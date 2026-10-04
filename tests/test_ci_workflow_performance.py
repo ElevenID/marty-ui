@@ -206,9 +206,9 @@ def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
 
 
 def _classify_changed_paths(
-    changed_paths: list[str], tmp_path: Path
+    changed_paths: list[str], tmp_path: Path, *, combined: bool = False
 ) -> list[dict[str, str]]:
-    """Exercise the real Bash classifier against independent synthetic diffs."""
+    """Exercise the real Bash classifier against synthetic diffs."""
     _, document = _workflow(CI_PATH)
     [classifier] = [
         step
@@ -242,6 +242,20 @@ while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
   index=$((index + 1))
 done < "$SYNTHETIC_PATHS_FILE"
 """
+    paths_to_run = changed_paths
+    if combined:
+        # One git diff containing multiple paths must preserve every selected
+        # obligation, not just the last matching case arm.
+        diff_file = tmp_path / "synthetic-combined-diff"
+        diff_file.write_bytes(
+            b"\0".join(path.encode("utf-8") for path in changed_paths) + b"\0"
+        )
+        prelude = prelude.replace(
+            "printf '%s\\0' \"$SYNTHETIC_CHANGED_PATH\"",
+            'cat "$SYNTHETIC_DIFF_FILE"',
+        )
+        assert 'cat "$SYNTHETIC_DIFF_FILE"' in prelude
+        paths_to_run = ["combined"]
     # Windows' system bash launcher may point at an unconfigured WSL distro;
     # use the Git Bash already required for this checkout's shell workflows.
     git_bash = Path("C:/Program Files/Git/bin/bash.exe")
@@ -255,8 +269,10 @@ done < "$SYNTHETIC_PATHS_FILE"
     environment.pop("BASH_ENV", None)
     environment.pop("ENV", None)
     environment["RUNNER_TEMP"] = tmp_path.as_posix()
+    if combined:
+        environment["SYNTHETIC_DIFF_FILE"] = diff_file.as_posix()
     path_file = tmp_path / "synthetic-changed-paths"
-    path_file.write_bytes(b"\0".join(path.encode("utf-8") for path in changed_paths) + b"\0")
+    path_file.write_bytes(b"\0".join(path.encode("utf-8") for path in paths_to_run) + b"\0")
     environment["SYNTHETIC_PATHS_FILE"] = path_file.as_posix()
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
@@ -273,7 +289,7 @@ done < "$SYNTHETIC_PATHS_FILE"
         dict(line.split("=", 1) for line in output.read_text().splitlines())
         for output in (
             tmp_path / f"synthetic-actions-output-{index}"
-            for index in range(len(changed_paths))
+            for index in range(len(paths_to_run))
         )
     ]
 
@@ -495,6 +511,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         ("ui",),
         ("rust",),
         ("python", "security"),
+        ("release",),
         ("release", "verification"),
         tuple(selections.values()),
     ):
@@ -677,6 +694,121 @@ def test_actual_classifier_selects_gates_for_compiler_and_runtime_inputs(
     expected["python"] = str(python_selected).lower()
     expected["security"] = str(security_selected).lower()
     assert actual == expected
+
+
+def test_canvas_inventory_inputs_keep_their_release_owner_without_full_pr_matrix(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    release = workflow["jobs"]["test-release-contracts"]
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in release["steps"]
+    ), "The release lane must still execute the inventory tests"
+    inventory_consumers = {
+        "canvas-worker-oracle-producers.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_worker_oracle_producer_inventory.py",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+        },
+        "canvas-worker-oracle-script-imports.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+        },
+    }
+    for manifest, expected in inventory_consumers.items():
+        references = subprocess.run(
+            ["git", "grep", "-l", "-F", "--", manifest],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert {
+            path
+            for path in references.stdout.splitlines()
+            if not path.endswith((".md", ".dockerignore"))
+        } == expected, f"Review new consumer of {manifest} before narrowing its gate"
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", "*Dockerfile*"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    copying_contracts = {
+        path
+        for path in tracked.stdout.splitlines()
+        if (ROOT / path).is_file()
+        and re.search(
+            r"(?m)^(?:COPY|ADD)\s+(?:--\S+\s+)*contracts(?:/|\s)",
+            (ROOT / path).read_text(encoding="utf-8"),
+        )
+    }
+    image_contexts = {
+        "services/Dockerfile": "services/Dockerfile.dockerignore",
+        "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
+        "rust/services/event-stream/Dockerfile": ".dockerignore",
+        "rust/services/revocation-profile/Dockerfile": ".dockerignore",
+    }
+    assert copying_contracts == set(image_contexts), (
+        "Review every image context that copies contracts before narrowing this gate"
+    )
+    for ignore_path in set(image_contexts.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for manifest in inventory_consumers:
+            exclusion = f"contracts/{manifest}"
+            assert lines.count(exclusion) == 1, (
+                f"Inventory manifest must be excluded from {ignore_path}"
+            )
+            assert not any(
+                line.startswith("!contracts")
+                for line in lines[lines.index(exclusion) + 1 :]
+            ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    for path in (
+        "contracts/canvas-worker-oracle-producers.json",
+        "contracts/canvas-worker-oracle-script-imports.json",
+        "tests/test_canvas_worker_oracle_producer_inventory.py",
+        "tests/test_canvas_worker_oracle_script_closure.py",
+    ):
+        actual = _classify_changed_path(path, tmp_path)
+        assert actual == {
+            "all": "false",
+            "ui": "false",
+            "python": "false",
+            "rust": "false",
+            "release": "true",
+            "verification": "false",
+            "security": "false",
+        }
+    # A new sibling test or changed corpus is not covered by this narrow rule.
+    assert _classify_changed_path(
+        "tests/test_canvas_worker_oracle_script_closure_helpers.py", tmp_path
+    )["all"] == "true"
+    assert _classify_changed_path(
+        "contracts/canvas-worker-startup-scenarios.json", tmp_path
+    )["rust"] == "true"
+    combined = _classify_changed_paths(
+        [
+            "contracts/canvas-worker-oracle-script-imports.json",
+            "contracts/canvas-worker-startup-scenarios.json",
+        ],
+        tmp_path,
+        combined=True,
+    )[0]
+    assert combined["release"] == combined["rust"] == "true"
+    assert combined["all"] == "false"
+    unknown = _classify_changed_paths(
+        [
+            "contracts/canvas-worker-oracle-script-imports.json",
+            "tests/test_canvas_worker_oracle_script_closure_helpers.py",
+        ],
+        tmp_path,
+        combined=True,
+    )[0]
+    assert all(value == "true" for value in unknown.values())
 
 
 def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:

@@ -6,6 +6,8 @@
 !proto/**
 !contracts/
 !contracts/**
+contracts/canvas-worker-oracle-producers.json
+contracts/canvas-worker-oracle-script-imports.json
 !services/
 !services/entrypoint.sh
 !scripts/

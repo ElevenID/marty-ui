@@ -13,6 +13,10 @@
 **/out
 **/target
 
+# CI inventory manifests are not product compilation or runtime inputs.
+contracts/canvas-worker-oracle-producers.json
+contracts/canvas-worker-oracle-script-imports.json
+
 # Python cache
 **/__pycache__
 **/*.pyc
