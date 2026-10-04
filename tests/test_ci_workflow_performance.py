@@ -515,8 +515,9 @@ def test_ci_gate_keeps_required_lanes_strict_when_optional_telemetry_fails() -> 
     ]
     required, telemetry = gate["steps"]
     assert not required.get("continue-on-error", False)
-    assert 'test "$result" = success' in required["run"]
-    assert '[[ "$result" == success || "$result" == skipped ]]' in required["run"]
+    assert '[[ "$result" == success ]]' in required["run"]
+    assert 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"' in required["run"]
+    assert 'require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"' in required["run"]
     assert telemetry["continue-on-error"] is True
     script = telemetry["with"]["script"]
     assert "[502, 503, 504]" in script
