@@ -37,6 +37,13 @@ PROOFS = (
 )
 
 
+def test_native_expiry_driver_uses_exact_current_reference_hash(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    native = importlib.import_module("test_canvas_worker_lease_expiry_https")
+    assert native.CORPUS_SHA256 == CAPTURE_SHA256
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == native.CORPUS_SHA256
+
+
 def test_current_corpus_differs_from_independent_capture_only_by_pinned_provenance():
     raw = ORACLE.read_bytes()
     assert raw.count(NEW_LEASE_SCRIPT_SHA256.encode()) == 2

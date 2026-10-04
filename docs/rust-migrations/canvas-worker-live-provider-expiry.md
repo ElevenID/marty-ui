@@ -65,7 +65,9 @@ its 19,767-byte SHA-256 is
 `24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50`.
 The reverse-provenance test proves the prior corpus bytes exactly. Hosted
 published-process regeneration is still required before drawing any conclusion
-about the cause or qualification.
+about the cause or qualification. The native expiry harness's exact raw-corpus
+pin follows the same digest; a focused contract now checks that the native and
+historical consumers agree on the current bytes.
 
 The first actual Linux native expiry preflight ran at
 `3967412b7fbe4627a12f313e9d4a4b8156f14f93` in
