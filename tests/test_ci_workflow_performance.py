@@ -1243,14 +1243,22 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert published.rstrip().endswith(
-        '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+        "(( composition_status == 0 && worker_status == 0 ))"
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4'
+            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
+    assert (
+        published.splitlines().count(
+            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+        )
+        == 1
+    )
+    assert 'wait "$composition_pid" || composition_status=$?' in published
+    assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (
         '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
         in published
@@ -1305,11 +1313,17 @@ def _assert_gateway_operations_registration(
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
-        '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+        "(( composition_status == 0 && worker_status == 0 ))"
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4'
+            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+        )
+        == 1
+    )
+    assert (
+        published.splitlines().count(
+            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )

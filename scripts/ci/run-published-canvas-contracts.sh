@@ -250,5 +250,41 @@ worker_parallel_tests=$("$worker_executable" --list --skip "$serial_test" "${pre
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]
 "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
-"$composition_executable" --nocapture --test-threads=4
-"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4
+# Each target owns its disposable database and process fixtures. Keep their
+# output separate, normally wait for both owners to finish cleanup, and fail
+# if either suite fails. The serial SQL-logging positive control stays outside
+# the pair. Forced cancellation still has the runner's usual teardown limits.
+target_logs=$(mktemp -d "${RUNNER_TEMP:?}/canvas-targets.XXXXXX")
+composition_log="$target_logs/composition.log"
+worker_log="$target_logs/worker.log"
+cleanup_target_logs() {
+  rm -f -- "$composition_log" "$worker_log"
+  rmdir -- "$target_logs"
+}
+trap cleanup_target_logs EXIT
+"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+composition_pid=$!
+"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
+worker_pid=$!
+report_target_logs() {
+  printf 'Canvas composition target exit: %s\n' "$1"
+  cat "$composition_log"
+  printf 'Canvas worker target exit: %s\n' "$2"
+  cat "$worker_log"
+}
+stop_targets() {
+  local composition_stopped=0 worker_stopped=0
+  kill "$composition_pid" "$worker_pid" 2>/dev/null || true
+  wait "$composition_pid" 2>/dev/null || composition_stopped=$?
+  wait "$worker_pid" 2>/dev/null || worker_stopped=$?
+  report_target_logs "$composition_stopped" "$worker_stopped"
+  exit "$1"
+}
+trap 'stop_targets 130' INT
+trap 'stop_targets 143' TERM
+composition_status=0
+worker_status=0
+wait "$composition_pid" || composition_status=$?
+wait "$worker_pid" || worker_status=$?
+report_target_logs "$composition_status" "$worker_status"
+(( composition_status == 0 && worker_status == 0 ))
