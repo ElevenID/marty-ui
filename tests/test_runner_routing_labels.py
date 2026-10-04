@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 import pytest
 
@@ -17,6 +19,8 @@ SHELL = shutil.which("pwsh") or shutil.which("powershell")
 
 def run_policy(body: str) -> subprocess.CompletedProcess[str]:
     if SHELL is None:
+        if os.environ.get("CI") == "true":
+            pytest.fail("PowerShell is required to validate runner routing in CI")
         pytest.skip("PowerShell is unavailable on this test host")
     policy = str(ROOT / "scripts" / "runner-routing-label-policy.ps1").replace("'", "''")
     command = f"$ErrorActionPreference = 'Stop'; . '{policy}'; {body}"
@@ -27,6 +31,15 @@ def run_policy(body: str) -> subprocess.CompletedProcess[str]:
         text=True,
         check=False,
     )
+
+
+def test_ci_cannot_skip_runner_routing_without_powershell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys.modules[__name__], "SHELL", None)
+    monkeypatch.setenv("CI", "true")
+    with pytest.raises(pytest.fail.Exception, match="PowerShell is required"):
+        run_policy("Assert-NewRunnerRouting")
 
 
 def runner(name: str, *labels: str) -> dict:
