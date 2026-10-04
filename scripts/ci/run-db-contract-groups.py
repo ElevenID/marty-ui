@@ -42,7 +42,7 @@ def _canvas_executable() -> Path:
             artifact["executable"]
             for line in source
             if (artifact := json.loads(line)).get("reason") == "compiler-artifact"
-            and "marty-issuance-service" in artifact.get("package_id", "")
+            and "#marty-service-acceptance@" in artifact.get("package_id", "")
             and artifact.get("target", {}).get("name")
             == "canvas_published_worker_contract"
             and artifact.get("executable") is not None

@@ -4956,8 +4956,12 @@ dependencies = [
 name = "marty-service-acceptance"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
+ "chrono",
+ "futures-util",
+ "hex",
  "marty-crypto 0.1.62",
  "marty-issuance-service",
  "marty-signing-keys",
@@ -4965,10 +4969,15 @@ dependencies = [
  "num-bigint",
  "redis",
  "reqwest",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "sqlx",
  "tempfile",
  "tokio",
  "tower",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
 ]

@@ -3,6 +3,7 @@
 
 use std::{
     collections::BTreeMap,
+    path::PathBuf,
     process::{Child, Command, ExitStatus, Stdio},
     time::Duration,
 };
@@ -11,6 +12,30 @@ use serde_json::Value;
 use sqlx::PgPool;
 
 pub(super) struct OwnedWorker(pub(super) Child);
+
+fn worker_executable() -> PathBuf {
+    worker_executable_from(
+        std::env::var_os("MARTY_CANVAS_WORKER_TEST_BINARY"),
+        option_env!("CARGO_BIN_EXE_marty-canvas-sync-worker"),
+    )
+}
+
+pub(super) fn worker_executable_from(
+    explicit: Option<std::ffi::OsString>,
+    cargo_binary: Option<&str>,
+) -> PathBuf {
+    if let Some(path) = explicit {
+        let path = PathBuf::from(path);
+        assert!(
+            path.is_absolute(),
+            "worker test binary path must be absolute"
+        );
+        return path;
+    }
+    PathBuf::from(
+        cargo_binary.expect("Cargo worker binary or MARTY_CANVAS_WORKER_TEST_BINARY is required"),
+    )
+}
 
 /// The launcher owns the backend application identity. SQLx applies duplicate
 /// URL parameters in order, so this final value is the effective worker ID.
@@ -72,7 +97,7 @@ impl OwnedWorker {
         stderr: Stdio,
     ) -> Self {
         let database_url = worker_database_url(database_url, worker_id);
-        let mut command = Command::new(env!("CARGO_BIN_EXE_marty-canvas-sync-worker"));
+        let mut command = Command::new(worker_executable());
         command
             .env_clear()
             .env("DATABASE_URL", database_url.as_str())

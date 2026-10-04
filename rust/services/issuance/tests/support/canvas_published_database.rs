@@ -2,13 +2,27 @@
 
 use serde_json::Value;
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
     time::Duration,
 };
 use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
+
+pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
+    start.ancestors().find(|ancestor| {
+        ancestor.join("rust/Cargo.toml").is_file()
+            && ancestor.join("contracts").is_dir()
+            && ancestor.join("scripts").is_dir()
+    })
+}
+
+pub(super) fn repository_root() -> PathBuf {
+    repository_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .expect("Canvas contract checkout root must contain rust, contracts, and scripts")
+        .to_path_buf()
+}
 
 fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
     if report["error_class"] != "DeadlineClockDisagreement" {
@@ -287,10 +301,7 @@ fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<St
                     return Err(error.into());
                 }
             }
-            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .nth(3)
-                .ok_or(error)?;
+            let root = repository_root_from(Path::new(env!("CARGO_MANIFEST_DIR"))).ok_or(error)?;
             let mounts = info["Mounts"].as_array().ok_or(error)?;
             if mounts.len() != 2 {
                 return Err(error.into());
@@ -1158,10 +1169,7 @@ impl PublishedDatabase {
             return Err("Non-loopback test port".into());
         }
         owned.url = format!("postgresql://oracle:synthetic-local-only@127.0.0.1:{port}/canvas_published_schema_test");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(3)
-            .unwrap();
+        let root = repository_root();
         // Mount only the two public test inputs, not the checkout or its Git
         // configuration. The native client connects through an owned loopback
         // port; unlike the Python-only oracle this runner is not network-none.

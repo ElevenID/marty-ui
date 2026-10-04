@@ -10,8 +10,12 @@ publish = false
 autotests = false
 
 [dev-dependencies]
+async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+hex.workspace = true
 marty-crypto.workspace = true
 marty-issuance-service = { path = "../../services/issuance" }
 marty-signing-keys = { path = "../../services/signing-keys" }
@@ -19,16 +23,25 @@ marty-verification = { workspace = true, features = ["csca"] }
 num-bigint.workspace = true
 redis.workspace = true
 reqwest.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
 tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 
 [[test]]
 name = "passport_managed_kms_chain"
 path = "tests/passport_managed_kms_chain.rs"
+
+[[test]]
+name = "canvas_published_worker_contract"
+path = "tests/canvas_published_worker_contract.rs"
 
 [lints.rust]
 unsafe_code = "forbid"

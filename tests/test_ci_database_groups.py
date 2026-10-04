@@ -114,7 +114,7 @@ def test_preflight_evidence_requires_all_four_successes_and_same_executable(
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "marty-issuance-service 0.1.0",
+                "package_id": "path+file:///checkout/rust/crates/service-acceptance#marty-service-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }

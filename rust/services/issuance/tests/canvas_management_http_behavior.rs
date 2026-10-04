@@ -61,6 +61,61 @@ mod canvas_json_depth_replay;
 #[path = "support/canvas_observation_values.rs"]
 mod canvas_observation_values;
 
+#[test]
+fn observation_encoding_preserves_numeric_and_literal_marker_distinctions() {
+    use marty_issuance_service::lossless_json::LosslessJson;
+
+    assert_eq!(
+        canvas_observation_values::scalar(&json!(9007199254740991u64)),
+        json!(9007199254740991u64)
+    );
+    assert_eq!(
+        canvas_observation_values::scalar(&json!(-9007199254740992i64)),
+        json!({"python_integer":"-9007199254740992"})
+    );
+    assert_eq!(
+        canvas_observation_values::scalar(
+            &serde_json::from_str::<Value>(&"9".repeat(4300)).unwrap()
+        ),
+        json!({"python_integer":"9".repeat(4300)})
+    );
+    assert_eq!(
+        canvas_observation_values::scalar(&json!(-0.0)),
+        json!({"python_float":"negative_zero"})
+    );
+    assert_eq!(
+        canvas_observation_values::lossless(&LosslessJson::Float(f64::NAN)),
+        json!({"python_float":"nan"})
+    );
+    let literal = json!({"python_float":"nan"});
+    assert_eq!(
+        canvas_observation_values::scalar(&literal),
+        json!({"python_object":[["python_float","nan"]]})
+    );
+    assert_ne!(
+        canvas_observation_values::scalar(&literal),
+        canvas_observation_values::lossless(&LosslessJson::Float(f64::NAN))
+    );
+    assert_eq!(
+        canvas_observation_values::lossless(&LosslessJson::PythonObject(vec![(
+            "python_object".to_owned().into(),
+            literal.into()
+        )])),
+        json!({"python_object":[["python_object", {"python_object":[["python_float","nan"]]}]]})
+    );
+}
+
+#[test]
+fn witness_agrees_with_explicit_typed_python_token_vector() {
+    use sha2::Digest;
+
+    let tokens = b"marty.json-tree/v1\n[\"object\",[[97],[98]]]\n[\"array\",2]\n[\"integer\",\"0\"]\n[\"bool\",false]\n[\"text\",[55296]]\n";
+    let actual = canvas_json_depth_replay::witness_bytes(br#"{"b":"\ud800","a":[0,false]}"#);
+    assert_eq!(actual["sha256"], hex::encode(sha2::Sha256::digest(tokens)));
+    assert_eq!(actual["nodes"], 5);
+    assert_eq!(actual["container_depth"], 2);
+}
+
 #[derive(Default)]
 struct MemoryRepository {
     platforms: Mutex<Vec<CanvasPlatformRecord>>,
