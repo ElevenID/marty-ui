@@ -266,10 +266,18 @@ trap cleanup_target_logs EXIT
 composition_pid=$!
 "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
+report_target_logs() {
+  printf 'Canvas composition target exit: %s\n' "$1"
+  cat "$composition_log"
+  printf 'Canvas worker target exit: %s\n' "$2"
+  cat "$worker_log"
+}
 stop_targets() {
+  local composition_stopped=0 worker_stopped=0
   kill "$composition_pid" "$worker_pid" 2>/dev/null || true
-  wait "$composition_pid" 2>/dev/null || true
-  wait "$worker_pid" 2>/dev/null || true
+  wait "$composition_pid" 2>/dev/null || composition_stopped=$?
+  wait "$worker_pid" 2>/dev/null || worker_stopped=$?
+  report_target_logs "$composition_stopped" "$worker_stopped"
   exit "$1"
 }
 trap 'stop_targets 130' INT
@@ -278,8 +286,5 @@ composition_status=0
 worker_status=0
 wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
-printf 'Canvas composition target exit: %s\n' "$composition_status"
-cat "$composition_log"
-printf 'Canvas worker target exit: %s\n' "$worker_status"
-cat "$worker_log"
+report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))

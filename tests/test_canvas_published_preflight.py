@@ -244,7 +244,7 @@ else
   if [[ "$*" == *--test-threads=4* ]]; then
     printf 'full target %s\n' "$name"
     [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
-    if [[ "$TEST_FAILURE" == barrier ]]; then
+    if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
       other=contract
       [[ "$name" == contract ]] && other=worker-contract
@@ -253,6 +253,10 @@ else
         sleep 0.05
       done
       [[ -f "started-$other" ]] || exit 25
+      if [[ "$TEST_FAILURE" == signal ]]; then
+        [[ "$name" != contract ]] || kill -TERM "$TEST_PARENT_PID"
+        sleep 1
+      fi
     fi
   fi
 fi
@@ -309,6 +313,7 @@ fi
         # Fake binaries shadow commands even if the shell uses `command docker`.
         wrapper = """export PATH="$PWD/fake-bin:/usr/bin:/bin"
 export TEST_LOG="$PWD/calls" RUNNER_TEMP="$PWD"
+export TEST_PARENT_PID="$BASHPID"
 source "$CONTRACT_SOURCE" "$@"
 """
         result = subprocess.run(
@@ -426,6 +431,20 @@ def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
     assert {call[1] for call in full} == {"contract", "worker-contract"}
     assert "Canvas composition target exit: 0" in result.stdout
     assert "Canvas worker target exit: 0" in result.stdout
+    assert "full target contract" in result.stdout
+    assert "full target worker-contract" in result.stdout
+    assert not list(tmp_path.glob("canvas-targets.*"))
+
+
+def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
+    result, calls = shell_case(failure="signal")
+    assert result.returncode == 143
+    assert {call[1] for call in calls if "--test-threads=4" in call} == {
+        "contract",
+        "worker-contract",
+    }
+    assert "Canvas composition target exit:" in result.stdout
+    assert "Canvas worker target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
