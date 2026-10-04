@@ -1,3 +1,9 @@
+//! Published Canvas worker acceptance cases. The CI runner resolves the real
+//! `marty-canvas-sync-worker` Cargo binary artifact and passes its absolute
+//! path in `MARTY_CANVAS_WORKER_TEST_BINARY`. For a direct guarded Cargo run,
+//! build that issuance binary first and set the same variable to its absolute
+//! path; dependency packages do not receive `CARGO_BIN_EXE_*` from Cargo.
+
 use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 
