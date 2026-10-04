@@ -1247,13 +1247,13 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --nocapture --test-threads=2 >"$composition_log" 2>&1 &'
         )
         == 1
     )
     assert (
         published.splitlines().count(
-            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -1264,7 +1264,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
-    assert '"$composition_executable" --nocapture --test-threads=4' in published
+    assert '"$composition_executable" --nocapture --test-threads=2' in published
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
 
 
@@ -1317,13 +1317,13 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --nocapture --test-threads=2 >"$composition_log" 2>&1 &'
         )
         == 1
     )
     assert (
         published.splitlines().count(
-            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -1419,13 +1419,13 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            '"$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2',
+            '"$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=2',
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --nocapture --test-threads=4',
+            '"$composition_executable" --nocapture --test-threads=2',
+            '"$composition_executable" unrelated_filter --nocapture --test-threads=2',
         )
     else:
         start = source.index(f"async fn {name}")
