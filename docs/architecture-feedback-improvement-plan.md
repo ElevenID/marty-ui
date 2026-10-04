@@ -342,6 +342,8 @@ Later protected observation, 2026-10-04: #1086's third [combined-head run 372298
 
 #1095's first main-based PR run reached the Canvas harness setup and correctly rejected a stale `CORPUS_SHA256` in the separate native expiry driver before worker execution. The exact corpus hash had changed with the diagnostic-only lease-script source pin, but that native raw-byte consumer had not been updated. Corrective head `8e514498d` aligns the native pin with the verified 19,767-byte corpus and adds a cross-consumer test; 314 focused tests including native-driver cases, Ruff, and diff checks pass locally, and independent review found no blocker. The superseded failing run was cancelled after [fresh exact-head CI 37236823246](https://github.com/ElevenID/marty-ui/actions/runs/37236823246) was created. No assertion or CI gate was weakened; hosted and protected results are pending.
 
+A1 support-owner follow-up [#1096](https://github.com/ElevenID/marty-ui/pull/1096) moves two self-host runtime fixture modules byte-identically from issuance tests to service acceptance and updates their Rust and Python path consumers. It is stacked on #1086 rather than merged independently. The rebased acceptance-target locked Cargo check and 29 focused Python tests passed locally; independent exact-head review found no code blocker. The stacked PR has only policy checks so far; full PR and protected validation remain required after #1086 merges. No speedup is attributed to this source-ownership move.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
