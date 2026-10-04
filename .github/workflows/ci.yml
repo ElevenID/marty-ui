@@ -93,6 +93,12 @@ jobs:
                   python=true
                   security=true
                   ;;
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
+                  # Only the release-collected inventory tests consume these
+                  # manifests; service image contexts exclude them. Other
+                  # corpora and unknown test paths retain broad selection.
+                  release=true
+                  ;;
                 rust/*|proto/*|contracts/*)
                   rust=true
                   ;;
