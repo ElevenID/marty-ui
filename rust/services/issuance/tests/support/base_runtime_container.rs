@@ -216,28 +216,9 @@ fn checked_asset_set(
 }
 
 pub(super) fn lexical_source_root() -> Result<PathBuf, String> {
-    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let package = root.file_name().and_then(|name| name.to_str());
-    let expected: &[&str] = match package {
-        Some("issuance") => &["issuance", "services", "rust"],
-        Some("service-acceptance") => &["service-acceptance", "crates", "rust"],
-        _ => return Err("Base runtime manifest directory has an unexpected shape".into()),
-    };
-    for expected in expected {
-        require(
-            root.file_name().and_then(|name| name.to_str()) == Some(*expected),
-            "Base runtime manifest directory has an unexpected shape",
-        )?;
-        require(
-            root.pop(),
-            "Base runtime manifest directory has no workspace root",
-        )?;
-    }
-    require(
-        root.is_absolute(),
-        "Base runtime source root must be absolute",
-    )?;
-    Ok(root)
+    super::canvas_published_database::repository_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .map(Path::to_path_buf)
+        .ok_or_else(|| "Base runtime manifest directory has an unexpected shape".into())
 }
 
 fn source_root() -> Result<PathBuf, String> {
@@ -271,6 +252,7 @@ struct OwnedContainer {
     network: String,
     image: String,
     executable: String,
+    issuance_binary: String,
     renderer: String,
     mounts: BTreeSet<String>,
     id: Option<String>,
@@ -328,6 +310,10 @@ impl OwnedContainer {
             actual == self.mounts,
             "Base runtime mount allowlist differs",
         )?;
+        require(
+            self.mounts.contains(&self.issuance_binary),
+            "Base runtime issuance artifact is not mounted",
+        )?;
         let env = info["Config"]["Env"]
             .as_array()
             .ok_or("Missing base runtime child configuration")?;
@@ -335,6 +321,7 @@ impl OwnedContainer {
             ("MARTY_BASE_RUNTIME_CHILD", "1"),
             ("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1"),
             ("MARTY_DIDCOMM_TEST_PYTHON", "python"),
+            ("MARTY_ISSUANCE_TEST_BINARY", self.issuance_binary.as_str()),
             ("MARTY_BASE_COMPOSE_BINARY", self.renderer.as_str()),
             ("PYTHONDONTWRITEBYTECODE", "1"),
         ] {
@@ -490,6 +477,10 @@ async fn run_child(
     let executables = runtime_executables()?;
     let test_executable = executables.test;
     let issuance = executables.issuance;
+    let issuance_binary = issuance
+        .to_str()
+        .ok_or("Invalid issuance test binary path")?
+        .to_owned();
     let gateway = executables.gateway;
     let renderer = regular_file(&PathBuf::from(
         std::env::var_os("MARTY_BASE_COMPOSE_BINARY")
@@ -549,6 +540,7 @@ async fn run_child(
             .to_str()
             .ok_or("Invalid test executable path")?
             .to_owned(),
+        issuance_binary,
         renderer: renderer.to_str().ok_or("Invalid renderer path")?.to_owned(),
         mounts: hashes
             .keys()
@@ -621,6 +613,7 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
     let diagnostics = super::runtime_failure_diagnostics::Diagnostics::from_environment()?;
     let label = format!("{LABEL}={}", container.scope);
     let renderer_env = format!("MARTY_BASE_COMPOSE_BINARY={}", container.renderer);
+    let issuance_env = format!("MARTY_ISSUANCE_TEST_BINARY={}", container.issuance_binary);
     let mounts: Vec<_> = container
         .mounts
         .iter()
@@ -646,6 +639,8 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1",
         "--env",
         "MARTY_DIDCOMM_TEST_PYTHON=python",
+        "--env",
+        &issuance_env,
         "--env",
         &renderer_env,
         "--env",
@@ -774,8 +769,13 @@ mod tests {
             network: format!("container:{}", "b".repeat(64)),
             image: format!("synthetic.invalid/runtime@sha256:{}", "c".repeat(64)),
             executable: "/synthetic/test".into(),
+            issuance_binary: "/synthetic/issuance".into(),
             renderer: "/synthetic/compose".into(),
-            mounts: BTreeSet::from(["/synthetic/test".into(), "/synthetic/compose".into()]),
+            mounts: BTreeSet::from([
+                "/synthetic/test".into(),
+                "/synthetic/compose".into(),
+                "/synthetic/issuance".into(),
+            ]),
             id: None,
             creation_attempted: false,
             prepared: None,
@@ -784,12 +784,14 @@ mod tests {
             "Id":id,"Config":{"Labels":{LABEL:container.scope},"Image":container.image,
               "Entrypoint":[container.executable],"Cmd":[CHILD,"--exact","--nocapture","--test-threads=1"],
               "Env":["MARTY_BASE_RUNTIME_CHILD=1","MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1",
-                     "MARTY_DIDCOMM_TEST_PYTHON=python","MARTY_BASE_COMPOSE_BINARY=/synthetic/compose","PYTHONDONTWRITEBYTECODE=1"]},
+                     "MARTY_DIDCOMM_TEST_PYTHON=python","MARTY_ISSUANCE_TEST_BINARY=/synthetic/issuance",
+                     "MARTY_BASE_COMPOSE_BINARY=/synthetic/compose","PYTHONDONTWRITEBYTECODE=1"]},
             "HostConfig":{"NetworkMode":container.network,"ReadonlyRootfs":true,"Tmpfs":{"/tmp":"rw,mode=1777"},
               "CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],"PortBindings":{}},
             "NetworkSettings":{"Ports":{}},
             "Mounts":[{"Type":"bind","Source":"/synthetic/test","Destination":"/synthetic/test","RW":false},
-                      {"Type":"bind","Source":"/synthetic/compose","Destination":"/synthetic/compose","RW":false}]
+                      {"Type":"bind","Source":"/synthetic/compose","Destination":"/synthetic/compose","RW":false},
+                      {"Type":"bind","Source":"/synthetic/issuance","Destination":"/synthetic/issuance","RW":false}]
         });
         container.checked(&info, &id).unwrap();
         for (pointer, value) in [
@@ -802,6 +804,10 @@ mod tests {
             ("/Config/Entrypoint", json!(["/bin/sh"])),
             ("/Config/Cmd", json!(["other-test"])),
             ("/Config/Env", json!(["MARTY_BASE_RUNTIME_CHILD=0"])),
+            (
+                "/Config/Env/3",
+                json!("MARTY_ISSUANCE_TEST_BINARY=/foreign"),
+            ),
             ("/HostConfig/NetworkMode", json!("host")),
             ("/HostConfig/ReadonlyRootfs", json!(false)),
             ("/HostConfig/Tmpfs", json!({})),
@@ -841,22 +847,22 @@ mod tests {
             let mut changed = kubernetes.clone();
             match fault {
                 "missing-marker" => {
-                    changed["Config"]["Env"].as_array_mut().unwrap().remove(5);
+                    changed["Config"]["Env"].as_array_mut().unwrap().remove(6);
                 }
                 "wrong-hash" => {
-                    changed["Config"]["Env"][7] = json!(format!(
+                    changed["Config"]["Env"][8] = json!(format!(
                         "MARTY_KUBERNETES_PREPARED_SHA256={}",
                         "b".repeat(64)
                     ))
                 }
                 "duplicate-model" => {
-                    let duplicate = changed["Config"]["Env"][6].clone();
+                    let duplicate = changed["Config"]["Env"][7].clone();
                     changed["Config"]["Env"]
                         .as_array_mut()
                         .unwrap()
                         .push(duplicate);
                 }
-                "writable-model" => changed["Mounts"][2]["RW"] = json!(true),
+                "writable-model" => changed["Mounts"][3]["RW"] = json!(true),
                 "wrong-child" => changed["Config"]["Cmd"][0] = json!(CHILD),
                 _ => unreachable!(),
             }

@@ -105,7 +105,16 @@ fn composition_source_root_matches_acceptance_package_root() {
             canvas_published_database::repository_root_from(&root.join(package)),
             Some(root.as_path()),
         );
+        let packaged_root = root.join("unmounted-checkout");
+        let packaged_manifest = packaged_root.join(package);
+        assert_eq!(
+            canvas_published_database::repository_root_from(&packaged_manifest),
+            Some(packaged_root.as_path()),
+        );
     }
+    assert!(
+        canvas_published_database::repository_root_from(&root.join("rust/crates/other")).is_none()
+    );
 }
 
 #[tokio::test]

@@ -11,16 +11,20 @@ use uuid::Uuid;
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 
 pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
-    start.ancestors().find(|ancestor| {
-        ancestor.join("rust/Cargo.toml").is_file()
-            && ancestor.join("contracts").is_dir()
-            && ancestor.join("scripts").is_dir()
-    })
+    // The packaged child mounts only reviewed inputs, not the entire checkout.
+    // Cargo's compile-time manifest path still has a fixed package suffix.
+    if !start.is_absolute()
+        || !(start.ends_with("rust/services/issuance")
+            || start.ends_with("rust/crates/service-acceptance"))
+    {
+        return None;
+    }
+    start.ancestors().nth(3)
 }
 
 pub(super) fn repository_root() -> PathBuf {
     repository_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
-        .expect("Canvas contract checkout root must contain rust, contracts, and scripts")
+        .expect("Canvas contract manifest directory has an unexpected package layout")
         .to_path_buf()
 }
 
