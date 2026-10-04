@@ -1327,7 +1327,9 @@ def _assert_gateway_operations_registration(
         )
         == 1
     )
-    assert (f'#[path = "support/{module}.rs"]\nmod {module};') in source
+    assert (
+        f'#[path = "../../../services/issuance/tests/support/{module}.rs"]\nmod {module};'
+    ) in source
     matches = re.findall(
         r"((?:^#\[[^\n]+\]\s*\n)+)" + rf"^async fn {name}\(\) \{{(.*?)^\}}",
         source,
@@ -1367,7 +1369,7 @@ def test_gateway_operations_candidate_is_required_and_not_dormant(registration) 
         encoding="utf-8"
     )
     source = (
-        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     _assert_gateway_operations_registration(published, source, registration)
 
@@ -1398,7 +1400,7 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         encoding="utf-8"
     )
     source = (
-        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     name, module, database, _connections, _message = registration
     if mutation == "inventory":

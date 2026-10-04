@@ -12,10 +12,7 @@ mod diagnostic_tests {
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
         .unwrap();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(3)
-            .unwrap();
+        let root = super::repository_root();
         let probe_id = "b".repeat(64);
         let probe = json!({
             "Id":probe_id,

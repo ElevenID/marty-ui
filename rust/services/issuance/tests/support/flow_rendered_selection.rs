@@ -83,8 +83,7 @@ impl Drop for Directory {
 }
 
 pub(super) fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../..")
+    super::super::super::canvas_published_database::repository_root()
         .canonicalize()
         .unwrap()
 }

@@ -131,7 +131,7 @@ def assert_renewal_registration(script, source, name, owner):
 @pytest.mark.parametrize("name,owner", RENEWAL_GATES)
 def test_renewal_gates_require_real_owned_database_and_cleanup(name, owner):
     source = (
-        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     assert_renewal_registration(SCRIPT.read_text(encoding="utf-8"), source, name, owner)
 
@@ -145,7 +145,7 @@ def test_renewal_gate_registration_rejects_weakened_qualification(
 ):
     script = SCRIPT.read_text(encoding="utf-8")
     source = (
-        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     line = next(line for line in script.splitlines() if f"'{name}: test'" in line)
     if mutation == "missing":
@@ -191,14 +191,23 @@ if [[ "$1" == -er ]]; then
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
   [[ "$TEST_FAILURE" != images ]] || exit 17
   printf '%s\n' "$TEST_POSTGRES_IMAGE" "$TEST_PYTHON_IMAGE"
-elif [[ "$#" == 3 && "$1" == -r ]]; then
-  [[ "$3" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
-  [[ "$2" == *marty-canvas-sync-worker* && "$2" == *'.profile.test == false'* && "$2" == *'#marty-issuance-service@'* ]] || exit 90
+elif [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target ]]; then
+  [[ "$6" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
+  [[ "$5" == *'.target.name == $target'* && "$5" == *'.profile.test == false'* && "$5" == *'#marty-issuance-service@'* ]] || exit 90
+  [[ "$4" == marty-canvas-sync-worker || "$4" == marty-issuance-service ]] || exit 90
   if [[ "${TEST_REAL_WORKER_JQ:-0}" == 1 ]]; then
     exec /usr/bin/jq "$@"
   fi
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
-  if [[ "$TEST_FAILURE" == missing-worker-binary ]]; then
+  if [[ "$4" == marty-issuance-service ]]; then
+    if [[ "$TEST_FAILURE" == missing-issuance-binary ]]; then
+      printf '%s\n' "$RUNNER_TEMP/does-not-exist"
+    elif [[ "$TEST_FAILURE" == duplicate-issuance-binaries ]]; then
+      printf '%s\n%s\n' "$TEST_ISSUANCE_BINARY" "$RUNNER_TEMP/other-worker-binary"
+    else
+      printf '%s\n' "$TEST_ISSUANCE_BINARY"
+    fi
+  elif [[ "$TEST_FAILURE" == missing-worker-binary ]]; then
     printf '%s\n' "$RUNNER_TEMP/does-not-exist"
   elif [[ "$TEST_FAILURE" == duplicate-worker-binaries ]]; then
     printf '%s\n%s\n' "$TEST_WORKER_BINARY" "$RUNNER_TEMP/other-worker-binary"
@@ -209,11 +218,7 @@ else
   [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
   [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
-  if [[ "$4" == canvas_published_worker_contract ]]; then
-    [[ "$7" == marty-service-acceptance ]] || exit 90
-  else
-    [[ "$7" == marty-issuance-service ]] || exit 90
-  fi
+  [[ "$7" == marty-service-acceptance ]] || exit 90
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
   if [[ "$TEST_FAILURE" == missing-executable ]]; then
     printf './does-not-exist\n'
@@ -244,6 +249,7 @@ exec /usr/bin/grep "$@"
 set -euo pipefail
 name="${0##*/}"
 [[ "$MARTY_CANVAS_WORKER_TEST_BINARY" == "$TEST_WORKER_BINARY" ]] || exit 91
+[[ "$MARTY_ISSUANCE_TEST_BINARY" == "$TEST_ISSUANCE_BINARY" ]] || exit 91
 record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
@@ -296,6 +302,9 @@ fi
     other_worker_binary = tmp_path / "other-worker-binary"
     other_worker_binary.write_bytes(worker_contract.read_bytes())
     other_worker_binary.chmod(0o755)
+    issuance_binary = tmp_path / "issuance-binary"
+    issuance_binary.write_bytes(worker_contract.read_bytes())
+    issuance_binary.chmod(0o755)
 
     def run(
         arguments=(),
@@ -339,7 +348,17 @@ fi
                     .replace(
                         "__OTHER_WORKER_BINARY__", f"{bash_root}/other-worker-binary"
                     )
-                    for artifact in worker_artifacts
+                    .replace("__ISSUANCE_BINARY__", f"{bash_root}/issuance-binary")
+                    for artifact in [
+                        *worker_artifacts,
+                        {
+                            "reason": "compiler-artifact",
+                            "package_id": "path+file:///checkout/rust/services/issuance#marty-issuance-service@0.1.0",
+                            "target": {"name": "marty-issuance-service", "kind": ["bin"]},
+                            "profile": {"test": False},
+                            "executable": "__ISSUANCE_BINARY__",
+                        },
+                    ]
                 )
                 + "\n",
                 encoding="utf-8",
@@ -363,6 +382,7 @@ fi
 export TEST_LOG="$PWD/calls" RUNNER_TEMP="$PWD"
 export TEST_PARENT_PID="$BASHPID"
 export TEST_WORKER_BINARY="$PWD/worker-binary"
+export TEST_ISSUANCE_BINARY="$PWD/issuance-binary"
 source "$CONTRACT_SOURCE" "$@"
 """
         result = subprocess.run(
@@ -686,6 +706,8 @@ def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
         "duplicate-executables",
         "missing-worker-binary",
         "duplicate-worker-binaries",
+        "missing-issuance-binary",
+        "duplicate-issuance-binaries",
         "list",
         "execute",
     ],

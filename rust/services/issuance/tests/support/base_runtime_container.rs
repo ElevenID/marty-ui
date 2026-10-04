@@ -171,7 +171,7 @@ fn runtime_executables() -> Result<RuntimeExecutables, String> {
         compatible_executable_paths(Path::new(&test))?
     } else {
         let test = std::env::current_exe().map_err(|_| "Base test executable is unavailable")?;
-        let issuance = PathBuf::from(env!("CARGO_BIN_EXE_marty-issuance-service"));
+        let issuance = super::issuance_process::issuance_binary();
         let gateway = issuance.with_file_name("marty-gateway");
         RuntimeExecutables {
             test,
@@ -217,9 +217,15 @@ fn checked_asset_set(
 
 pub(super) fn lexical_source_root() -> Result<PathBuf, String> {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    for expected in ["issuance", "services", "rust"] {
+    let package = root.file_name().and_then(|name| name.to_str());
+    let expected: &[&str] = match package {
+        Some("issuance") => &["issuance", "services", "rust"],
+        Some("service-acceptance") => &["service-acceptance", "crates", "rust"],
+        _ => return Err("Base runtime manifest directory has an unexpected shape".into()),
+    };
+    for expected in expected {
         require(
-            root.file_name().and_then(|name| name.to_str()) == Some(expected),
+            root.file_name().and_then(|name| name.to_str()) == Some(*expected),
             "Base runtime manifest directory has an unexpected shape",
         )?;
         require(

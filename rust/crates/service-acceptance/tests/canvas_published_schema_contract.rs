@@ -2,13 +2,13 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
-#[path = "../../../crates/selfhost-bundle/tests/support/extracted_bundle.rs"]
+#[path = "../../selfhost-bundle/tests/support/extracted_bundle.rs"]
 mod selfhost_extracted;
-#[path = "support/selfhost_packaged_runtime.rs"]
+#[path = "../../../services/issuance/tests/support/selfhost_packaged_runtime.rs"]
 mod selfhost_packaged_runtime;
-#[path = "../../../crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"]
+#[path = "../../selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"]
 mod selfhost_prepared;
-#[path = "support/selfhost_runtime_sidecar.rs"]
+#[path = "../../../services/issuance/tests/support/selfhost_runtime_sidecar.rs"]
 mod selfhost_runtime_sidecar;
 
 #[test]
@@ -54,47 +54,59 @@ async fn selfhost_public_image_loader_child() {
     println!("\nSELFHOST_PUBLIC_LOADER_COMPLETE:{sentinel}");
 }
 
-#[path = "support/renewal_reference_fixture.rs"]
+#[path = "../../../services/issuance/tests/support/renewal_reference_fixture.rs"]
 mod renewal_reference_fixture;
 
-#[path = "support/base_runtime_canvas.rs"]
+#[path = "../../../services/issuance/tests/support/base_runtime_canvas.rs"]
 mod base_runtime_canvas;
-#[path = "support/base_runtime_container.rs"]
+#[path = "../../../services/issuance/tests/support/base_runtime_container.rs"]
 mod base_runtime_container;
-#[path = "support/base_runtime_didcomm.rs"]
+#[path = "../../../services/issuance/tests/support/base_runtime_didcomm.rs"]
 mod base_runtime_didcomm;
-#[path = "support/base_runtime_gateway.rs"]
+#[path = "../../../services/issuance/tests/support/base_runtime_gateway.rs"]
 mod base_runtime_gateway;
-#[path = "support/base_runtime_ordinary.rs"]
+#[path = "../../../services/issuance/tests/support/base_runtime_ordinary.rs"]
 mod base_runtime_ordinary;
-#[path = "support/base_runtime_redis.rs"]
+#[path = "../../../services/issuance/tests/support/base_runtime_redis.rs"]
 mod base_runtime_redis;
 mod bounded_fixture_command {
-    include!("support/bounded_fixture_command.rs");
-    include!("support/bounded_fixture_command_tests.rs");
+    include!("../../../services/issuance/tests/support/bounded_fixture_command.rs");
+    include!("../../../services/issuance/tests/support/bounded_fixture_command_tests.rs");
 }
-#[path = "support/envoy_runtime.rs"]
+#[path = "../../../services/issuance/tests/support/envoy_runtime.rs"]
 mod envoy_runtime;
-#[path = "support/envoy_runtime_sidecar.rs"]
+#[path = "../../../services/issuance/tests/support/envoy_runtime_sidecar.rs"]
 mod envoy_runtime_sidecar;
-#[path = "support/issuance_named_peers.rs"]
+#[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
 mod issuance_named_peers;
-#[path = "support/rendered_base_process.rs"]
+#[path = "../../../services/issuance/tests/support/rendered_base_process.rs"]
 mod rendered_base_process;
-#[path = "support/renewal_binding_postgres.rs"]
+#[path = "../../../services/issuance/tests/support/renewal_binding_postgres.rs"]
 mod renewal_binding_postgres;
-#[path = "support/renewal_fresh_main.rs"]
+#[path = "../../../services/issuance/tests/support/renewal_fresh_main.rs"]
 mod renewal_fresh_main;
-#[path = "support/renewal_gateway_replay.rs"]
+#[path = "../../../services/issuance/tests/support/renewal_gateway_replay.rs"]
 mod renewal_gateway_replay;
-#[path = "support/renewal_main_replay.rs"]
+#[path = "../../../services/issuance/tests/support/renewal_main_replay.rs"]
 mod renewal_main_replay;
-#[path = "support/resolved_kubernetes_runtime.rs"]
+#[path = "../../../services/issuance/tests/support/resolved_kubernetes_runtime.rs"]
 mod resolved_kubernetes_runtime;
-#[path = "support/resolved_runtime.rs"]
+#[path = "../../../services/issuance/tests/support/resolved_runtime.rs"]
 mod resolved_runtime;
-#[path = "support/runtime_failure_diagnostics.rs"]
+#[path = "../../../services/issuance/tests/support/runtime_failure_diagnostics.rs"]
 mod runtime_failure_diagnostics;
+
+#[test]
+fn composition_source_root_matches_acceptance_package_root() {
+    let root = canvas_published_database::repository_root();
+    assert_eq!(base_runtime_container::lexical_source_root().unwrap(), root);
+    for package in ["rust/services/issuance", "rust/crates/service-acceptance"] {
+        assert_eq!(
+            canvas_published_database::repository_root_from(&root.join(package)),
+            Some(root.as_path()),
+        );
+    }
+}
 
 #[tokio::test]
 async fn kubernetes_profile_gateway_composition_isolated() {
@@ -383,7 +395,7 @@ async fn didcomm_renewal_http_composes_real_delivery_and_renewal_links() {
     owned.close_verified().unwrap();
 }
 
-#[path = "support/didcomm_native_grpc_fixture.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
 mod didcomm_native_grpc_fixture;
 
 #[tokio::test]
@@ -399,7 +411,7 @@ async fn didcomm_unkeyed_grpc_initiation_composes_real_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "support/didcomm_admission_recovery.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_admission_recovery.rs"]
 mod didcomm_admission_recovery;
 
 #[tokio::test]
@@ -477,13 +489,13 @@ async fn didcomm_http_admission_recovers_real_keyed_reservation() {
     owned.close_verified().unwrap();
 }
 
-#[path = "support/didcomm_wallet_fixture.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_wallet_fixture.rs"]
 mod didcomm_wallet_fixture;
 
-#[path = "support/didcomm_test_fixtures.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_test_fixtures.rs"]
 mod didcomm_test_fixtures;
 
-#[path = "support/didcomm_composed_delivery.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;
 
 #[tokio::test]
@@ -525,10 +537,10 @@ async fn didcomm_fresh_http_admission_composes_reservation_and_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "support/didcomm_gateway_replay.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_gateway_replay.rs"]
 mod didcomm_gateway_replay;
 
-#[path = "support/didcomm_tls_transport_contract.rs"]
+#[path = "../../../services/issuance/tests/support/didcomm_tls_transport_contract.rs"]
 mod didcomm_tls_transport_contract;
 
 #[tokio::test]
@@ -568,9 +580,9 @@ async fn didcomm_native_composes_crypto_https_and_published_durability() {
         .expect("verify exact-owned database cleanup");
 }
 
-#[path = "support/canvas_json_depth_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_json_depth_replay.rs"]
 mod canvas_json_depth_replay;
-#[path = "support/canvas_observation_values.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_observation_values.rs"]
 mod canvas_observation_values;
 
 #[tokio::test]
@@ -578,10 +590,10 @@ async fn status_provider_matches_json_depth_reference() {
     canvas_status_provider_replay::replay_depth().await;
 }
 
-#[path = "support/canvas_operations_read_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_operations_read_replay.rs"]
 mod canvas_operations_read_replay;
 
-#[path = "support/canvas_operations_gateway_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_operations_gateway_replay.rs"]
 mod canvas_operations_gateway_replay;
 
 #[tokio::test]
@@ -607,7 +619,7 @@ async fn operations_gateway_candidate_preserves_trusted_actor_and_frozen_routes(
     owned.close().unwrap();
 }
 
-#[path = "support/canvas_gateway_lifecycle_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_gateway_lifecycle_replay.rs"]
 mod canvas_gateway_lifecycle_replay;
 
 #[tokio::test]
@@ -633,12 +645,12 @@ async fn operations_gateway_candidate_preserves_review_lifecycle() {
     owned.close().unwrap();
 }
 
-#[path = "support/canvas_status_provider_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_status_provider_replay.rs"]
 mod canvas_status_provider_replay;
 
-#[path = "support/canvas_status_runtime_contract.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_status_runtime_contract.rs"]
 mod canvas_status_runtime_contract;
-#[path = "support/issuance_process.rs"]
+#[path = "../../../services/issuance/tests/support/issuance_process.rs"]
 mod issuance_process;
 
 #[tokio::test]
@@ -1288,7 +1300,7 @@ async fn review_lifecycle_matches_published_python() {
     }
 }
 
-#[path = "support/canvas_review_lifecycle_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_review_lifecycle_replay.rs"]
 mod canvas_review_lifecycle_replay;
 
 #[tokio::test]
@@ -1360,10 +1372,10 @@ async fn operations_resolution_matches_corrected_published_schema() {
     native.close().unwrap();
 }
 
-#[path = "support/canvas_review_resolution_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_review_resolution_replay.rs"]
 mod canvas_review_resolution_replay;
 
-#[path = "support/canvas_base_gateway_recovery.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_base_gateway_recovery.rs"]
 mod canvas_base_gateway_recovery;
 
 #[tokio::test]
@@ -1399,7 +1411,7 @@ async fn canvas_base_review_gateway_matches_corrected_published_schema() {
     native.close_verified().unwrap();
 }
 
-#[path = "support/canvas_review_resolution_checks.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_review_resolution_checks.rs"]
 mod canvas_review_resolution_checks;
 
 #[tokio::test]
@@ -1462,10 +1474,10 @@ async fn enqueue_inputs_match_frozen_published_python() {
     native.close().unwrap();
 }
 
-#[path = "support/canvas_enqueue_input_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_enqueue_input_replay.rs"]
 mod canvas_enqueue_input_replay;
 
-#[path = "support/canvas_job_operations_checks.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_job_operations_checks.rs"]
 mod canvas_job_operations_checks;
 
 #[tokio::test]
@@ -1606,22 +1618,24 @@ async fn heartbeat_readiness_matches_published_python() {
     native.close().unwrap();
 }
 
-#[path = "support/canvas_heartbeat_readiness_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_heartbeat_readiness_replay.rs"]
 mod canvas_heartbeat_readiness_replay;
 
-#[path = "support/canvas_issued_review_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_issued_review_replay.rs"]
 mod canvas_issued_review_replay;
-#[path = "support/canvas_mixed_roster_replay.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_mixed_roster_replay.rs"]
 mod canvas_mixed_roster_replay;
 #[expect(
     dead_code,
     reason = "shared database fixture has worker-only constructors"
 )]
 mod canvas_published_database {
-    include!("support/canvas_published_database.rs");
-    include!("support/canvas_published_database_diagnostic_tests.rs");
+    include!("../../../services/issuance/tests/support/canvas_published_database.rs");
+    include!(
+        "../../../services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs"
+    );
 }
-#[path = "support/canvas_published_processor.rs"]
+#[path = "../../../services/issuance/tests/support/canvas_published_processor.rs"]
 mod canvas_published_processor;
 
 #[tokio::test]

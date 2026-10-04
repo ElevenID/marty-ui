@@ -96,8 +96,8 @@ impl RenderedBase {
             }
         }
         command.env("PYTHONUTF8", "1").arg(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../../scripts/render_base_native_runtime_fixture.py"),
+            super::canvas_published_database::repository_root()
+                .join("scripts/render_base_native_runtime_fixture.py"),
         );
         if let Some(renderer) = std::env::var_os("MARTY_BASE_COMPOSE_BINARY") {
             assert!(

@@ -694,13 +694,13 @@ jobs:
             sh -ceu '
               cargo build --locked --offline --quiet -p marty-issuance-service --bin marty-issuance-service
               cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway
-              cargo test --locked --offline -p marty-issuance-service \
+              cargo test --locked --offline -p marty-service-acceptance \
                 --test canvas_published_schema_contract --no-run --message-format=json
             ' > "$compat_artifacts"
           compat_executable="$(jq -sr '
             [.[] | select(.reason == "compiler-artifact")
             | select(.target.name == "canvas_published_schema_contract")
-            | select(.package_id | contains("marty-issuance-service"))
+            | select(.package_id | contains("#marty-service-acceptance@"))
             | select(.executable != null) | .executable] | unique
             | if length == 1 then .[0] else error("Expected one Bookworm-compatible base runtime executable") end
           ' "$compat_artifacts")"

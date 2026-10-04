@@ -3,6 +3,7 @@
 //! synthetic configuration to the isolated command before spawning it.
 use std::{
     net::TcpListener,
+    path::PathBuf,
     process::{Child, Command, Stdio},
     time::Duration,
 };
@@ -24,9 +25,26 @@ pub(super) fn reserve_port() -> (TcpListener, u16) {
     (listener, port)
 }
 
+/// Cargo only exposes a package's binary path to that package's integration
+/// tests. Cross-service acceptance receives the exact built artifact from CI.
+pub(super) fn issuance_binary() -> PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_marty-issuance-service") {
+        return PathBuf::from(path);
+    }
+    let path = PathBuf::from(
+        std::env::var_os("MARTY_ISSUANCE_TEST_BINARY")
+            .expect("set MARTY_ISSUANCE_TEST_BINARY to the built issuance binary"),
+    );
+    assert!(
+        path.is_absolute() && path.is_file(),
+        "issuance binary must be an absolute built artifact"
+    );
+    path
+}
+
 /// Retain the existing health/gRPC smoke tests' ambient-environment behavior.
 pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_marty-issuance-service"));
+    let mut command = Command::new(issuance_binary());
     for (name, _) in std::env::vars().filter(|(name, _)| {
         name.starts_with("MARTY_ISSUANCE__")
             || matches!(
