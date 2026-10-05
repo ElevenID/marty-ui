@@ -29,6 +29,13 @@ PREFLIGHTS = [
     ("body-timeout-preflight", BODY_TIMEOUT_TARGET),
     ("lease-expiry-preflight", LEASE_EXPIRY_TARGET),
 ]
+FAST_MODE_SKIPS = [
+    TARGET,
+    BODY_TIMEOUT_TARGET,
+    TIMEOUT_TARGET,
+    LEASE_EXPIRY_TARGET,
+    "reference_matches_published",
+]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
 PINS = [
     f"registry.invalid/{name}@sha256:{letter * 64}"
@@ -71,12 +78,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert sum(line.strip() == serial for line in script.splitlines()) == 1
     assert sum(line.strip() == json_serial for line in script.splitlines()) == 1
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + ${#preflight_skips[@]} / 2)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]"
         in script
     )
-    assert script.splitlines().count(
-        composition_full + ' >"$composition_log" 2>&1 &'
-    ) == 1
+    assert (
+        script.splitlines().count(composition_full + ' >"$composition_log" 2>&1 &') == 1
+    )
     assert script.splitlines().count(worker_full + ' >"$worker_log" 2>&1 &') == 1
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
@@ -313,6 +320,7 @@ fi
         worker_artifacts=None,
         pins=PINS,
         run_id="12345",
+        qualification=False,
     ):
         lines = (
             registrations
@@ -320,7 +328,9 @@ fi
             else [f"{name}: test" for name in required_registrations()]
         )
         composition = [
-            line for line in lines if line.startswith("heartbeat_readiness_")
+            line
+            for line in lines
+            if line.startswith("heartbeat_readiness_")
             or line.startswith("json_consumer_diagnostic_")
         ]
         worker = [line for line in lines if line not in composition]
@@ -363,6 +373,7 @@ fi
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
                 "GITHUB_JOB": "test-rust-services",
+                "MARTY_CANVAS_FULL_QUALIFICATION": "1" if qualification else "0",
                 SCHEMA_ENV: "0",
             }
         )
@@ -429,7 +440,15 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     ]
     assert sorted(children[6:]) == sorted(
         [
-            ["child", "contract", "1", "--skip", json_serial, "--nocapture", "--test-threads=4"],
+            [
+                "child",
+                "contract",
+                "1",
+                "--skip",
+                json_serial,
+                "--nocapture",
+                "--test-threads=4",
+            ],
             [
                 "child",
                 "worker-contract",
@@ -452,30 +471,52 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     evidence = tmp_path / "canvas-published-preflights.sha256"
     evidence.write_text(
         hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
-        + "\n12345\n1\ntest-rust-services\n",
+        + "\n12345\n1\ntest-rust-services\n0\n",
         newline="\n",
     )
     result, calls = shell_case(["full-after-preflights"])
     assert result.returncode == 0, result.stderr
     children = [call for call in calls if call[0] == "child"]
-    skipped = [target for _, target in PREFLIGHTS]
+    skipped = FAST_MODE_SKIPS
     assert [
         "child",
         "worker-contract",
         "1",
         "--skip",
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
-        *[
-            item
-            for target in (skipped[0], skipped[2], skipped[1], skipped[3])
-            for item in ("--skip", target)
-        ],
+        *[item for target in skipped for item in ("--skip", target)],
         "--nocapture",
         "--test-threads=4",
     ] in children
     assert not any(
         call[3:5] == [target, "--exact"] for call in children for target in skipped
     )
+
+    mismatched, mismatched_calls = shell_case(
+        ["full-after-preflights"], qualification=True
+    )
+    assert mismatched.returncode != 0
+    assert not any(call[0] == "docker" for call in mismatched_calls)
+    evidence.write_text(evidence.read_text().replace("\n0\n", "\n1\n"), newline="\n")
+    result, calls = shell_case(["full-after-preflights"], qualification=True)
+    assert result.returncode == 0, result.stderr
+    worker_full = next(
+        call
+        for call in calls
+        if call[:2] == ["child", "worker-contract"] and "--test-threads=4" in call
+    )
+    assert [
+        worker_full[index + 1]
+        for index, item in enumerate(worker_full[:-1])
+        if item == "--skip"
+    ] == [
+        "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        TARGET,
+        BODY_TIMEOUT_TARGET,
+        TIMEOUT_TARGET,
+        LEASE_EXPIRY_TARGET,
+    ]
+    assert "reference_matches_published" not in worker_full
 
     result, calls = shell_case([])
     assert result.returncode == 0, result.stderr
@@ -536,7 +577,9 @@ def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
 
 
 @pytest.mark.parametrize("failed", ["contract", "worker-contract"])
-def test_full_target_failure_is_not_masked_by_other_target(shell_case, tmp_path, failed):
+def test_full_target_failure_is_not_masked_by_other_target(
+    shell_case, tmp_path, failed
+):
     result, calls = shell_case(failure=f"{failed}-full")
     assert result.returncode != 0
     full = [call for call in calls if "--test-threads=4" in call]
@@ -554,7 +597,7 @@ def test_reuse_mode_fails_closed_without_matching_evidence(
 ):
     path = tmp_path / "canvas-published-preflights.sha256"
     if evidence == "wrong":
-        path.write_text("0" * 64 + "\n12345\n1\ntest-rust-services\n")
+        path.write_text("0" * 64 + "\n12345\n1\ntest-rust-services\n0\n")
     elif evidence == "malformed":
         path.write_text("not-a-digest\n")
     result, calls = shell_case(["full-after-preflights"])
@@ -566,7 +609,7 @@ def test_reuse_mode_fails_closed_without_matching_evidence(
 def test_reuse_mode_rejects_composition_executable_digest(shell_case, tmp_path):
     (tmp_path / "canvas-published-preflights.sha256").write_text(
         hashlib.sha256((tmp_path / "contract").read_bytes()).hexdigest()
-        + "\n12345\n1\ntest-rust-services\n",
+        + "\n12345\n1\ntest-rust-services\n0\n",
         newline="\n",
     )
     result, calls = shell_case(["full-after-preflights"])
@@ -847,7 +890,8 @@ def test_database_group_owner_still_invokes_default_full_mode(tmp_path, monkeypa
     assert "rust-db" in observed
 
 
-def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("qualification", [False, True])
+def test_preflight_group_owner_runs_exact_modes(tmp_path, monkeypatch, qualification):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
     executable = tmp_path / "canvas-contract"
     executable.write_bytes(b"synthetic compiled Canvas contract")
@@ -867,6 +911,7 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_RUN_ID", "synthetic-run")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("GITHUB_JOB", "test-rust-services")
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "1" if qualification else "0")
     observed = {}
 
     def groups(commands, directory):
@@ -892,14 +937,13 @@ def test_preflight_group_owner_runs_all_four_exact_modes(tmp_path, monkeypatch):
         encoding="ascii"
     ) == (
         hashlib.sha256(executable.read_bytes()).hexdigest()
-        + "\nsynthetic-run\n1\ntest-rust-services\n"
+        + f"\nsynthetic-run\n1\ntest-rust-services\n{int(qualification)}\n"
     )
-    assert list(observed) == [
-        "mixed-roster-preflight",
-        "body-timeout-preflight",
-        "timeout-preflight",
-        "lease-expiry-preflight",
-    ]
+    assert list(observed) == (
+        [name for name, _ in PREFLIGHTS]
+        if qualification
+        else ["timeout-preflight", "lease-expiry-preflight"]
+    )
     assert all(
         command == ["bash", str(SCRIPT), name] for name, command in observed.items()
     )

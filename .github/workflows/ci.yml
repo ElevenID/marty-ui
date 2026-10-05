@@ -8,12 +8,17 @@ env:
   MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty_common-0.2.16-py3-none-any.whl
   MARTY_COMMON_DIGEST: sha256:e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
+  # Weekly and manual runs retain the complete historical-reference matrices.
+  MARTY_CANVAS_FULL_QUALIFICATION: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}
 
 on:
   pull_request:
     branches: [main]
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 0'
 
 permissions:
   contents: read

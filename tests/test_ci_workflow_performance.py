@@ -142,6 +142,30 @@ def _workflow(path: Path) -> tuple[str, dict[str, object]]:
     return source, yaml.safe_load(source)
 
 
+def test_off_path_ci_qualifies_full_canvas_without_weakening_pr_gates() -> None:
+    source, document = _workflow(CI_PATH)
+    assert "  workflow_dispatch:\n" in source
+    assert document[True]["schedule"] == [{"cron": "17 4 * * 0"}]
+    assert document["env"]["MARTY_CANVAS_FULL_QUALIFICATION"] == (
+        "${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}"
+    )
+    classifier = next(
+        step
+        for step in document["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    )
+    assert 'elif [[ -z "$BASE_SHA" ]]; then\n  all=true' in classifier["run"]
+    assert (
+        "github.event.pull_request.base.sha || github.event.merge_group.base_sha || ''"
+        in (classifier["env"]["BASE_SHA"])
+    )
+    rust_steps = document["jobs"]["test-rust-services"]["steps"]
+    assert any(
+        step.get("run") == "python3 ../scripts/ci/run-db-contract-groups.py preflights"
+        for step in rust_steps
+    )
+
+
 def _assert_python_service_job_preserves_full_suite(document) -> None:
     job = document["jobs"]["test-services"]
     assert job["needs"] == "changes"
@@ -274,7 +298,9 @@ done < "$SYNTHETIC_PATHS_FILE"
     if combined:
         environment["SYNTHETIC_DIFF_FILE"] = diff_file.as_posix()
     path_file = tmp_path / "synthetic-changed-paths"
-    path_file.write_bytes(b"\0".join(path.encode("utf-8") for path in paths_to_run) + b"\0")
+    path_file.write_bytes(
+        b"\0".join(path.encode("utf-8") for path in paths_to_run) + b"\0"
+    )
     environment["SYNTHETIC_PATHS_FILE"] = path_file.as_posix()
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
@@ -471,7 +497,10 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         bash = str(Path(git).parent.parent / "bin" / "bash.exe")
 
     def exercise(
-        flags=(), overrides=None, event="pull_request", result_count=None,
+        flags=(),
+        overrides=None,
+        event="pull_request",
+        result_count=None,
         selection_overrides=None,
     ):
         selected = set(flags)
@@ -545,8 +574,14 @@ def test_ci_gate_keeps_required_lanes_strict_when_optional_telemetry_fails() -> 
     required, telemetry = gate["steps"]
     assert not required.get("continue-on-error", False)
     assert '[[ "$result" == success ]]' in required["run"]
-    assert 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"' in required["run"]
-    assert 'require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"' in required["run"]
+    assert (
+        'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
+        in required["run"]
+    )
+    assert (
+        'require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"'
+        in required["run"]
+    )
     assert telemetry["continue-on-error"] is True
     script = telemetry["with"]["script"]
     assert "[502, 503, 504]" in script
@@ -654,12 +689,18 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     [
         (
             "rust/services/issuance/src/canvas_sync_processor_contract.md",
-            True, False, False, False,
+            True,
+            False,
+            False,
+            False,
         ),
         ("rust/services/issuance/src/canvas_sync_worker.rs", True, False, False, False),
         (
             "docs/rust-migrations/canvas-worker-dispatch-reconciliation.md",
-            False, False, False, False,
+            False,
+            False,
+            False,
+            False,
         ),
         ("README.md", False, False, False, False),
         # The bundle manifest packages this otherwise documentation-shaped file.
@@ -788,12 +829,18 @@ def test_canvas_inventory_inputs_keep_their_release_owner_without_full_pr_matrix
             "security": "false",
         }
     # A new sibling test or changed corpus is not covered by this narrow rule.
-    assert _classify_changed_path(
-        "tests/test_canvas_worker_oracle_script_closure_helpers.py", tmp_path
-    )["all"] == "true"
-    assert _classify_changed_path(
-        "contracts/canvas-worker-startup-scenarios.json", tmp_path
-    )["rust"] == "true"
+    assert (
+        _classify_changed_path(
+            "tests/test_canvas_worker_oracle_script_closure_helpers.py", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "contracts/canvas-worker-startup-scenarios.json", tmp_path
+        )["rust"]
+        == "true"
+    )
     combined = _classify_changed_paths(
         [
             "contracts/canvas-worker-oracle-script-imports.json",
@@ -855,7 +902,8 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
             path
             for path in references.stdout.splitlines()
             if not path.endswith(".md")
-            and path not in {".github/workflows/ci.yml", "tests/test_ci_workflow_performance.py"}
+            and path
+            not in {".github/workflows/ci.yml", "tests/test_ci_workflow_performance.py"}
         } == expected, f"Review new consumer of {name} before narrowing its gate"
 
     selected = {
@@ -873,12 +921,18 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
         "tests/test_canvas_oss_runner_quarantine.py",
     ):
         assert _classify_changed_path(path, tmp_path) == selected
-    assert _classify_changed_path(
-        "scripts/register-canvas-oss-runner-helper.ps1", tmp_path
-    )["all"] == "true"
-    assert _classify_changed_path(
-        "tests/test_canvas_oss_acceptance_topology.py", tmp_path
-    )["all"] == "true"
+    assert (
+        _classify_changed_path(
+            "scripts/register-canvas-oss-runner-helper.ps1", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "tests/test_canvas_oss_acceptance_topology.py", tmp_path
+        )["all"]
+        == "true"
+    )
 
 
 def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:
@@ -915,7 +969,9 @@ def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> 
                 manifest_path = match.group("manifest")
                 assert manifest_path and manifest_path.startswith("/")
                 package = next(
-                    parent for parent in source.parents if (parent / "Cargo.toml").is_file()
+                    parent
+                    for parent in source.parents
+                    if (parent / "Cargo.toml").is_file()
                 )
                 target = (package / manifest_path.removeprefix("/")).resolve()
             assert target.is_relative_to(ROOT), f"Embedded input leaves repo: {source}"
@@ -923,10 +979,14 @@ def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> 
             relative = target.relative_to(ROOT).as_posix()
             if not relative.startswith("rust/"):
                 external_inputs.add(relative)
-    assert macro_count == matched_count, "Review new include macro forms before classifying inputs"
+    assert macro_count == matched_count, (
+        "Review new include macro forms before classifying inputs"
+    )
     assert external_inputs, "Expected external Rust compiler inputs"
     paths = sorted(external_inputs)
-    for path, actual in zip(paths, _classify_changed_paths(paths, tmp_path), strict=True):
+    for path, actual in zip(
+        paths, _classify_changed_paths(paths, tmp_path), strict=True
+    ):
         assert actual["rust"] == "true", f"Rust consumer skipped for {path}"
 
 
@@ -1334,7 +1394,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
-    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in published
+    assert (
+        '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
+        in published
+    )
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
 
 
@@ -1997,23 +2060,32 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
     service_fallback = service_names.index(
         "Keep Rust service tests independent of optional compiler cache"
     )
-    assert service_cache < service_fallback < service_names.index(
-        "Compile reusable Rust test executables"
+    assert (
+        service_cache
+        < service_fallback
+        < service_names.index("Compile reusable Rust test executables")
     )
     assert not service_steps[service_fallback].get("continue-on-error", False)
     assert not service_steps[service_fallback].get("if")
     assert services["env"]["RUSTC_WRAPPER"] == "sccache"
     assert ci["jobs"]["rust-lint-policy"]["env"]["RUSTC_WRAPPER"] == "sccache"
     fallback_command = "bash scripts/ci/optional-sccache-fallback.sh"
-    assert steps[fallback]["run"] == service_steps[service_fallback]["run"] == fallback_command
+    assert (
+        steps[fallback]["run"]
+        == service_steps[service_fallback]["run"]
+        == fallback_command
+    )
     assert (
         steps[lint]["run"]
         == "cargo clippy --locked --workspace --all-targets -- -D warnings"
     )
     assert not steps[lint].get("continue-on-error", False)
-    assert "cargo test --locked --workspace --no-run" in service_steps[
-        service_names.index("Compile reusable Rust test executables")
-    ]["run"]
+    assert (
+        "cargo test --locked --workspace --no-run"
+        in service_steps[service_names.index("Compile reusable Rust test executables")][
+            "run"
+        ]
+    )
 
     script = ROOT / "scripts/ci/optional-sccache-fallback.sh"
     assert script.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash\n")
@@ -2086,7 +2158,8 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
     scripts = {}
     for job_name in ("test-rust-services", "rust-lint-policy"):
         step = next(
-            step for step in jobs[job_name]["steps"]
+            step
+            for step in jobs[job_name]["steps"]
             if step.get("name") == "Report compiler cache effectiveness"
         )
         assert step["if"] == "always()"
@@ -2122,8 +2195,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
                 [bash, "--noprofile", "--norc", "-s"],
                 input=(
                     'export PATH="$PWD/fake-bin:/usr/bin:/bin"\n'
-                    'export RUNNER_TEMP="$PWD/runner-temp"\n'
-                    + script
+                    'export RUNNER_TEMP="$PWD/runner-temp"\n' + script
                 ),
                 cwd=tmp_path,
                 env=environment,
