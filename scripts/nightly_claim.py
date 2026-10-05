@@ -22,13 +22,7 @@ RUN_ID = re.compile(r"[1-9][0-9]*\Z")
 DATE = re.compile(r"20[0-9]{6}\Z")
 PREPARATION_WORKFLOW = ".github/workflows/prepare-nightly-claim.yml"
 INTAKE_WORKFLOW = ".github/workflows/nightly-claim-intake.yml"
-REQUIRED_WORKFLOWS = (
-    ".github/workflows/ci.yml",
-    ".github/workflows/open-source-policy.yml",
-    ".github/workflows/organization-quality.yml",
-    ".github/workflows/codeql-rust.yml",
-    ".github/workflows/codeql-actions.yml",
-)
+POLICY_SCHEMA = "elevenid.stack-tag-preparation/v1"
 
 
 class NightlyClaimError(ValueError):
@@ -65,7 +59,27 @@ def _validate_identity(version: str, date: str, run_id: str, source_sha: str) ->
     return tag
 
 
-def _required_runs(payload: Any, source_sha: str, current_run_id: str) -> list[dict[str, Any]]:
+def _required_workflows(policy: Any) -> tuple[str, ...]:
+    document = _object(policy, "stack-tag policy")
+    _require(document.get("schema") == POLICY_SCHEMA, "stack-tag policy schema changed")
+    entries = document.get("required_workflows")
+    _require(isinstance(entries, list) and bool(entries), "required workflows missing")
+    paths: list[str] = []
+    for entry in entries:
+        item = _object(entry, "required workflow")
+        path = item.get("path")
+        _require(
+            isinstance(path, str) and path.startswith(".github/workflows/")
+            and path.endswith(".yml") and item.get("event") == "merge_group",
+            "required workflow is not a merge-group gate",
+        )
+        _require(path not in paths, "duplicate required workflow")
+        paths.append(path)
+    return tuple(paths)
+
+
+def _required_runs(payload: Any, source_sha: str, current_run_id: str,
+                   required_workflows: tuple[str, ...]) -> list[dict[str, Any]]:
     pages = payload if isinstance(payload, list) else [payload]
     runs: list[dict[str, Any]] = []
     for page in pages:
@@ -73,7 +87,7 @@ def _required_runs(payload: Any, source_sha: str, current_run_id: str) -> list[d
         _require(isinstance(entries, list), "workflow-runs array is missing")
         runs.extend(_object(entry, "workflow run") for entry in entries)
     accepted = []
-    for path in REQUIRED_WORKFLOWS:
+    for path in required_workflows:
         matches = [
             run for run in runs
             if run.get("path") == path
@@ -91,7 +105,8 @@ def _required_runs(payload: Any, source_sha: str, current_run_id: str) -> list[d
 
 
 def create_claim(*, repository: str, version: str, date: str, run_id: str,
-                 source_sha: str, stack_lock: Any, workflow_runs: Any) -> dict[str, Any]:
+                 source_sha: str, stack_lock: Any, workflow_runs: Any,
+                 policy: Any) -> dict[str, Any]:
     _require(repository == "ElevenID/marty-ui", "nightly repository changed")
     tag = _validate_identity(version, date, run_id, source_sha)
     lock = _object(stack_lock, "stack lock")
@@ -108,13 +123,16 @@ def create_claim(*, repository: str, version: str, date: str, run_id: str,
         "claim_run_id": run_id,
         "preparation_workflow": PREPARATION_WORKFLOW,
         "intake_workflow": INTAKE_WORKFLOW,
-        "required_workflows": _required_runs(workflow_runs, source_sha, run_id),
+        "required_workflows": _required_runs(
+            workflow_runs, source_sha, run_id, _required_workflows(policy)
+        ),
         "qualification": "not_started",
         "publication": "prohibited",
     }
 
 
-def validate_intake(claim: Any, run: Any, *, current_main_sha: str) -> dict[str, Any]:
+def validate_intake(claim: Any, run: Any, *, current_main_sha: str,
+                    policy: Any) -> dict[str, Any]:
     claim = _object(claim, "nightly claim")
     run = _object(run, "preparation run")
     _require(set(claim) == {
@@ -145,9 +163,10 @@ def validate_intake(claim: Any, run: Any, *, current_main_sha: str) -> dict[str,
     _require(run.get("status") == "completed" and run.get("conclusion") == "success",
              "preparation did not succeed")
     evidence = claim["required_workflows"]
-    _require(isinstance(evidence, list) and len(evidence) == len(REQUIRED_WORKFLOWS),
+    required_workflows = _required_workflows(policy)
+    _require(isinstance(evidence, list) and len(evidence) == len(required_workflows),
              "required workflow evidence is incomplete")
-    for entry, path in zip(evidence, REQUIRED_WORKFLOWS):
+    for entry, path in zip(evidence, required_workflows):
         _require(_object(entry, "workflow evidence") == {
             "path": path, "event": "merge_group", "run_id": entry.get("run_id")
         } and RUN_ID.fullmatch(str(entry.get("run_id"))) is not None,
@@ -162,12 +181,14 @@ def main() -> None:
     for name in ("repository", "version", "date", "run-id", "source-sha"):
         create.add_argument(f"--{name}", required=True)
     create.add_argument("--stack-lock", type=Path, required=True)
+    create.add_argument("--policy", type=Path, required=True)
     create.add_argument("--runs-json", type=Path, required=True)
     create.add_argument("--output", type=Path, required=True)
     intake = sub.add_parser("intake")
     intake.add_argument("--claim", type=Path, required=True)
     intake.add_argument("--run-json", type=Path, required=True)
     intake.add_argument("--current-main-sha", required=True)
+    intake.add_argument("--policy", type=Path, required=True)
     intake.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
@@ -176,10 +197,12 @@ def main() -> None:
                 repository=args.repository, version=args.version, date=args.date,
                 run_id=args.run_id, source_sha=args.source_sha,
                 stack_lock=_load(args.stack_lock), workflow_runs=_load(args.runs_json),
+                policy=_load(args.policy),
             )
         else:
             result = validate_intake(_load(args.claim), _load(args.run_json),
-                                     current_main_sha=args.current_main_sha)
+                                     current_main_sha=args.current_main_sha,
+                                     policy=_load(args.policy))
         args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except NightlyClaimError as error:
         parser.exit(1, f"nightly claim rejected: {error}\n")

@@ -55,7 +55,9 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$current_main"
           python scripts/nightly_claim.py intake \
             --claim claim/nightly-claim.json --run-json preparation-run.json \
-            --current-main-sha "$current_main" --output admitted-nightly-claim.json
+            --current-main-sha "$current_main" \
+            --policy .github/stack-tag-policy.json \
+            --output admitted-nightly-claim.json
           tag="$(jq -er .tag admitted-nightly-claim.json)"
           tag_refs="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"
           if [[ -n "$tag_refs" ]]; then

@@ -79,6 +79,7 @@ jobs:
           --run-id "$GITHUB_RUN_ID"
           --source-sha "$SOURCE_SHA"
           --stack-lock release/stack-lock.json
+          --policy .github/stack-tag-policy.json
           --runs-json workflow-runs.json
           --output nightly-claim.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

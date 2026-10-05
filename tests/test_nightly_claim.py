@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,8 @@ nightly = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(nightly)
 
 SOURCE = "a" * 40
+POLICY = json.loads((ROOT / ".github/stack-tag-policy.json").read_text(encoding="utf-8"))
+REQUIRED_WORKFLOWS = tuple(entry["path"] for entry in POLICY["required_workflows"])
 
 
 def runs(*, failed: str | None = None) -> dict:
@@ -22,17 +25,18 @@ def runs(*, failed: str | None = None) -> dict:
         {"id": index + 10, "path": path, "event": "merge_group",
          "head_sha": SOURCE, "head_branch": "main", "status": "completed",
          "conclusion": "failure" if path == failed else "success"}
-        for index, path in enumerate(nightly.REQUIRED_WORKFLOWS)
+        for index, path in enumerate(REQUIRED_WORKFLOWS)
     ]}
 
 
-def claim(*, workflow_runs: dict | None = None) -> dict:
+def claim(*, workflow_runs: dict | None = None, policy: dict | None = None) -> dict:
     return nightly.create_claim(
         repository="ElevenID/marty-ui", version="1.2.3", date="20261005",
         run_id="12345", source_sha=SOURCE,
         stack_lock={"schema": "marty.stack-lock/v1", "release": "marty-ui@1.2.3",
                     "release_state": "eligible"},
         workflow_runs=workflow_runs if workflow_runs is not None else runs(),
+        policy=policy if policy is not None else POLICY,
     )
 
 
@@ -50,7 +54,9 @@ def test_nightly_claim_is_distinct_no_write_identity() -> None:
     assert result["tier"] == "nightly"
     assert result["qualification"] == "not_started"
     assert result["publication"] == "prohibited"
-    assert nightly.validate_intake(result, preparation_run(), current_main_sha=SOURCE) == result
+    assert nightly.validate_intake(
+        result, preparation_run(), current_main_sha=SOURCE, policy=POLICY
+    ) == result
 
 
 @pytest.mark.parametrize("version,date,run_id", [
@@ -65,13 +71,13 @@ def test_reject_invalid_nightly_identity(version: str, date: str, run_id: str) -
             repository="ElevenID/marty-ui", version=version, date=date,
             run_id=run_id, source_sha=SOURCE,
             stack_lock={"schema": "marty.stack-lock/v1", "release": f"marty-ui@{version}",
-                        "release_state": "eligible"}, workflow_runs=runs(),
+            "release_state": "eligible"}, workflow_runs=runs(), policy=POLICY,
         )
 
 
 def test_reject_missing_or_failed_exact_source_gate() -> None:
     with pytest.raises(nightly.NightlyClaimError, match="workflow failed"):
-        claim(workflow_runs=runs(failed=nightly.REQUIRED_WORKFLOWS[0]))
+        claim(workflow_runs=runs(failed=REQUIRED_WORKFLOWS[0]))
     wrong_source = runs()
     wrong_source["workflow_runs"][0]["head_sha"] = "b" * 40
     with pytest.raises(nightly.NightlyClaimError, match="workflow missing"):
@@ -81,7 +87,7 @@ def test_reject_missing_or_failed_exact_source_gate() -> None:
 def test_latest_exact_source_gate_must_pass() -> None:
     duplicate = runs()
     duplicate["workflow_runs"].append({
-        "id": 100, "path": nightly.REQUIRED_WORKFLOWS[0], "event": "merge_group",
+        "id": 100, "path": REQUIRED_WORKFLOWS[0], "event": "merge_group",
         "head_sha": SOURCE, "head_branch": "gh-readonly-queue/main/test",
         "status": "completed", "conclusion": "failure",
     })
@@ -98,20 +104,37 @@ def test_latest_exact_source_gate_must_pass() -> None:
 ])
 def test_intake_rejects_wrong_run(run_change: dict) -> None:
     with pytest.raises(nightly.NightlyClaimError):
-        nightly.validate_intake(claim(), preparation_run(**run_change), current_main_sha=SOURCE)
+        nightly.validate_intake(
+            claim(), preparation_run(**run_change), current_main_sha=SOURCE, policy=POLICY
+        )
 
 
 def test_intake_rejects_stale_main_and_claim_tampering() -> None:
     with pytest.raises(nightly.NightlyClaimError, match="no longer main"):
-        nightly.validate_intake(claim(), preparation_run(), current_main_sha="b" * 40)
+        nightly.validate_intake(
+            claim(), preparation_run(), current_main_sha="b" * 40, policy=POLICY
+        )
     changed = claim()
     changed["publication"] = "permitted"
     with pytest.raises(nightly.NightlyClaimError, match="cannot authorize publication"):
-        nightly.validate_intake(changed, preparation_run(), current_main_sha=SOURCE)
+        nightly.validate_intake(changed, preparation_run(), current_main_sha=SOURCE, policy=POLICY)
     changed = claim()
     changed["tag"] = "v1.2.3"
     with pytest.raises(nightly.NightlyClaimError):
-        nightly.validate_intake(changed, preparation_run(), current_main_sha=SOURCE)
+        nightly.validate_intake(changed, preparation_run(), current_main_sha=SOURCE, policy=POLICY)
+
+
+def test_new_required_policy_gate_cannot_be_silently_omitted() -> None:
+    expanded = {**POLICY, "required_workflows": [
+        *POLICY["required_workflows"],
+        {"path": ".github/workflows/new-required.yml", "event": "merge_group"},
+    ]}
+    with pytest.raises(nightly.NightlyClaimError, match="workflow missing"):
+        claim(policy=expanded)
+    with pytest.raises(nightly.NightlyClaimError, match="incomplete"):
+        nightly.validate_intake(
+            claim(), preparation_run(), current_main_sha=SOURCE, policy=expanded
+        )
 
 
 def test_workflow_contract_has_no_stable_or_recording_dispatch() -> None:
