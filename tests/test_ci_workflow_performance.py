@@ -935,6 +935,50 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
     )
 
 
+def test_release_contract_test_sources_keep_their_release_owner(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    release = workflow["jobs"]["test-release-contracts"]
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in release["steps"]
+    ), "The release lane must execute every narrowed test module"
+
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for path in (
+        "tests/test_stack_tag_gate.py",
+        "tests/test_release_transaction.py",
+        "tests/test_stack_release_contract.py",
+        "tests/test_check_release_absent.py",
+        "tests/test_github_release_environment_preflight.py",
+        "tests/test_release_environment_workflow_contract.py",
+        "tests/test_create_local_release_manifest.py",
+    ):
+        assert _classify_changed_path(path, tmp_path) == selected
+    assert _classify_changed_path(
+        "tests/test_stack_release_contract_helpers.py", tmp_path
+    )["all"] == "true"
+
+    combined = _classify_changed_paths(
+        ["tests/test_stack_tag_gate.py", "services/entrypoint.sh"],
+        tmp_path,
+        combined=True,
+    )[0]
+    assert combined["release"] == combined["rust"] == combined["python"] == "true"
+    assert combined["security"] == "true"
+
+    # The separate merge-group contract below still requires every CI lane.
+
+
 def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:
     """Every direct embedded input outside rust/ must select its Rust consumer."""
     macro_start = re.compile(r"\binclude(?:_(?:str|bytes))?!\s*[({\[]")
