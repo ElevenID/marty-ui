@@ -375,11 +375,19 @@ corpus hashes and all behavioral observations; hosted regeneration is still
 required.
 
 A diagnostic-only lease follow-up splits the post-join body-schedule and
-durable-observation assertions without changing either condition. The current
+durable-observation assertions without changing either condition. The then-current
 19,767-byte expiry corpus hash is
 `335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7`;
 the sole change from the prior expiry corpus is its capture-script provenance
 hash. Exact published-process regeneration remains required.
+
+The 2026-10-04 bounded post-join diagnostic retains exact durable-observation
+equality and reports only fixed changed-section flags on failure. Its current
+19,767-byte corpus hash is
+`24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50`;
+the native expiry driver's raw-corpus pin matches it. The reverse-provenance
+test proves that only the lease-script source pin changed from the preceding
+corpus. A hosted published-process regeneration is still required.
 
 ## Historical 121-entry checkpoint
 

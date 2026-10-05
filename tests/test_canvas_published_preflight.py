@@ -58,18 +58,20 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     )
 
 
-def test_full_mode_is_exactly_four_way_while_every_preflight_stays_serial() -> None:
+def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
     preflight = (
         '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
     )
     serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
-    composition_full = '"$composition_executable" --nocapture --test-threads=4'
+    json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
+    composition_full = '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
     assert sum(line.strip() == preflight for line in script.splitlines()) == 1
     assert sum(line.strip() == serial for line in script.splitlines()) == 1
+    assert sum(line.strip() == json_serial for line in script.splitlines()) == 1
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((2 + ${#preflight_skips[@]} / 2)) ]]"
         in script
     )
     assert script.splitlines().count(
@@ -77,6 +79,7 @@ def test_full_mode_is_exactly_four_way_while_every_preflight_stays_serial() -> N
     ) == 1
     assert script.splitlines().count(worker_full + ' >"$worker_log" 2>&1 &') == 1
     assert script.index(composition_full) < script.index(worker_full)
+    assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
     assert script.rstrip().endswith(
         "(( composition_status == 0 && worker_status == 0 ))"
@@ -261,6 +264,10 @@ elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
   done < "registrations-$name"
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
+  if [[ "$TEST_FAILURE" == json-serial && "$name" == contract &&
+    "$1" == json_consumer_diagnostic_matches_published_boundaries ]]; then
+    exit 26
+  fi
   if [[ "$*" == *--test-threads=4* ]]; then
     printf 'full target %s\n' "$name"
     [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
@@ -314,6 +321,7 @@ fi
         )
         composition = [
             line for line in lines if line.startswith("heartbeat_readiness_")
+            or line.startswith("json_consumer_diagnostic_")
         ]
         worker = [line for line in lines if line not in composition]
         if duplicate_across_targets:
@@ -389,14 +397,16 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     assert result.returncode == 0, result.stderr
     checks = [call[2] for call in calls if call[:2] == ["grep", "-Fx"]]
     serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
+    json_serial = "json_consumer_diagnostic_matches_published_boundaries"
     assert checks == [f"{name}: test" for name in required_registrations()] + [
-        f"{serial}: test"
+        f"{serial}: test",
+        f"{json_serial}: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:5] == [
+    assert children[:6] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
-        ["child", "contract", "1", "--list"],
+        ["child", "contract", "1", "--list", "--skip", json_serial],
         ["child", "worker-contract", "1", "--list", "--skip", serial],
         [
             "child",
@@ -407,10 +417,19 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--nocapture",
             "--test-threads=1",
         ],
-    ]
-    assert sorted(children[5:]) == sorted(
         [
-            ["child", "contract", "1", "--nocapture", "--test-threads=4"],
+            "child",
+            "contract",
+            "1",
+            json_serial,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+    ]
+    assert sorted(children[6:]) == sorted(
+        [
+            ["child", "contract", "1", "--skip", json_serial, "--nocapture", "--test-threads=4"],
             [
                 "child",
                 "worker-contract",
@@ -483,6 +502,23 @@ def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
+
+
+def test_failed_serial_json_probe_stops_before_parallel_targets(shell_case):
+    result, calls = shell_case(failure="json-serial")
+    assert result.returncode != 0
+    assert any(
+        call[1:5]
+        == [
+            "contract",
+            "1",
+            "json_consumer_diagnostic_matches_published_boundaries",
+            "--exact",
+        ]
+        for call in calls
+        if call[0] == "child"
+    )
+    assert not any("--test-threads=4" in call for call in calls)
 
 
 def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):

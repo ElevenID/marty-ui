@@ -52,6 +52,22 @@ def safe_timing_diagnostics(failure):
     return dict(values)
 
 
+def safe_lease_observation_diagnostics(failure):
+    # The lease oracle is imported only by its explicit dispatch branch.
+    owner = sys.modules.get("run_canvas_worker_lease_expiry_oracle")
+    expected_type = getattr(owner, "LeaseObservationChanged", None)
+    if expected_type is None or type(failure) is not expected_type:
+        return None
+    values = failure.__dict__.get("changed_sections")
+    fields = {"jobs", "facts", "oauth", "snapshot", "heartbeat", "target", "shape"}
+    if type(values) is not dict or set(values) != fields:
+        return None
+    if not all(type(value) is bool for value in values.values()):
+        return None
+    # Never return rows, tokens, dynamic timestamps, exception args, or notes.
+    return dict(values)
+
+
 def failure_report(failure):
     report = {
         "status": "failed",
@@ -68,6 +84,9 @@ def failure_report(failure):
     timing = safe_timing_diagnostics(failure)
     if timing is not None:
         report["timing_diagnostics"] = timing
+    lease_observation = safe_lease_observation_diagnostics(failure)
+    if lease_observation is not None:
+        report["lease_observation_diagnostics"] = lease_observation
     return report
 
 

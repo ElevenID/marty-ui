@@ -1313,7 +1313,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1329,8 +1329,12 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
         in published
     )
+    assert (
+        '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
+        in published
+    )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
-    assert '"$composition_executable" --nocapture --test-threads=4' in published
+    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in published
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
 
 
@@ -1383,7 +1387,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1490,8 +1494,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")
