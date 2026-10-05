@@ -39,7 +39,7 @@ struct Process {
 }
 impl Process {
     fn start(environment: &BTreeMap<String, String>, directory: &Path) -> Self {
-        let binary = Path::new(env!("CARGO_BIN_EXE_marty-issuance-service")).with_file_name(
+        let binary = super::super::super::issuance_process::issuance_binary().with_file_name(
             if cfg!(windows) {
                 "marty-flow.exe"
             } else {

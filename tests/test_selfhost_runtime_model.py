@@ -71,7 +71,7 @@ def test_actual_extracted_runtime_model_is_mandatory():
 
 
 def assert_public_image_loader_connected(reader):
-    source = reader("rust/services/issuance/tests/canvas_published_schema_contract.rs")
+    source = reader("rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs")
     runtime = reader(
         "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs"
     )
@@ -204,7 +204,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
         source = read(name)
         replacements = {
             "source": (
-                "rust/services/issuance/tests/canvas_published_schema_contract.rs",
+                "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs",
                 "selfhost_packaged_runtime::run_isolated_child()",
             ),
             "runner": (

@@ -34,8 +34,7 @@ find_executable() {
   local target="$1"
   local package
   case "$target" in
-    canvas_published_schema_contract) package=marty-issuance-service ;;
-    canvas_published_worker_contract) package=marty-service-acceptance ;;
+    canvas_published_schema_contract|canvas_published_worker_contract) package=marty-service-acceptance ;;
     *) echo "Unknown Canvas contract target: $target" >&2; return 1 ;;
   esac
   local -a matches=()
@@ -51,13 +50,14 @@ find_executable() {
   }
   printf '%s\n' "${matches[0]}"
 }
-find_worker_binary() {
+find_issuance_package_binary() {
+  local target="$1"
   local -a matches=()
   local output
-  output=$(jq -r '
+  output=$(jq -r --arg target "$target" '
     select(.reason == "compiler-artifact")
     | select(.package_id | contains("#marty-issuance-service@"))
-    | select(.target.name == "marty-canvas-sync-worker")
+    | select(.target.name == $target)
     | select(.target.kind | index("bin"))
     | select(.profile.test == false)
     | select(.executable != null) | .executable
@@ -66,15 +66,17 @@ find_worker_binary() {
     mapfile -t matches <<< "$output"
   fi
   [[ ${#matches[@]} == 1 && "${matches[0]}" == /* && -x "${matches[0]}" ]] || {
-    echo "Expected one real marty-canvas-sync-worker binary artifact (found ${#matches[@]})" >&2
+    echo "Expected one real $target binary artifact (found ${#matches[@]})" >&2
     return 1
   }
   printf '%s\n' "${matches[0]}"
 }
 composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
-worker_binary=$(find_worker_binary)
+worker_binary=$(find_issuance_package_binary marty-canvas-sync-worker)
+issuance_binary=$(find_issuance_package_binary marty-issuance-service)
 export MARTY_CANVAS_WORKER_TEST_BINARY="$worker_binary"
+export MARTY_ISSUANCE_TEST_BINARY="$issuance_binary"
 composition_tests=$("$composition_executable" --list)
 worker_tests=$("$worker_executable" --list)
 all_test_names=$(printf '%s\n%s\n' "$composition_tests" "$worker_tests" | grep ': test$')

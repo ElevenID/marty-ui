@@ -152,5 +152,7 @@ def test_both_stream_capture_is_bounded_before_failure_artifact_write():
     assert "&output.stdout," in source and "&output.stderr," in source
     assert (
         "mod runtime_failure_diagnostics;"
-        in (support.parent / "canvas_published_schema_contract.rs").read_text()
+        in (
+            ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        ).read_text()
     )

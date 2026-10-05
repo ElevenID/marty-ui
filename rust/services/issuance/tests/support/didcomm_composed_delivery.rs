@@ -209,7 +209,12 @@ async fn publish_renewal(
     )
 }
 
-async fn unexpected_peer(State(state): State<Peers>) -> StatusCode {
+async fn unexpected_peer(State(state): State<Peers>, request: Request<Body>) -> StatusCode {
+    eprintln!(
+        "Unexpected controlled DIDComm peer request: method={} path={}",
+        request.method(),
+        request.uri().path()
+    );
     state.unexpected.fetch_add(1, Ordering::SeqCst);
     StatusCode::NOT_FOUND
 }
