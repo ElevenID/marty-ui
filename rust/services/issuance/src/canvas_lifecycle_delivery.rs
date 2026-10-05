@@ -544,7 +544,7 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MemoryProvider(Mutex<Vec<Value>>);
+    struct MemoryProvider(Mutex<Vec<Value>>, bool);
 
     #[async_trait]
     impl CanvasLifecycleStatusProvider for MemoryProvider {
@@ -563,6 +563,11 @@ mod tests {
                 "action":action.as_str(),
                 "reason":reason,
             }));
+            if self.1 {
+                return Err(CanvasLifecycleProviderError(
+                    "synthetic provider outage".to_owned().into(),
+                ));
+            }
             Ok(crate::lossless_json::object(
                 json!({"provider_result":"ok"}).as_object().unwrap().clone(),
             ))
@@ -704,6 +709,30 @@ mod tests {
         );
         assert_eq!(provider.0.lock().unwrap().len(), 1);
         assert_eq!(store.saves.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn mock_store_persists_provider_failure_for_retry() {
+        let store = Arc::new(MemoryStore::new(json!({
+            "canvas_program_binding_id":"binding-a"
+        })));
+        let provider = Arc::new(MemoryProvider(Mutex::new(Vec::new()), true));
+        let synchronizer = CanvasLifecycleDeliverySynchronizer {
+            store: store.clone(),
+            provider: provider.clone(),
+        };
+        synchronizer
+            .synchronize(&credential(), CredentialLifecycleAction::Suspend, None)
+            .await
+            .unwrap();
+        assert_eq!(provider.0.lock().unwrap().len(), 1);
+        let saved = store.saves.lock().unwrap();
+        assert_eq!(saved[0]["last_error"], "synthetic provider outage");
+        assert_eq!(
+            saved[0]["metadata"]["last_status_sync_error"],
+            "synthetic provider outage"
+        );
+        assert_eq!(saved[0]["metadata"]["status_sync_attempts"], 1);
     }
 
     #[test]
