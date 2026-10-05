@@ -57,7 +57,8 @@ jobs:
             --claim claim/nightly-claim.json --run-json preparation-run.json \
             --current-main-sha "$current_main" --output admitted-nightly-claim.json
           tag="$(jq -er .tag admitted-nightly-claim.json)"
-          if git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}" | grep -q .; then
+          tag_refs="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+          if [[ -n "$tag_refs" ]]; then
             echo "::error::Nightly tag already exists"
             exit 1
           fi

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -121,5 +122,25 @@ def test_workflow_contract_has_no_stable_or_recording_dispatch() -> None:
         assert "e2e-tests.yml" not in workflow
         assert "youtube" not in workflow.lower()
         assert "git push" not in workflow
+        assert 'tag_refs="$(git ls-remote --tags origin ' in workflow
+        assert "| grep -q ." not in workflow
     assert "workflow_run:" in intake
     assert "nightly-claim.json" in prepare
+
+
+@pytest.mark.parametrize("workflow_name", [
+    "prepare-nightly-claim.yml", "nightly-claim-intake.yml",
+])
+def test_tag_lookup_failure_cannot_be_accepted_as_absence(workflow_name: str) -> None:
+    if sys.platform == "win32":
+        pytest.skip("workflow shell model runs under native Bash in Linux CI")
+    source = (ROOT / ".github/workflows" / workflow_name).read_text()
+    lookup = next(line.strip() for line in source.splitlines()
+                  if line.strip().startswith('tag_refs="$(git ls-remote '))
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\ngit() { return 42; }\ntag=test\n"
+         + lookup + "\necho accepted"],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 42
+    assert "accepted" not in result.stdout
