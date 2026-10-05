@@ -68,4 +68,4 @@ jobs:
           name: nightly-claim-admitted-${{ github.event.workflow_run.id }}
           path: admitted-nightly-claim.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30

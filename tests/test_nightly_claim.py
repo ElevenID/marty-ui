@@ -124,6 +124,7 @@ def test_workflow_contract_has_no_stable_or_recording_dispatch() -> None:
         assert "git push" not in workflow
         assert 'tag_refs="$(git ls-remote --tags origin ' in workflow
         assert "| grep -q ." not in workflow
+        assert "retention-days: 30" in workflow
     assert "workflow_run:" in intake
     assert "nightly-claim.json" in prepare
 

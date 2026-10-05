@@ -86,4 +86,4 @@ jobs:
           name: nightly-claim-${{ github.run_id }}
           path: nightly-claim.json
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 30
