@@ -52,9 +52,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             )
             self.assertFalse(result["all"])
             self.assertEqual(result["direct"], ["core"])
-            self.assertEqual(
-                result["packages"], ["acceptance", "core", "service"]
-            )
+            self.assertEqual(result["packages"], ["acceptance", "core", "service"])
 
     def test_longest_package_root_owns_nested_input(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -94,6 +92,53 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     self.assertTrue(result["all"])
                     self.assertEqual(len(result["packages"]), 6)
                     self.assertIn("non-Cargo runtime consumers", result["reason"])
+
+    def test_notification_runtime_edges_are_observed_without_narrowing(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/notification/src/main.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertEqual(
+            {edge["package"] for edge in result["observed_non_cargo_consumers"]},
+            {"marty-applicant", "marty-gateway", "marty-selfhost-bundle"},
+        )
+        for edge in result["observed_non_cargo_consumers"]:
+            with self.subTest(consumer=edge["package"]):
+                self.assertEqual(edge["producer"], "marty-notification")
+                self.assertIn(edge["package"], packages)
+                self.assertIn(
+                    edge["binding"],
+                    (ROOT / edge["evidence"]).read_text(encoding="utf-8"),
+                )
+                if "runtime_evidence" in edge:
+                    self.assertIn(
+                        edge["runtime_marker"],
+                        (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
+                    )
+                self.assertNotIn(
+                    "marty-notification",
+                    {dep["name"] for dep in packages[edge["package"]]["dependencies"]},
+                )
+
+    def test_notification_edge_diagnostic_does_not_replace_unknown_service_fallback(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            [
+                "rust/services/notification/src/main.rs",
+                "rust/services/gateway/src/config.rs",
+            ],
+            metadata,
+            ROOT,
+        )
+        self.assertTrue(result["all"])
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        self.assertEqual(len(result["packages"]), len(metadata["workspace_members"]))
 
     def test_shared_and_unowned_inputs_request_full_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
