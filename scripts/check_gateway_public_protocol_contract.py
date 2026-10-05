@@ -277,7 +277,8 @@ def _rust_service_source() -> str:
     return "\n".join(sources)
 
 
-def _assert_rust_behavior_vectors() -> None:
+def _assert_rust_behavior_vector_references() -> None:
+    """Check source references only; Rust test execution belongs to the Cargo lane."""
     source = _rust_service_source()
     vectors = sorted((REPO_ROOT / "contracts").glob("gateway-*-behavior.json"))
     vectors.extend(
@@ -290,7 +291,7 @@ def _assert_rust_behavior_vectors() -> None:
     missing = [path.name for path in vectors if path.name not in source]
     if missing:
         raise AssertionError(
-            "gateway behavior vectors are not executed by Rust tests: "
+            "gateway behavior vectors are not referenced by Rust service source: "
             + ", ".join(missing)
         )
 
@@ -302,7 +303,7 @@ def check_contract(protocol_root: Path) -> None:
     assert_documented_public_boundary()
     _assert_trust_ui_boundary()
     _assert_dto_shapes(protocol_root)
-    _assert_rust_behavior_vectors()
+    _assert_rust_behavior_vector_references()
 
 
 def main() -> int:

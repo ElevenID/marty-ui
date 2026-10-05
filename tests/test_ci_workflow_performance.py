@@ -984,6 +984,55 @@ def test_release_contract_test_sources_keep_their_release_owner(
     # The separate merge-group contract below still requires every CI lane.
 
 
+def test_release_owned_policy_test_sources_have_no_second_execution_owner(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    )
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    candidates = (
+        "tests/test_sanitize_sccache_stats.py",
+        "tests/test_oss_boundary.py",
+        "tests/test_public_protocol_documentation.py",
+        "tests/test_ci_database_groups.py",
+        "tests/test_rust_ownership.py",
+    )
+    ci_source = CI_PATH.read_text(encoding="utf-8")
+    for path in candidates:
+        assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
+        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+            if other_workflow == CI_PATH:
+                continue
+            assert path not in other_workflow.read_text(encoding="utf-8")
+        assert _classify_changed_path(path, tmp_path) == selected
+
+    assert _classify_changed_path(
+        "tests/test_sanitize_sccache_stats_helpers.py", tmp_path
+    )["all"] == "true"
+    assert _classify_changed_paths(
+        ["tests/test_oss_boundary.py", "services/entrypoint.sh"],
+        tmp_path,
+        combined=True,
+    )[0]["all"] == "false"
+    assert _classify_changed_paths(
+        ["tests/test_oss_boundary.py", "unknown-new-input.txt"],
+        tmp_path,
+        combined=True,
+    )[0]["all"] == "true"
+
+
 def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:
     """Every direct embedded input outside rust/ must select its Rust consumer."""
     macro_start = re.compile(r"\binclude(?:_(?:str|bytes))?!\s*[({\[]")

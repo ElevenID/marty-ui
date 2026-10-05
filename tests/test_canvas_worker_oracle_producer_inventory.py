@@ -11,6 +11,56 @@ ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts"
 SCRIPTS = ROOT / "scripts"
 MANIFEST = CONTRACTS / "canvas-worker-oracle-producers.json"
+PREPARER = SCRIPTS / "prepare_canvas_published_schema.py"
+
+
+def preparer_worker_runners(source):
+    """Read the two current worker-dispatch forms without executing the preparer."""
+    tree = ast.parse(source)
+    direct = {
+        f"{node.module}.py"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        and node.module is not None
+        and node.module.startswith("run_canvas_worker_")
+    }
+    dispatch_loops = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.For)
+        and isinstance(node.target, ast.Tuple)
+        and len(node.target.elts) == 3
+        and all(isinstance(item, ast.Name) for item in node.target.elts)
+        and [item.id for item in node.target.elts] == ["flag", "name", "key"]
+    ]
+    assert len(dispatch_loops) == 1, "Review published preparer dispatch shape"
+    loop = dispatch_loops[0]
+    assert isinstance(loop.iter, ast.List), "Review published preparer dispatch source"
+    names = []
+    for entry in loop.iter.elts:
+        assert isinstance(entry, ast.Tuple) and len(entry.elts) == 3
+        name = entry.elts[1]
+        assert isinstance(name, ast.Constant) and isinstance(name.value, str), (
+            "Review dynamic published preparer dispatch"
+        )
+        names.append(name.value)
+    templates = [
+        node
+        for node in ast.walk(loop)
+        if isinstance(node, ast.JoinedStr)
+        and any(
+            isinstance(part, ast.Constant)
+            and "/verification/scripts/run_canvas_" in str(part.value)
+            for part in node.values
+        )
+    ]
+    assert len(templates) == 1, "Review published preparer script dispatch"
+    assert ast.unparse(templates[0]) == (
+        "f'/verification/scripts/run_canvas_{name}_oracle.py'"
+    ), "Review published preparer script template"
+    return direct | {
+        f"run_canvas_{name}_oracle.py" for name in names if name.startswith("worker_")
+    }
 
 
 def test_oracle_producer_inventory_covers_every_corpus_once():
@@ -21,6 +71,7 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
         "purpose",
         "direct_runner_corpora",
         "shared_runner_corpora",
+        "standalone_runner_entries",
         "external_fixture_corpora",
         "standalone_scenarios",
     }
@@ -93,6 +144,35 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     }
     assert mapped_runners == actual_runners, (
         "New producers need corpus ownership review"
+    )
+    standalone = inventory["standalone_runner_entries"]
+    assert set(standalone) == {"run_canvas_worker_logging_oracle.py"}
+    for runner, launcher in standalone.items():
+        source = (ROOT / launcher).read_text(encoding="utf-8")
+        assert source.count(f"/verification/scripts/{runner}") == 2, (
+            "Review standalone historical launcher mounting and invocation"
+        )
+        assert launcher in (ROOT / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        ), "Standalone historical runner must remain in CI"
+    assert preparer_worker_runners(PREPARER.read_text(encoding="utf-8")) == (
+        mapped_runners - set(standalone)
+    ), "Published preparer worker dispatch needs producer-ownership review"
+
+
+def test_preparer_worker_dispatch_guard_rejects_unmapped_runner():
+    source = PREPARER.read_text(encoding="utf-8")
+    existing = "from run_canvas_worker_lease_expiry_oracle import run"
+    assert source.count(existing) == 1
+    changed = source.replace(
+        existing,
+        existing + "\n            from run_canvas_worker_new_oracle import run",
+    )
+    assert "run_canvas_worker_new_oracle.py" in preparer_worker_runners(changed)
+    assert "run_canvas_worker_new_oracle.py" not in preparer_worker_runners(source)
+    removed = source.replace(existing, "")
+    assert "run_canvas_worker_lease_expiry_oracle.py" not in preparer_worker_runners(
+        removed
     )
 
 
