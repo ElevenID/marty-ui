@@ -4,11 +4,11 @@ use tracing::instrument::WithSubscriber;
 
 #[path = "../../selfhost-bundle/tests/support/extracted_bundle.rs"]
 mod selfhost_extracted;
-#[path = "../../../services/issuance/tests/support/selfhost_packaged_runtime.rs"]
+#[path = "support/selfhost_packaged_runtime.rs"]
 mod selfhost_packaged_runtime;
 #[path = "../../selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"]
 mod selfhost_prepared;
-#[path = "../../../services/issuance/tests/support/selfhost_runtime_sidecar.rs"]
+#[path = "support/selfhost_runtime_sidecar.rs"]
 mod selfhost_runtime_sidecar;
 
 #[test]
@@ -57,17 +57,17 @@ async fn selfhost_public_image_loader_child() {
 #[path = "../../../services/issuance/tests/support/renewal_reference_fixture.rs"]
 mod renewal_reference_fixture;
 
-#[path = "../../../services/issuance/tests/support/base_runtime_canvas.rs"]
+#[path = "support/base_runtime_canvas.rs"]
 mod base_runtime_canvas;
-#[path = "../../../services/issuance/tests/support/base_runtime_container.rs"]
+#[path = "support/base_runtime_container.rs"]
 mod base_runtime_container;
-#[path = "../../../services/issuance/tests/support/base_runtime_didcomm.rs"]
+#[path = "support/base_runtime_didcomm.rs"]
 mod base_runtime_didcomm;
-#[path = "../../../services/issuance/tests/support/base_runtime_gateway.rs"]
+#[path = "support/base_runtime_gateway.rs"]
 mod base_runtime_gateway;
-#[path = "../../../services/issuance/tests/support/base_runtime_ordinary.rs"]
+#[path = "support/base_runtime_ordinary.rs"]
 mod base_runtime_ordinary;
-#[path = "../../../services/issuance/tests/support/base_runtime_redis.rs"]
+#[path = "support/base_runtime_redis.rs"]
 mod base_runtime_redis;
 mod bounded_fixture_command {
     include!("../../../services/issuance/tests/support/bounded_fixture_command.rs");
@@ -79,7 +79,7 @@ mod envoy_runtime;
 mod envoy_runtime_sidecar;
 #[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
 mod issuance_named_peers;
-#[path = "../../../services/issuance/tests/support/rendered_base_process.rs"]
+#[path = "support/rendered_base_process.rs"]
 mod rendered_base_process;
 #[path = "../../../services/issuance/tests/support/renewal_binding_postgres.rs"]
 mod renewal_binding_postgres;
@@ -91,9 +91,9 @@ mod renewal_gateway_replay;
 mod renewal_main_replay;
 #[path = "../../../services/issuance/tests/support/resolved_kubernetes_runtime.rs"]
 mod resolved_kubernetes_runtime;
-#[path = "../../../services/issuance/tests/support/resolved_runtime.rs"]
+#[path = "support/resolved_runtime.rs"]
 mod resolved_runtime;
-#[path = "../../../services/issuance/tests/support/runtime_failure_diagnostics.rs"]
+#[path = "support/runtime_failure_diagnostics.rs"]
 mod runtime_failure_diagnostics;
 
 #[test]

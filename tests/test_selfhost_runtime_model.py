@@ -10,6 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
 SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
 ADAPTER = "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
+PACKAGED = "rust/crates/service-acceptance/tests/support/selfhost_packaged_runtime.rs"
+SIDECAR = "rust/crates/service-acceptance/tests/support/selfhost_runtime_sidecar.rs"
 NAME = (
     "actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references"
 )
@@ -72,10 +74,10 @@ def test_actual_extracted_runtime_model_is_mandatory():
 
 def assert_public_image_loader_connected(reader):
     source = reader("rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs")
-    runtime = reader(
-        "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs"
-    )
-    sidecar = reader("rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs")
+    runtime = reader(PACKAGED)
+    sidecar = reader(SIDECAR)
+    assert '#[path = "support/selfhost_packaged_runtime.rs"]' in source
+    assert '#[path = "support/selfhost_runtime_sidecar.rs"]' in source
     main = reader("rust/services/issuance/src/main.rs")
     runner = reader("scripts/ci/run-published-canvas-contracts.sh")
     workflow = yaml.safe_load(reader(".github/workflows/ci.yml"))
@@ -219,35 +221,35 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
             "image": (".github/workflows/ci.yml", "MARTY_SELFHOST_TEST_IMAGE"),
             "revision": (".github/workflows/ci.yml", "MARTY_SELFHOST_TEST_REVISION"),
             "pending": (
-                "rust/services/issuance/tests/support/selfhost_runtime_sidecar.rs",
+                SIDECAR,
                 "create_new(true)",
             ),
             "ownership": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "ALTER SCHEMA issuance_service OWNER TO marty",
             ),
             "ownership-proof": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "pg_get_userbyid(datdba) = 'marty'",
             ),
             "ownership-seed": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "seed(&check).await?;",
             ),
             "ownership-stage": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 'record_database_stage("transfer-ownership")',
             ),
             "migration-owned-projection": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)",
             ),
             "wrong-password-running": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "matches!(case, SecretCase::Correct | SecretCase::CrLf)",
             ),
             "wrong-password-marker": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "issuance startup database authentication failed",
             ),
             "wrong-password-sqlstate": (
@@ -255,7 +257,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
                 'database_sqlstate = "28P01"',
             ),
             "wrong-password-structured": (
-                "rust/services/issuance/tests/support/selfhost_packaged_runtime.rs",
+                PACKAGED,
                 "LogExpectation::Structured",
             ),
         }
