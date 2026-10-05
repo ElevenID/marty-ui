@@ -291,8 +291,8 @@ async fn form_experience_login_uses_the_experience_callback_and_last_duplicate_v
 
 #[tokio::test]
 async fn frozen_login_failures_preserve_status_and_detail() {
-    // The source-owned submission unit matrix checks issuer/client mismatches.
-    // Keep these route/repository sentinels for status, detail, and no-write behavior.
+    // Source-owned validation cases cannot replace route/no-write checks: the
+    // route must actually invoke validation for present-hint submissions.
     struct Case {
         name: &'static str,
         platform: Option<CanvasLtiPlatform>,
@@ -329,6 +329,24 @@ async fn frozen_login_failures_preserve_status_and_detail() {
             body: json!({}),
             status: StatusCode::BAD_REQUEST,
             detail: "Canvas LTI login requires login_hint",
+        },
+        Case {
+            name: "issuer_mismatch",
+            platform: Some(ready_platform()),
+            enabled: true,
+            pilots: pilot(),
+            body: json!({"login_hint": "hint", "iss": "https://evil.example"}),
+            status: StatusCode::BAD_REQUEST,
+            detail: "Canvas LTI issuer does not match platform",
+        },
+        Case {
+            name: "client_id_mismatch",
+            platform: Some(ready_platform()),
+            enabled: true,
+            pilots: pilot(),
+            body: json!({"login_hint": "hint", "client_id": "other-client"}),
+            status: StatusCode::BAD_REQUEST,
+            detail: "Canvas LTI client_id does not match platform",
         },
     ];
     for case in cases {
