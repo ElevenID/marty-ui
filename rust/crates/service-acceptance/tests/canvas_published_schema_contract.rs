@@ -504,7 +504,7 @@ mod didcomm_wallet_fixture;
 #[path = "../../../services/issuance/tests/support/didcomm_test_fixtures.rs"]
 mod didcomm_test_fixtures;
 
-#[path = "../../../services/issuance/tests/support/didcomm_composed_delivery.rs"]
+#[path = "support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;
 
 #[tokio::test]
