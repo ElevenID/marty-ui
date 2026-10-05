@@ -23,6 +23,14 @@ for nightly. Map every selected journey to an assertion owner and evidence
 consumer before changing execution. Recording/video is presentation evidence,
 not a substitute for independent behavioral assertions.
 
+The stable stack claim additionally requires a completed successful full Canvas
+qualification from the CI workflow's weekly schedule or manual dispatch on
+the **same protected-main commit**. If main changes after that run, dispatch CI
+again on main and wait for it to complete before preparing the stable tag.
+The routine PR/merge-group CI run is not a substitute: it deliberately omits
+the pinned historical replays. This release-time gate does not run another
+copy of the historical suite on every PR.
+
 ## Approved target policy
 
 - Nightly is a distinct, immutable **prerelease** version and tag, not an

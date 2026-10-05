@@ -177,6 +177,40 @@ def validate_workflow_runs(
                 "conclusion": latest.get("conclusion"),
             }
         )
+    qualification = _object(
+        document.get("required_full_qualification"), "required_full_qualification"
+    )
+    if qualification != {
+        "path": ".github/workflows/ci.yml",
+        "events": ["schedule", "workflow_dispatch"],
+    }:
+        raise StackTagGateError("full Canvas qualification policy is invalid")
+    qualification_runs = [
+        run
+        for run in runs
+        if run.get("path") == qualification["path"]
+        and run.get("event") in qualification["events"]
+        and run.get("head_sha") == expected_commit
+        and run.get("head_branch") == "main"
+        and run.get("id") != current_run_id
+    ]
+    if not qualification_runs:
+        raise StackTagGateError("exact-main full Canvas qualification is missing")
+    latest_qualification = max(
+        qualification_runs, key=lambda run: int(run.get("id", 0))
+    )
+    if latest_qualification.get("status") != "completed":
+        raise StackTagGateError("full Canvas qualification is still pending")
+    if latest_qualification.get("conclusion") != "success":
+        raise StackTagGateError("full Canvas qualification did not succeed")
+    accepted.append(
+        {
+            "path": qualification["path"],
+            "event": latest_qualification["event"],
+            "run_id": latest_qualification["id"],
+            "conclusion": latest_qualification["conclusion"],
+        }
+    )
     return accepted
 
 
