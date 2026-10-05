@@ -140,6 +140,42 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
         self.assertEqual(len(result["packages"]), len(metadata["workspace_members"]))
 
+    def test_auth_outbound_runtime_edges_are_observed_without_narrowing(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        auth_dependencies = {
+            dep["name"] for dep in packages["marty-auth"]["dependencies"]
+        }
+        providers = {
+            "marty-flow": "rust/services/flow/src/lib.rs",
+            "marty-organization": "rust/services/organization/src/lib.rs",
+            "marty-applicant": "rust/services/applicant/src/lib.rs",
+            "marty-issuance-service": "rust/services/issuance/src/lib.rs",
+        }
+        for provider, path in providers.items():
+            with self.subTest(provider=provider):
+                self.assertNotIn(provider, auth_dependencies)
+                self.assertTrue((ROOT / path).is_file())
+                result = planner.plan([path], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == provider and edge["package"] == "marty-auth"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                self.assertIn(
+                    edge["binding"],
+                    (ROOT / edge["evidence"]).read_text(encoding="utf-8"),
+                )
+                self.assertIn(
+                    edge["runtime_marker"],
+                    (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
+                )
+
     def test_shared_and_unowned_inputs_request_full_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

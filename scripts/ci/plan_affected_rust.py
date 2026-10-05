@@ -17,6 +17,44 @@ RUST = ROOT / "rust"
 # Keep the service fallback below until every service and its transitive inputs
 # have an obligation owner. The paths document the source of each observation.
 OBSERVED_NON_CARGO_CONSUMERS = {
+    # Auth connects to these services at runtime. Their package changes can
+    # affect Auth even though Cargo has no reverse dependency on them.
+    "marty-flow": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "FLOW_GRPC_TARGET",
+            "runtime_evidence": "rust/services/auth/src/connections.rs",
+            "runtime_marker": "&config.flow_grpc_target",
+        },
+    ],
+    "marty-organization": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "ORG_GRPC_TARGET",
+            "runtime_evidence": "rust/services/auth/src/connections.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+        },
+    ],
+    "marty-applicant": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "APPLICANT_SERVICE_URL",
+            "runtime_evidence": "rust/services/auth/src/main.rs",
+            "runtime_marker": "config.applicant_service_url.clone()",
+        },
+    ],
+    "marty-issuance-service": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "ISSUANCE_NATIVE_SERVICE_URL",
+            "runtime_evidence": "rust/services/auth/src/main.rs",
+            "runtime_marker": "&config.issuance_native_service_url",
+        },
+    ],
     "marty-notification": [
         {
             "package": "marty-applicant",
