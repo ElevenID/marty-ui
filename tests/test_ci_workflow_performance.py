@@ -1387,7 +1387,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1494,8 +1494,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")
