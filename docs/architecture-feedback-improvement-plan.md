@@ -347,6 +347,8 @@ A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072),
 
 Acceptance support-owner follow-up (local candidate, 2026-10-05): eleven self-host and base-runtime support modules used only by `canvas_published_schema_contract` are moved from issuance's test directory into `marty-service-acceptance/tests/support`. The module import paths and Python ownership guards change, but assertions, target names, runtime inputs, and CI triggers do not. Shared Canvas database/command helpers still used by issuance examples remain in their existing location; moving them would require a separate shared-fixture boundary. Package-scoped Rust 1.95 acceptance-test `cargo check` and 98 focused Python runtime tests pass locally after the move. Hosted published-process and protected queue validation remain required before any merge or speed claim.
 
+The next A1 support-owner batch moves twelve Flow and DIDComm composition support modules into `marty-service-acceptance/tests/support` after the base-runtime owner move. The files are byte-for-byte renames; only two Rust module paths and two Python ownership-guard paths change. Assertions, target names, process fixtures, and CI triggers remain unchanged. This makes the acceptance target the source owner of its cross-service helpers without claiming a measured runtime reduction. Acceptance-target Cargo check, focused guard tests, independent review, and protected published-process CI are required before merging.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
