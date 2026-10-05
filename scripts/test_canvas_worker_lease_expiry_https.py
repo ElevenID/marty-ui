@@ -29,7 +29,7 @@ CASE_NAMES = tuple(name for name, _ in reference.CASE_LAYOUT)
 # Publication added a default-identity handler hook to the shared HTTPS fixture.
 # Contract tests account exactly for fixture, TLS-helper, and diagnostic-only
 # script provenance updates; hosted regeneration must still match frozen bytes.
-CORPUS_SHA256 = "335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7"
+CORPUS_SHA256 = "24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50"
 SCHEMA = "marty.canvas-worker-lease-expiry-native-observation/v1"
 STATUSES = frozenset(("leased", "succeeded", "retry", "dead_letter"))
 FIELDS = frozenset(
