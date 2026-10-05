@@ -962,6 +962,10 @@ def test_release_contract_test_sources_keep_their_release_owner(
         "tests/test_github_release_environment_preflight.py",
         "tests/test_release_environment_workflow_contract.py",
         "tests/test_create_local_release_manifest.py",
+        "tests/test_build_stack_manifest.py",
+        "tests/test_prepare_official_beta_release.py",
+        "tests/test_stack_pre_promotion.py",
+        "tests/test_local_beta_release_runner.py",
     ):
         assert _classify_changed_path(path, tmp_path) == selected
     assert _classify_changed_path(
