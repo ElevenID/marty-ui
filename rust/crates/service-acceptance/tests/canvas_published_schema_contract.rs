@@ -89,7 +89,7 @@ mod renewal_fresh_main;
 mod renewal_gateway_replay;
 #[path = "support/renewal_main_replay.rs"]
 mod renewal_main_replay;
-#[path = "../../../services/issuance/tests/support/resolved_kubernetes_runtime.rs"]
+#[path = "support/resolved_kubernetes_runtime.rs"]
 mod resolved_kubernetes_runtime;
 #[path = "support/resolved_runtime.rs"]
 mod resolved_runtime;

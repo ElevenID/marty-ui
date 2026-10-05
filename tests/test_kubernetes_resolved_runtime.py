@@ -38,7 +38,7 @@ def required(source, runner, workflow):
         '#[path = "support/resolved_runtime.rs"]\nmod resolved_runtime;'
     ) == 1
     assert source.count(
-        '#[path = "../../../services/issuance/tests/support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
     ) == 1
     assert "base_runtime_container::run_kubernetes(&owned, &redis)" in source
     assert "renewal_fresh_main::run_kubernetes(" in source
@@ -143,7 +143,7 @@ def test_prepared_model_cleanup_control_is_required(fault):
         "prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored"
     )
     source = (
-        ROOT / "rust/services/issuance/tests/support/resolved_kubernetes_runtime.rs"
+        ROOT / "rust/crates/service-acceptance/tests/support/resolved_kubernetes_runtime.rs"
     ).read_text()
     runner = inputs()[1]
 
