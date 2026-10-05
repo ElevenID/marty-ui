@@ -172,6 +172,23 @@ def test_actual_envoy_gate_is_mandatory_and_unignored():
     assert_registration(*registration_inputs())
 
 
+def test_scalar_yaml_contract_has_fast_renderer_owner_and_real_envoy_gate():
+    name = "feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers"
+    renderer = (
+        ROOT / "rust/crates/release-evidence/src/envoy_config.rs"
+    ).read_text(encoding="utf-8")
+    runtime = (
+        ROOT / "rust/services/issuance/tests/support/envoy_runtime_sidecar.rs"
+    ).read_text(encoding="utf-8")
+    manifest = (ROOT / "rust/crates/release-evidence/Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f"#[test]\n    fn {name}()" in renderer
+    assert name not in runtime
+    assert 'serde_json = { workspace = true, features = ["arbitrary_precision"] }' in manifest
+    assert_registration(*registration_inputs())
+
+
 @pytest.mark.parametrize(
     "kind",
     (

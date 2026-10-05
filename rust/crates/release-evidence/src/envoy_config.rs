@@ -274,3 +274,42 @@ pub fn encode(model: &Value) -> Result<String, &'static str> {
         .map_err(|_| "Cannot encode bounded Envoy configuration")?;
     String::from_utf8(output.0).map_err(|_| "Cannot encode Envoy configuration")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{encode, parse, render, DESCRIPTOR};
+
+    #[test]
+    fn feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers() {
+        let source = include_bytes!("../../../../config/envoy/envoy.yaml");
+        let parsed = parse(source).unwrap();
+        assert_eq!(
+            parsed["static_resources"]["listeners"][0]["address"]["socket_address"]["port_value"]
+                .as_u64(),
+            Some(9000)
+        );
+        let candidate = render(source, DESCRIPTOR).unwrap();
+        let encoded = encode(&candidate).unwrap();
+        assert!(!encoded.contains("$serde_json::private::Number"));
+        // Independent YAML consumer must see scalar numeric nodes. A JSON-only
+        // roundtrip can silently reconstruct the private Number marker instead.
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&encoded).unwrap();
+        assert_eq!(
+            yaml["static_resources"]["listeners"][0]["address"]["socket_address"]["port_value"]
+                .as_u64(),
+            Some(9000)
+        );
+        for cluster in yaml["static_resources"]["clusters"].as_sequence().unwrap() {
+            assert!(
+                cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]
+                    ["address"]["socket_address"]["port_value"]
+                    .as_u64()
+                    .is_some()
+            );
+            assert_eq!(
+                cluster["health_checks"][0]["healthy_threshold"].as_u64(),
+                Some(2)
+            );
+        }
+    }
+}
