@@ -112,6 +112,12 @@ jobs:
                   verification=true
                   release=true
                   ;;
+                scripts/register-canvas-oss-runner.ps1|scripts/runner-routing-label-policy.ps1|scripts/setup-canvas-oss-runner.ps1|tests/test_runner_routing_labels.py|tests/test_canvas_oss_runner_quarantine.py)
+                  # These host-registration inputs are checked by the root
+                  # release pytest suite; they are not public image inputs.
+                  # Manual self-hosted workflows retain their own preflights.
+                  release=true
+                  ;;
                 tests/*|scripts/*|.github/workflows/*|.github/codeql/*|.dockerignore)
                   all=true
                   ;;

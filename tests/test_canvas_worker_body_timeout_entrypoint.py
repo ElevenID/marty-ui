@@ -13,6 +13,36 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_schema_preparer_pin_matches_mounted_source(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    probe = importlib.import_module("prepare_canvas_published_schema")
+    fixture = json.loads(
+        (ROOT / "contracts/canvas-worker-consumer-range-oracle.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert probe.source_sha256() == fixture["schema_preparer_source_sha256"]
+
+
+def test_schema_preparer_pin_is_checked_before_database_access(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    probe = importlib.import_module("prepare_canvas_published_schema")
+    fixture = {"schema_preparer_source_sha256": "0" * 64}
+
+    def read(path, *args, **kwargs):
+        assert path.name == "canvas-worker-consumer-range-oracle.json"
+        return json.dumps(fixture)
+
+    monkeypatch.setattr(Path, "read_text", read)
+    monkeypatch.setattr(
+        probe.importlib.util,
+        "find_spec",
+        lambda *_: pytest.fail("Unpinned preparer reached worker or database access"),
+    )
+    with pytest.raises(RuntimeError, match="schema preparer provenance mismatch"):
+        probe.prepare()
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_body_capture_dispatch_is_explicit_quiet_and_disposes_database(
     monkeypatch, capsys, fails
@@ -27,6 +57,7 @@ def test_body_capture_dispatch_is_explicit_quiet_and_disposes_database(
     source_hash = hashlib.sha256(source.encode()).hexdigest()
     fixture = {
         "observed_source_sha256": source_hash,
+        "schema_preparer_source_sha256": probe.source_sha256(),
         "migration_revisions": ["synthetic-revision"],
     }
 

@@ -274,12 +274,18 @@ printf '%s\n' "$all_test_names" | grep -Fx 'worker_timeout_native_child: test'
 # its own so unrelated test threads cannot affect the positive control.
 serial_test=worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings
 printf '%s\n' "$worker_tests" | grep -Fx "$serial_test: test"
+serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
+printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
-composition_parallel_tests=$("$composition_executable" --list | grep -c ': test$')
+composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" | grep -c ': test$')
 worker_parallel_tests=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}" | grep -c ': test$')
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
-[[ $((all_tests - parallel_tests)) == $((1 + ${#preflight_skips[@]} / 2)) ]]
+[[ $((all_tests - parallel_tests)) == $((2 + ${#preflight_skips[@]} / 2)) ]]
 "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
+# This published-process probe covers the full frozen JSON corpus and has a
+# fixed 120-second deadline. Keep other Canvas tests off this runner while it
+# runs; contention must not turn its contract into an intermittent timeout.
+"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
 # output separate, normally wait for both owners to finish cleanup, and fail
 # if either suite fails. The serial SQL-logging positive control stays outside
@@ -292,7 +298,7 @@ cleanup_target_logs() {
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
-"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!

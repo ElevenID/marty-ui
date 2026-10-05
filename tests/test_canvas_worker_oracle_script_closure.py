@@ -172,6 +172,45 @@ def harness_mount_inputs(source: str) -> dict[str, list[str]]:
     }
 
 
+def harness_extra_scenario_mounts(source: str) -> list[dict[str, object]]:
+    """Inventory the explicit scenario-dependent mounts in the probe builder.
+
+    This deliberately recognizes only the current static match-arm shape. A new
+    expression must be reviewed instead of disappearing from the inventory.
+    """
+    start = "        let extra_scenarios: &[&str] = match script {"
+    end = "        for path in extra_scenarios {"
+    assert source.count(start) == source.count(end) == 1
+    body = source.split(start, 1)[1].split(end, 1)[0]
+    assert body.rstrip().endswith("};")
+    body = body.rstrip()[:-2]
+    arm_pattern = re.compile(
+        r"(?s)(.*?)\s*=>\s*(?:&\[(.*?)\]|\{\s*&\[(.*?)\]\s*\})\s*,?"
+    )
+    arms = list(arm_pattern.finditer(body))
+    assert len(arms) == body.count("=>"), "Review new extra-scenario match syntax"
+    assert "".join(arm.group(0) for arm in arms).strip() == body.strip(), (
+        "Review unmatched extra-scenario mount syntax"
+    )
+    inventory = []
+    for arm in arms:
+        selector = " ".join(arm.group(1).split())
+        paths_source = arm.group(2) if arm.group(2) is not None else arm.group(3)
+        paths = re.findall(r'"((?:scripts|contracts)/[^"\n]+)"', paths_source)
+        residue = re.sub(r'"(?:scripts|contracts)/[^"\n]+"', "", paths_source)
+        assert not residue.strip(" \t\r\n,"), (
+            f"Review nonliteral extra-scenario mount for {selector}"
+        )
+        assert all(".." not in Path(path).parts for path in paths), (
+            f"Review noncanonical extra-scenario mount for {selector}"
+        )
+        assert all((ROOT / path).is_file() for path in paths), (
+            f"Missing extra-scenario mount for {selector}"
+        )
+        inventory.append({"when": selector, "paths": paths})
+    return inventory
+
+
 def test_historical_capture_input_graph_is_reviewed():
     producers = json.loads(PRODUCERS.read_text(encoding="utf-8"))
     runners = {
@@ -182,8 +221,9 @@ def test_historical_capture_input_graph_is_reviewed():
     assert set(inventory) == {
         "schema", "purpose", "direct_imports", "launched_scripts",
         "scenario_literals", "scenario_templates", "harness_path_syntax",
+        "harness_extra_scenarios",
     }
-    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v3"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v4"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
@@ -236,6 +276,9 @@ def test_historical_capture_input_graph_is_reviewed():
     )
     for path in harness["literal_paths"]:
         assert (ROOT / path).is_file(), f"Missing listed harness path: {path}"
+    assert inventory["harness_extra_scenarios"] == harness_extra_scenario_mounts(
+        HARNESS.read_text(encoding="utf-8")
+    ), "Scenario-dependent harness mounts changed; review the inventory"
 
 
 def test_import_graph_detects_transitive_and_dynamic_inputs(tmp_path):
@@ -315,3 +358,37 @@ def test_harness_mount_inventory_detects_new_paths_and_expressions():
     changed = source.replace("scripts/fixture.py", "untracked/path")
     with pytest.raises(AssertionError, match="Review mount source"):
         harness_mount_inputs(changed)
+
+
+def test_harness_extra_scenario_inventory_fails_closed_on_new_syntax():
+    source = (
+        "        let extra_scenarios: &[&str] = match script {\n"
+        '            "worker_deadline" => &["scripts/canvas_worker_output_capture.py"],\n'
+        "            _ => &[],\n"
+        "        };\n"
+        "        for path in extra_scenarios {\n"
+    )
+    assert harness_extra_scenario_mounts(source) == [
+        {
+            "when": '"worker_deadline"',
+            "paths": ["scripts/canvas_worker_output_capture.py"],
+        },
+        {"when": "_", "paths": []},
+    ]
+    changed = source.replace(
+        '"scripts/canvas_worker_output_capture.py"', "dynamic_mount()"
+    )
+    with pytest.raises(AssertionError, match="Review nonliteral"):
+        harness_extra_scenario_mounts(changed)
+    changed = source.replace(
+        '"scripts/canvas_worker_output_capture.py"',
+        '"scripts/missing_fixture.py"',
+    )
+    with pytest.raises(AssertionError, match="Missing extra-scenario mount"):
+        harness_extra_scenario_mounts(changed)
+    changed = source.replace(
+        '"scripts/canvas_worker_output_capture.py"',
+        '"scripts/../scripts/canvas_worker_output_capture.py"',
+    )
+    with pytest.raises(AssertionError, match="Review noncanonical"):
+        harness_extra_scenario_mounts(changed)

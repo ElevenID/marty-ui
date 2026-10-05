@@ -12,7 +12,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-lease-expiry-oracle.json"
 BODY_ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
-CAPTURE_SHA256 = "335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7"
+CAPTURE_SHA256 = "24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50"
+PREVIOUS_DIAGNOSTIC_CAPTURE_SHA256 = "335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7"
 TLS_HELPER_CAPTURE_SHA256 = "340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181"
 PREVIOUS_CAPTURE_SHA256 = "e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853"
 BODY_SHA256 = "7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8"
@@ -23,7 +24,8 @@ OLD_CAPTURE_SCRIPT_SHA256 = "fca12bc82af56d1cf6f852d9166854f92e41cbe00062ef603c6
 NEW_CAPTURE_SCRIPT_SHA256 = "515b9f7c59180bd2613316dade8d894dfd92c06ddae650acebe9b51bc17b762f"
 TLS_HELPER_SHA256 = "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d"
 OLD_LEASE_SCRIPT_SHA256 = "73972e23d054b18437f5ffd2e457584aaaa4dcdb45c3f68539b422e44ba8cd39"
-NEW_LEASE_SCRIPT_SHA256 = "c1f2ac9c3fbee555b8c7e7f230805d626abff58efa20262171e31d4b3559b519"
+PREVIOUS_LEASE_SCRIPT_SHA256 = "c1f2ac9c3fbee555b8c7e7f230805d626abff58efa20262171e31d4b3559b519"
+NEW_LEASE_SCRIPT_SHA256 = "d6ddca1394799df9b5516369459e1e6e57c6b1406f48f3cc7adba06ef5adbbe4"
 CASES = ("renewal_lock_early_release", "renewal_lock_crosses_expiry")
 PROOFS = (
     "blocked_renewal_observed",
@@ -35,11 +37,22 @@ PROOFS = (
 )
 
 
+def test_native_expiry_driver_uses_exact_current_reference_hash(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    native = importlib.import_module("test_canvas_worker_lease_expiry_https")
+    assert native.CORPUS_SHA256 == CAPTURE_SHA256
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == native.CORPUS_SHA256
+
+
 def test_current_corpus_differs_from_independent_capture_only_by_pinned_provenance():
     raw = ORACLE.read_bytes()
     assert raw.count(NEW_LEASE_SCRIPT_SHA256.encode()) == 2
-    prior_diagnostic = raw.replace(
-        NEW_LEASE_SCRIPT_SHA256.encode(), OLD_LEASE_SCRIPT_SHA256.encode()
+    prior_current = raw.replace(
+        NEW_LEASE_SCRIPT_SHA256.encode(), PREVIOUS_LEASE_SCRIPT_SHA256.encode()
+    )
+    assert hashlib.sha256(prior_current).hexdigest() == PREVIOUS_DIAGNOSTIC_CAPTURE_SHA256
+    prior_diagnostic = prior_current.replace(
+        PREVIOUS_LEASE_SCRIPT_SHA256.encode(), OLD_LEASE_SCRIPT_SHA256.encode()
     )
     assert hashlib.sha256(prior_diagnostic).hexdigest() == TLS_HELPER_CAPTURE_SHA256
     helper = b', "test_canvas_lti_https.py": "' + TLS_HELPER_SHA256.encode() + b'"'

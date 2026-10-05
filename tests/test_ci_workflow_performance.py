@@ -815,6 +815,72 @@ def test_canvas_inventory_inputs_keep_their_release_owner_without_full_pr_matrix
     assert all(value == "true" for value in unknown.values())
 
 
+def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    release = workflow["jobs"]["test-release-contracts"]
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in release["steps"]
+    ), "The release lane must still execute the runner policy tests"
+
+    # A newly introduced executable/script consumer must be reviewed before
+    # these exact inputs can retain their narrower PR selection.
+    consumers = {
+        "register-canvas-oss-runner.ps1": {
+            "scripts/setup-canvas-oss-runner.ps1",
+            "tests/test_canvas_oss_acceptance_topology.py",
+            "tests/test_canvas_oss_runner_quarantine.py",
+        },
+        "runner-routing-label-policy.ps1": {
+            "scripts/register-canvas-oss-runner.ps1",
+            "tests/test_canvas_oss_runner_quarantine.py",
+            "tests/test_runner_routing_labels.py",
+        },
+        "setup-canvas-oss-runner.ps1": {
+            "scripts/register-canvas-oss-runner.ps1",
+            "tests/test_canvas_oss_acceptance_topology.py",
+        },
+    }
+    for name, expected in consumers.items():
+        references = subprocess.run(
+            ["git", "grep", "-l", "-F", "--", name],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert {
+            path
+            for path in references.stdout.splitlines()
+            if not path.endswith(".md")
+            and path not in {".github/workflows/ci.yml", "tests/test_ci_workflow_performance.py"}
+        } == expected, f"Review new consumer of {name} before narrowing its gate"
+
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for path in (
+        *(f"scripts/{name}" for name in consumers),
+        "tests/test_runner_routing_labels.py",
+        "tests/test_canvas_oss_runner_quarantine.py",
+    ):
+        assert _classify_changed_path(path, tmp_path) == selected
+    assert _classify_changed_path(
+        "scripts/register-canvas-oss-runner-helper.ps1", tmp_path
+    )["all"] == "true"
+    assert _classify_changed_path(
+        "tests/test_canvas_oss_acceptance_topology.py", tmp_path
+    )["all"] == "true"
+
+
 def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:
     """Every direct embedded input outside rust/ must select its Rust consumer."""
     macro_start = re.compile(r"\binclude(?:_(?:str|bytes))?!\s*[({\[]")
@@ -1247,7 +1313,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1263,8 +1329,12 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
         in published
     )
+    assert (
+        '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
+        in published
+    )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
-    assert '"$composition_executable" --nocapture --test-threads=4' in published
+    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in published
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
 
 
@@ -1317,7 +1387,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            '"$composition_executable" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1426,8 +1496,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")

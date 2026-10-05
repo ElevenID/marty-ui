@@ -131,7 +131,7 @@ def assert_registration(source, runner, workflow):
     assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
     assert '[[ -f "$evidence" ]]' in runner
-    assert '"$composition_executable" --nocapture --test-threads=4' in runner
+    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in runner
     jobs = workflow["jobs"]
     steps = jobs["test-rust-services"]["steps"]
     builds = [
