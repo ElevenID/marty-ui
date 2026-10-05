@@ -1123,6 +1123,7 @@ mod tests {
                 json!({"min_score_percent":70}),
             )]),
             facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
@@ -1237,6 +1238,7 @@ mod tests {
     struct SimulatorRepository {
         resources: CanvasSyncResources,
         facts: Mutex<Vec<Value>>,
+        identities: Mutex<Option<BTreeMap<String, CanvasLinkedIdentitySnapshot>>>,
         candidates: Mutex<BTreeMap<String, CanvasRosterCandidate>>,
         observations: Mutex<BTreeMap<String, Vec<CanvasCandidateObservationSnapshot>>>,
         cursor: Mutex<Option<(usize, usize)>>,
@@ -1282,6 +1284,9 @@ mod tests {
             _: &str,
             user: &str,
         ) -> Result<Option<CanvasLinkedIdentitySnapshot>, CanvasSyncProcessingError> {
+            if let Some(identities) = self.identities.lock().unwrap().as_ref() {
+                return Ok(identities.get(user).cloned());
+            }
             Ok(Some(CanvasLinkedIdentitySnapshot {
                 id: format!("identity-{user}"),
                 lti_subject: format!("subject-{user}"),
@@ -1636,6 +1641,7 @@ mod tests {
                 json!({"min_score_percent":70}),
             )]),
             facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
@@ -1772,6 +1778,7 @@ mod tests {
         let repository = Arc::new(SimulatorRepository {
             resources: simulator_resources(requirements),
             facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
@@ -1813,6 +1820,7 @@ mod tests {
         let repository = Arc::new(SimulatorRepository {
             resources: simulator_resources(requirements),
             facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
@@ -1865,6 +1873,152 @@ mod tests {
         assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 2)));
     }
 
+    #[derive(Debug)]
+    struct MixedRosterProvider;
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for MixedRosterProvider {
+        fn for_run(
+            self: Arc<Self>,
+            _: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
+        async fn read_requirement(
+            &self,
+            resources: &CanvasSyncResources,
+            requirement: &Value,
+            canvas_user_id: Option<&str>,
+            lti_subject: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            SimulatorProvider
+                .read_requirement(resources, requirement, canvas_user_id, lti_subject)
+                .await
+        }
+
+        async fn roster(
+            &self,
+            _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
+            _: &[Value],
+            _: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            let matrix: Value = serde_json::from_str(include_str!(
+                "../../../../contracts/canvas-worker-mixed-roster-scenarios.json"
+            ))
+            .unwrap();
+            let users = matrix["roster_users"].as_array().unwrap();
+            let active_12 = matrix["cases"][0]["stages"][0]["active_12"] == true;
+            Ok(CanvasRosterSnapshot {
+                canvas_user_ids: users.iter().map(|value| value.to_string()).collect(),
+                lti_subjects: matrix["identities"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|identity| {
+                        identity["status"] == "linked" && (identity["user"] != "12" || active_12)
+                    })
+                    .map(|identity| format!("subject-{}", identity["user"].as_str().unwrap()))
+                    .collect(),
+                preloaded_observations: BTreeMap::new(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_roster_unit_window_preserves_terminal_states_and_identity_gates() {
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-mixed-roster-scenarios.json"
+        ))
+        .unwrap();
+        let requirements: Vec<Value> = serde_json::from_str(
+            &serde_json::to_string(&matrix["requirements"])
+                .unwrap()
+                .replace("{origin}", "https://canvas.test"),
+        )
+        .unwrap();
+        let identities = matrix["identities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|identity| {
+                let user = identity["user"].as_str().unwrap();
+                (
+                    user.to_owned(),
+                    CanvasLinkedIdentitySnapshot {
+                        id: format!("identity-{user}"),
+                        lti_subject: format!("subject-{user}"),
+                        canvas_user_id: Some(user.to_owned()),
+                        status: identity["status"].as_str().unwrap().to_owned(),
+                    },
+                )
+            })
+            .collect();
+        let repository = Arc::new(SimulatorRepository {
+            resources: simulator_resources(requirements),
+            facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(Some(identities)),
+            candidates: Mutex::new(BTreeMap::new()),
+            observations: Mutex::new(BTreeMap::new()),
+            cursor: Mutex::new(None),
+            disabled: Mutex::new(false),
+        });
+        for terminal in matrix["terminal_candidates"].as_array().unwrap() {
+            let user = terminal["user"].as_str().unwrap();
+            let state = terminal["state"].as_str().unwrap();
+            let key = candidate_key("platform-1", "binding-1", Some(user), None);
+            repository.candidates.lock().unwrap().insert(
+                key.clone(),
+                CanvasRosterCandidate {
+                    id: format!("candidate-{user}"),
+                    candidate_key: key,
+                    canvas_user_id: Some(user.to_owned()),
+                    lti_subject: None,
+                    learner_identity_id: None,
+                    state: state.to_owned(),
+                },
+            );
+        }
+        let processor = NativeCanvasSyncProcessor::new(
+            repository.clone(),
+            Arc::new(MixedRosterProvider),
+            enabled_config(),
+            matrix["batch_size"].as_u64().unwrap() as usize,
+            matrix["roster_limit"].as_u64().unwrap() as usize,
+        );
+        let mut first = target(CanvasSyncTargetType::BackgroundRoster);
+        first.metadata.insert(
+            "roster_cursor".into(),
+            matrix["cases"][0]["initial_cursor"].clone(),
+        );
+        let first_result = run_simulated(&processor, first).await.unwrap();
+        assert_eq!(first_result["candidates_seen"].get(), "3");
+        assert_eq!(first_result["pending_claim"].get(), "1");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+
+        let second_result =
+            run_simulated(&processor, target(CanvasSyncTargetType::BackgroundRoster))
+                .await
+                .unwrap();
+        assert_eq!(second_result["candidates_seen"].get(), "3");
+        assert_eq!(second_result["pending_claim"].get(), "0");
+        assert_eq!(second_result["identity_link_required"].get(), "3");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((3, 6)));
+        let candidates = repository.candidates.lock().unwrap();
+        for (user, state) in [
+            ("7", "claimed"),
+            ("8", "dismissed"),
+            ("9", "pending_claim"),
+            ("10", "identity_link_required"),
+            ("11", "identity_link_required"),
+            ("12", "identity_link_required"),
+        ] {
+            let key = candidate_key("platform-1", "binding-1", Some(user), None);
+            assert_eq!(candidates[&key].state, state, "user {user}");
+        }
+    }
+
     #[tokio::test]
     async fn expired_issued_drift_disables_without_provider_or_fact_mutation() {
         let repository = Arc::new(SimulatorRepository {
@@ -1876,6 +2030,7 @@ mod tests {
                 json!({"completed":true}),
             )]),
             facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
