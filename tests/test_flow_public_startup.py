@@ -26,7 +26,7 @@ def test_public_flow_main_gate_is_registered_and_required():
 
 def test_public_flow_gate_uses_real_main_and_retains_historical_gates():
     helper = (
-        ROOT / "rust/services/issuance/tests/support/flow_public_startup.rs"
+        ROOT / "rust/crates/service-acceptance/tests/support/flow_public_startup.rs"
     ).read_text()
     assert '"marty-flow.exe"' in helper and '"marty-flow"' in helper
     assert ".env_clear()" in helper

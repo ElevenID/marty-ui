@@ -420,7 +420,7 @@ async fn didcomm_unkeyed_grpc_initiation_composes_real_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "../../../services/issuance/tests/support/didcomm_admission_recovery.rs"]
+#[path = "support/didcomm_admission_recovery.rs"]
 mod didcomm_admission_recovery;
 
 #[tokio::test]

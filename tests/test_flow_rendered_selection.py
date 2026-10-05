@@ -139,7 +139,7 @@ def test_mapping_cannot_hide_missing_or_unowned_bindings(tmp_path, fault):
 
 def test_actual_loader_factory_and_mandatory_gate_are_registered():
     source = (
-        ROOT / "rust/services/issuance/tests/support/flow_rendered_selection.rs"
+        ROOT / "rust/crates/service-acceptance/tests/support/flow_rendered_selection.rs"
     ).read_text()
     assert "FlowServiceConfig::from_env()" in source
     assert "FlowGrpcChannelFactories::from_config(&config)" in source
