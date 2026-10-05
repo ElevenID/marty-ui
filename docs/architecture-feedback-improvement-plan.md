@@ -344,6 +344,10 @@ Later protected observation, 2026-10-04: #1086's third [combined-head run 372298
 
 A1 support-owner follow-up [#1096](https://github.com/ElevenID/marty-ui/pull/1096) moves two self-host runtime fixture modules byte-identically from issuance tests to service acceptance and updates their Rust and Python path consumers. It is stacked on #1086 rather than merged independently. The rebased acceptance-target locked Cargo check and 29 focused Python tests passed locally; independent exact-head review found no code blocker. The stacked PR has only policy checks so far; full PR and protected validation remain required after #1086 merges. No speedup is attributed to this source-ownership move.
 
+A1 Flow support-owner follow-up [#1097](https://github.com/ElevenID/marty-ui/pull/1097) stacks on #1096. It moves seven Flow/DIDComm support modules byte-identically into service acceptance, updates the composition target's root `#[path]`, and updates two Python source-path readers. A locked acceptance-target Cargo check, 18 focused Python tests, and diff checks passed locally; independent review cleared the complete seven-file relative-path closure without dropping a test, assertion, or gate. Other DIDComm source edges remain outside this slice. The stacked PR has not yet received full PR or protected CI, and no speedup is attributed to the move.
+
+The corrected #1095 head's [full PR CI attempt](https://github.com/ElevenID/marty-ui/actions/runs/37236823246) passed all four Canvas native preflights and the historical lease-expiry published-process test, including both lease cases. Its composition target instead failed one unchanged `json_consumer_diagnostic_matches_published_boundaries` probe because the published probe returned `TimeoutError`; 142 composition tests passed, one failed, and 127 worker tests passed with two ignored. This is not a passing CI result or evidence of a harmless failure. Only failed jobs were rerun on the same head; retain the exact diagnostic and all gates while investigating any repeat.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
