@@ -56,18 +56,16 @@ def test_launch_failure_still_runs_sibling(tmp_path: Path) -> None:
     assert "completed" in (tmp_path / "other.log").read_text()
 
 
-def test_four_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
+def test_retained_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
     commands = {
         name: [sys.executable, "-c", f"print('{name}'); raise SystemExit({status})"]
         for name, status in (
-            ("mixed-roster-preflight", 0),
-            ("body-timeout-preflight", 7),
             ("timeout-preflight", 0),
-            ("lease-expiry-preflight", 0),
+            ("lease-expiry-preflight", 7),
         )
     }
     assert GROUPS.run_groups(commands, tmp_path) == {
-        name: (7 if name == "body-timeout-preflight" else 0) for name in commands
+        name: (7 if name == "lease-expiry-preflight" else 0) for name in commands
     }
     for name in commands:
         assert name in (tmp_path / f"{name}.log").read_text(encoding="utf-8")
@@ -101,7 +99,7 @@ def test_split_lanes_run_exactly_their_owned_database_group(
         assert "run-rust-db-contracts.sh" in observed[expected][-1]
 
 
-def test_preflight_evidence_requires_all_four_successes_and_same_executable(
+def test_preflight_evidence_requires_both_successes_and_same_executable(
     tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
@@ -130,7 +128,7 @@ def test_preflight_evidence_requires_all_four_successes_and_same_executable(
         for name in commands:
             (directory / f"{name}.log").write_text("finished\n", encoding="utf-8")
         return {
-            name: (7 if failed and name == "body-timeout-preflight" else 0)
+            name: (7 if failed and name == "lease-expiry-preflight" else 0)
             for name in commands
         }
 
@@ -142,6 +140,9 @@ def test_preflight_evidence_requires_all_four_successes_and_same_executable(
     failed = False
     assert GROUPS.main("preflights") == 0
     assert GROUPS._has_preflight_evidence()
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "1")
+    assert not GROUPS._has_preflight_evidence()
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "0")
     assert GROUPS.main("database") == 0
     assert observed["published-canvas"][-1] == "full-after-preflights"
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")

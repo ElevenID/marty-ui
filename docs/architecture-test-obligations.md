@@ -3,7 +3,7 @@
 Baseline: UI `92e16b2f15045e91a92a737b0a42b431895a8b66`.
 Owner: architecture-feedback implementation; see [the tracker](architecture-feedback-improvement-plan.md).
 
-This is the initial group inventory for A0 and the exact obligation record for the first A1 move. It is not yet a complete dependency manifest and must not be used to skip CI groups. Existing triggers remain authoritative.
+This is the initial group inventory for A0, the exact obligation record for the first A1 move, and the Canvas A4/A5 qualification split. It is not yet a complete dependency manifest for selecting other CI groups. Workflow triggers remain authoritative.
 
 ## Existing groups and ownership constraints
 
@@ -12,13 +12,15 @@ This is the initial group inventory for A0 and the exact obligation record for t
 | Workspace behavior: contracts lane, `cargo test --locked --workspace` | Service/domain behavior, embedded contract corpora, explicit test targets and grouped behavior modules | Some tests return early without configured environments; a successful default workspace run is not evidence of live acceptance. Preserve explicit later invocations. |
 | Native PostgreSQL contracts: `scripts/ci/run-rust-db-contracts.sh` | Real persistence, tenant boundaries, migrations, concurrency, recovery; compiled artifacts and dedicated databases | Preserve suite-specific database ownership and serial requirements. Flow's shared database runs after workspace tests. |
 | Managed signing/passport: contracts lane OpenBao step | Issuance signer + Signing Keys APIs + real Redis/OpenBao + independent OpenSSL verification | First A1 extraction below. Real services and explicit ignored-test execution remain required. |
-| Canvas preflights: `scripts/ci/run-db-contract-groups.py preflights` | Mixed roster, body timeout, timeout, lease expiry | Success evidence is bound to executable digest and run identity. Full-suite skipping is valid only for the exact successful preflights. |
-| Canvas published/native parity: `scripts/ci/run-published-canvas-contracts.sh` | Historical image and PostgreSQL digests; capture/control scripts; scenarios and expected observations; native worker, TLS, database, and process behavior | Serial SQL-logging case plus four-thread remainder. Child/helper tests must retain their parent protocols and environment configuration. |
+| Canvas preflights: `scripts/ci/run-db-contract-groups.py preflights` | Routine CI runs native timeout and lease-expiry cases; scheduled/manual CI additionally runs the long mixed-roster and body-timeout cases | Success evidence is bound to executable digest, run identity, and qualification mode. Reuse skips only preflights actually run in that mode; routine CI also omits the two long matrices from the later worker target. |
+| Canvas published/native parity: `scripts/ci/run-published-canvas-contracts.sh` | Routine CI retains owned native worker, TLS, database, and process behavior. Weekly scheduled or manually dispatched CI also qualifies mixed-roster/body-timeout matrices and all 33 pinned historical-process/repository/cycle replays. | Historical reference replays are not required on PR/merge-queue paths; run the complete qualification on demand with `gh workflow run ci.yml --ref main`. The registered-test count fails closed if a new historical replay is added without classification. Serial SQL logging and the four-thread remainder still apply. Child/helper tests must retain their parent protocols and environment configuration. |
 | DIDComm/renewal/Flow composition inside the Canvas executable | Native delivery, keyed recovery, renewal persistence, HTTP/gRPC boundaries, configured main processes | Shared support modules and actual service binaries; separate ownership is needed before selecting independently. |
 | Deployment/self-host acceptance inside the Canvas executable | Rendered Compose/Kubernetes/Envoy configuration, extracted bundle, actual public image and Bookworm-compatible executable | Has image/build prerequisites independent of ordinary behavior tests. Relative paths, compile-time executable variables and artifact package-ID filters currently bind it to issuance. |
 | Feature regression and passport test-mode image lanes | Distinct features and packaged default/opt-in boundaries | Preserve separate configurations and actual image contents; default workspace testing does not substitute for these lanes. |
 
 For remaining A0 work, enumerate each group's scenario obligations and non-Cargo input closure in a reusable manifest before activating selection. The groups above deliberately remain broad where ownership has not yet been proven.
+
+Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
 ## First extraction: managed passport KMS chain
 

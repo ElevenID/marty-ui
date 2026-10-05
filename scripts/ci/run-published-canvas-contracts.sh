@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
-# A narrow early diagnostic gate precedes the full suite. Its four exact tests
-# are omitted later only with same-run evidence for this compiled executable.
+# A narrow early diagnostic gate precedes the full suite. The two retained
+# exact native preflights are omitted later only with same-run evidence for
+# this compiled executable. The long mixed-roster/body matrices and their
+# pinned historical-process replays remain available through explicit full
+# mode, outside routine PR and merge-queue qualification.
 # Validate before any image/network work; arbitrary test filters are forbidden.
 mode="${1-full}"
+if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" != 0 && "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" != 1 ]]; then
+  echo "Invalid Canvas qualification mode" >&2
+  exit 2
+fi
 if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight ]]; then
   echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight]" >&2
   exit 2
@@ -76,24 +83,45 @@ all_test_names=$(printf '%s\n%s\n' "$composition_tests" "$worker_tests" | grep '
   exit 1
 }
 preflight_skips=()
+expected_skipped_worker_tests=0
 if [[ "$mode" == full-after-preflights ]]; then
   evidence="${RUNNER_TEMP:?}/canvas-published-preflights.sha256"
   [[ -f "$evidence" ]] || { echo "Missing Canvas preflight evidence" >&2; exit 1; }
   mapfile -t proof < "$evidence"
-  [[ ${#proof[@]} == 4 && "${proof[0]}" =~ ^[a-f0-9]{64}$ &&
+  [[ ${#proof[@]} == 5 && "${proof[0]}" =~ ^[a-f0-9]{64}$ &&
     "${proof[0]}" == "$(sha256sum "$worker_executable" | cut -d' ' -f1)" &&
     "${proof[1]}" == "${GITHUB_RUN_ID:?}" &&
     "${proof[2]}" == "${GITHUB_RUN_ATTEMPT:?}" &&
-    "${proof[3]}" == "${GITHUB_JOB:?}" ]] || {
+    "${proof[3]}" == "${GITHUB_JOB:?}" &&
+    "${proof[4]}" == "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" ]] || {
     echo "Canvas preflight evidence does not match this CI run and executable" >&2
     exit 1
   }
-  preflight_skips=(
-    --skip worker_mixed_roster_matches_frozen_published_process
-    --skip worker_body_timeout_matches_frozen_published_process
-    --skip worker_timeout_matches_frozen_published_process
-    --skip worker_lease_expiry_matches_frozen_published_process
-  )
+  if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 1 ]]; then
+    # Manual qualification ran all four exact native preflights in this run.
+    # Historical references remain in the following full worker target.
+    preflight_skips=(
+      --skip worker_mixed_roster_matches_frozen_published_process
+      --skip worker_body_timeout_matches_frozen_published_process
+      --skip worker_timeout_matches_frozen_published_process
+      --skip worker_lease_expiry_matches_frozen_published_process
+    )
+    expected_skipped_worker_tests=4
+  else
+    # Routine feedback keeps the owned worker timeout/lease preflights but
+    # avoids repeating the two long scenario matrices and pinned old process.
+    preflight_skips=(
+      --skip worker_mixed_roster_matches_frozen_published_process
+      --skip worker_body_timeout_matches_frozen_published_process
+      --skip worker_timeout_matches_frozen_published_process
+      --skip worker_lease_expiry_matches_frozen_published_process
+      --skip reference_matches_published
+    )
+    # All 33 historical process/repository/cycle replays are available in
+    # manual qualification, not the PR and merge-queue critical path. A new
+    # replay changes this count and must be deliberately classified.
+    expected_skipped_worker_tests=37
+  fi
 fi
 for image in "${images[@]}"; do
   docker pull "$image"
@@ -278,7 +306,7 @@ all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
 composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" | grep -c ': test$')
 worker_parallel_tests=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}" | grep -c ': test$')
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
-[[ $((all_tests - parallel_tests)) == $((2 + ${#preflight_skips[@]} / 2)) ]]
+[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]
 "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
