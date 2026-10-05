@@ -34,10 +34,12 @@ def required(source, runner, workflow):
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
     assert '[[ -f "$evidence" ]]' in runner
     assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in runner
-    for module in ("resolved_runtime", "resolved_kubernetes_runtime"):
-        assert source.count(
-            f'#[path = "../../../services/issuance/tests/support/{module}.rs"]\nmod {module};'
-        ) == 1
+    assert source.count(
+        '#[path = "support/resolved_runtime.rs"]\nmod resolved_runtime;'
+    ) == 1
+    assert source.count(
+        '#[path = "../../../services/issuance/tests/support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+    ) == 1
     assert "base_runtime_container::run_kubernetes(&owned, &redis)" in source
     assert "renewal_fresh_main::run_kubernetes(" in source
     steps = workflow["jobs"]["test-rust-services"]["steps"]

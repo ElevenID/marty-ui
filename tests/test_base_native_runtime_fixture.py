@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+ACCEPTANCE_SUPPORT = ROOT / "rust/crates/service-acceptance/tests/support"
 FIXTURE = runpy.run_path(str(ROOT / "scripts/render_base_native_runtime_fixture.py"))
 
 
@@ -164,10 +165,10 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
 
 def test_native_launch_has_no_post_render_smoke_overrides():
     renderer = (
-        ROOT / "rust/services/issuance/tests/support/rendered_base_process.rs"
+        ACCEPTANCE_SUPPORT / "rendered_base_process.rs"
     ).read_text()
     text = (
-        ROOT / "rust/services/issuance/tests/support/resolved_runtime.rs"
+        ACCEPTANCE_SUPPORT / "resolved_runtime.rs"
     ).read_text()
     assert re.search(r"\.env_clear\(\)\s*\.envs\(environment\)", text)
     assert "isolated_smoke_command" not in text + renderer
@@ -325,7 +326,7 @@ def compatibility_ci(workflow):
     assert names.index("Compile reusable Rust test executables") < index
     assert index < names.index("Prepare required rendered base executable acceptance")
     source = (
-        ROOT / "rust/services/issuance/tests/support/base_runtime_container.rs"
+        ACCEPTANCE_SUPPORT / "base_runtime_container.rs"
     ).read_text()
     assert (
         "const COMPAT_TEST_EXECUTABLE: &str = "
@@ -604,7 +605,7 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
 
 def test_ordinary_token_snapshot_proves_bounded_expiry_without_ignoring_state():
     ordinary = (
-        ROOT / "rust/services/issuance/tests/support/base_runtime_ordinary.rs"
+        ACCEPTANCE_SUPPORT / "base_runtime_ordinary.rs"
     ).read_text(encoding="utf-8")
 
     def check(source):
