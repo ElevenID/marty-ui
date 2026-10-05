@@ -140,6 +140,32 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
         self.assertEqual(len(result["packages"]), len(metadata["workspace_members"]))
 
+    def test_flow_gateway_route_is_observed_without_narrowing(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/flow/src/lib.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-flow" and edge["package"] == "marty-gateway"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertIn(
+            edge["binding"], (ROOT / edge["evidence"]).read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            edge["runtime_marker"],
+            (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "marty-flow",
+            {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
+        )
+
     def test_auth_outbound_runtime_edges_are_observed_without_narrowing(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

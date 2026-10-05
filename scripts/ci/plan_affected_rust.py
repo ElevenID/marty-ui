@@ -27,6 +27,13 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_evidence": "rust/services/auth/src/connections.rs",
             "runtime_marker": "&config.flow_grpc_target",
         },
+        {
+            "package": "marty-gateway",
+            "evidence": "rust/services/gateway/src/config.rs",
+            "binding": "FLOW_SERVICE_URL",
+            "runtime_evidence": "rust/services/gateway/src/contract.rs",
+            "runtime_marker": '("/v1/flows", "flows")',
+        },
     ],
     "marty-organization": [
         {
