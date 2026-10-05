@@ -124,6 +124,12 @@ jobs:
                   # also run in the required release lane, not service images.
                   release=true
                   ;;
+                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py)
+                  # These test-only policy/helper sources are collected by the
+                  # root release pytest step, with no other CI or image owner.
+                  # Their implementation inputs still retain their own lanes.
+                  release=true
+                  ;;
                 .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
                   verification=true
                   release=true
