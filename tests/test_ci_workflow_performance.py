@@ -1821,6 +1821,79 @@ def test_ui_timing_refresh_runs_after_the_required_ci_gate() -> None:
 
 
 @pytest.mark.parametrize(
+    ("primary", "retry", "expected_success"),
+    [
+        ("success", "skipped", True),
+        ("failure", "success", True),
+        ("failure", "failure", False),
+    ],
+)
+def test_ui_timing_upload_retry_keeps_tests_and_artifact_required(
+    primary: str, retry: str, expected_success: bool
+) -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-ui"]["steps"]
+    unit = next(step for step in steps if step.get("name") == "Unit tests")
+    first = next(step for step in steps if step.get("id") == "ui_timing_upload")
+    second = next(step for step in steps if step.get("id") == "ui_timing_retry")
+    gate = next(
+        step for step in steps if step.get("name") == "Require per-file test timings upload"
+    )
+
+    assert steps.index(unit) < steps.index(first) < steps.index(second) < steps.index(gate)
+    assert "test-ui" in document["jobs"]["ci-gate"]["needs"]
+    assert unit["run"] == "node scripts/run-vitest-shard.mjs ${{ matrix.shard }} 4"
+    assert unit["env"]["VITEST_TIMING_OUTPUT"] == (
+        "${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json"
+    )
+    assert not unit.get("continue-on-error") and not unit.get("if")
+    assert first["if"] == "always()"
+    assert second["if"] == "always() && steps.ui_timing_upload.outcome == 'failure'"
+    assert (retry != "skipped") is (primary == "failure")
+    assert first["continue-on-error"] is True
+    assert second["continue-on-error"] is True
+    assert first["uses"] == second["uses"] == (
+        "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    )
+    for upload in (first, second):
+        assert upload["with"]["name"] == "ui-vitest-timing-${{ matrix.shard }}"
+        assert upload["with"]["path"] == (
+            "${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json"
+        )
+        assert upload["with"]["retention-days"] == 14
+        assert upload["with"]["if-no-files-found"] == "error"
+    assert second["with"]["overwrite"] is True
+    assert not first["with"].get("overwrite")
+    assert gate["if"] == "always()"
+    assert not gate.get("continue-on-error")
+    assert gate["env"] == {
+        "PRIMARY_OUTCOME": "${{ steps.ui_timing_upload.outcome }}",
+        "RETRY_OUTCOME": "${{ steps.ui_timing_retry.outcome }}",
+    }
+
+    git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+    bash = str(git_bash) if os.name == "nt" and git_bash.is_file() else shutil.which("bash")
+    assert bash, "Bash is required to exercise the timing artifact gate"
+    environment = {
+        **os.environ,
+        "PRIMARY_OUTCOME": primary,
+        "RETRY_OUTCOME": retry,
+    }
+    environment.pop("BASH_ENV", None)
+    environment.pop("ENV", None)
+    result = subprocess.run(
+        [bash, "-c", gate["run"]],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_success
+    if not expected_success:
+        assert "Both per-file timing artifact uploads failed" in result.stderr
+
+
+@pytest.mark.parametrize(
     "scenario",
     ["missing", "empty", "unrelated", "nested", "malformed", "not_directory"],
 )
