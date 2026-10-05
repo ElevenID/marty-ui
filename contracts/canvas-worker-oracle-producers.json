@@ -42,6 +42,9 @@
       "canvas-worker-oauth-revocation-selection-oracle.json"
     ]
   },
+  "standalone_runner_entries": {
+    "run_canvas_worker_logging_oracle.py": "scripts/test_canvas_worker_logging_reference.py"
+  },
   "external_fixture_corpora": {
     "canvas-worker-configuration-oracle.json": "docs/canvas-worker-lossless-configuration.md",
     "canvas-worker-consumer-range-oracle.json": "docs/canvas-worker-lossless-configuration.md",
