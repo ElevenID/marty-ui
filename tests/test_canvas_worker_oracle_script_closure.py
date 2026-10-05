@@ -231,6 +231,15 @@ def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
     assert body.count("root.join(&path)") == 1
     assert body.count('root.join("scripts").join(name)') == 1
     assert body.count("root.join(path)") == 3
+    basename_branch, worker_branch = body.split("} else if worker_https {", 1)
+    worker_branch, _ = worker_branch.split("} else {", 1)
+    assert basename_branch.count('let path = format!("scripts/{name}");') == 1, (
+        "Review consumer-helper basename source directory"
+    )
+    assert basename_branch.count("target=/verification/{path},readonly") == 1
+    assert basename_branch.count("root.join(&path)") == 1
+    assert worker_branch.count("target=/verification/scripts/{name},readonly") == 1
+    assert worker_branch.count('root.join("scripts").join(name)') == 1
     groups = []
     for index, array in enumerate(arrays):
         names = re.findall(r'"([^"\n]+)"', array)
@@ -464,4 +473,18 @@ def test_dynamic_helper_mount_inventory_rejects_unreviewed_inputs():
         '"test_canvas_lti_https.py",', 'dynamic_helper_name(),', 1
     )
     with pytest.raises(AssertionError, match="Review consumer-helper mount shape"):
+        harness_dynamic_helper_mounts(changed)
+    changed = source.replace(
+        'let path = format!("scripts/{name}");',
+        'let path = format!("contracts/{name}");',
+        1,
+    )
+    with pytest.raises(AssertionError, match="Review consumer-helper basename source"):
+        harness_dynamic_helper_mounts(changed)
+    changed = source.replace(
+        "target=/verification/scripts/{name},readonly",
+        "target=/verification/other/{name},readonly",
+        1,
+    )
+    with pytest.raises(AssertionError):
         harness_dynamic_helper_mounts(changed)
