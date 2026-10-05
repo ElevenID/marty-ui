@@ -369,13 +369,38 @@ jobs:
           VITEST_TIMING_OUTPUT: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
         run: node scripts/run-vitest-shard.mjs ${{ matrix.shard }} 4
       - name: Upload per-file test timings
+        id: ui_timing_upload
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ui-vitest-timing-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
+      - name: Retry per-file test timings upload
+        id: ui_timing_retry
+        if: always() && steps.ui_timing_upload.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-vitest-timing-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+      - name: Require per-file test timings upload
+        if: always()
+        shell: bash
+        env:
+          PRIMARY_OUTCOME: ${{ steps.ui_timing_upload.outcome }}
+          RETRY_OUTCOME: ${{ steps.ui_timing_retry.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$PRIMARY_OUTCOME" != success && "$RETRY_OUTCOME" != success ]]; then
+            echo "Both per-file timing artifact uploads failed" >&2
+            exit 1
+          fi
 
   test-services:
     name: Service Tests
