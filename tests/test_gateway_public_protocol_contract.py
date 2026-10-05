@@ -3,11 +3,12 @@ from pathlib import Path
 
 import pytest
 
+import scripts.check_gateway_public_protocol_contract as protocol_contract
 from scripts.check_gateway_public_protocol_contract import (
     DTO_SHAPES,
     _assert_issued_credential_extension_contract,
     _assert_protocol_version,
-    _assert_rust_behavior_vectors,
+    _assert_rust_behavior_vector_references,
 )
 
 
@@ -24,8 +25,30 @@ def test_gateway_public_dto_shape_manifest_is_unique_and_versioned() -> None:
     assert all(len(model["fields"]) == len(set(model["fields"])) for model in models)
 
 
-def test_every_gateway_behavior_vector_executes_in_rust() -> None:
-    _assert_rust_behavior_vectors()
+def test_every_gateway_behavior_vector_has_a_rust_source_reference() -> None:
+    _assert_rust_behavior_vector_references()
+
+
+def test_vector_reference_guard_does_not_claim_rust_test_execution(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    contracts = tmp_path / "contracts"
+    contracts.mkdir()
+    (contracts / "gateway-example-behavior.json").write_text("{}", encoding="utf-8")
+    services = tmp_path / "rust" / "services" / "example"
+    services.mkdir(parents=True)
+    source = services / "src.rs"
+    source.write_text(
+        "// gateway-example-behavior.json\n"
+        "// credential-metadata-behavior.json\n"
+        "// vc-api-adapter-behavior.json\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(protocol_contract, "REPO_ROOT", tmp_path)
+    _assert_rust_behavior_vector_references()
+    source.write_text("// gateway-example-behavior.json\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="not referenced by Rust service source"):
+        _assert_rust_behavior_vector_references()
 
 
 def test_ci_pins_the_public_protocol_once_without_repository_secrets() -> None:
