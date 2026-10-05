@@ -1045,6 +1045,18 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
         ROOT / "rust/services/Dockerfile.ci",
         *(ROOT / "rust/services").glob("*/Dockerfile"),
     ]
+    scanned = {path.relative_to(ROOT).as_posix() for path in dockerfiles}
+    for workflow, excluded in (
+        (CI_PATH, set()),
+        (ROOT / ".github/workflows/cd.yml", {"docker/ui.Dockerfile"}),
+    ):
+        image_inputs = set(
+            re.findall(
+                r"(?m)^\s*file:\s+([^\s#]*Dockerfile[^\s#]*)\s*$",
+                workflow.read_text(encoding="utf-8"),
+            )
+        )
+        assert image_inputs - excluded <= scanned, workflow
     for dockerfile in dockerfiles:
         assert dockerfile.is_file()
         for line in dockerfile.read_text(encoding="utf-8").splitlines():
@@ -1061,6 +1073,7 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
             assert all(
                 source not in {".", "./", "tests", "./tests"}
                 and not source.startswith(("tests/", "./tests/"))
+                and not any(char in source for char in "*?[]$")
                 for source in sources
             ), dockerfile
 
