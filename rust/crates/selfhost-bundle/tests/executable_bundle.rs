@@ -14,6 +14,21 @@ use extracted_bundle::{
     assert_contained_references, assert_descriptor_inventory, inventory, ExtractedBundle,
 };
 
+#[test]
+fn jointly_mutated_verified_bundle_is_refused() {
+    extracted_bundle::assert_jointly_mutated_verified_bundle_is_refused();
+}
+
+#[test]
+fn extracted_inputs_survive_child_unwind_until_parent_removes_scratch() {
+    extracted_bundle::assert_extracted_inputs_survive_child_unwind_until_parent_removes_scratch();
+}
+
+#[test]
+fn prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
+    resolved_selfhost_runtime::assert_prepared_inputs_survive_child_unwind_until_parent_removes_scratch();
+}
+
 fn repository() -> PathBuf {
     // Explicit additional qualification can select another reviewed source
     // revision; the mandatory default always qualifies this workspace's source.

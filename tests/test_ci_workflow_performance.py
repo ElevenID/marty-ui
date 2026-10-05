@@ -966,11 +966,15 @@ def test_release_contract_test_sources_keep_their_release_owner(
         "tests/test_prepare_official_beta_release.py",
         "tests/test_stack_pre_promotion.py",
         "tests/test_local_beta_release_runner.py",
+        "tests/test_selfhost_packager_reference.py",
     ):
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         assert _classify_changed_path(path, tmp_path) == selected
     assert _classify_changed_path(
         "tests/test_stack_release_contract_helpers.py", tmp_path
+    )["all"] == "true"
+    assert _classify_changed_path(
+        "tests/test_selfhost_packager_reference_helpers.py", tmp_path
     )["all"] == "true"
 
     combined = _classify_changed_paths(
@@ -1031,6 +1035,47 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         tmp_path,
         combined=True,
     )[0]["all"] == "true"
+
+
+def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
+    """Keep the release-only selector honest if CI image contexts expand."""
+    dockerfiles = [
+        ROOT / "services/Dockerfile",
+        ROOT / "services/Dockerfile.migrations",
+        ROOT / "rust/services/Dockerfile.ci",
+        *(ROOT / "rust/services").glob("*/Dockerfile"),
+    ]
+    scanned = {path.relative_to(ROOT).as_posix() for path in dockerfiles}
+    for workflow, excluded in (
+        (CI_PATH, set()),
+        (ROOT / ".github/workflows/cd.yml", {"docker/ui.Dockerfile"}),
+    ):
+        image_inputs = set(
+            re.findall(
+                r"(?m)^\s*file:\s+([^\s#]*Dockerfile[^\s#]*)\s*$",
+                workflow.read_text(encoding="utf-8"),
+            )
+        )
+        assert image_inputs - excluded <= scanned, workflow
+    for dockerfile in dockerfiles:
+        assert dockerfile.is_file()
+        for line in dockerfile.read_text(encoding="utf-8").splitlines():
+            if not re.match(r"^\s*(COPY|ADD)\s", line):
+                continue
+            # A new whole-context, JSON-form, or root-test copy needs an
+            # explicit selector review before test-only PRs skip image lanes.
+            instruction = re.sub(r"^\s*(?:COPY|ADD)\s+", "", line)
+            assert not re.match(r"(?:--\S+\s+)*\[", instruction), dockerfile
+            sources = [
+                part for part in instruction.split()[:-1] if not part.startswith("--")
+            ]
+            assert sources, dockerfile
+            assert all(
+                source not in {".", "./", "tests", "./tests"}
+                and not source.startswith(("tests/", "./tests/"))
+                and not any(char in source for char in "*?[]$")
+                for source in sources
+            ), dockerfile
 
 
 def test_external_rust_include_inputs_select_rust_validation(tmp_path: Path) -> None:

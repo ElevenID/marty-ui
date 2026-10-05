@@ -153,7 +153,26 @@ def assert_connections(read):
     helper = read(SHARED)
     assert "inventory(&self.extracted), self.verified_inventory" in helper
     assert "inventory(&self.output), self.verified_inventory" in helper
-    assert "#[test]\nfn jointly_mutated_verified_bundle_is_refused()" in helper
+    prepared = read(
+        "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
+    )
+    for shared, module, name in [
+        (helper, "extracted_bundle", "jointly_mutated_verified_bundle_is_refused"),
+        (
+            helper,
+            "extracted_bundle",
+            "extracted_inputs_survive_child_unwind_until_parent_removes_scratch",
+        ),
+        (
+            prepared,
+            "resolved_selfhost_runtime",
+            "prepared_inputs_survive_child_unwind_until_parent_removes_scratch",
+        ),
+    ]:
+        assert f"pub(super) fn assert_{name}()" in shared
+        assert f"#[test]\nfn {name}()" in executable
+        assert f"{module}::assert_{name}();" in executable
+        assert f"#[test]\nfn {name}()" not in shared
     shared = helper.split("pub(super) fn create", 1)[1].split(
         "pub(super) fn directory", 1
     )[0]

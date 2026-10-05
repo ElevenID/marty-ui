@@ -211,6 +211,51 @@ def harness_extra_scenario_mounts(source: str) -> list[dict[str, object]]:
     return inventory
 
 
+def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
+    """Inventory helper filenames interpolated into published-process mounts.
+
+    The existing path-syntax inventory sees ``root.join(&path)`` and
+    ``root.join("scripts").join(name)``, but not the list values that supply
+    those variables. This guard covers only the bounded consumer-helper block.
+    """
+    start = "        let mut consumer_helpers: Vec<String> ="
+    end = "        let extra_scenarios: &[&str] = match script {"
+    assert source.count(start) == source.count(end) == 1
+    body = source.split(start, 1)[1].split(end, 1)[0]
+    arrays = re.findall(r"\[\s*((?:\"[^\"\n]+\"\s*,?\s*)+)\]\s*\.into_iter\(\)", body)
+    paths = re.findall(r'let path = "([^"\n]+)";', body)
+    assert len(arrays) == 3 and len(paths) == 2, "Review consumer-helper mount shape"
+    assert body.count(".into_iter()") == 3
+    assert body.count("consumer_helpers.push(") == 2
+    assert body.count("consumer_helpers.extend(") == 1
+    assert body.count("root.join(&path)") == 1
+    assert body.count('root.join("scripts").join(name)') == 1
+    assert body.count("root.join(path)") == 3
+    basename_branch, worker_branch = body.split("} else if worker_https {", 1)
+    worker_branch, _ = worker_branch.split("} else {", 1)
+    assert basename_branch.count('let path = format!("scripts/{name}");') == 1, (
+        "Review consumer-helper basename source directory"
+    )
+    assert basename_branch.count("target=/verification/{path},readonly") == 1
+    assert basename_branch.count("root.join(&path)") == 1
+    assert worker_branch.count("target=/verification/scripts/{name},readonly") == 1
+    assert worker_branch.count('root.join("scripts").join(name)') == 1
+    groups = []
+    for index, array in enumerate(arrays):
+        names = re.findall(r'"([^"\n]+)"', array)
+        assert names and len(names) == len(set(names))
+        if index < 2:
+            # Both list branches interpolate basenames beneath scripts/.
+            assert all(Path(name).name == name and name.endswith(".py") for name in names)
+            names = [f"scripts/{name}" for name in names]
+        groups.append(names)
+    groups.append(paths)
+    for group in groups:
+        assert all(path.startswith(("scripts/", "contracts/")) for path in group)
+        assert all(".." not in Path(path).parts and (ROOT / path).is_file() for path in group)
+    return groups
+
+
 def test_historical_capture_input_graph_is_reviewed():
     producers = json.loads(PRODUCERS.read_text(encoding="utf-8"))
     runners = {
@@ -276,6 +321,27 @@ def test_historical_capture_input_graph_is_reviewed():
     )
     for path in harness["literal_paths"]:
         assert (ROOT / path).is_file(), f"Missing listed harness path: {path}"
+    assert harness_dynamic_helper_mounts(HARNESS.read_text(encoding="utf-8")) == [
+        [
+            "scripts/run_canvas_validation_boundary_oracle.py",
+            "scripts/run_canvas_status_provider_oracle.py",
+            "scripts/canvas_observation_values.py",
+            "scripts/canvas_json_tree_observation.py",
+        ],
+        [
+            "scripts/run_canvas_worker_startup_oracle.py",
+            "scripts/test_canvas_lti_https.py",
+            "scripts/canvas_worker_https_fixture.py",
+        ],
+        [
+            "scripts/run_canvas_worker_rest_oracle.py",
+            "contracts/canvas-worker-rest-scenarios.json",
+        ],
+        [
+            "scripts/run_canvas_worker_provider_signals_oracle.py",
+            "scripts/run_canvas_worker_provider_recovery_oracle.py",
+        ],
+    ], "Published-process dynamic helper mounts changed; review their inputs"
     assert inventory["harness_extra_scenarios"] == harness_extra_scenario_mounts(
         HARNESS.read_text(encoding="utf-8")
     ), "Scenario-dependent harness mounts changed; review the inventory"
@@ -392,3 +458,33 @@ def test_harness_extra_scenario_inventory_fails_closed_on_new_syntax():
     )
     with pytest.raises(AssertionError, match="Review noncanonical"):
         harness_extra_scenario_mounts(changed)
+
+
+def test_dynamic_helper_mount_inventory_rejects_unreviewed_inputs():
+    source = HARNESS.read_text(encoding="utf-8")
+    groups = harness_dynamic_helper_mounts(source)
+    assert "scripts/test_canvas_lti_https.py" in groups[1]
+    changed = source.replace(
+        '"test_canvas_lti_https.py",', '"unreviewed_helper.py",', 1
+    )
+    with pytest.raises(AssertionError):
+        harness_dynamic_helper_mounts(changed)
+    changed = source.replace(
+        '"test_canvas_lti_https.py",', 'dynamic_helper_name(),', 1
+    )
+    with pytest.raises(AssertionError, match="Review consumer-helper mount shape"):
+        harness_dynamic_helper_mounts(changed)
+    changed = source.replace(
+        'let path = format!("scripts/{name}");',
+        'let path = format!("contracts/{name}");',
+        1,
+    )
+    with pytest.raises(AssertionError, match="Review consumer-helper basename source"):
+        harness_dynamic_helper_mounts(changed)
+    changed = source.replace(
+        "target=/verification/scripts/{name},readonly",
+        "target=/verification/other/{name},readonly",
+        1,
+    )
+    with pytest.raises(AssertionError):
+        harness_dynamic_helper_mounts(changed)
