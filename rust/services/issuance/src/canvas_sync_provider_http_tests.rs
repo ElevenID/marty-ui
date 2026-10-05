@@ -380,6 +380,66 @@ async fn roster_collection_progress_outlives_total_policy_without_changing_lti_o
 }
 
 #[tokio::test]
+async fn collection_clients_expire_stalled_bodies_before_peer_close() {
+    for (operation, protocol) in [
+        (false, CollectionProtocol::CanvasRest),
+        (false, CollectionProtocol::Lti),
+        (true, CollectionProtocol::CanvasRest),
+    ] {
+        // Keep the response incomplete and the connection open well beyond the
+        // outer bound. A mere EOF/parser failure must not satisfy this test.
+        let mut server = ResponseServer::start_parts(vec![
+            (
+                Duration::ZERO,
+                wire_response(200, "Content-Length: 2\r\n", b"["),
+            ),
+            (Duration::from_secs(2), b"]".to_vec()),
+        ])
+        .await;
+        // The real scoped REST budgets remain 15/20 seconds. Exercise the
+        // same collection/page path with a short operation budget here; the
+        // separate scope test proves which client each provider selects.
+        let client = if operation {
+            RestReadClient::Operation(CanvasOperationHttpClient::new(
+                CanvasOriginPolicy {
+                    allow_http_localhost: true,
+                    ..CanvasOriginPolicy::default()
+                },
+                CanvasNetworkTimeout::from_seconds(0.05),
+            ))
+        } else {
+            RestReadClient::Total(
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(Duration::from_millis(50))
+                    .build()
+                    .unwrap(),
+            )
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            request_collection_page(
+                &client,
+                Url::parse(&format!("{}/owned", server.origin)).unwrap(),
+                "synthetic-token",
+                NRPS_MEMBERSHIP_ACCEPT,
+                protocol,
+            ),
+        )
+        .await
+        .expect("stalled body must expire while the synthetic connection stays open");
+        assert_eq!(result, Err(CanvasProviderReadError::Unavailable));
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), server.request.take().unwrap())
+                .await
+                .unwrap()
+                .is_ok()
+        );
+    }
+}
+
+#[tokio::test]
 async fn prepared_roster_collection_preserves_status_accept_and_link_classification() {
     let (mut template, pool) = run_provider_without_database_io();
     pool.close().await;
