@@ -48,15 +48,110 @@ pub struct CanvasLifecycleCredential<'a> {
     pub transaction_id: &'a str,
 }
 
+#[async_trait]
+trait CanvasLifecycleDeliveryStore: Send + Sync {
+    async fn context(
+        &self,
+        credential: &ManagedCredential,
+    ) -> Result<(String, Option<OwnedJsonValue>), CredentialManagementPortError>;
+
+    async fn delivered(
+        &self,
+        credential: &ManagedCredential,
+    ) -> Result<Vec<OwnedJsonValue>, CredentialManagementPortError>;
+
+    async fn binding(
+        &self,
+        id: &str,
+    ) -> Result<Option<OwnedJsonValue>, CredentialManagementPortError>;
+
+    async fn platform(
+        &self,
+        id: &str,
+    ) -> Result<Option<OwnedJsonValue>, CredentialManagementPortError>;
+
+    async fn save(
+        &self,
+        record: &Value,
+        metadata: Box<serde_json::value::RawValue>,
+        last_error: Option<&str>,
+        now: chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<u64, CredentialManagementPortError>;
+}
+
+struct PostgresCanvasLifecycleDeliveryStore(PgPool);
+
+#[async_trait]
+impl CanvasLifecycleDeliveryStore for PostgresCanvasLifecycleDeliveryStore {
+    async fn context(
+        &self,
+        credential: &ManagedCredential,
+    ) -> Result<(String, Option<OwnedJsonValue>), CredentialManagementPortError> {
+        Ok(sqlx::query_as("SELECT c.transaction_id,to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
+            .bind(&credential.id).bind(&credential.organization_id).fetch_optional(&self.0).await.map_err(error)?
+            .unwrap_or_default())
+    }
+
+    async fn delivered(
+        &self,
+        credential: &ManagedCredential,
+    ) -> Result<Vec<OwnedJsonValue>, CredentialManagementPortError> {
+        sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE credential_id=$1 AND organization_id=$2 AND delivery_target='canvas_credentials' AND status='delivered' ORDER BY created_at,delivery_target")
+            .bind(&credential.id).bind(&credential.organization_id).fetch_all(&self.0).await.map_err(error)
+    }
+
+    async fn binding(
+        &self,
+        id: &str,
+    ) -> Result<Option<OwnedJsonValue>, CredentialManagementPortError> {
+        sqlx::query_scalar(
+            "SELECT to_jsonb(b) FROM issuance_service.canvas_program_bindings b WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(error)
+    }
+
+    async fn platform(
+        &self,
+        id: &str,
+    ) -> Result<Option<OwnedJsonValue>, CredentialManagementPortError> {
+        sqlx::query_scalar(
+            "SELECT to_jsonb(p) FROM issuance_service.canvas_platforms p WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_optional(&self.0)
+        .await
+        .map_err(error)
+    }
+
+    async fn save(
+        &self,
+        record: &Value,
+        metadata: Box<serde_json::value::RawValue>,
+        last_error: Option<&str>,
+        now: chrono::DateTime<chrono::FixedOffset>,
+    ) -> Result<u64, CredentialManagementPortError> {
+        Ok(sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$3,last_error=$4,canvas_account_id=$5,updated_at=$6 WHERE id=$1 AND organization_id=$2")
+            .bind(record["id"].as_str()).bind(record["organization_id"].as_str()).bind(sqlx::types::Json(metadata))
+            .bind(last_error).bind(record["canvas_account_id"].as_str()).bind(now)
+            .execute(&self.0).await.map_err(error)?.rows_affected())
+    }
+}
+
 #[derive(Clone)]
 pub struct CanvasLifecycleDeliverySynchronizer {
-    pool: PgPool,
+    store: Arc<dyn CanvasLifecycleDeliveryStore>,
     provider: Arc<dyn CanvasLifecycleStatusProvider>,
 }
 
 impl CanvasLifecycleDeliverySynchronizer {
     pub fn new(pool: PgPool, provider: Arc<dyn CanvasLifecycleStatusProvider>) -> Self {
-        Self { pool, provider }
+        Self {
+            store: Arc::new(PostgresCanvasLifecycleDeliveryStore(pool)),
+            provider,
+        }
     }
 
     pub async fn synchronize(
@@ -65,11 +160,8 @@ impl CanvasLifecycleDeliverySynchronizer {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<(), CanvasLifecycleSyncError> {
-        let context: Option<(String, Option<OwnedJsonValue>)> = sqlx::query_as("SELECT c.transaction_id,to_jsonb(a) FROM issuance_service.issued_credentials c JOIN issuance_service.issuance_transactions t ON t.id=c.transaction_id LEFT JOIN issuance_service.applications a ON a.id=t.application_id WHERE c.id=$1 AND c.organization_id=$2")
-            .bind(&credential.id).bind(&credential.organization_id).fetch_optional(&self.pool).await.map_err(error)?;
-        let (transaction_id, application) = context.unwrap_or_default();
-        let records: Vec<OwnedJsonValue> = sqlx::query_scalar("SELECT to_jsonb(d) FROM issuance_service.credential_delivery_records d WHERE credential_id=$1 AND organization_id=$2 AND delivery_target='canvas_credentials' AND status='delivered' ORDER BY created_at,delivery_target")
-            .bind(&credential.id).bind(&credential.organization_id).fetch_all(&self.pool).await.map_err(error)?;
+        let (transaction_id, application) = self.store.context(credential).await?;
+        let records = self.store.delivered(credential).await?;
         for mut record in records {
             let now = crate::canvas_legacy_ingest::timestamp_string(chrono::Utc::now());
             let mut metadata_owner = match record
@@ -197,13 +289,7 @@ impl CanvasLifecycleDeliverySynchronizer {
                 "Canvas mirror delivery record is missing canvas_program_binding_id".into(),
             ));
         };
-        let binding: Option<OwnedJsonValue> = sqlx::query_scalar(
-            "SELECT to_jsonb(b) FROM issuance_service.canvas_program_bindings b WHERE id=$1",
-        )
-        .bind(&id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(error)?;
+        let binding = self.store.binding(&id).await?;
         let Some(binding) = binding else {
             return Ok(Err(format!("Canvas program binding {id} was not found")));
         };
@@ -220,13 +306,7 @@ impl CanvasLifecycleDeliverySynchronizer {
         let platform_id = binding["platform_id"]
             .as_str()
             .ok_or_else(|| error("Canvas binding platform missing"))?;
-        let platform: Option<OwnedJsonValue> = sqlx::query_scalar(
-            "SELECT to_jsonb(p) FROM issuance_service.canvas_platforms p WHERE id=$1",
-        )
-        .bind(platform_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(error)?;
+        let platform = self.store.platform(platform_id).await?;
         let Some(platform) = platform else {
             return Ok(Err(format!("Canvas platform {platform_id} was not found")));
         };
@@ -265,11 +345,15 @@ impl CanvasLifecycleDeliverySynchronizer {
                     .ok_or(CanvasLifecycleSyncError::TextEncoding)
             })
             .transpose()?;
-        let rows = sqlx::query("UPDATE issuance_service.credential_delivery_records SET metadata=$3,last_error=$4,canvas_account_id=$5,updated_at=$6 WHERE id=$1 AND organization_id=$2")
-            .bind(record["id"].as_str()).bind(record["organization_id"].as_str()).bind(sqlx::types::Json(metadata))
-            .bind(last_error).bind(record["canvas_account_id"].as_str())
-            .bind(chrono::DateTime::parse_from_rfc3339(now).map_err(error)?)
-            .execute(&self.pool).await.map_err(error)?.rows_affected();
+        let rows = self
+            .store
+            .save(
+                record,
+                metadata,
+                last_error,
+                chrono::DateTime::parse_from_rfc3339(now).map_err(error)?,
+            )
+            .await?;
         if rows != 1 {
             return Err(error(
                 "Canvas delivery record disappeared before synchronization could be persisted",
@@ -363,6 +447,264 @@ fn error(value: impl std::fmt::Display) -> CredentialManagementPortError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    struct MemoryStore {
+        calls: Mutex<Vec<String>>,
+        records: Mutex<Vec<OwnedJsonValue>>,
+        binding: Mutex<Option<OwnedJsonValue>>,
+        platform: Mutex<Option<OwnedJsonValue>>,
+        saves: Mutex<Vec<Value>>,
+        saved_rows: u64,
+    }
+
+    impl MemoryStore {
+        fn new(metadata: Value) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                records: Mutex::new(vec![OwnedJsonValue::new(json!({
+                    "id":"delivery-a", "organization_id":"org-a", "canvas_account_id":null,
+                    "metadata":metadata
+                }))]),
+                binding: Mutex::new(Some(OwnedJsonValue::new(json!({
+                    "id":"binding-a", "enabled":true, "platform_id":"platform-a",
+                    "canvas_credentials":{}
+                })))),
+                platform: Mutex::new(Some(OwnedJsonValue::new(json!({
+                    "id":"platform-a", "enabled":true, "canvas_account_id":"account-a"
+                })))),
+                saves: Mutex::new(Vec::new()),
+                saved_rows: 1,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl CanvasLifecycleDeliveryStore for MemoryStore {
+        async fn context(
+            &self,
+            credential: &ManagedCredential,
+        ) -> Result<(String, Option<OwnedJsonValue>), CredentialManagementPortError> {
+            assert_eq!(
+                (&*credential.id, &*credential.organization_id),
+                ("credential-a", "org-a")
+            );
+            self.calls.lock().unwrap().push("context".into());
+            Ok(("transaction-a".into(), None))
+        }
+
+        async fn delivered(
+            &self,
+            credential: &ManagedCredential,
+        ) -> Result<Vec<OwnedJsonValue>, CredentialManagementPortError> {
+            assert_eq!(
+                (&*credential.id, &*credential.organization_id),
+                ("credential-a", "org-a")
+            );
+            self.calls.lock().unwrap().push("delivered".into());
+            Ok(std::mem::take(&mut *self.records.lock().unwrap()))
+        }
+
+        async fn binding(
+            &self,
+            id: &str,
+        ) -> Result<Option<OwnedJsonValue>, CredentialManagementPortError> {
+            assert_eq!(id, "binding-a");
+            self.calls.lock().unwrap().push("binding".into());
+            Ok(self.binding.lock().unwrap().take())
+        }
+
+        async fn platform(
+            &self,
+            id: &str,
+        ) -> Result<Option<OwnedJsonValue>, CredentialManagementPortError> {
+            assert_eq!(id, "platform-a");
+            self.calls.lock().unwrap().push("platform".into());
+            Ok(self.platform.lock().unwrap().take())
+        }
+
+        async fn save(
+            &self,
+            record: &Value,
+            metadata: Box<serde_json::value::RawValue>,
+            last_error: Option<&str>,
+            now: chrono::DateTime<chrono::FixedOffset>,
+        ) -> Result<u64, CredentialManagementPortError> {
+            assert_eq!(record["id"], "delivery-a");
+            assert_eq!(record["organization_id"], "org-a");
+            assert_eq!(now.offset().local_minus_utc(), 0);
+            self.calls.lock().unwrap().push("save".into());
+            self.saves.lock().unwrap().push(json!({
+                "metadata":serde_json::from_str::<Value>(metadata.get()).unwrap(),
+                "last_error":last_error,
+                "canvas_account_id":record["canvas_account_id"]
+            }));
+            Ok(self.saved_rows)
+        }
+    }
+
+    #[derive(Default)]
+    struct MemoryProvider(Mutex<Vec<Value>>);
+
+    #[async_trait]
+    impl CanvasLifecycleStatusProvider for MemoryProvider {
+        async fn synchronize(
+            &self,
+            context: CanvasLifecycleCredential<'_>,
+            platform: &Value,
+            delivery: &Value,
+            action: CredentialLifecycleAction,
+            reason: Option<&str>,
+        ) -> Result<LosslessObject, CanvasLifecycleProviderError> {
+            self.0.lock().unwrap().push(json!({
+                "transaction_id":context.transaction_id,
+                "platform_id":platform["id"],
+                "account_id":delivery["canvas_account_id"],
+                "action":action.as_str(),
+                "reason":reason,
+            }));
+            Ok(crate::lossless_json::object(
+                json!({"provider_result":"ok"}).as_object().unwrap().clone(),
+            ))
+        }
+    }
+
+    fn credential() -> ManagedCredential {
+        use crate::credential_management::ManagedCredentialStatus;
+        ManagedCredential {
+            id: "credential-a".into(),
+            transaction_id: "transaction-a".into(),
+            organization_id: "org-a".into(),
+            credential_template_id: "template-a".into(),
+            issuer_did: None,
+            status: ManagedCredentialStatus::Suspended,
+            status_updated_at: chrono::Utc::now(),
+            revoked: false,
+            revoked_at: None,
+            revocation_reason: None,
+            revocation_profile_id: None,
+            status_list_entries: vec![],
+        }
+    }
+
+    #[tokio::test]
+    async fn mock_store_checks_profile_gate_before_provider_or_target_lookup() {
+        let store = Arc::new(MemoryStore::new(json!({
+            "canvas_program_binding_id":"binding-a",
+            "canvas_feature_flags":{"enable_canvas_mirror_ops":false}
+        })));
+        let provider = Arc::new(MemoryProvider::default());
+        let synchronizer = CanvasLifecycleDeliverySynchronizer {
+            store: store.clone(),
+            provider: provider.clone(),
+        };
+        synchronizer
+            .synchronize(&credential(), CredentialLifecycleAction::Suspend, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            *store.calls.lock().unwrap(),
+            ["context", "delivered", "save"]
+        );
+        assert!(provider.0.lock().unwrap().is_empty());
+        let saved = store.saves.lock().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0]["metadata"]["canvas_feature_gate_blocked"], true);
+        assert_eq!(
+            saved[0]["last_error"],
+            "Canvas mirror operations are disabled by deployment profile"
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_store_checks_target_provider_and_durable_success_order() {
+        let store = Arc::new(MemoryStore::new(json!({
+            "canvas_program_binding_id":"binding-a", "status_sync_attempts":4
+        })));
+        let provider = Arc::new(MemoryProvider::default());
+        let synchronizer = CanvasLifecycleDeliverySynchronizer {
+            store: store.clone(),
+            provider: provider.clone(),
+        };
+        synchronizer
+            .synchronize(
+                &credential(),
+                CredentialLifecycleAction::Reinstate,
+                Some("reason"),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            *store.calls.lock().unwrap(),
+            ["context", "delivered", "binding", "platform", "save"]
+        );
+        assert_eq!(
+            provider.0.lock().unwrap()[0],
+            json!({
+                "transaction_id":"transaction-a", "platform_id":"platform-a",
+                "account_id":"account-a", "action":"reinstate", "reason":"reason"
+            })
+        );
+        let saved = store.saves.lock().unwrap();
+        assert_eq!(saved[0]["metadata"]["status_sync_attempts"], 5);
+        assert_eq!(saved[0]["metadata"]["provider_result"], "ok");
+        assert_eq!(saved[0]["metadata"]["last_status_sync_error"], Value::Null);
+        assert_eq!(saved[0]["last_error"], Value::Null);
+        assert_eq!(saved[0]["canvas_account_id"], "account-a");
+    }
+
+    #[tokio::test]
+    async fn mock_store_records_missing_binding_as_retry_without_provider_call() {
+        let store = Arc::new(MemoryStore::new(json!({
+            "canvas_program_binding_id":"binding-a"
+        })));
+        store.binding.lock().unwrap().take();
+        let provider = Arc::new(MemoryProvider::default());
+        let synchronizer = CanvasLifecycleDeliverySynchronizer {
+            store: store.clone(),
+            provider: provider.clone(),
+        };
+        synchronizer
+            .synchronize(&credential(), CredentialLifecycleAction::Suspend, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            *store.calls.lock().unwrap(),
+            ["context", "delivered", "binding", "save"]
+        );
+        assert!(provider.0.lock().unwrap().is_empty());
+        let saved = store.saves.lock().unwrap();
+        assert_eq!(saved[0]["metadata"]["status_sync_attempts"], 1);
+        assert_eq!(saved[0]["metadata"]["last_status_sync_action"], "suspend");
+        assert_eq!(
+            saved[0]["last_error"],
+            "Canvas lifecycle sync skipped: Canvas program binding binding-a was not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn mock_store_rejects_missing_durable_save_after_provider_success() {
+        let mut store = MemoryStore::new(json!({
+            "canvas_program_binding_id":"binding-a"
+        }));
+        store.saved_rows = 0;
+        let store = Arc::new(store);
+        let provider = Arc::new(MemoryProvider::default());
+        let synchronizer = CanvasLifecycleDeliverySynchronizer {
+            store: store.clone(),
+            provider: provider.clone(),
+        };
+        let failure = synchronizer
+            .synchronize(&credential(), CredentialLifecycleAction::Reinstate, None)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure.to_string(),
+            "Canvas delivery record disappeared before synchronization could be persisted"
+        );
+        assert_eq!(provider.0.lock().unwrap().len(), 1);
+        assert_eq!(store.saves.lock().unwrap().len(), 1);
+    }
 
     #[test]
     fn attempt_projection_preserves_signed_and_lossless_decimal_counters() {
