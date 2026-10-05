@@ -8,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,10 @@ SCHEMA = "elevenid.stack-tag-preparation/v1"
 STACK_LOCK_SCHEMA = "marty.stack-lock/v1"
 RELEASE_ELIGIBLE_STATE = "eligible"
 TAG_PATTERN = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+NIGHTLY_TAG_PATTERN = re.compile(
+    r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+    r"-nightly\.(20[0-9]{6})\.([1-9][0-9]*)$"
+)
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 PREPARATION_WORKFLOW = ".github/workflows/prepare-stack-tag.yml"
 
@@ -36,11 +41,31 @@ def _load_json(path: Path, label: str) -> Any:
         raise StackTagGateError(f"cannot load {label}: {error}") from error
 
 
+def classify_release_tag(tag: str) -> tuple[str, str]:
+    """Parse a tag's syntax; release-claim provenance is checked separately."""
+
+    stable = TAG_PATTERN.fullmatch(tag)
+    if stable is not None:
+        return "stable", ".".join(stable.groups())
+    nightly = NIGHTLY_TAG_PATTERN.fullmatch(tag)
+    if nightly is not None:
+        date = nightly.group(4)
+        try:
+            datetime.strptime(date, "%Y%m%d")
+        except ValueError as error:
+            raise StackTagGateError(f"invalid nightly date: {date}") from error
+        return "nightly", tag[1:]
+    raise StackTagGateError(f"invalid release tag: {tag}")
+
+
 def version_from_tag(tag: str) -> str:
-    match = TAG_PATTERN.fullmatch(tag)
-    if match is None:
+    try:
+        tier, version = classify_release_tag(tag)
+    except StackTagGateError as error:
+        raise StackTagGateError(f"invalid stable tag: {tag}") from error
+    if tier != "stable":
         raise StackTagGateError(f"invalid stable tag: {tag}")
-    return ".".join(match.groups())
+    return version
 
 
 def _git(repository: Path, *arguments: str) -> str:
@@ -152,6 +177,40 @@ def validate_workflow_runs(
                 "conclusion": latest.get("conclusion"),
             }
         )
+    qualification = _object(
+        document.get("required_full_qualification"), "required_full_qualification"
+    )
+    if qualification != {
+        "path": ".github/workflows/ci.yml",
+        "events": ["schedule", "workflow_dispatch"],
+    }:
+        raise StackTagGateError("full Canvas qualification policy is invalid")
+    qualification_runs = [
+        run
+        for run in runs
+        if run.get("path") == qualification["path"]
+        and run.get("event") in qualification["events"]
+        and run.get("head_sha") == expected_commit
+        and run.get("head_branch") == "main"
+        and run.get("id") != current_run_id
+    ]
+    if not qualification_runs:
+        raise StackTagGateError("exact-main full Canvas qualification is missing")
+    latest_qualification = max(
+        qualification_runs, key=lambda run: int(run.get("id", 0))
+    )
+    if latest_qualification.get("status") != "completed":
+        raise StackTagGateError("full Canvas qualification is still pending")
+    if latest_qualification.get("conclusion") != "success":
+        raise StackTagGateError("full Canvas qualification did not succeed")
+    accepted.append(
+        {
+            "path": qualification["path"],
+            "event": latest_qualification["event"],
+            "run_id": latest_qualification["id"],
+            "conclusion": latest_qualification["conclusion"],
+        }
+    )
     return accepted
 
 

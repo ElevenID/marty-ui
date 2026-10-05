@@ -790,6 +790,7 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     workflow = _text(".github/workflows/cd.yml")
     prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    ci = _text(".github/workflows/ci.yml")
     policy = json.loads(_text(".github/stack-tag-policy.json"))
 
     assert policy["schema"] == "elevenid.stack-tag-preparation/v1"
@@ -806,6 +807,15 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
         {"path": ".github/workflows/codeql-rust.yml", "event": "merge_group"},
         {"path": ".github/workflows/codeql-actions.yml", "event": "merge_group"},
     ]
+    assert policy["required_full_qualification"] == {
+        "path": ".github/workflows/ci.yml",
+        "events": ["schedule", "workflow_dispatch"],
+    }
+    assert (
+        "MARTY_CANVAS_FULL_QUALIFICATION: "
+        "${{ (github.event_name == 'workflow_dispatch' || "
+        "github.event_name == 'schedule') && '1' || '0' }}"
+    ) in ci
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "git ls-remote --tags" in prepare
     assert "git tag -a" not in prepare

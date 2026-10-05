@@ -24,7 +24,46 @@ POLICY = {
         {"path": ".github/workflows/codeql-rust.yml", "event": "merge_group"},
         {"path": ".github/workflows/codeql-actions.yml", "event": "merge_group"},
     ],
+    "required_full_qualification": {
+        "path": ".github/workflows/ci.yml",
+        "events": ["schedule", "workflow_dispatch"],
+    },
 }
+
+
+@pytest.mark.parametrize(
+    ("tag", "tier", "version"),
+    [
+        ("v1.2.3", "stable", "1.2.3"),
+        ("v1.2.4-nightly.20261005.123456789", "nightly", "1.2.4-nightly.20261005.123456789"),
+    ],
+)
+def test_release_tag_tier_syntax(tag: str, tier: str, version: str) -> None:
+    assert stack_tag_gate.classify_release_tag(tag) == (tier, version)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "v01.2.3",
+        "v1.02.3",
+        "v1.2.03",
+        "v1.2.4-nightly.20260230.123",
+        "v1.2.4-nightly.20261005.0",
+        "v1.2.4-nightly.20261005.00123",
+        "v1.2.4-nightly.20261005",
+        "v1.2.4-rc.1",
+        "v1.2.4-nightly.20261005.123.extra",
+    ],
+)
+def test_release_tag_tier_rejects_unknown_or_ambiguous_tags(tag: str) -> None:
+    with pytest.raises(stack_tag_gate.StackTagGateError):
+        stack_tag_gate.classify_release_tag(tag)
+
+
+def test_stable_stack_claim_rejects_nightly_tag() -> None:
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="invalid stable tag"):
+        stack_tag_gate.version_from_tag("v1.2.4-nightly.20261005.123456789")
 
 
 def write_stack_lock(
@@ -46,6 +85,18 @@ def write_stack_lock(
     )
 
 
+def test_stable_source_gate_rejects_nightly_even_with_eligible_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_stack_lock(tmp_path)
+    monkeypatch.setattr(stack_tag_gate, "_git", lambda *_args: COMMIT)
+    nightly = "v1.2.4-nightly.20261005.123456789"
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="invalid stable tag"):
+        stack_tag_gate.require_release_eligible(tmp_path, nightly)
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="invalid stable tag"):
+        stack_tag_gate.validate_source(tmp_path, nightly, COMMIT)
+
+
 def run(run_id: int, path: str, event: str, **updates: object) -> dict[str, object]:
     value: dict[str, object] = {
         "id": run_id,
@@ -54,6 +105,7 @@ def run(run_id: int, path: str, event: str, **updates: object) -> dict[str, obje
         "status": "completed",
         "conclusion": "success",
         "head_sha": COMMIT,
+        "head_branch": "main",
     }
     value.update(updates)
     return value
@@ -65,13 +117,60 @@ def payload() -> dict[str, object]:
             run(10, ".github/workflows/ci.yml", "merge_group"),
             run(11, ".github/workflows/codeql-rust.yml", "merge_group"),
             run(12, ".github/workflows/codeql-actions.yml", "merge_group"),
+            run(13, ".github/workflows/ci.yml", "workflow_dispatch"),
         ]
     }
 
 
 def test_exact_head_terminal_workflows_pass() -> None:
     accepted = stack_tag_gate.validate_workflow_runs(payload(), POLICY, COMMIT, 99)
-    assert [item["run_id"] for item in accepted] == [10, 11, 12]
+    assert [item["run_id"] for item in accepted] == [10, 11, 12, 13]
+
+
+@pytest.mark.parametrize(
+    ("updates", "message"),
+    [
+        ({"status": "in_progress", "conclusion": None}, "still pending"),
+        ({"conclusion": "failure"}, "did not succeed"),
+        ({"head_sha": "c" * 40}, "missing"),
+        ({"head_branch": "develop"}, "missing"),
+        ({"event": "pull_request"}, "missing"),
+    ],
+)
+def test_full_canvas_qualification_must_be_successful_on_exact_main(
+    updates: dict[str, object], message: str
+) -> None:
+    document = payload()
+    workflow_runs = document["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs[-1].update(updates)
+    with pytest.raises(stack_tag_gate.StackTagGateError, match=message):
+        stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
+
+
+def test_latest_full_canvas_qualification_controls_release_claim() -> None:
+    document = payload()
+    workflow_runs = document["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs.append(
+        run(14, ".github/workflows/ci.yml", "schedule", conclusion="failure")
+    )
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="did not succeed"):
+        stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
+    workflow_runs[-1]["conclusion"] = "success"
+    accepted = stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
+    assert accepted[-1] == {
+        "path": ".github/workflows/ci.yml",
+        "event": "schedule",
+        "run_id": 14,
+        "conclusion": "success",
+    }
+
+
+def test_full_canvas_qualification_policy_cannot_be_removed() -> None:
+    policy = {key: value for key, value in POLICY.items() if key != "required_full_qualification"}
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="required_full_qualification"):
+        stack_tag_gate.validate_workflow_runs(payload(), policy, COMMIT, 99)
 
 
 @pytest.mark.parametrize("conclusion", ["skipped", "failure"])
