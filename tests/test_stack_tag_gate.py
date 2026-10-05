@@ -27,6 +27,41 @@ POLICY = {
 }
 
 
+@pytest.mark.parametrize(
+    ("tag", "tier", "version"),
+    [
+        ("v1.2.3", "stable", "1.2.3"),
+        ("v1.2.4-nightly.20261005.123456789", "nightly", "1.2.4-nightly.20261005.123456789"),
+    ],
+)
+def test_release_tag_tier_syntax(tag: str, tier: str, version: str) -> None:
+    assert stack_tag_gate.classify_release_tag(tag) == (tier, version)
+
+
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "v01.2.3",
+        "v1.02.3",
+        "v1.2.03",
+        "v1.2.4-nightly.20260230.123",
+        "v1.2.4-nightly.20261005.0",
+        "v1.2.4-nightly.20261005.00123",
+        "v1.2.4-nightly.20261005",
+        "v1.2.4-rc.1",
+        "v1.2.4-nightly.20261005.123.extra",
+    ],
+)
+def test_release_tag_tier_rejects_unknown_or_ambiguous_tags(tag: str) -> None:
+    with pytest.raises(stack_tag_gate.StackTagGateError):
+        stack_tag_gate.classify_release_tag(tag)
+
+
+def test_stable_stack_claim_rejects_nightly_tag() -> None:
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="invalid stable tag"):
+        stack_tag_gate.version_from_tag("v1.2.4-nightly.20261005.123456789")
+
+
 def write_stack_lock(
     repository: Path,
     *,
@@ -44,6 +79,18 @@ def write_stack_lock(
     (release_directory / "stack-lock.json").write_text(
         json.dumps(document), encoding="utf-8"
     )
+
+
+def test_stable_source_gate_rejects_nightly_even_with_eligible_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_stack_lock(tmp_path)
+    monkeypatch.setattr(stack_tag_gate, "_git", lambda *_args: COMMIT)
+    nightly = "v1.2.4-nightly.20261005.123456789"
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="invalid stable tag"):
+        stack_tag_gate.require_release_eligible(tmp_path, nightly)
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="invalid stable tag"):
+        stack_tag_gate.validate_source(tmp_path, nightly, COMMIT)
 
 
 def run(run_id: int, path: str, event: str, **updates: object) -> dict[str, object]:
