@@ -673,22 +673,22 @@ pub(super) struct Preflight {
 pub(super) fn preflight() -> Result<Preflight, String> {
     require(std::env::consts::OS == "linux")?;
     super::selfhost_runtime_sidecar::require_closed_child()?;
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(3)
-        .ok_or(ERROR)?;
+    let repo = super::canvas_published_database::repository_root();
     let image = PublicImage::inspect(
         std::env::var("MARTY_SELFHOST_TEST_IMAGE").map_err(|_| ERROR)?,
         &std::env::var("MARTY_SELFHOST_TEST_REVISION").map_err(|_| ERROR)?,
     )?;
     let pending = PendingOperation::begin(PendingKind::Packager)?;
-    let mut extracted =
-        super::selfhost_extracted::ExtractedBundle::create_with(repo, packager(repo)?, |command| {
+    let mut extracted = super::selfhost_extracted::ExtractedBundle::create_with(
+        &repo,
+        packager(&repo)?,
+        |command| {
             super::bounded_fixture_command::run(command, None, Duration::from_secs(60), 1024 * 1024)
                 .expect("Bounded actual packager invocation")
-        });
+        },
+    );
     extracted.retain_for_parent(&super::selfhost_runtime_sidecar::parent_scratch()?);
-    super::selfhost_prepared::qualify(repo, &extracted.extracted);
+    super::selfhost_prepared::qualify(&repo, &extracted.extracted);
     require(extracted.directory().is_dir())?;
     pending.complete()?;
     Ok(Preflight {

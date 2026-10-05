@@ -20,7 +20,7 @@ pub(super) struct ResolvedRuntime {
 impl ResolvedRuntime {
     pub(super) fn native_command(&self) -> Command {
         exact_environment_command(
-            Path::new(env!("CARGO_BIN_EXE_marty-issuance-service")),
+            &super::issuance_process::issuance_binary(),
             &self.native_environment,
         )
     }
@@ -42,8 +42,7 @@ impl ResolvedRuntime {
             );
         }
         exact_environment_command(
-            &Path::new(env!("CARGO_BIN_EXE_marty-issuance-service"))
-                .with_file_name("marty-gateway"),
+            &super::issuance_process::issuance_binary().with_file_name("marty-gateway"),
             &self.gateway_environment,
         )
     }

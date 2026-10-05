@@ -227,7 +227,7 @@ def runtime_registration(script, source, name):
 def test_runtime_names_require_exact_owned_composition(name, fault):
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
     source = (
-        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text()
     runtime_registration(script, source, name)
     line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"

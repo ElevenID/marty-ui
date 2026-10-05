@@ -264,7 +264,7 @@ impl OwnedEnvoy {
                 && images[0]["Os"] == "linux",
             "Exact Linux Envoy image is unavailable",
         )?;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let root = super::canvas_published_database::repository_root();
         let source = regular_file(&root.join("config/envoy/envoy.yaml"))?;
         let proto = regular_file(&root.join("config/envoy/proto_descriptor.pb"))?;
         let source_before = digest(&source)?;
