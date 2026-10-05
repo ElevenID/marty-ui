@@ -3,7 +3,7 @@
 Baseline: UI `92e16b2f15045e91a92a737b0a42b431895a8b66`.
 Owner: architecture-feedback implementation; see [the tracker](architecture-feedback-improvement-plan.md).
 
-This is the initial group inventory for A0 and the exact obligation record for the first A1 move. It is not yet a complete dependency manifest and must not be used to skip CI groups. Existing triggers remain authoritative.
+This is the initial group inventory for A0, the exact obligation record for the first A1 move, and the Canvas A4/A5 qualification split. It is not yet a complete dependency manifest for selecting other CI groups. Workflow triggers remain authoritative.
 
 ## Existing groups and ownership constraints
 
@@ -19,6 +19,8 @@ This is the initial group inventory for A0 and the exact obligation record for t
 | Feature regression and passport test-mode image lanes | Distinct features and packaged default/opt-in boundaries | Preserve separate configurations and actual image contents; default workspace testing does not substitute for these lanes. |
 
 For remaining A0 work, enumerate each group's scenario obligations and non-Cargo input closure in a reusable manifest before activating selection. The groups above deliberately remain broad where ownership has not yet been proven.
+
+Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
 ## First extraction: managed passport KMS chain
 
