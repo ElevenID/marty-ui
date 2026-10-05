@@ -113,6 +113,17 @@ jobs:
                 release/*|scripts/stack_tag_gate.py|scripts/release_transaction.py|.github/stack-tag-policy.json)
                   release=true
                   ;;
+                tests/test_stack_tag_gate.py|tests/test_release_transaction.py|tests/test_stack_release_contract.py|tests/test_build_stack_manifest.py|tests/test_prepare_official_beta_release.py|tests/test_stack_pre_promotion.py)
+                  # The release lane executes the complete root Python test
+                  # suite. These exact test sources do not enter runtime
+                  # images; unknown siblings retain the full PR matrix.
+                  release=true
+                  ;;
+                tests/test_check_release_absent.py|tests/test_github_release_environment_preflight.py|tests/test_release_environment_workflow_contract.py|tests/test_create_local_release_manifest.py|tests/test_local_beta_release_runner.py)
+                  # These exact release-environment/manifest contract tests
+                  # also run in the required release lane, not service images.
+                  release=true
+                  ;;
                 .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
                   verification=true
                   release=true
