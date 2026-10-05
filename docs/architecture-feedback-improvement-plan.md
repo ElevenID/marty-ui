@@ -351,6 +351,8 @@ The next A1 support-owner batch moves twelve Flow and DIDComm composition suppor
 
 A further acceptance-only renewal group contains the published-schema Postgres/Canvas binding, packaged-main replay, fresh-main composition, and gateway replay support. Five support files can move byte-for-byte into the acceptance package; the three issuance-service tests that consume `renewal_reference_fixture.rs` keep that shared historical fixture in its service location. The move changes only acceptance module paths and Python source-inspection paths, not assertions, target names, CI selection, or process/database guarantees. Scoped Cargo and guard validation plus independent review are required before the combined A1 batch is ready.
 
+The same combined A1 branch moves the Kubernetes resolver support file byte-for-byte into acceptance ownership, for eighteen R100 support moves total. Both `resolved_runtime` and `resolved_kubernetes_runtime` now resolve from that package; the named Kubernetes process checks and required runner remain unchanged. The exact combined head passes Rust 1.95 acceptance-test `cargo check`, 135 Kubernetes/workflow Python guards, and independent review. Protected CI is still required before merge; no speedup is claimed from this owner move alone.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
