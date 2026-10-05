@@ -13,6 +13,85 @@ from collections import defaultdict, deque
 ROOT = Path(__file__).resolve().parents[2]
 RUST = ROOT / "rust"
 
+# These are observed HTTP/deployment consumers, not a complete runtime graph.
+# Keep the service fallback below until every service and its transitive inputs
+# have an obligation owner. The paths document the source of each observation.
+OBSERVED_NON_CARGO_CONSUMERS = {
+    # Auth connects to these services at runtime. Their package changes can
+    # affect Auth even though Cargo has no reverse dependency on them.
+    "marty-flow": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "FLOW_GRPC_TARGET",
+            "runtime_evidence": "rust/services/auth/src/connections.rs",
+            "runtime_marker": "&config.flow_grpc_target",
+        },
+        {
+            "package": "marty-gateway",
+            "evidence": "rust/services/gateway/src/config.rs",
+            "binding": "FLOW_SERVICE_URL",
+            "runtime_evidence": "rust/services/gateway/src/contract.rs",
+            "runtime_marker": '("/v1/flows", "flows")',
+        },
+    ],
+    "marty-organization": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "ORG_GRPC_TARGET",
+            "runtime_evidence": "rust/services/auth/src/connections.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+        },
+        {
+            "package": "marty-trust-profile",
+            "evidence": "rust/services/trust-profile/src/config.rs",
+            "binding": "ORG_GRPC_TARGET",
+            "runtime_evidence": "rust/services/trust-profile/src/main.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+        },
+    ],
+    "marty-applicant": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "APPLICANT_SERVICE_URL",
+            "runtime_evidence": "rust/services/auth/src/main.rs",
+            "runtime_marker": "config.applicant_service_url.clone()",
+        },
+    ],
+    "marty-issuance-service": [
+        {
+            "package": "marty-auth",
+            "evidence": "rust/services/auth/src/config.rs",
+            "binding": "ISSUANCE_NATIVE_SERVICE_URL",
+            "runtime_evidence": "rust/services/auth/src/main.rs",
+            "runtime_marker": "&config.issuance_native_service_url",
+        },
+    ],
+    "marty-notification": [
+        {
+            "package": "marty-applicant",
+            "evidence": "rust/services/applicant/src/main.rs",
+            "binding": "NOTIFICATION_EVENT_INGEST_URL",
+            "runtime_evidence": "rust/services/applicant/src/providers.rs",
+            "runtime_marker": ".post(url)",
+        },
+        {
+            "package": "marty-gateway",
+            "evidence": "rust/services/gateway/src/config.rs",
+            "binding": "NOTIFICATION_SERVICE_URL",
+            "runtime_evidence": "rust/services/gateway/src/contract.rs",
+            "runtime_marker": '("/v1/notifications", "notifications")',
+        },
+        {
+            "package": "marty-selfhost-bundle",
+            "evidence": "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs",
+            "binding": "NOTIFICATION_SERVICE_URL",
+        },
+    ],
+}
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     # Both move endpoints matter, including a deleted package that metadata no
@@ -59,8 +138,11 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
         for package in packages
     }
 
-    def full(reason: str) -> dict:
-        return {"all": True, "packages": sorted(names), "reason": reason}
+    def full(reason: str, *, observed_consumers: list[dict] | None = None) -> dict:
+        result = {"all": True, "packages": sorted(names), "reason": reason}
+        if observed_consumers:
+            result["observed_non_cargo_consumers"] = observed_consumers
+        return result
 
     direct: set[str] = set()
     for raw in paths:
@@ -103,11 +185,21 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
     # Notification and Presentation Policy consumes Trust Profile. Until that
     # runtime graph is proven, no affected service package is narrow evidence.
     services = {
-        name for name, owner in roots.items()
+        name
+        for name, owner in roots.items()
         if owner.is_relative_to(PurePosixPath("rust/services"))
     }
     if affected & services:
-        return full("unmapped non-Cargo runtime consumers of service packages")
+        observed = [
+            {"producer": producer, **edge}
+            for producer in sorted(affected & services)
+            for edge in OBSERVED_NON_CARGO_CONSUMERS.get(producer, [])
+            if edge["package"] in names
+        ]
+        return full(
+            "unmapped non-Cargo runtime consumers of service packages",
+            observed_consumers=observed,
+        )
     return {
         "all": False,
         "packages": sorted(affected),
