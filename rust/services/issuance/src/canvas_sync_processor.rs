@@ -1926,8 +1926,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn mixed_roster_unit_window_preserves_terminal_states_and_identity_gates() {
+    fn mixed_roster_fixture() -> (Value, Arc<SimulatorRepository>) {
         let matrix: Value = serde_json::from_str(include_str!(
             "../../../../contracts/canvas-worker-mixed-roster-scenarios.json"
         ))
@@ -1980,6 +1979,12 @@ mod tests {
                 },
             );
         }
+        (matrix, repository)
+    }
+
+    #[tokio::test]
+    async fn mixed_roster_unit_window_preserves_terminal_states_and_identity_gates() {
+        let (matrix, repository) = mixed_roster_fixture();
         let processor = NativeCanvasSyncProcessor::new(
             repository.clone(),
             Arc::new(MixedRosterProvider),
@@ -2014,6 +2019,134 @@ mod tests {
             ("11", "identity_link_required"),
             ("12", "identity_link_required"),
         ] {
+            let key = candidate_key("platform-1", "binding-1", Some(user), None);
+            assert_eq!(candidates[&key].state, state, "user {user}");
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum TailResponse {
+        Negative,
+        Unavailable,
+        Positive,
+    }
+
+    #[derive(Debug)]
+    struct ScriptedTailProvider {
+        response: Mutex<TailResponse>,
+    }
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for ScriptedTailProvider {
+        fn for_run(
+            self: Arc<Self>,
+            _: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
+        async fn read_requirement(
+            &self,
+            _: &CanvasSyncResources,
+            requirement: &Value,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            let source = requirement["source"].as_str().unwrap();
+            let score = match (*self.response.lock().unwrap(), source) {
+                (TailResponse::Unavailable, _) => return Err(CanvasProviderReadError::Unavailable),
+                (TailResponse::Negative, "ags_result") => 1,
+                (TailResponse::Negative | TailResponse::Positive, _) => 9,
+            };
+            let assertion = match source {
+                "canvas_rest" => rest_assertion(
+                    "canvas.assignment_score",
+                    &json!({"score":score,"workflow_state":"graded","assignment":{"points_possible":10}}),
+                ),
+                "ags_result" => ags_assertion(
+                    &json!({"resultScore":score,"resultMaximum":10,"resultStatus":"FullyGraded"}),
+                ),
+                _ => panic!("unexpected frozen source"),
+            };
+            Ok(CanvasAuthoritativeObservation {
+                assertion,
+                source_payload: Map::new(),
+                verification_method: if source == "canvas_rest" {
+                    "CANVAS_OAUTH_API_READ"
+                } else {
+                    "LTI_AGS_RESULT_READ"
+                },
+                effective_at: None,
+            })
+        }
+
+        async fn roster(
+            &self,
+            target: &CanvasSyncTarget,
+            resources: &CanvasSyncResources,
+            requirements: &[Value],
+            limit: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            MixedRosterProvider
+                .roster(target, resources, requirements, limit)
+                .await
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_roster_tail_outage_preserves_negative_heads_until_positive_recovery() {
+        let (matrix, repository) = mixed_roster_fixture();
+        let provider = Arc::new(ScriptedTailProvider {
+            response: Mutex::new(TailResponse::Negative),
+        });
+        let processor = NativeCanvasSyncProcessor::new(
+            repository.clone(),
+            provider.clone(),
+            enabled_config(),
+            matrix["batch_size"].as_u64().unwrap() as usize,
+            matrix["roster_limit"].as_u64().unwrap() as usize,
+        );
+        let mut tail = target(CanvasSyncTargetType::BackgroundRoster);
+        tail.metadata.insert("roster_cursor".into(), Value::from(3));
+
+        let negative = run_simulated(&processor, tail.clone()).await.unwrap();
+        assert_eq!(negative["candidates_seen"].get(), "3");
+        assert_eq!(negative["pending_claim"].get(), "0");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+        let ordinary_key = candidate_key("platform-1", "binding-1", Some("9"), None);
+        let ordinary_id = repository.candidates.lock().unwrap()[&ordinary_key]
+            .id
+            .clone();
+        let negative_heads = repository.observations.lock().unwrap()[&ordinary_id].clone();
+        assert_eq!(negative_heads.len(), 2);
+        for (requirement, score) in [("rest", 90.0), ("ags", 10.0)] {
+            let head = negative_heads
+                .iter()
+                .find(|head| head.requirement_id == requirement)
+                .unwrap();
+            assert_eq!(head.assertion["score_percent"], score);
+        }
+
+        *provider.response.lock().unwrap() = TailResponse::Unavailable;
+        let unavailable = run_simulated(&processor, tail.clone()).await.unwrap();
+        assert_eq!(unavailable["observations_written"].get(), "0");
+        assert_eq!(
+            repository.observations.lock().unwrap()[&ordinary_id],
+            negative_heads
+        );
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+
+        *provider.response.lock().unwrap() = TailResponse::Positive;
+        let recovery = run_simulated(&processor, tail).await.unwrap();
+        assert_eq!(recovery["pending_claim"].get(), "1");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+        let recovered_heads = repository.observations.lock().unwrap()[&ordinary_id].clone();
+        assert_eq!(recovered_heads.len(), 2);
+        assert!(recovered_heads
+            .iter()
+            .all(|head| head.assertion["score_percent"] == 90.0));
+        let candidates = repository.candidates.lock().unwrap();
+        for (user, state) in [("7", "claimed"), ("8", "dismissed"), ("9", "pending_claim")] {
             let key = candidate_key("platform-1", "binding-1", Some(user), None);
             assert_eq!(candidates[&key].state, state, "user {user}");
         }
