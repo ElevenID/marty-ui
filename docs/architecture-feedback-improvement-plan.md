@@ -349,6 +349,8 @@ Acceptance support-owner follow-up (local candidate, 2026-10-05): eleven self-ho
 
 The next A1 support-owner batch moves twelve Flow and DIDComm composition support modules into `marty-service-acceptance/tests/support` after the base-runtime owner move. The files are byte-for-byte renames; only two Rust module paths and two Python ownership-guard paths change. Assertions, target names, process fixtures, and CI triggers remain unchanged. This makes the acceptance target the source owner of its cross-service helpers without claiming a measured runtime reduction. Acceptance-target Cargo check, focused guard tests, independent review, and protected published-process CI are required before merging.
 
+A further acceptance-only renewal group contains the published-schema Postgres/Canvas binding, packaged-main replay, fresh-main composition, and gateway replay support. Five support files can move byte-for-byte into the acceptance package; the three issuance-service tests that consume `renewal_reference_fixture.rs` keep that shared historical fixture in its service location. The move changes only acceptance module paths and Python source-inspection paths, not assertions, target names, CI selection, or process/database guarantees. Scoped Cargo and guard validation plus independent review are required before the combined A1 batch is ready.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.

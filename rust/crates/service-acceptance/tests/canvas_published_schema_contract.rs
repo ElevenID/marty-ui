@@ -81,13 +81,13 @@ mod envoy_runtime_sidecar;
 mod issuance_named_peers;
 #[path = "support/rendered_base_process.rs"]
 mod rendered_base_process;
-#[path = "../../../services/issuance/tests/support/renewal_binding_postgres.rs"]
+#[path = "support/renewal_binding_postgres.rs"]
 mod renewal_binding_postgres;
-#[path = "../../../services/issuance/tests/support/renewal_fresh_main.rs"]
+#[path = "support/renewal_fresh_main.rs"]
 mod renewal_fresh_main;
-#[path = "../../../services/issuance/tests/support/renewal_gateway_replay.rs"]
+#[path = "support/renewal_gateway_replay.rs"]
 mod renewal_gateway_replay;
-#[path = "../../../services/issuance/tests/support/renewal_main_replay.rs"]
+#[path = "support/renewal_main_replay.rs"]
 mod renewal_main_replay;
 #[path = "../../../services/issuance/tests/support/resolved_kubernetes_runtime.rs"]
 mod resolved_kubernetes_runtime;

@@ -465,7 +465,7 @@ def test_shared_renderer_bootstrap_retains_frozen_hash_and_verifies_before_execu
 )
 def test_inner_acceptance_roster_cannot_drop_a_capability(owner):
     source = (
-        ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
+        ROOT / "rust/crates/service-acceptance/tests/support/renewal_fresh_main.rs"
     ).read_text()
 
     def check(text):
@@ -486,7 +486,7 @@ def test_inner_acceptance_roster_cannot_drop_a_capability(owner):
 
 def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications():
     renewal = (
-        ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
+        ROOT / "rust/crates/service-acceptance/tests/support/renewal_fresh_main.rs"
     ).read_text(encoding="utf-8")
 
     def check(source):
@@ -593,7 +593,7 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
             check(weakened)
 
     canvas = (
-        ROOT / "rust/services/issuance/tests/support/renewal_canvas_binding.rs"
+        ROOT / "rust/crates/service-acceptance/tests/support/renewal_canvas_binding.rs"
     ).read_text(encoding="utf-8")
     for required in [
         'format!("notification-renewal-canvas-{}", transaction.id)',
