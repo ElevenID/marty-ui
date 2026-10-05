@@ -967,6 +967,7 @@ def test_release_contract_test_sources_keep_their_release_owner(
         "tests/test_stack_pre_promotion.py",
         "tests/test_local_beta_release_runner.py",
     ):
+        assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         assert _classify_changed_path(path, tmp_path) == selected
     assert _classify_changed_path(
         "tests/test_stack_release_contract_helpers.py", tmp_path
