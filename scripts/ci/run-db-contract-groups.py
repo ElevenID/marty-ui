@@ -13,9 +13,13 @@ from time import monotonic
 
 HEARTBEAT_SECONDS = 30
 PREFLIGHT_MODES = (
-    "mixed-roster-preflight",
-    "body-timeout-preflight",
     "timeout-preflight",
+    "lease-expiry-preflight",
+)
+FULL_QUALIFICATION_PREFLIGHT_MODES = (
+    "mixed-roster-preflight",
+    "timeout-preflight",
+    "body-timeout-preflight",
     "lease-expiry-preflight",
 )
 EVIDENCE_NAME = "canvas-published-preflights.sha256"
@@ -68,7 +72,16 @@ def _has_preflight_evidence() -> bool:
     if evidence is None or not evidence.is_file():
         return False
     try:
-        expected = "\n".join((_executable_digest(), *_run_identity())) + "\n"
+        expected = (
+            "\n".join(
+                (
+                    _executable_digest(),
+                    *_run_identity(),
+                    os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
+                )
+            )
+            + "\n"
+        )
         return evidence.read_text(encoding="ascii") == expected
     except (OSError, ValueError, KeyError):
         return False
@@ -82,7 +95,16 @@ def _record_preflight_evidence() -> None:
     with tempfile.NamedTemporaryFile(
         mode="w", encoding="ascii", newline="\n", dir=evidence.parent, delete=False
     ) as temporary:
-        temporary.write("\n".join((digest, *_run_identity())) + "\n")
+        temporary.write(
+            "\n".join(
+                (
+                    digest,
+                    *_run_identity(),
+                    os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
+                )
+            )
+            + "\n"
+        )
         temporary_path = Path(temporary.name)
     os.replace(temporary_path, evidence)
 
@@ -141,6 +163,12 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
 
 def main(mode: str = "database") -> int:
     scripts = Path(__file__).resolve().parent
+    qualification = os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0")
+    if qualification not in ("0", "1"):
+        raise ValueError("Invalid Canvas qualification mode")
+    preflight_modes = (
+        FULL_QUALIFICATION_PREFLIGHT_MODES if qualification == "1" else PREFLIGHT_MODES
+    )
     if mode in ("database", "canvas"):
         published_mode = ["full-after-preflights"] if _has_preflight_evidence() else []
         commands: dict[str, list[str]] = {
@@ -158,11 +186,11 @@ def main(mode: str = "database") -> int:
         evidence = _preflight_evidence()
         if evidence is not None:
             evidence.unlink(missing_ok=True)  # A failed rerun cannot reuse old proof.
-        # Longest first keeps the two workers busy. Each exact preflight owns
+        # Two workers overlap independent cases. Each exact preflight owns
         # its disposable Docker database and dynamically allocated HTTPS ports.
         commands = {
             name: ["bash", str(scripts / "run-published-canvas-contracts.sh"), name]
-            for name in PREFLIGHT_MODES
+            for name in preflight_modes
         }
     else:
         raise ValueError("Unsupported contract group mode")
@@ -174,7 +202,7 @@ def main(mode: str = "database") -> int:
             print(f"===== {name}: exit {status} =====", flush=True)
             print((directory / f"{name}.log").read_text(encoding="utf-8"), flush=True)
         failed = any(status != 0 for status in results.values())
-        if mode == "preflights" and set(results) != set(PREFLIGHT_MODES):
+        if mode == "preflights" and set(results) != set(preflight_modes):
             failed = True
         if mode == "preflights" and not failed:
             try:

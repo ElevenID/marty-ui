@@ -1126,6 +1126,7 @@ mod tests {
             identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
             disabled: Mutex::new(false),
         });
@@ -1241,6 +1242,7 @@ mod tests {
         identities: Mutex<Option<BTreeMap<String, CanvasLinkedIdentitySnapshot>>>,
         candidates: Mutex<BTreeMap<String, CanvasRosterCandidate>>,
         observations: Mutex<BTreeMap<String, Vec<CanvasCandidateObservationSnapshot>>>,
+        observation_payloads: Mutex<BTreeMap<(String, String), String>>,
         cursor: Mutex<Option<(usize, usize)>>,
         disabled: Mutex<bool>,
     }
@@ -1359,6 +1361,16 @@ mod tests {
             requirement: &str,
             observation: &CanvasAuthoritativeObservation,
         ) -> Result<bool, CanvasSyncProcessingError> {
+            let canonical = crate::canvas_award_candidate::python_canonical_json(&json!({
+                "assertion": observation.assertion,
+                "payload": observation.source_payload,
+            }));
+            let key = (candidate.to_owned(), requirement.to_owned());
+            let mut payloads = self.observation_payloads.lock().unwrap();
+            if payloads.get(&key) == Some(&canonical) {
+                return Ok(false);
+            }
+            payloads.insert(key, canonical);
             let mut all = self.observations.lock().unwrap();
             let current = all.entry(candidate.into()).or_default();
             current.retain(|item| item.requirement_id != requirement);
@@ -1644,6 +1656,7 @@ mod tests {
             identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
             disabled: Mutex::new(false),
         });
@@ -1781,6 +1794,7 @@ mod tests {
             identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
             disabled: Mutex::new(false),
         });
@@ -1823,6 +1837,7 @@ mod tests {
             identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
             disabled: Mutex::new(false),
         });
@@ -1876,6 +1891,27 @@ mod tests {
     #[derive(Debug)]
     struct MixedRosterProvider;
 
+    fn mixed_roster_snapshot(active_12: bool) -> CanvasRosterSnapshot {
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-mixed-roster-scenarios.json"
+        ))
+        .unwrap();
+        let users = matrix["roster_users"].as_array().unwrap();
+        CanvasRosterSnapshot {
+            canvas_user_ids: users.iter().map(|value| value.to_string()).collect(),
+            lti_subjects: matrix["identities"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|identity| {
+                    identity["status"] == "linked" && (identity["user"] != "12" || active_12)
+                })
+                .map(|identity| format!("subject-{}", identity["user"].as_str().unwrap()))
+                .collect(),
+            preloaded_observations: BTreeMap::new(),
+        }
+    }
+
     #[async_trait]
     impl CanvasAuthoritativeProvider for MixedRosterProvider {
         fn for_run(
@@ -1908,26 +1944,12 @@ mod tests {
                 "../../../../contracts/canvas-worker-mixed-roster-scenarios.json"
             ))
             .unwrap();
-            let users = matrix["roster_users"].as_array().unwrap();
             let active_12 = matrix["cases"][0]["stages"][0]["active_12"] == true;
-            Ok(CanvasRosterSnapshot {
-                canvas_user_ids: users.iter().map(|value| value.to_string()).collect(),
-                lti_subjects: matrix["identities"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .filter(|identity| {
-                        identity["status"] == "linked" && (identity["user"] != "12" || active_12)
-                    })
-                    .map(|identity| format!("subject-{}", identity["user"].as_str().unwrap()))
-                    .collect(),
-                preloaded_observations: BTreeMap::new(),
-            })
+            Ok(mixed_roster_snapshot(active_12))
         }
     }
 
-    #[tokio::test]
-    async fn mixed_roster_unit_window_preserves_terminal_states_and_identity_gates() {
+    fn mixed_roster_fixture() -> (Value, Arc<SimulatorRepository>) {
         let matrix: Value = serde_json::from_str(include_str!(
             "../../../../contracts/canvas-worker-mixed-roster-scenarios.json"
         ))
@@ -1961,6 +1983,7 @@ mod tests {
             identities: Mutex::new(Some(identities)),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
             disabled: Mutex::new(false),
         });
@@ -1980,6 +2003,12 @@ mod tests {
                 },
             );
         }
+        (matrix, repository)
+    }
+
+    #[tokio::test]
+    async fn mixed_roster_unit_window_preserves_terminal_states_and_identity_gates() {
+        let (matrix, repository) = mixed_roster_fixture();
         let processor = NativeCanvasSyncProcessor::new(
             repository.clone(),
             Arc::new(MixedRosterProvider),
@@ -2019,6 +2048,192 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum TailResponse {
+        Negative,
+        Unavailable,
+        Positive,
+    }
+
+    #[derive(Debug)]
+    struct ScriptedTailProvider {
+        response: Mutex<TailResponse>,
+        active_12: Mutex<bool>,
+    }
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for ScriptedTailProvider {
+        fn for_run(
+            self: Arc<Self>,
+            _: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
+        async fn read_requirement(
+            &self,
+            _: &CanvasSyncResources,
+            requirement: &Value,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            let source = requirement["source"].as_str().unwrap();
+            let score = match (*self.response.lock().unwrap(), source) {
+                (TailResponse::Unavailable, _) => return Err(CanvasProviderReadError::Unavailable),
+                (TailResponse::Negative, "ags_result") => 1,
+                (TailResponse::Negative | TailResponse::Positive, _) => 9,
+            };
+            let assertion = match source {
+                "canvas_rest" => rest_assertion(
+                    "canvas.assignment_score",
+                    &json!({"score":score,"workflow_state":"graded","assignment":{"points_possible":10}}),
+                ),
+                "ags_result" => ags_assertion(
+                    &json!({"resultScore":score,"resultMaximum":10,"resultStatus":"FullyGraded"}),
+                ),
+                _ => panic!("unexpected frozen source"),
+            };
+            Ok(CanvasAuthoritativeObservation {
+                assertion,
+                source_payload: Map::new(),
+                verification_method: if source == "canvas_rest" {
+                    "CANVAS_OAUTH_API_READ"
+                } else {
+                    "LTI_AGS_RESULT_READ"
+                },
+                effective_at: None,
+            })
+        }
+
+        async fn roster(
+            &self,
+            _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
+            _: &[Value],
+            _: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            Ok(mixed_roster_snapshot(*self.active_12.lock().unwrap()))
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_roster_tail_outage_preserves_negative_heads_until_positive_recovery() {
+        let (matrix, repository) = mixed_roster_fixture();
+        let provider = Arc::new(ScriptedTailProvider {
+            response: Mutex::new(TailResponse::Negative),
+            active_12: Mutex::new(false),
+        });
+        let processor = NativeCanvasSyncProcessor::new(
+            repository.clone(),
+            provider.clone(),
+            enabled_config(),
+            matrix["batch_size"].as_u64().unwrap() as usize,
+            matrix["roster_limit"].as_u64().unwrap() as usize,
+        );
+        let mut tail = target(CanvasSyncTargetType::BackgroundRoster);
+        tail.metadata.insert("roster_cursor".into(), Value::from(3));
+
+        let negative = run_simulated(&processor, tail.clone()).await.unwrap();
+        assert_eq!(negative["candidates_seen"].get(), "3");
+        assert_eq!(negative["pending_claim"].get(), "0");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+        let ordinary_key = candidate_key("platform-1", "binding-1", Some("9"), None);
+        let ordinary_id = repository.candidates.lock().unwrap()[&ordinary_key]
+            .id
+            .clone();
+        let negative_heads = repository.observations.lock().unwrap()[&ordinary_id].clone();
+        assert_eq!(negative_heads.len(), 2);
+        for (requirement, score) in [("rest", 90.0), ("ags", 10.0)] {
+            let head = negative_heads
+                .iter()
+                .find(|head| head.requirement_id == requirement)
+                .unwrap();
+            assert_eq!(head.assertion["score_percent"], score);
+        }
+
+        *provider.response.lock().unwrap() = TailResponse::Unavailable;
+        let unavailable = run_simulated(&processor, tail.clone()).await.unwrap();
+        assert_eq!(unavailable["observations_written"].get(), "0");
+        assert_eq!(
+            repository.observations.lock().unwrap()[&ordinary_id],
+            negative_heads
+        );
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+
+        *provider.response.lock().unwrap() = TailResponse::Positive;
+        let recovery = run_simulated(&processor, tail).await.unwrap();
+        assert_eq!(recovery["pending_claim"].get(), "1");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((0, 6)));
+        let recovered_heads = repository.observations.lock().unwrap()[&ordinary_id].clone();
+        assert_eq!(recovered_heads.len(), 2);
+        assert!(recovered_heads
+            .iter()
+            .all(|head| head.assertion["score_percent"] == 90.0));
+        let candidates = repository.candidates.lock().unwrap();
+        for (user, state) in [("7", "claimed"), ("8", "dismissed"), ("9", "pending_claim")] {
+            let key = candidate_key("platform-1", "binding-1", Some(user), None);
+            assert_eq!(candidates[&key].state, state, "user {user}");
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_roster_active_head_reconciles_once_and_preserves_duplicate_heads() {
+        let (matrix, repository) = mixed_roster_fixture();
+        let provider = Arc::new(ScriptedTailProvider {
+            response: Mutex::new(TailResponse::Positive),
+            active_12: Mutex::new(false),
+        });
+        let processor = NativeCanvasSyncProcessor::new(
+            repository.clone(),
+            provider.clone(),
+            enabled_config(),
+            matrix["batch_size"].as_u64().unwrap() as usize,
+            matrix["roster_limit"].as_u64().unwrap() as usize,
+        );
+        let head = target(CanvasSyncTargetType::BackgroundRoster);
+        let gated = run_simulated(&processor, head.clone()).await.unwrap();
+        assert_eq!(gated["identity_link_required"].get(), "3");
+        assert_eq!(gated["observations_written"].get(), "0");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((3, 6)));
+
+        *provider.active_12.lock().unwrap() = true;
+        let active = run_simulated(&processor, head.clone()).await.unwrap();
+        assert_eq!(active["identity_link_required"].get(), "2");
+        assert_eq!(active["pending_claim"].get(), "1");
+        assert_eq!(active["observations_written"].get(), "2");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((3, 6)));
+        let active_key = candidate_key("platform-1", "binding-1", Some("12"), None);
+        let active_id = repository.candidates.lock().unwrap()[&active_key]
+            .id
+            .clone();
+        let active_heads = repository.observations.lock().unwrap()[&active_id].clone();
+        assert_eq!(active_heads.len(), 2);
+        assert!(active_heads
+            .iter()
+            .all(|head| head.assertion["score_percent"] == 90.0));
+
+        let duplicate = run_simulated(&processor, head).await.unwrap();
+        assert_eq!(duplicate["identity_link_required"].get(), "2");
+        assert_eq!(duplicate["pending_claim"].get(), "1");
+        assert_eq!(duplicate["observations_written"].get(), "0");
+        assert_eq!(*repository.cursor.lock().unwrap(), Some((3, 6)));
+        assert_eq!(
+            repository.observations.lock().unwrap()[&active_id],
+            active_heads
+        );
+        let candidates = repository.candidates.lock().unwrap();
+        for (user, state) in [
+            ("7", "claimed"),
+            ("8", "dismissed"),
+            ("10", "identity_link_required"),
+            ("11", "identity_link_required"),
+            ("12", "pending_claim"),
+        ] {
+            let key = candidate_key("platform-1", "binding-1", Some(user), None);
+            assert_eq!(candidates[&key].state, state, "user {user}");
+        }
+    }
+
     #[tokio::test]
     async fn expired_issued_drift_disables_without_provider_or_fact_mutation() {
         let repository = Arc::new(SimulatorRepository {
@@ -2033,6 +2248,7 @@ mod tests {
             identities: Mutex::new(None),
             candidates: Mutex::new(BTreeMap::new()),
             observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
             cursor: Mutex::new(None),
             disabled: Mutex::new(false),
         });
