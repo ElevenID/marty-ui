@@ -166,6 +166,40 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
         )
 
+    def test_organization_trust_profile_control_plane_is_observed(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/organization/src/lib.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-organization"
+            and edge["package"] == "marty-trust-profile"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertIn(
+            edge["binding"], (ROOT / edge["evidence"]).read_text(encoding="utf-8")
+        )
+        self.assertIn(
+            edge["runtime_marker"],
+            (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
+        )
+        control_plane = (
+            ROOT / "rust/services/trust-profile/src/control_plane.rs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("OrganizationServiceClient::new(endpoint.connect_lazy())", control_plane)
+        self.assertIn(".get_member(self.request(GetMemberRequest", control_plane)
+        self.assertNotIn(
+            "marty-organization",
+            {dep["name"] for dep in packages["marty-trust-profile"]["dependencies"]},
+        )
+
     def test_auth_outbound_runtime_edges_are_observed_without_narrowing(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

@@ -43,6 +43,13 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_evidence": "rust/services/auth/src/connections.rs",
             "runtime_marker": "&config.organization_grpc_target",
         },
+        {
+            "package": "marty-trust-profile",
+            "evidence": "rust/services/trust-profile/src/config.rs",
+            "binding": "ORG_GRPC_TARGET",
+            "runtime_evidence": "rust/services/trust-profile/src/main.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+        },
     ],
     "marty-applicant": [
         {
