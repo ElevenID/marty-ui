@@ -352,6 +352,8 @@ Next DIDComm source-owner constraint: the remaining composition target imports `
 
 The corrected #1095 head's [full PR CI attempt](https://github.com/ElevenID/marty-ui/actions/runs/37236823246) passed all four Canvas native preflights and the historical lease-expiry published-process test, including both lease cases. Its composition target instead failed one unchanged `json_consumer_diagnostic_matches_published_boundaries` probe because the published probe returned `TimeoutError`; 142 composition tests passed, one failed, and 127 worker tests passed with two ignored. This is not a passing CI result or evidence of a harmless failure. Only failed jobs were rerun on the same head; retain the exact diagnostic and all gates while investigating any repeat.
 
+The failed-jobs rerun on that exact head reproduced the JSON-consumer `TimeoutError` while the lease and worker tests again passed. A local isolated run of the exact JSON-consumer Rust test against the pinned published image passed in 39.23 seconds, below its unchanged 120-second deadline. #1095 now includes fixed-class setup/validation/provider phase diagnostics and runs that mandatory probe once, serially, before the remaining 4+4 parallel Canvas targets; the complete-case count guard and failure propagation remain in place. Focused shell-model, phase-diagnostic, and workflow-policy checks and independent review passed locally. [Fresh exact-head CI 37256844039](https://github.com/ElevenID/marty-ui/actions/runs/37256844039) is pending; contention is a hypothesis until hosted evidence confirms or refutes it, and no merge or speedup is claimed yet.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
