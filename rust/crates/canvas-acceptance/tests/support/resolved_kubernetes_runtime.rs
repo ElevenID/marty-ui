@@ -607,7 +607,7 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
                 None
             },
     )?;
-    overlay(native, gateway, &spec)
+    overlay(native, gateway, spec)
 }
 
 fn overlay(
