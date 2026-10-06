@@ -345,10 +345,25 @@ def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> Non
 
 
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
+    # Published matrix IDs are checked-in case identities, not probe output,
+    # environment values, SQL, URLs, or arbitrary text from the child log.
+    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 95
+    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 21
+    for name in GROUPS.PUBLISHED_MATRIX_PROBE_NAMES:
+        marker = json.dumps(
+            {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for phase, name in (
+        ("migration_seed", "published_probe"),
+        ("migration_seed", "json_consumer"),
+        ("migration_seed", "json_depth"),
+        ("migration_seed", "timeout_consumer"),
+        ("migration_seed", "worker_validation_template"),
         ("scenario", "retry-after.http_date_future"),
         ("cleanup", "published_database_removal"),
         ("contract", "canvas_sync_worker_postgres_contract"),
+        ("contract_phase", "renewal_job_outcomes"),
     ):
         marker = json.dumps(
             {"phase": phase, "name": name, "duration_ms": 1, "status": "ok"}
@@ -356,6 +371,80 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+    for name in (
+        "case_from_scenario",
+        "json_depth_extra",
+        "worker_validation_other",
+        "validation.not_a_frozen_case",
+        "retry-after.http_date_future.extra",
+        "retry-after.secret\nvalue",
+    ):
+        marker = json.dumps(
+            {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert (
+            GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+            is None
+        )
+
+
+def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
+    support = (
+        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
+    ).read_text(encoding="utf-8")
+    worker = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+    ).read_text(encoding="utf-8")
+    for name in ("json_consumer", "json_depth", "timeout_consumer"):
+        assert f'Some("{name}") => "{name}"' in support
+    assert support.count('"worker_validation_template"') == 1
+    assert (
+        worker.count("PublishedDatabase::start_for_worker_validation_template()") == 1
+    )
+    assert support.count("worker_matrix_timing_name(scenario, case)?") == 1
+    assert support.index(
+        'return Err("unsupported owned worker matrix case".into());'
+    ) < (support.index("worker_matrix_timing_name(scenario, case)?"))
+    assert "Self::start_probe_with_migration_named(" in support
+    assert 'strip_prefix("worker-")' in support
+    # Every Rust wrapper that reaches the shared case constructor must have
+    # an exact checked-in scenario family in the timing collector. This also
+    # catches a newly added wrapper whose labels would otherwise disappear.
+    wrapper_families = re.findall(
+        r'Self::start_with_worker_case\(\s*case,\s*include_str!\(\s*"\.\./\.\./\.\./\.\./\.\./contracts/canvas-worker-([a-z-]+)-scenarios\.json"\s*\)',
+        support,
+    )
+    assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 21
+    assert set(wrapper_families) == GROUPS.PUBLISHED_MATRIX_SCENARIOS
+
+
+def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_sync_worker_postgres_contract.rs"
+    ).read_text(encoding="utf-8")
+    emitted = re.findall(
+        r'(?:CompositePhaseTimer::start|timed_phase)\(\s*"([a-z_]+)"', source
+    )
+    assert len(emitted) == 15
+    assert len(set(emitted)) == len(emitted)
+    assert set(emitted) == GROUPS.TIMING_NAMES["contract_phase"]
+    assert emitted[0] == "composite_total"
+    assert emitted[-1] == "pool_close"
+    assert '"\\nMARTY_CI_PHASE_V1 ' in source
+    timer_drop = source.split("impl Drop for CompositePhaseTimer", 1)[1].split(
+        "async fn timed_phase", 1
+    )[0]
+    assert "std::io::stderr().lock()" in timer_drop
+    assert "let _ = writeln!(" in timer_drop
+    assert "eprintln!(" not in timer_drop
+    assert '#[ignore = "manual no-database check' in source
+    for name in emitted:
+        marker = json.dumps(
+            {"phase": "contract_phase", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "rust-db")
+    unknown = '{"phase":"contract_phase","name":"private_value","duration_ms":1,"status":"ok"}'
+    assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + unknown, "rust-db") is None
 
 
 def test_unavailable_optional_timing_file_does_not_change_contract_result(

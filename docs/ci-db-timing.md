@@ -25,12 +25,28 @@ time in the JSONL evidence.
 Canvas's exact-owned PostgreSQL fixture emits `container_startup`,
 `database_readiness`, `migration_seed`, and `cleanup`, including failed phase
 status when unwinding. `migration_seed` is deliberately one combined phase:
-the pinned historical producer executes its migrations and fixture seed
-internally, and changing it would invalidate the source/oracle pin. The native
-REST worker harness separately times each corpus-owned `scenario`, plus its
-own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS fixture,
-not PostgreSQL seeding. A case's scenario duration includes its nested setup,
-worker run, assertions, and cleanup, so these durations must not be added.
+it starts before the pinned probe container runs and ends after its case
+execution and report validation. It is not a pure migration duration. The
+historical producer executes its migrations and fixture seed internally, and
+changing it would invalidate the source/oracle pin. The native
+fixture labels three fixed constructor origins (`json_consumer`, `json_depth`,
+`timeout_consumer`) and the worker-validation repository's single shared
+template (`worker_validation_template`). Its 21 published worker matrix
+families use bounded `kind.case` labels from the checked-in scenario corpus,
+after case-membership validation; the collector accepts only those exact
+identities. Other probes retain `published_probe`. These labels identify the
+source-owned probe path, not a migration-only duration or proof that an adjacent
+parallel test log line owns a particular probe. They contain no fixture
+contents, payloads, or dynamic resource identifiers.
+These labels appear for whichever matrix cases actually execute. Routine CI
+skips 33 historical replays, so those skipped probes emit no case timing;
+selected routine cases still receive labels. The prior routine artifact had
+602 rows, including 127 `published_probe` records, but those counts are
+observations, not an invariant or evidence that skipped cases ran.
+The native REST worker harness separately times each corpus-owned `scenario`,
+plus its own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS
+fixture, not PostgreSQL seeding. A case's scenario duration includes its nested
+setup, worker run, assertions, and cleanup, so these durations must not be added.
 The PostgreSQL cleanup duration measures resource removal, not the subsequent
 exact-absence verification; a successful removal can still fail that verification
 and fail the test. Explicit close and the following Rust destructor produce one
@@ -38,6 +54,21 @@ removal phase when the first close succeeds; a failed partial removal can be
 timed again if the destructor retries remaining owned resources. The HTTPS
 cleanup duration measures server/thread shutdown, not deletion of the temporary
 certificate directory; a deletion failure still fails the test.
+
+The ordinary `canvas_sync_worker_postgres_contract` executable also emits
+fixed `contract_phase` durations from its stateful composite test. Each timer
+writes only its allowlisted marker directly to stderr because libtest
+otherwise captures print macros; this does not enable broader test logging.
+The outer `composite_total` includes connection, schema setup, all subphases, and pool
+close; do not add it to its nested phases or to the executable's `contract`
+duration. `initial_schema` is separate from the scheduler/recovery/completion
+block. `hinted_retry`, privacy, signing, projections, and consumer ranges each
+include their existing destructive schema reset. Lifecycle, actual owned
+process signals, renewal generation/write-failure boundaries, and the 60-case
+renewal outcome matrix retain their existing order and real deadlines. A
+failed assertion marks its active phase failed during unwind; later phases
+are absent, and the contract's exit status remains the gate. These timings
+are diagnostic only, not proof that any phase can safely overlap another.
 
 This is instrumentation, not a speedup or evidence to remove tests. All
 existing cases, image/source pins, connection limits, qualification tiers,

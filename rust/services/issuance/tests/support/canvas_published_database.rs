@@ -14,16 +14,16 @@ const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
 struct PhaseTimer {
     phase: &'static str,
-    name: &'static str,
+    name: String,
     started: Instant,
     succeeded: bool,
 }
 
 impl PhaseTimer {
-    fn start(phase: &'static str, name: &'static str) -> Self {
+    fn start(phase: &'static str, name: impl Into<String>) -> Self {
         Self {
             phase,
-            name,
+            name: name.into(),
             started: Instant::now(),
             succeeded: false,
         }
@@ -32,6 +32,26 @@ impl PhaseTimer {
     fn success(mut self) {
         self.succeeded = true;
     }
+}
+
+// Matrix names come only from checked-in scenario fixtures after membership
+// validation. Keep them safe to print as one JSON string without ever using a
+// Docker ID, URL, SQL, case payload, or environment value as a timing label.
+fn worker_matrix_timing_name(scenario: &str, case: &str) -> Result<String, String> {
+    let kind = scenario
+        .strip_prefix("worker-")
+        .ok_or("Invalid owned worker matrix timing kind")?;
+    let name = format!("{kind}.{case}");
+    if kind.is_empty()
+        || case.is_empty()
+        || name.len() > 96
+        || !name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
+    {
+        return Err("Invalid owned worker matrix timing name".into());
+    }
+    Ok(name)
 }
 
 impl Drop for PhaseTimer {
@@ -420,6 +440,17 @@ impl PublishedDatabase {
         Self::start_probe(None).await
     }
 
+    pub async fn start_for_worker_validation_template() -> Result<Self, String> {
+        Self::start_probe_with_scope(
+            None,
+            None,
+            false,
+            Uuid::new_v4(),
+            "worker_validation_template",
+        )
+        .await
+    }
+
     /// The host coordinator allocates this UUID before launching its child, so
     /// interrupted creation can be recovered by exact scope, never by prefix.
     pub(super) async fn start_with_scope(scope: Uuid) -> Result<Self, String> {
@@ -427,7 +458,7 @@ impl PublishedDatabase {
         if !scope_ids(scope, &docker)?.is_empty() {
             return Err("Caller-owned database scope already exists".into());
         }
-        Self::start_probe_with_scope(None, None, false, scope).await
+        Self::start_probe_with_scope(None, None, false, scope, "published_probe").await
     }
 
     /// Default-schema fixture recovery only. The caller supplies its already
@@ -931,10 +962,13 @@ impl PublishedDatabase {
         {
             return Err("unsupported owned worker matrix case".into());
         }
+        let timing_name = worker_matrix_timing_name(scenario, case)?;
         let flag = format!("{flag_name}={case}");
-        Self::start_probe_with_extra(
+        Self::start_probe_with_migration_named(
             Some((script, scenario, script, &flag)),
             Some("canvas-issued-review-scenarios.json"),
+            false,
+            Some(timing_name),
         )
         .await
     }
@@ -1127,7 +1161,33 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
     ) -> Result<Self, String> {
-        Self::start_probe_with_scope(oracle, extra_fixture, recovery_schema, Uuid::new_v4()).await
+        Self::start_probe_with_migration_named(oracle, extra_fixture, recovery_schema, None).await
+    }
+
+    async fn start_probe_with_migration_named(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+        matrix_timing_name: Option<String>,
+    ) -> Result<Self, String> {
+        // These are fixed constructor origins, not text from a scenario or probe.
+        let timing_name = matrix_timing_name.unwrap_or_else(|| {
+            match oracle.map(|(script, _, _, _)| script) {
+                Some("json_consumer") => "json_consumer",
+                Some("json_depth") => "json_depth",
+                Some("timeout_consumer") => "timeout_consumer",
+                _ => "published_probe",
+            }
+            .to_owned()
+        });
+        Self::start_probe_with_scope(
+            oracle,
+            extra_fixture,
+            recovery_schema,
+            Uuid::new_v4(),
+            timing_name,
+        )
+        .await
     }
 
     async fn start_probe_with_scope(
@@ -1135,6 +1195,7 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
         scope: Uuid,
+        timing_name: impl Into<String>,
     ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
@@ -1627,7 +1688,7 @@ impl PublishedDatabase {
         }
         // The pinned producer owns both migrations and seed data. This timer
         // measures their combined verified probe, without editing that input.
-        let migration_timing = PhaseTimer::start("migration_seed", "published_probe");
+        let migration_timing = PhaseTimer::start("migration_seed", timing_name);
         let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());
