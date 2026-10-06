@@ -1,9 +1,9 @@
 """Native deadline comparator tests, not native-worker execution evidence."""
 
-from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
 import importlib
 import json
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from pathlib import Path
 
 import pytest
@@ -12,6 +12,7 @@ import pytest
 @pytest.fixture
 def native(monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
+    monkeypatch.delenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", raising=False)
     return importlib.import_module("test_canvas_worker_rest_https")
 
 
@@ -102,6 +103,76 @@ def test_each_retry_case_uses_a_separate_native_child(native, monkeypatch):
             == case["name"]
         )
         assert spec["stages"][0]["status"] == 429
+
+
+@pytest.mark.parametrize(
+    "tier,expected",
+    [
+        ("routine", {"http_date_future", "malformed"}),
+        (
+            "full",
+            {
+                "http_date_future",
+                "http_date_past",
+                "malformed",
+                "negative",
+                "zero",
+                "clamped",
+                "huge_integer",
+            },
+        ),
+    ],
+)
+def test_explicit_retry_tiers_select_exact_native_cases(
+    native, monkeypatch, tier, expected
+):
+    monkeypatch.setenv(native.RETRY_AFTER_TIER, tier)
+    calls = []
+    monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
+    native.run("synthetic-test-executable", "retry-after")
+    assert {call[4]["name"] for call in calls} == expected
+    assert len(calls) == len(expected)
+
+
+@pytest.mark.parametrize("tier", ["", "partial", "FULL", "2"])
+def test_invalid_retry_tier_fails_before_any_child(native, monkeypatch, tier):
+    monkeypatch.setenv(native.RETRY_AFTER_TIER, tier)
+    calls = []
+    monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
+    with pytest.raises(ValueError, match="Invalid native Retry-After tier"):
+        native.run("synthetic-test-executable", "retry-after")
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "missing",
+        "extra",
+        "duplicate",
+        "same_count_substitution",
+        "missing_reference",
+        "extra_reference",
+    ],
+)
+def test_retry_tier_rejects_matrix_or_oracle_drift(native, change):
+    names = sorted(native.RETRY_AFTER_CASES)
+    cases = [{"name": name} for name in names]
+    reference = {name: {} for name in names}
+    if change == "missing":
+        cases.pop()
+    elif change == "extra":
+        cases.append({"name": "new_case"})
+    elif change == "duplicate":
+        cases[-1]["name"] = cases[0]["name"]
+    elif change == "same_count_substitution":
+        cases[-1]["name"] = "new_case"
+    elif change == "missing_reference":
+        del reference[names[-1]]
+    else:
+        reference["new_case"] = {}
+    with pytest.raises(AssertionError, match="inventory changed"):
+        native.selected_retry_after_cases(cases, reference, "routine")
 
 
 @pytest.mark.parametrize("scenario,stages", [("rest", 4), ("facts", 4), ("retry", 5)])
