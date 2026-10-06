@@ -959,6 +959,41 @@ The assembled policy sweep passed 73 tests and 63 subtests in 13.99s;
 package-scoped frozen/offline Rust validation passed 16 contract vectors, the
 transport matrix and the compile-fail evidence-construction doctest.
 
+## #1127 qualification and next selection checkpoint (2026-10-06)
+
+Exact PR source `aaae1631482e002d063e23248be2a7bb041104c4` passed normal
+CI `37477668436` and all required checks. The Canvas log recorded exactly one
+rendered-base completion marker and the real Linux owner as `ok` at 15:07:38
+UTC; composition completed 143 tests with no failures. This does not qualify
+the unpublished PostgreSQL/Kubernetes additions or a nightly release.
+#1127 entered the normal protected queue at 15:12:45 UTC. Queue commit
+`e2d8b37a4bfb5f913183581b1b1a0e03055cfff5` is being validated by CI
+`37485559081`; no admin bypass or gate alteration was used.
+
+The latest routine run took 51m22s, rather than #1126's 31m43s. Its Canvas lane
+took 49m45s: host compile 10m10s, Bookworm compile 9m20s, public image 13m36s,
+and database acceptance 12m53s. Different assembled code, build/cache state and
+runner conditions make these observations unsuitable for attributing a steady
+41% gain. Retain both observations and investigate rather than extrapolate.
+The host cache health check succeeded, but counters were collected more than
+38 minutes after compilation. With sccache's default 600-second daemon idle
+shutdown, late zeros do not prove a cache bypass or describe Docker cache hits.
+Capture sanitized host counters immediately after compilation before drawing
+cache conclusions.
+
+Reviewed selector source `17bd14bb3`, assembled as `ee0d2afa3`, admits only
+the two exact OID4VP integration-test paths to the existing PR contracts lane,
+and only after the verified-path CLI executes their ownership/context/corpus
+proof. Contracts still run the workspace tests excluding Canvas acceptance;
+existing lint, supply-chain and public/release policies are unchanged. Generic
+Rust PR security selection remains governed by its existing policy, not a new
+waiver. Unknown/mixed/deleted/renamed inputs or failed proof remain broad;
+push/main, protected merge groups and full qualification retain full validation.
+This batch itself changes workflow/runtime inputs and must run full CI.
+The assembled compile-scope suite passed 32 tests. A broader policy sweep found
+three stale completion-suffix assertions after the new guards; fix these before
+publication, retaining all owner completion and target-success guarantees.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
