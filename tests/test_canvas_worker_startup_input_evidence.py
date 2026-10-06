@@ -39,8 +39,8 @@ def _startup_inputs(graph: dict) -> set[str]:
 
 
 def _normalized_sha256(path: Path) -> str:
-    normalized = path.read_text(encoding="utf-8").replace("\r\n", "\n").replace(
-        "\r", "\n"
+    normalized = (
+        path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
     )
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
@@ -79,7 +79,9 @@ def test_current_startup_capture_inputs_match_explicit_hashes() -> None:
         "contracts/canvas-worker-startup-scenarios.json",
     ],
 )
-def test_each_startup_input_change_invalidates_evidence(tmp_path: Path, name: str) -> None:
+def test_each_startup_input_change_invalidates_evidence(
+    tmp_path: Path, name: str
+) -> None:
     graph = json.loads(GRAPH.read_text(encoding="utf-8"))
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
     for source in evidence["sha256"]:
