@@ -794,6 +794,22 @@ Do not reuse historical evidence without independently verifiable capture record
 or a controlled, fully attested capture; neither retroactively inferred hashes
 nor replacing expected outputs to match native behavior is acceptable proof.
 
+## HTTPS duplicate experiment disposition (2026-10-06)
+
+When both Rust lanes are selected, both execute
+`canvas_authoritative_https::actual_ags_nrps_https_uses_child_scoped_trust`:
+the contracts workspace invocation and the Canvas lane's exact native HTTPS
+step. The local candidate `00eddfbf66c0abaf48f6512851089967e8179a92` added
+lane-aware exclusion, compiled substring-uniqueness discovery and execution
+guards. Targeted policies passed, but independent review recommends not shipping
+it: the new serial whole-workspace `--list` invocation and six-file policy delta
+are disproportionate to the duplicate cost. In successful normal #1126
+[Canvas job 112238131886](https://github.com/ElevenID/marty-ui/actions/runs/37454314639/job/112238131886),
+that exact HTTPS step started and completed at 11:21:20 UTC (second-resolution
+metadata, not a controlled benchmark). Its reported duration does not justify
+adding another workspace discovery pass. Preserve the unpushed candidate for
+audit and retain existing execution; no speedup or exclusion is promoted.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
