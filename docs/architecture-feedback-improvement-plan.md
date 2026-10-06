@@ -657,6 +657,16 @@ raw-credential routes distinct from signed-VP handling and reject unverified
 context flags as proof. Only then qualify the same-key wallet happy journey and
 nightly release tier on real Flow/policy/issuance results. This audit changed no
 pins, authentication behavior or release authority.
+An integration-repository review of the five candidate nightly smoke cases
+found issuance coverage but no successful verifier verdict. Its recorded
+signed-presentation replay reached policy evaluation and was denied; the
+observed outer-presentation forwarding needs investigation before any
+qualification claim. The next narrow implementation is one serial, no-skip
+disposable-stack happy journey with a real authorized principal, exact policy
+and trust fixture, same-key signed presentation, and an actual `allow` verdict
+against pinned artifacts. Only after that passes should a separate Linux
+nightly transaction bind the case result to an immutable prerelease tag and
+image digests. Existing stable release E2E and recording gates remain required.
 
 ## A6 container-input audit disposition (2026-10-06)
 
@@ -692,6 +702,13 @@ workloads, not a before/after speed comparison. Both workflows succeeded.
 This fresh evidence retains A7's deferred disposition: moving preflight work
 to another job is not yet shown to reduce the critical path, and no security,
 feature, benchmark or platform qualification is removed on that assumption.
+The newer successful [PR run 37460823351](https://github.com/ElevenID/marty-core/actions/runs/37460823351)
+had a 12m30s preflight and 18m30s affected Rust tests; protected
+[merge run 37463564302](https://github.com/ElevenID/marty-core/actions/runs/37463564302)
+had a 12m43s preflight and 18m26s Windows lane. The jobs already run in
+parallel and feed the same CI gate. A new preflight job would add runner and
+cache startup without shortening either observed critical path, so A7 remains
+deferred pending evidence that its position on the critical path changes.
 
 ## Next renewal decomposition: bounded obligations (unpublished)
 
