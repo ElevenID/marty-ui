@@ -1934,6 +1934,28 @@ pub(super) type ReviewTransportPorts = (
     Arc<dyn ReviewResponseExpectations>,
 );
 
+// The shared probe returns None after 50 attempts (normally about five
+// seconds). Keep retrying within this caller's ten-second process-start limit.
+async fn wait_for_owned_review_health<F, Fut>(
+    deadline: std::time::Duration,
+    mut probe: F,
+) -> Option<Value>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<Value>>,
+{
+    tokio::time::timeout(deadline, async {
+        loop {
+            if let Some(health) = probe().await {
+                break health;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .ok()
+}
+
 /// Reuse the real main-process/dependency owner with a new request boundary.
 /// The factory is invoked only after the exact owned process becomes healthy.
 /// Its ports cannot opt out of the fifteen real-lifecycle cases, claim-hold,
@@ -1998,17 +2020,17 @@ pub(super) async fn run_review_operations_main_with_transport<F>(
             .expect("start owned issuance lifecycle process"),
     );
     let client = bounded_http_client(Duration::from_secs(5));
-    let health = tokio::time::timeout(
-        Duration::from_secs(10),
-        wait_for_health_with_client(http_port, &client),
-    )
-    .await
-    .expect("owned issuance readiness deadline");
+    let health = wait_for_owned_review_health(Duration::from_secs(10), || {
+        wait_for_health_with_client(http_port, &client)
+    })
+    .await;
+    let child_status = child.0.try_wait().expect("inspect owned issuance process");
     assert_eq!(
         health,
-        Some(json!({"status":"healthy","service":"issuance-service"}))
+        Some(json!({"status":"healthy","service":"issuance-service"})),
+        "owned issuance readiness failed on port {http_port}; child status: {child_status:?}"
     );
-    assert!(child.0.try_wait().unwrap().is_none());
+    assert!(child_status.is_none());
     // Prove the packaged main owns every mirror route, not merely the
     // route-local test router. Authentication must still win before query,
     // tenant, repository, or provider work on each operation.
@@ -2236,6 +2258,25 @@ async fn run_scenario(pool: &PgPool, responses: Responses) {
 #[cfg(test)]
 mod review_transport_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn owned_review_health_retries_after_first_probe_exhausts() {
+        let mut probes = 0;
+        let expected = json!({"status":"healthy","service":"issuance-service"});
+        let health = wait_for_owned_review_health(std::time::Duration::from_secs(1), || {
+            probes += 1;
+            std::future::ready((probes == 2).then(|| expected.clone()))
+        })
+        .await;
+        assert_eq!(health, Some(expected));
+        assert_eq!(probes, 2);
+
+        let timed_out = wait_for_owned_review_health(std::time::Duration::from_millis(1), || {
+            std::future::pending::<Option<Value>>()
+        })
+        .await;
+        assert_eq!(timed_out, None);
+    }
 
     #[test]
     fn concurrent_setup_and_bridge_projection_are_frozen_and_expected_only() {
