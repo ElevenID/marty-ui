@@ -961,8 +961,8 @@ fn provider_configuration_image_owner_rejects_isolation_and_mount_drift() {
         },
         "NetworkSettings": {"Ports": {}},
         "Mounts": [
-            {"Type": "bind", "RW": false, "Destination": "/verification/scripts/run_canvas_provider_configuration_oracle.py"},
-            {"Type": "bind", "RW": false, "Destination": "/verification/contracts/canvas-provider-configuration-scenarios.json"}
+            {"Type": "bind", "RW": false, "Source": "/expected/script.py", "Destination": "/verification/scripts/run_canvas_provider_configuration_oracle.py"},
+            {"Type": "bind", "RW": false, "Source": "/expected/scenarios.json", "Destination": "/verification/contracts/canvas-provider-configuration-scenarios.json"}
         ]
     });
     owner.checked(&info, &id).unwrap();
@@ -996,6 +996,11 @@ fn provider_configuration_image_owner_rejects_isolation_and_mount_drift() {
             serde_json::json!({"5432/tcp": []}),
         ),
         ("/Mounts/0/RW", serde_json::json!(true)),
+        ("/Mounts/0/Source", serde_json::json!("/foreign/script.py")),
+        (
+            "/Mounts/1/Source",
+            serde_json::json!("/foreign/scenarios.json"),
+        ),
         (
             "/Mounts/1/Destination",
             serde_json::json!("/verification/foreign"),
@@ -1005,6 +1010,31 @@ fn provider_configuration_image_owner_rejects_isolation_and_mount_drift() {
         *info.pointer_mut(pointer).unwrap() = replacement;
         assert!(owner.checked(&info, &id).is_err(), "{pointer}");
         *info.pointer_mut(pointer).unwrap() = previous;
+    }
+}
+
+#[test]
+fn provider_configuration_image_reference_rejects_tags_options_and_malformed_digests() {
+    let valid = format!(
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:{}",
+        "a".repeat(64)
+    );
+    assert_eq!(
+        canvas_published_database::pinned_published_image(&valid).unwrap(),
+        valid
+    );
+    for invalid in [
+        "ghcr.io/elevenid/marty-credentials-issuance:latest".to_owned(),
+        format!("--privileged@sha256:{}", "a".repeat(64)),
+        format!("GHCR.io/elevenid/marty@sha256:{}", "a".repeat(64)),
+        format!("ghcr.io/elevenid/marty@sha256:{}", "a".repeat(63)),
+        format!("ghcr.io/elevenid/marty@sha256:{}", "A".repeat(64)),
+        format!("ghcr.io/elevenid/marty@sha256:{};rm", "a".repeat(64)),
+    ] {
+        assert!(
+            canvas_published_database::pinned_published_image(&invalid).is_err(),
+            "invalid image reference was accepted: {invalid}"
+        );
     }
 }
 

@@ -1713,12 +1713,37 @@ const PROVIDER_ORACLE_SCENARIOS: &str =
     "/verification/contracts/canvas-provider-configuration-scenarios.json";
 pub(super) const PROVIDER_ORACLE_COMMAND: &str = r#"import json,runpy; print(json.dumps(runpy.run_path('/verification/scripts/run_canvas_provider_configuration_oracle.py')['run'](), sort_keys=True))"#;
 
+pub(super) fn pinned_published_image(value: &str) -> Result<&str, String> {
+    let (repository, digest) = value
+        .split_once("@sha256:")
+        .ok_or("Published image must use a SHA-256 digest")?;
+    if !repository
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || !repository.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'/' | b'_' | b'-')
+        })
+        || digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Published image reference is not an immutable safe digest".into());
+    }
+    Ok(value)
+}
+
 // This helper owns only the pinned published-image probe. The Python oracle
 // executes selected published source and fresh full-module imports; neither
 // needs a database or network. Keep its lifecycle separate from migrations.
 pub(super) struct PublishedImageOracle {
     scope: String,
     image: String,
+    script_source: String,
+    scenarios_source: String,
     id: Option<String>,
     creation_attempted: bool,
 }
@@ -1729,6 +1754,8 @@ impl PublishedImageOracle {
         Self {
             scope: scope.to_owned(),
             image: image.to_owned(),
+            script_source: "/expected/script.py".into(),
+            scenarios_source: "/expected/scenarios.json".into(),
             id: None,
             creation_attempted: false,
         }
@@ -1766,16 +1793,21 @@ impl PublishedImageOracle {
                 if mount["Type"] != "bind" || mount["RW"] != false {
                     return Err("Published image oracle mount is not read-only bind");
                 }
-                mount["Destination"]
-                    .as_str()
-                    .ok_or("Invalid published image oracle mount")
+                Ok((
+                    mount["Source"]
+                        .as_str()
+                        .ok_or("Invalid published image oracle source")?,
+                    mount["Destination"]
+                        .as_str()
+                        .ok_or("Invalid published image oracle destination")?,
+                ))
             })
             .collect::<Result<_, _>>()?;
         if mounts.len() != 2
             || actual
                 != std::collections::BTreeSet::from([
-                    PROVIDER_ORACLE_SCRIPT,
-                    PROVIDER_ORACLE_SCENARIOS,
+                    (self.script_source.as_str(), PROVIDER_ORACLE_SCRIPT),
+                    (self.scenarios_source.as_str(), PROVIDER_ORACLE_SCENARIOS),
                 ])
         {
             return Err("Published image oracle mount allowlist differs".into());
@@ -1843,23 +1875,33 @@ pub(super) async fn provider_configuration_image_oracle() -> Result<Value, Strin
         "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
     ))
     .map_err(|_| "Invalid pinned published-image fixture")?;
-    let image = fixture["observed_image"]
-        .as_str()
-        .ok_or("Missing pinned published image")?;
+    let image = pinned_published_image(
+        fixture["observed_image"]
+            .as_str()
+            .ok_or("Missing pinned published image")?,
+    )?;
     let root = repository_root();
+    let script_source = root
+        .join("scripts/run_canvas_provider_configuration_oracle.py")
+        .display()
+        .to_string();
+    let scenarios_source = root
+        .join("contracts/canvas-provider-configuration-scenarios.json")
+        .display()
+        .to_string();
     let script_mount = format!(
         "type=bind,source={},target={PROVIDER_ORACLE_SCRIPT},readonly",
-        root.join("scripts/run_canvas_provider_configuration_oracle.py")
-            .display()
+        script_source
     );
     let scenarios_mount = format!(
         "type=bind,source={},target={PROVIDER_ORACLE_SCENARIOS},readonly",
-        root.join("contracts/canvas-provider-configuration-scenarios.json")
-            .display()
+        scenarios_source
     );
     let mut owner = PublishedImageOracle {
         scope: Uuid::new_v4().to_string(),
         image: image.to_owned(),
+        script_source,
+        scenarios_source,
         id: None,
         creation_attempted: false,
     };
