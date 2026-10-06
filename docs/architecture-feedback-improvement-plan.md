@@ -920,6 +920,24 @@ hypothetical observed reverse chain are lexical inventory, not execution or a
 complete consumer graph. Service changes still select the full workspace.
 The assembled planner suite passed 20 tests and 63 subtests in 1.68s.
 
+Reviewed Kubernetes source `24a51eb8f634c4a3414d9ff216a454cf14a4c851` is now
+assembled as `93a779169`. It factors existing closed-spec validation and model
+resolution without changing the native renderer's parent/child behavior. One
+bounded real envsubst preparation supports four independently asserted literal
+configuration outcomes, with opt-in discovery and a unique completion marker.
+The author passed 189 preflight policies with one skip; the assembled four
+Kubernetes marker controls passed. Windows compilation/discovery checks the
+body but deliberately returns before rendering, so exact-head Linux execution
+is still required. The six profiles and all eighteen native cases remain.
+
+The current #1127 Canvas job recorded 10m10s of host test compilation and 9m20s
+for the separate Bookworm compatibility compilation. Public release binaries
+cannot replace that compatibility test executable. A single hermetic compile
+could be investigated, but requires proving linker, flags, native dependencies,
+cache access, artifact paths and execution on both Ubuntu and Bookworm. Keep the
+two current guarantees until a bounded compatibility prototype supports reuse;
+sharing a target directory alone is not proof or a measured saving.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
