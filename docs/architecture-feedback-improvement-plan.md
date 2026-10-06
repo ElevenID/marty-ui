@@ -998,9 +998,11 @@ late composition group. Commit `560599673` updated those assertions to accept
 the verified early execution followed by exactly two late skips; the
 PostgreSQL refusal case still runs in the late group. All 35 renewal ownership
 tests and the 200-test published preflight suite passed locally (1 preflight
-skip). The broad combined policy sweep and independent batch review are still
-pending, as is hosted Linux evidence for the early base/Kubernetes proofs and
-the PostgreSQL completion marker. No native process case has been removed.
+skip). The combined policy sweep passed 216 tests, and an independent reviewer
+cleared assembled source `e8d9f59e9` after 54 focused proof/owner/telemetry
+tests and 11 shell fallback cases. Hosted Linux evidence for the early
+base/Kubernetes proofs and the PostgreSQL completion marker remains required
+before merge. No native process case has been removed.
 
 ## Design references
 
