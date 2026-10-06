@@ -946,6 +946,19 @@ assembled ownership/planner/context/image sweep passed 72 tests and 63 subtests
 in 17.91s. This inventory is lexical evidence, not execution or complete
 transitive input closure, and does not authorize dropping any native case.
 
+The reviewed OID4VP context proof (`5eb3a075`, assembled `11bb015e1`) adds
+only two exact test-file exclusions to the root ignore policy. Existing scoped
+test-directory exclusions remain unchanged; the bounded matcher recognizes
+their directory ancestors and later negations. A tiny network-disabled BuildKit
+probe with the three SHA-identical actual ignore files confirmed the production
+contract corpus was copyable (3/3), both test files were excluded (6/6), and a
+later explicit negation restored only its named file while retaining the other
+exclusion and corpus. The owned scratch fixture was removed. This establishes
+context behavior, not measured time savings or CI-selection authority.
+The assembled policy sweep passed 73 tests and 63 subtests in 13.99s;
+package-scoped frozen/offline Rust validation passed 16 contract vectors, the
+transport matrix and the compile-fail evidence-construction doctest.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
