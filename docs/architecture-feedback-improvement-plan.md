@@ -7,8 +7,8 @@ merged, including UI #1124 at `e9f140e00` and #1126 at `8d42d1bdc`. #1126's
 normal/full PR CI and protected merge-queue validation passed; it merged at
 13:11:46 UTC on 2026-10-06.
 The combined unit/renewal/typed-transport follow-up is published as
-[UI #1127](https://github.com/ElevenID/marty-ui/pull/1127), with exact-head CI
-still running at the 14:30 UTC checkpoint; the separate
+[UI #1127](https://github.com/ElevenID/marty-ui/pull/1127). Its source CI
+passed; protected queue CI remains in progress at the 15:50 UTC checkpoint. The separate
 roster component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest crate,
 but UI migration and nightly
@@ -990,9 +990,17 @@ Rust PR security selection remains governed by its existing policy, not a new
 waiver. Unknown/mixed/deleted/renamed inputs or failed proof remain broad;
 push/main, protected merge groups and full qualification retain full validation.
 This batch itself changes workflow/runtime inputs and must run full CI.
-The assembled compile-scope suite passed 32 tests. A broader policy sweep found
-three stale completion-suffix assertions after the new guards; fix these before
-publication, retaining all owner completion and target-success guarantees.
+The assembled compile-scope suite passed 32 tests. The three stale
+completion-suffix assertions were corrected in the reviewed fail-fast source
+before assembly. The later assembled sweep found three more stale renewal
+ownership assertions: they assumed both configuration cases always ran in the
+late composition group. Commit `560599673` updated those assertions to accept
+the verified early execution followed by exactly two late skips; the
+PostgreSQL refusal case still runs in the late group. All 35 renewal ownership
+tests and the 200-test published preflight suite passed locally (1 preflight
+skip). The broad combined policy sweep and independent batch review are still
+pending, as is hosted Linux evidence for the early base/Kubernetes proofs and
+the PostgreSQL completion marker. No native process case has been removed.
 
 ## Design references
 
