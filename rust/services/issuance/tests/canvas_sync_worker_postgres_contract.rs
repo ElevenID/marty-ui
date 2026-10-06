@@ -7,7 +7,7 @@ use marty_issuance_service::{
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
 use sqlx::{postgres::PgPoolOptions, Row};
-use std::{future::Future, time::Instant};
+use std::{future::Future, io::Write, time::Instant};
 
 // Test-only, fixed-name phase markers are filtered again by the CI evidence
 // collector. No SQL, URL, worker output or exception text enters the artifact.
@@ -33,13 +33,24 @@ impl CompositePhaseTimer {
 
 impl Drop for CompositePhaseTimer {
     fn drop(&mut self) {
-        eprintln!(
+        // libtest captures print macros unless --nocapture is used. Write only
+        // this fixed-schema diagnostic directly to stderr, never test logs or
+        // database values, so CI can collect phase rows without widening logs.
+        let _ = writeln!(
+            std::io::stderr().lock(),
             "\nMARTY_CI_PHASE_V1 {{\"phase\":\"contract_phase\",\"name\":\"{}\",\"duration_ms\":{},\"status\":\"{}\"}}",
             self.name,
             self.started.elapsed().as_millis(),
             if self.succeeded { "ok" } else { "failed" },
         );
     }
+}
+
+#[test]
+#[ignore = "manual no-database check that fixed phase markers bypass libtest capture"]
+fn composite_phase_marker_is_visible_without_nocapture() {
+    let allowlisted_name = "initial_schema";
+    CompositePhaseTimer::start(allowlisted_name).success();
 }
 
 async fn timed_phase(name: &'static str, action: impl Future<Output = ()>) {

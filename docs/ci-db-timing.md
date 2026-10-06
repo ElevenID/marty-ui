@@ -38,6 +38,11 @@ identities. Other probes retain `published_probe`. These labels identify the
 source-owned probe path, not a migration-only duration or proof that an adjacent
 parallel test log line owns a particular probe. They contain no fixture
 contents, payloads, or dynamic resource identifiers.
+These labels appear for whichever matrix cases actually execute. Routine CI
+skips 33 historical replays, so those skipped probes emit no case timing;
+selected routine cases still receive labels. The prior routine artifact had
+602 rows, including 127 `published_probe` records, but those counts are
+observations, not an invariant or evidence that skipped cases ran.
 The native REST worker harness separately times each corpus-owned `scenario`,
 plus its own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS
 fixture, not PostgreSQL seeding. A case's scenario duration includes its nested
@@ -51,8 +56,10 @@ cleanup duration measures server/thread shutdown, not deletion of the temporary
 certificate directory; a deletion failure still fails the test.
 
 The ordinary `canvas_sync_worker_postgres_contract` executable also emits
-fixed `contract_phase` durations from its stateful composite test. The outer
-`composite_total` includes connection, schema setup, all subphases, and pool
+fixed `contract_phase` durations from its stateful composite test. Each timer
+writes only its allowlisted marker directly to stderr because libtest
+otherwise captures print macros; this does not enable broader test logging.
+The outer `composite_total` includes connection, schema setup, all subphases, and pool
 close; do not add it to its nested phases or to the executable's `contract`
 duration. `initial_schema` is separate from the scheduler/recovery/completion
 block. `hinted_retry`, privacy, signing, projections, and consumer ranges each

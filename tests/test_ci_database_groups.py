@@ -431,6 +431,13 @@ def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> No
     assert emitted[0] == "composite_total"
     assert emitted[-1] == "pool_close"
     assert '"\\nMARTY_CI_PHASE_V1 ' in source
+    timer_drop = source.split("impl Drop for CompositePhaseTimer", 1)[1].split(
+        "async fn timed_phase", 1
+    )[0]
+    assert "std::io::stderr().lock()" in timer_drop
+    assert "let _ = writeln!(" in timer_drop
+    assert "eprintln!(" not in timer_drop
+    assert '#[ignore = "manual no-database check' in source
     for name in emitted:
         marker = json.dumps(
             {"phase": "contract_phase", "name": name, "duration_ms": 1, "status": "ok"}
