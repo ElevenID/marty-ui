@@ -449,6 +449,12 @@ not proof that every selected case executed or complete historical provenance.
 
 ## Latest validation checkpoint
 
+### 2026-10-06 parent merged and follow-up prepared for hosted validation
+
+UI #1124 merged at 10:28:13 UTC as `e9f140e00ab5a3b2c6e54a901e7360f817e2475e` after normal, manual full, and protected queue workflows passed. Its layered Retry-After/validation tests, PostgreSQL terminal persistence assertions, image-only configuration oracle, narrowed host Cargo invocations, test-only Docker exclusions and source-backed Gateway shadow edges are now on main. No whole-pipeline speedup is attributed from these runs.
+
+The independently reviewed follow-up rebased onto that exact merged main as `9ce7979735013486cb27ca94ccc2282325637ec3`; comparison with pre-rebase `023c958b4` proved a byte-identical complete tracked file tree. The following milestone entry changes tracking documentation only. This batch is ready for one hosted PR/full qualification cycle; routine ten-case and full twenty-case native validation still require real Linux execution before merge. Fresh complete-main qualification is reserved for the next meaningful merged milestone rather than dispatching redundant parent runs while this batch is validated. Stable release prerequisites remain unchanged and cannot use the earlier failed main run.
+
 ### 2026-10-06 assembled follow-up review and Python milestone
 
 Final assembled source `002b4ad3d8aa3df230a65f7f21fd783830109dd3` passed the complete local root Python suite under explicit full qualification with the SHA-verified CI dependency: 5,794 passed, 29 existing platform/opt-in skips, and 32 subtests in 580.06s. Independent assembled review cleared the cross-interactions. This validates the corrected local batch, not hosted Linux native selection, production image builds, protected merge or release eligibility; hosted routine/full pilots remain required after rebasing onto merged parent main. This following update changes tracking documentation only.
