@@ -548,6 +548,30 @@ The provider-configuration historical oracle now has an image-only candidate own
 
 Review correction for that local candidate: the 12 signing-detail names are distinct within the integration target, but `signing_error_detail::scalar_api_remains_a_projection_of_the_shared_owner` is source-included there and also runs in the issuance library target. The historical contracts log has 13 signing-related `ok` lines across those two targets, not 13 unique obligations or independent oracles. The static guard rejects ignored/conditional test attributes and commented-out ownership wiring; it does not discover current Cargo runtime execution. The combined batch makes manifest-only changes select release checks in addition to the existing conservative Rust lane, and excludes this CI-only manifest from service images. Helper/test changes remain broad. No new execution exclusion or release-only shortcut is authorized.
 
+## Current routine feedback observation (2026-10-06)
+
+#1126's [normal PR run 37454314639](https://github.com/ElevenID/marty-ui/actions/runs/37454314639)
+passed all 23 jobs at source `ce70c40bd07f0629db2549d5a39af94d2fc1b7ea`.
+Its Canvas log executed the ten declared routine validation cases, including all
+three retained lock races and the privacy case, and named the real PostgreSQL
+validation owner as passing. Full run `37454308609` is still live; no complete
+full-tier qualification, merge, or release authority is claimed at this checkpoint.
+
+| Observed normal PR run | #1124 `37437829353` | #1126 `37454314639` |
+| --- | --- | --- |
+| Workflow created-to-final-update | 53m33s | 31m43s |
+| Canvas job | 51m32s | 30m25s |
+| Host acceptance compilation | 10m42s | 6m28s |
+| Bookworm acceptance compilation | 10m14s | 5m46s |
+| Public selfhost image build | 12m56s | 8m00s |
+| Isolated database contract group | 13m52s | 6m50s |
+
+This is observed routine feedback roughly 22 minutes shorter in these two
+successful runs (about 41% for workflow wall time), not a controlled benchmark.
+Cache state, runner load, source and validation work differ; do not attribute
+the entire difference to one refactoring or extrapolate steady-state/official
+release savings. The full tier and protected queue must still qualify independently.
+
 ## Assembled next test-layer batch (unpublished, 2026-10-06)
 
 Exact combined source `4b2bd952511bc8818954db43fecdcc6d95f36f65`, based on
