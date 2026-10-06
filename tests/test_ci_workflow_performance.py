@@ -1924,13 +1924,13 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '( set -o pipefail; timed canvas_target composition "$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 2>&1 | tee "$composition_log" | sed -u -n \'/^MARTY_CI_PHASE_V1 /p\' ) &'
         )
         == 1
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            '( set -o pipefail; MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" timed canvas_target worker "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log" | sed -u -n \'/^MARTY_CI_PHASE_V1 /p\' ) &'
         )
         == 1
     )

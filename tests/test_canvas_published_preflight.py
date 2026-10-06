@@ -89,22 +89,46 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
     composition_full = '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
-    assert sum(line.strip() == preflight for line in script.splitlines()) == 1
-    assert sum(line.strip() == serial for line in script.splitlines()) == 1
-    assert sum(line.strip() == json_serial for line in script.splitlines()) == 1
+    assert (
+        sum(
+            line.strip() == 'timed canvas_serial "$mode" ' + preflight
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    assert (
+        sum(
+            line.strip() == "timed canvas_serial sql_logging " + serial
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    assert (
+        sum(
+            line.strip() == "timed canvas_serial json_consumer " + json_serial
+            for line in script.splitlines()
+        )
+        == 1
+    )
     assert (
         "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]"
         in script
     )
     assert (
-        script.splitlines().count(composition_full + ' >"$composition_log" 2>&1 &') == 1
+        script.count(
+            "timed canvas_target composition "
+            + composition_full
+            + ' 2>&1 | tee "$composition_log"'
+        )
+        == 1
     )
     assert (
-        script.splitlines().count(
+        script.count(
             'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
             'MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" '
+            + "timed canvas_target worker "
             + worker_full
-            + ' >"$worker_log" 2>&1 &'
+            + ' 2>&1 | tee "$worker_log"'
         )
         == 1
     )

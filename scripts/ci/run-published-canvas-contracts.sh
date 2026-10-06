@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
+timed() {
+  local phase="$1" name="$2"
+  shift 2
+  local started ended status=0
+  started=$(python3 -c 'import time; print(time.monotonic_ns())')
+  "$@" || status=$?
+  ended=$(python3 -c 'import time; print(time.monotonic_ns())')
+  printf 'MARTY_CI_PHASE_V1 {"phase":"%s","name":"%s","duration_ms":%s,"status":"%s"}\n' \
+    "$phase" "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
+  return "$status"
+}
 # A narrow early diagnostic gate precedes the full suite. The two retained
 # exact native preflights are omitted later only with same-run evidence for
 # this compiled executable. The long mixed-roster/body matrices and their
@@ -144,11 +155,16 @@ if [[ "$mode" == full-after-preflights ]]; then
   fi
 fi
 for image in "${images[@]}"; do
-  docker pull "$image"
+  # Stable ordinal only: never put an image reference in timing evidence.
+  if [[ "$image" == "${images[0]}" ]]; then
+    timed image_pull postgres docker pull "$image"
+  else
+    timed image_pull published_probe docker pull "$image"
+  fi
 done
 if [[ -n "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | grep -Fx "$preflight_target: test"
-  "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
+  timed canvas_serial "$mode" "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
   exit 0
 fi
 printf '%s\n' "$all_test_names" | grep -Fx 'heartbeat_readiness_matches_published_python: test'
@@ -329,11 +345,11 @@ worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]
-"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
+timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
 # runs; contention must not turn its contract into an intermittent timeout.
-"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
+timed canvas_serial json_consumer "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
 # output separate, normally wait for both owners to finish cleanup, and fail
 # if either suite fails. The serial SQL-logging positive control stays outside
@@ -346,9 +362,9 @@ cleanup_target_logs() {
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
-"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+( set -o pipefail; timed canvas_target composition "$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 2>&1 | tee "$composition_log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ) &
 composition_pid=$!
-MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
+( set -o pipefail; MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" timed canvas_target worker "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ) &
 worker_pid=$!
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"

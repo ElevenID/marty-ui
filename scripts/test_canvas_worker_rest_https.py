@@ -7,6 +7,7 @@ import ssl
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from http.server import ThreadingHTTPServer
@@ -72,6 +73,24 @@ VALIDATION_CORPUS_SHA256 = {
     "scenarios": "4933e2fe4108d2ebb6329233c2a42889155ed2c8c6b948ca2a4b938e6b9290a7",
     "oracle": "927f092c2daf428c37ed3a5e906d13873b10c7f147ea2774c15d9dbd1f245d55",
 }
+
+
+def emit_phase(phase, name, started, status):
+    """Emit only a fixed phase, corpus-owned case ID, duration and outcome."""
+    print(
+        "MARTY_CI_PHASE_V1 "
+        + json.dumps(
+            {
+                "phase": phase,
+                "name": name,
+                "duration_ms": round((time.monotonic() - started) * 1000),
+                "status": status,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        flush=True,
+    )
 
 
 def validate_validation_corpus_files(scenarios: Path, oracle: Path) -> None:
@@ -214,11 +233,29 @@ def run(executable, scenario="rest"):
             }
             if scenario == "roster-failure":
                 stage = dict(case)
-            run_scenario(
-                executable, scenario, {"stages": [stage]}, reference[case["name"]], case
-            )
+            started = time.monotonic()
+            status = "failed"
+            try:
+                run_scenario(
+                    executable,
+                    scenario,
+                    {"stages": [stage]},
+                    reference[case["name"]],
+                    case,
+                )
+                status = "ok"
+            finally:
+                # The parser accepts only short static scenario IDs and numeric
+                # durations; no response, SQL, token or exception enters telemetry.
+                emit_phase("scenario", f"{scenario}.{case['name']}", started, status)
     else:
-        run_scenario(executable, scenario, spec, reference)
+        started = time.monotonic()
+        status = "failed"
+        try:
+            run_scenario(executable, scenario, spec, reference)
+            status = "ok"
+        finally:
+            emit_phase("scenario", scenario, started, status)
 
 
 def assert_retry_timing(output, case, dates, expected):
@@ -289,15 +326,21 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
 
     with tempfile.TemporaryDirectory(prefix="canvas-worker-rest-native-") as directory:
         certificate_root = Path(directory)
-        cert, key = create_loopback_certificate(certificate_root)
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        name = scenario if matrix_case is None else f"{scenario}.{matrix_case['name']}"
+        fixture_started = time.monotonic()
+        fixture_ready = False
+        server = None
         thread = None
         try:
+            cert, key = create_loopback_certificate(certificate_root)
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
             context.load_cert_chain(cert, key)
             server.socket = context.wrap_socket(server.socket, server_side=True)
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
+            fixture_ready = True
+            emit_phase("fixture_seed", name, fixture_started, "ok")
             empty_ca_directory = certificate_root / "empty-ca-directory"
             empty_ca_directory.mkdir()
             environment = dict(os.environ)
@@ -323,6 +366,12 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
                 timeout=240,
                 check=False,
             )
+            # The native child keeps raw diagnostics captured for its existing
+            # failure assertion. Forward only timing-shaped lines from the
+            # owned fixture; the group relay validates every field again.
+            for line in child.stderr.splitlines():
+                if line.startswith("MARTY_CI_PHASE_V1 "):
+                    print(line, flush=True)
             assert child.returncode == 0, (
                 f"Native worker replay failed: {child.stdout} {child.stderr}"
             )
@@ -352,11 +401,20 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
                 f"Native worker {label} replay passed all {len(spec['stages'])} frozen HTTPS stages ({len(requests)} requests)"
             )
         finally:
-            if thread is not None:
-                server.shutdown()
-                thread.join(timeout=5)
-                assert not thread.is_alive()
-            server.server_close()
+            if not fixture_ready:
+                emit_phase("fixture_seed", name, fixture_started, "failed")
+            cleanup_started = time.monotonic()
+            cleanup_status = "failed"
+            try:
+                if thread is not None:
+                    server.shutdown()
+                    thread.join(timeout=5)
+                    assert not thread.is_alive()
+                if server is not None:
+                    server.server_close()
+                cleanup_status = "ok"
+            finally:
+                emit_phase("cleanup", name, cleanup_started, cleanup_status)
 
 
 if __name__ == "__main__":
