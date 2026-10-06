@@ -870,6 +870,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_tier_obligations.py",
             "tests/test_ci_workflow_performance.py",
         },
+        "python-value-fast-obligations.json": {
+            ".github/workflows/ci.yml",
+            "scripts/ci/check_python_value_fast_obligations.py",
+            "tests/test_python_value_fast_obligations.py",
+            "tests/test_ci_workflow_performance.py",
+        },
     }
     for manifest, expected in inventory_consumers.items():
         references = subprocess.run(
@@ -924,6 +930,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
         "contracts/canvas-worker-tier-obligations.json",
+        "contracts/python-value-fast-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
     ):
