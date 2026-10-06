@@ -938,6 +938,14 @@ cache access, artifact paths and execution on both Ubuntu and Bookworm. Keep the
 two current guarantees until a bounded compatibility prototype supports reuse;
 sharing a target directory alone is not proof or a measured saving.
 
+The three renewal component owners are inventoried in reviewed source
+`bc4f6fd92` plus correction `7d8448972`, assembled as `a5a9a9e6e`. Review caught
+and corrected an omitted unconditional Compose helper input. Exact owner,
+source/runner wiring and missing/duplicate/substitution controls passed; the
+assembled ownership/planner/context/image sweep passed 72 tests and 63 subtests
+in 17.91s. This inventory is lexical evidence, not execution or complete
+transitive input closure, and does not authorize dropping any native case.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
