@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 from pathlib import Path
+import re
 import tomllib
 from typing import Any
 
@@ -91,6 +93,114 @@ ELEVENID_PROTOCOL_RUNTIME_EXTENSIONS = {
 }
 ELEVENID_PROTOCOL_RUNTIME_OPTIONAL_FIELDS = {
     "trust-profile.json": {"supported_formats"},
+}
+
+
+@dataclass(frozen=True)
+class VectorTestOwner:
+    source: str
+    test: str
+    loader: str | None = None
+
+
+# One executable Rust test owner per public vector. Some vectors have additional
+# consumers; this inventory deliberately requires only one independently
+# discoverable owner, not an exhaustive list of all uses.
+VECTOR_TEST_OWNERS = {
+    "credential-metadata-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/credential_metadata.rs",
+        "language_neutral_credential_metadata_contract",
+    ),
+    "gateway-authorization-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/authorization.rs",
+        "language_neutral_authorization_contract",
+        "contract",
+    ),
+    "gateway-credential-template-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/credential_template_contract.rs",
+        "language_neutral_credential_template_contract",
+    ),
+    "gateway-deployment-behavior.json": VectorTestOwner(
+        "rust/services/deployment-profile/src/gateway_contract.rs",
+        "language_neutral_deployment_contract",
+    ),
+    "gateway-did-web-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/did_web.rs", "shared_did_web_behavior_contract"
+    ),
+    "gateway-didcomm-delivery-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/didcomm_contract.rs",
+        "language_neutral_didcomm_delivery_contract",
+    ),
+    "gateway-discovery-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/discovery.rs",
+        "language_neutral_gateway_discovery_contract",
+    ),
+    "gateway-flow-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/flow_contract.rs", "language_neutral_flow_contract"
+    ),
+    "gateway-flow-key-envelope-behavior.json": VectorTestOwner(
+        "rust/services/signing-keys/src/flow_envelope.rs",
+        "envelope_round_trip_preserves_exact_binding_and_payload",
+        "contract",
+    ),
+    "gateway-internal-signing-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/signing_compat.rs",
+        "shared_internal_signing_route_contract",
+    ),
+    "gateway-issuance-create-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/issuance_create.rs",
+        "language_neutral_issuance_create_contract",
+    ),
+    "gateway-issued-credential-lifecycle-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/issuance_lifecycle_contract.rs",
+        "language_neutral_lifecycle_request_contract",
+    ),
+    "gateway-issuer-context-behavior.json": VectorTestOwner(
+        "rust/services/signing-keys/src/compat.rs",
+        "issuer_context_selects_one_did_and_includes_profile_certificate_chain",
+    ),
+    "gateway-issuer-identity-behavior.json": VectorTestOwner(
+        "rust/services/signing-keys/src/compat.rs",
+        "issuer_identity_matches_language_neutral_behavior",
+    ),
+    "gateway-middleware-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/middleware.rs",
+        "language_neutral_gateway_middleware_contract",
+        "contract",
+    ),
+    "gateway-organization-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/organization_contract.rs",
+        "language_neutral_organization_contract",
+    ),
+    "gateway-organization-composition-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/organization_composition.rs",
+        "language_neutral_organization_composition_contract",
+    ),
+    "gateway-presentation-policy-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/presentation_policy_contract.rs",
+        "language_neutral_presentation_policy_contract",
+    ),
+    "gateway-signing-authorization-behavior.json": VectorTestOwner(
+        "rust/services/signing-keys/src/compat.rs",
+        "service_signing_authorization_matches_language_neutral_behavior",
+    ),
+    "gateway-sse-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/runtime.rs",
+        "language_neutral_sse_contract_filters_tenants_and_preserves_frames",
+    ),
+    "gateway-trust-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/trust_contract.rs",
+        "language_neutral_trust_contract",
+    ),
+    "gateway-verification-flow-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/verification_flow_contract.rs",
+        "language_neutral_verification_flow_contract",
+    ),
+    "vc-api-adapter-behavior.json": VectorTestOwner(
+        "rust/services/gateway/src/vc_api.rs",
+        "language_neutral_vc_api_adapter_contract",
+        "contract",
+    ),
 }
 
 
@@ -267,33 +377,133 @@ def _assert_dto_shapes(protocol_root: Path) -> None:
             )
 
 
-def _rust_service_source() -> str:
-    sources: list[str] = []
-    for service in sorted((REPO_ROOT / "rust" / "services").iterdir()):
-        if not service.is_dir():
-            continue
-        for path in sorted(service.rglob("*.rs")):
-            sources.append(path.read_text(encoding="utf-8"))
-    return "\n".join(sources)
+def _rust_function_body(source: str, declaration: re.Match[str]) -> str:
+    # These owned functions are rustfmt-formatted. A closing brace at the
+    # declaration's indentation closes the function, not a nested block.
+    line_start = source.rfind("\n", 0, declaration.start()) + 1
+    indentation = re.match(r"[ \t]*", source[line_start:]).group()
+    closing = re.search(
+        rf"(?m)^{re.escape(indentation)}\}}[ \t]*$", source[declaration.end() :]
+    )
+    if closing is None:
+        raise AssertionError("Rust vector test/helper has no function boundary")
+    return source[declaration.end() : declaration.end() + closing.start()]
 
 
-def _assert_rust_behavior_vector_references() -> None:
-    """Check source references only; Rust test execution belongs to the Cargo lane."""
-    source = _rust_service_source()
-    vectors = sorted((REPO_ROOT / "contracts").glob("gateway-*-behavior.json"))
-    vectors.extend(
-        REPO_ROOT / "contracts" / name
-        for name in (
-            "credential-metadata-behavior.json",
-            "vc-api-adapter-behavior.json",
+def _test_section(source: str, test_name: str) -> str:
+    attributes_and_function = re.search(
+        rf"(?m)((?:^[ \t]*#\[[^\n]+\]\r?\n)+)[ \t]*(?:async[ \t]+)?"
+        rf"fn[ \t]+{re.escape(test_name)}[ \t]*\(",
+        source,
+    )
+    if attributes_and_function is None:
+        raise AssertionError(
+            f"Rust vector test is missing or not annotated: {test_name}"
+        )
+    attributes = attributes_and_function.group(1)
+    if not re.search(r"(?m)^[ \t]*#\[(?:tokio::)?test\][ \t]*$", attributes):
+        raise AssertionError(f"Rust vector test is not executable: {test_name}")
+    if re.search(r"(?m)^[ \t]*#\[ignore(?:\([^\n]*\))?\][ \t]*$", attributes):
+        raise AssertionError(f"Rust vector test is ignored: {test_name}")
+    if re.search(r"(?m)^[ \t]*#\[cfg(?:_attr)?\(", attributes):
+        raise AssertionError(f"Rust vector test is conditionally compiled: {test_name}")
+    if not re.search(
+        r"(?m)^[ \t]*#\[cfg\(test\)\]", source[: attributes_and_function.start()]
+    ):
+        raise AssertionError(f"Rust vector test has no test-only module: {test_name}")
+    return _rust_function_body(source, attributes_and_function)
+
+
+def _loads_vector(source: str, vector_name: str) -> bool:
+    return bool(
+        re.search(
+            rf'(?m)^[ \t]*(?!//)[^\n]*\binclude_str!\([ \t\r\n]*"[^"\n]*/{re.escape(vector_name)}"',
+            source,
         )
     )
-    missing = [path.name for path in vectors if path.name not in source]
-    if missing:
+
+
+def _assert_rust_behavior_vector_test_owners() -> None:
+    """Bind each vector to a registered, non-ignored test in the workspace lane.
+
+    This proves test discovery/ownership, not per-case dynamic coverage. The
+    unchanged Rust workspace test job remains the execution authority.
+    """
+    vectors = {
+        path.name for path in (REPO_ROOT / "contracts").glob("gateway-*-behavior.json")
+    } | {"credential-metadata-behavior.json", "vc-api-adapter-behavior.json"}
+    if vectors != VECTOR_TEST_OWNERS.keys():
         raise AssertionError(
-            "gateway behavior vectors are not referenced by Rust service source: "
-            + ", ".join(missing)
+            "public vector test-owner inventory drifted: "
+            f"unowned={sorted(vectors - VECTOR_TEST_OWNERS.keys())}, "
+            f"stale={sorted(VECTOR_TEST_OWNERS.keys() - vectors)}"
         )
+    missing_vectors = [
+        name for name in vectors if not (REPO_ROOT / "contracts" / name).is_file()
+    ]
+    if missing_vectors:
+        raise AssertionError(f"public vectors are missing: {sorted(missing_vectors)}")
+
+    workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    if not all(
+        marker in workflow
+        for marker in (
+            "test-rust-services:",
+            "lane: [canvas, contracts]",
+            "cargo test --locked --workspace",
+        )
+    ):
+        raise AssertionError(
+            "the full Rust workspace test owner is not registered in CI"
+        )
+
+    for vector_name, owner in sorted(VECTOR_TEST_OWNERS.items()):
+        source_path = REPO_ROOT / owner.source
+        if not source_path.is_file() or source_path.parent.name != "src":
+            raise AssertionError(
+                f"public vector test source is not a library module: {vector_name}"
+            )
+        crate = source_path.parent.parent
+        manifest = tomllib.loads((crate / "Cargo.toml").read_text(encoding="utf-8"))
+        if (
+            manifest.get("package", {}).get("autolib") is False
+            or manifest.get("lib", {}).get("test") is False
+            or not (crate / "src/lib.rs").is_file()
+        ):
+            raise AssertionError(
+                f"public vector library tests are disabled: {vector_name}"
+            )
+        lib_source = (crate / "src/lib.rs").read_text(encoding="utf-8")
+        if not re.search(
+            rf"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+"
+            rf"{re.escape(source_path.stem)}[ \t]*;",
+            lib_source,
+        ):
+            raise AssertionError(
+                f"public vector test module is not registered: {vector_name}"
+            )
+
+        source = source_path.read_text(encoding="utf-8")
+        test_section = _test_section(source, owner.test)
+        if owner.loader is None:
+            loaded = _loads_vector(test_section, vector_name)
+        else:
+            loader = re.search(
+                rf"(?m)^[ \t]*fn[ \t]+{re.escape(owner.loader)}[ \t]*\(",
+                source,
+            )
+            if loader is None or loader.start() > source.index(f"fn {owner.test}("):
+                raise AssertionError(
+                    f"public vector test helper is missing: {vector_name}"
+                )
+            helper_section = _rust_function_body(source, loader)
+            loaded = _loads_vector(helper_section, vector_name) and bool(
+                re.search(rf"\b{re.escape(owner.loader)}\s*\(\s*\)", test_section)
+            )
+        if not loaded:
+            raise AssertionError(
+                f"public vector is not loaded by its Rust test: {vector_name}"
+            )
 
 
 def check_contract(protocol_root: Path) -> None:
@@ -303,7 +513,7 @@ def check_contract(protocol_root: Path) -> None:
     assert_documented_public_boundary()
     _assert_trust_ui_boundary()
     _assert_dto_shapes(protocol_root)
-    _assert_rust_behavior_vector_references()
+    _assert_rust_behavior_vector_test_owners()
 
 
 def main() -> int:
