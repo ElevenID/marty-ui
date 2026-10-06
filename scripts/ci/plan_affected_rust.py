@@ -173,6 +173,88 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
 }
 
+# Each row has an actual declared public route with this upstream owner, not
+# merely a configured URL. Flow and Notification already have explicit edges
+# above; Deployment Profile is a direct Gateway Cargo dependency. Conditional
+# issuance-native/provider-ingress selectors are excluded.
+GATEWAY_PUBLIC_ROUTE_CONSUMERS = {
+    # producer: (configuration binding, published route, ownership rule)
+    "marty-auth": ("AUTH_SERVICE_URL", "/v1/auth/{path:path}", '("/v1/auth", "auth")'),
+    "marty-organization": (
+        "ORGANIZATION_SERVICE_URL",
+        "/v1/organizations",
+        '("/v1/organizations", "organizations")',
+    ),
+    "marty-credential-template": (
+        "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        "/v1/credential-templates",
+        '("/v1/credential-templates", "credential-templates")',
+    ),
+    "marty-trust-profile": (
+        "TRUST_PROFILE_SERVICE_URL",
+        "/v1/trust-profiles",
+        '("/v1/trust-profiles", "trust-profiles")',
+    ),
+    "marty-issuance-service": (
+        "ISSUANCE_SERVICE_URL",
+        "/v1/issuance",
+        '("/v1/issuance", "issuance")',
+    ),
+    "marty-applicant": (
+        "APPLICANT_SERVICE_URL",
+        "/v1/me/applicant-profile",
+        '("/v1/me", "applicant")',
+    ),
+    "marty-compliance-profile": (
+        "COMPLIANCE_PROFILE_SERVICE_URL",
+        "/v1/compliance-profiles",
+        '("/v1/compliance-profiles", "compliance-profiles")',
+    ),
+    "marty-presentation-policy": (
+        "PRESENTATION_POLICY_SERVICE_URL",
+        "/v1/presentation-policies",
+        '("/v1/presentation-policies", "presentation-policies")',
+    ),
+    "marty-verification-service": (
+        "VERIFICATION_SERVICE_URL",
+        "/v1/verify",
+        '("/v1/verify", "verification")',
+    ),
+    "marty-revocation-profile": (
+        "REVOCATION_PROFILE_SERVICE_URL",
+        "/v1/revocation-profiles",
+        '("/v1/revocation-profiles", "revocation-profiles")',
+    ),
+    "marty-device-registration": (
+        "DEVICE_REGISTRATION_SERVICE_URL",
+        "/v1/devices",
+        '("/v1/devices", "device-registration")',
+    ),
+    "marty-signing-keys": (
+        "SIGNING_KEYS_SERVICE_URL",
+        "/v1/signing-keys",
+        '("/v1/signing-keys", "signing-keys")',
+    ),
+}
+for producer, (
+    binding,
+    route_path,
+    runtime_marker,
+) in GATEWAY_PUBLIC_ROUTE_CONSUMERS.items():
+    OBSERVED_NON_CARGO_CONSUMERS.setdefault(producer, []).append(
+        {
+            "package": "marty-gateway",
+            "evidence": "rust/services/gateway/src/config.rs",
+            "binding": binding,
+            "runtime_evidence": "rust/services/gateway/src/contract.rs",
+            "runtime_marker": runtime_marker,
+            "route_contract": "contracts/gateway-routes.json",
+            "route_path": route_path,
+            "dispatch_evidence": "rust/services/gateway/src/main.rs",
+            "dispatch_marker": "StaticServiceRegistry::from_urls(&config.service_urls)?",
+        }
+    )
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     # Both move endpoints matter, including a deleted package that metadata no

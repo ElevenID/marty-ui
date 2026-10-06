@@ -1410,19 +1410,37 @@ async fn worker_validation_repository_matches_frozen_errors() {
         return;
     }
     use marty_issuance_service::{
-        canvas_sync_worker::CanvasSyncWorkerRepository,
+        canvas_sync_worker::{CanvasSyncJobStatus, CanvasSyncWorkerRepository, JobFailure},
         canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     };
     let reference: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../contracts/canvas-worker-validation-oracle.json"
     ))
     .unwrap();
-    for case in canvas_worker_rest_replay::validation_scenarios()["cases"]
+    let scenarios = canvas_worker_rest_replay::validation_scenarios()["cases"]
         .as_array()
-        .unwrap()
+        .unwrap();
+    assert_eq!(scenarios.len(), 20);
+    let names = scenarios
+        .iter()
+        .map(|case| case["name"].as_str().unwrap())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(names.len(), scenarios.len());
+    assert_eq!(
+        names,
+        reference
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect()
+    );
+    let repository_cases = scenarios
         .iter()
         .filter(|case| case["boundary"] != "processor_dispatch")
-    {
+        .collect::<Vec<_>>();
+    assert_eq!(repository_cases.len(), 13);
+    for case in repository_cases {
         let name = case["name"].as_str().unwrap();
         let owned = canvas_published_database::PublishedDatabase::start()
             .await
@@ -1436,6 +1454,23 @@ async fn worker_validation_repository_matches_frozen_errors() {
             canvas_worker_rest_replay::prepare(&pool, "https://127.0.0.1:1", "rest").await;
         let case = canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
         let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
+        // Lease before validation: inactive/stale validation can disable the
+        // target, but the actual worker already owns the queued job by then.
+        let leased = repository
+            .lease_ready("validation-worker", &1_u64.into(), &120_u64.into())
+            .await
+            .unwrap();
+        assert_eq!(leased.len(), 1, "{name}");
+        let job = &leased[0];
+        assert_eq!(job.id, "worker-validation-job", "{name}");
+        assert_eq!(job.status, CanvasSyncJobStatus::Leased, "{name}");
+        assert_eq!(job.attempt_count, 1, "{name}");
+        assert_eq!(job.max_attempts, 8, "{name}");
+        assert_eq!(
+            job.lease_owner.as_deref(),
+            Some("validation-worker"),
+            "{name}"
+        );
         let target = repository
             .target("org-review", "target-review")
             .await
@@ -1467,6 +1502,50 @@ async fn worker_validation_repository_matches_frozen_errors() {
         );
         assert!(!error.retryable);
         assert_eq!(error.retry_after_seconds, None);
+        assert_eq!(
+            repository
+                .fail_job(
+                    job,
+                    "validation-worker",
+                    &JobFailure {
+                        error_code: error.code,
+                        error_summary: Some(error.summary),
+                        retry_after_seconds: error.retry_after_seconds,
+                        force_dead_letter: !error.retryable,
+                    },
+                    job.target_config_version,
+                )
+                .await
+                .unwrap(),
+            Some(CanvasSyncJobStatus::DeadLetter),
+            "{name}"
+        );
+        let jobs: serde_json::Value =
+            sqlx::query_scalar(fixture.spec["jobs_sql"].as_str().unwrap())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(jobs, reference[name]["observations"][0]["jobs"], "{name}");
+        let target_state: serde_json::Value = sqlx::query_scalar(
+            "SELECT jsonb_build_object('enabled',enabled,'config_version',config_version) \
+             FROM issuance_service.canvas_evidence_sync_targets WHERE id='target-review'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(target_state, reference[name]["target"], "{name}");
+        let oauth: serde_json::Value =
+            sqlx::query_scalar(fixture.spec["oauth_sql"].as_str().unwrap())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(oauth, reference[name]["observations"][0]["oauth"], "{name}");
+        let facts: serde_json::Value =
+            sqlx::query_scalar(fixture.spec["facts_sql"].as_str().unwrap())
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(facts, reference[name]["observations"][0]["facts"], "{name}");
         fixture.assert_preserved(&pool).await;
         pool.close().await;
         owned.close().unwrap();

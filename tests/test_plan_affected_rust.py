@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -164,6 +165,87 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "marty-flow",
             {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
         )
+
+    def test_published_gateway_upstream_routes_are_observed_without_narrowing(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        contract = json.loads(
+            (ROOT / "contracts/gateway-routes.json").read_text(encoding="utf-8")
+        )
+        published_paths = {route["path"] for route in contract["routes"]}
+        self.assertEqual(len(planner.GATEWAY_PUBLIC_ROUTE_CONSUMERS), 12)
+        self.assertIn(
+            "marty-deployment-profile",
+            {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
+        )
+        self.assertIn("/v1/deployment-profiles", published_paths)
+        bootstrap = (ROOT / "rust/services/gateway/src/main.rs").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GatewayProxy::new(", bootstrap)
+        self.assertIn("contract.proxy_route_table_with_passport_selectors(", bootstrap)
+        self.assertEqual(
+            {
+                edge["binding"]
+                for edge in planner.OBSERVED_NON_CARGO_CONSUMERS["marty-flow"]
+                if edge["package"] == "marty-gateway"
+            },
+            {"FLOW_SERVICE_URL"},
+        )
+        self.assertEqual(
+            {
+                edge["binding"]
+                for edge in planner.OBSERVED_NON_CARGO_CONSUMERS["marty-notification"]
+                if edge["package"] == "marty-gateway"
+            },
+            {"NOTIFICATION_SERVICE_URL"},
+        )
+        for producer in planner.GATEWAY_PUBLIC_ROUTE_CONSUMERS:
+            with self.subTest(producer=producer):
+                self.assertIn(producer, packages)
+                changed = Path(packages[producer]["manifest_path"]).relative_to(ROOT)
+                result = planner.plan([changed.as_posix()], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == producer
+                    and edge["package"] == "marty-gateway"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                self.assertIn(edge["route_path"], published_paths)
+                owner = re.fullmatch(
+                    r'\("([^\"]+)", "([^\"]+)"\)', edge["runtime_marker"]
+                )
+                self.assertIsNotNone(owner)
+                self.assertTrue(edge["route_path"].startswith(owner.group(1)))
+                configured = (ROOT / edge["evidence"]).read_text(encoding="utf-8")
+                self.assertRegex(
+                    configured,
+                    r'\(\s*"'
+                    + re.escape(owner.group(2))
+                    + r'"\s*,\s*"'
+                    + re.escape(edge["binding"])
+                    + r'"',
+                )
+                for marker, source in (
+                    ("binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("dispatch_marker", "dispatch_evidence"),
+                ):
+                    self.assertIn(
+                        edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+                    )
+                self.assertNotIn(
+                    producer,
+                    {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
+                )
 
     def test_organization_trust_profile_control_plane_is_observed(self) -> None:
         metadata = planner.cargo_metadata()

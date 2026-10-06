@@ -1173,6 +1173,184 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn frozen_validation_processor_cases_preserve_tracked_state_without_provider_reads() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-validation-scenarios.json"
+        ))
+        .unwrap();
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-validation-oracle.json"
+        ))
+        .unwrap();
+        // These seven are processor dispatch, not the thirteen repository
+        // validation cases. The template-removal race remains native; this
+        // isolated seam proves only its processor error after resources vanish.
+        // The simulator's patch ports are no-op successes, so this is not
+        // durable or comprehensive write-absence evidence; native replay owns
+        // those effects.
+        let expected = [
+            (
+                "invalid_roster_batch",
+                "canvas_roster_configuration_invalid",
+            ),
+            (
+                "invalid_roster_limit",
+                "canvas_roster_configuration_invalid",
+            ),
+            (
+                "invalid_roster_bounds_do_not_preempt_application",
+                "canvas_lti_identity_missing",
+            ),
+            (
+                "invalid_evidence_requirements",
+                "canvas_requirements_invalid",
+            ),
+            ("missing_lti_subject", "canvas_lti_identity_missing"),
+            (
+                "unsupported_award_candidate",
+                "canvas_sync_target_type_unsupported",
+            ),
+            (
+                "template_removed_after_application_read",
+                "canvas_application_template_unavailable",
+            ),
+        ];
+        let discovered = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["boundary"] == "processor_dispatch")
+            .map(|case| case["name"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(discovered.len(), expected.len());
+        assert_eq!(
+            discovered
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(scenarios["cases"].as_array().unwrap().len(), 20);
+
+        for (name, expected_code) in expected {
+            let scenario = scenarios["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            assert_eq!(scenario["code"], expected_code, "{name}");
+            let mut resources = simulator_resources(vec![requirement(
+                "assignment",
+                "canvas_rest",
+                "canvas.assignment_score",
+                json!({"course_id":"1","activity_id":"2"}),
+                json!({"min_score_percent":70}),
+            )]);
+            let mut kind = CanvasSyncTargetType::LearnerApplication;
+            let mut roster_batch = None;
+            let mut roster_limit = None;
+            match name {
+                "invalid_roster_batch" => {
+                    kind = CanvasSyncTargetType::BackgroundRoster;
+                    roster_batch = Some("synthetic-invalid-bound");
+                }
+                "invalid_roster_limit" => {
+                    kind = CanvasSyncTargetType::BackgroundRoster;
+                    roster_limit = Some("synthetic-invalid-bound");
+                }
+                "invalid_roster_bounds_do_not_preempt_application" => {
+                    roster_batch = Some("synthetic-invalid-bound");
+                    roster_limit = Some("synthetic-invalid-bound");
+                    resources
+                        .application
+                        .as_mut()
+                        .unwrap()
+                        .application
+                        .integration_context = json!({"canvas":{}});
+                }
+                "invalid_evidence_requirements" => {
+                    resources.binding.insert(
+                        "evidence_requirements".into(),
+                        json!([{
+                            "requirement_id":"broken", "source":"canvas_rest",
+                            "fact_type":"not-a-canvas-fact", "scope":{},
+                            "pass_rule":{}, "required":true
+                        }]),
+                    );
+                }
+                "missing_lti_subject" => {
+                    resources
+                        .application
+                        .as_mut()
+                        .unwrap()
+                        .application
+                        .integration_context = json!({"canvas":{}});
+                }
+                "unsupported_award_candidate" => kind = CanvasSyncTargetType::AwardCandidate,
+                "template_removed_after_application_read" => {
+                    resources.application_template = None;
+                }
+                _ => unreachable!(),
+            }
+            let repository = Arc::new(SimulatorRepository {
+                resources,
+                facts: Mutex::new(Vec::new()),
+                identities: Mutex::new(None),
+                candidates: Mutex::new(BTreeMap::new()),
+                observations: Mutex::new(BTreeMap::new()),
+                observation_payloads: Mutex::new(BTreeMap::new()),
+                cursor: Mutex::new(None),
+                disabled: Mutex::new(false),
+            });
+            let provider = Arc::new(RunCountingProvider::default());
+            let processor = NativeCanvasSyncProcessor::new_with_roster_configuration(
+                repository.clone(),
+                provider.clone(),
+                enabled_config(),
+                CanvasRosterBounds::from_values(roster_batch, roster_limit),
+            );
+            let mut case_target = target(kind);
+            if matches!(kind, CanvasSyncTargetType::BackgroundRoster) {
+                case_target.application_id = None;
+            }
+            if matches!(kind, CanvasSyncTargetType::AwardCandidate) {
+                case_target.application_id = None;
+                case_target.candidate_id = Some("candidate-unsupported".into());
+            }
+            let error = run_simulated(&processor, case_target).await.unwrap_err();
+            let frozen = &oracle[name]["observations"][0]["jobs"][0];
+            assert_eq!(error.code, expected_code, "{name}");
+            assert_eq!(error.code, frozen["last_error_code"], "{name}");
+            assert_eq!(error.summary, frozen["last_error_summary"], "{name}");
+            assert!(!error.retryable, "{name}");
+            assert_eq!(error.retry_after_seconds, None, "{name}");
+            assert!(repository.facts.lock().unwrap().is_empty(), "{name}");
+            assert!(repository.candidates.lock().unwrap().is_empty(), "{name}");
+            assert!(repository.observations.lock().unwrap().is_empty(), "{name}");
+            assert!(
+                repository.observation_payloads.lock().unwrap().is_empty(),
+                "{name}"
+            );
+            assert!(repository.identities.lock().unwrap().is_none(), "{name}");
+            assert_eq!(*repository.cursor.lock().unwrap(), None, "{name}");
+            assert!(!*repository.disabled.lock().unwrap(), "{name}");
+            assert!(provider.calls.lock().unwrap().is_empty(), "{name}");
+            assert!(
+                provider
+                    .scoped_calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(_, _, action)| *action == "start"),
+                "{name}: provider REST or roster read occurred"
+            );
+        }
+    }
+
     #[test]
     fn candidate_ags_projection_preserves_full_learner_and_rest_observations() {
         let record = json!({"id":"result-7","resultScore":90,"resultMaximum":100,"resultStatus":"FullyGraded"});
@@ -2307,6 +2485,131 @@ mod tests {
             assert_eq!(actual.summary, job["last_error_summary"], "{name}");
             assert_eq!(actual.retryable, job["status"] == "retry", "{name}");
         }
+    }
+
+    #[derive(Debug)]
+    struct RateLimitedSimulatorProvider {
+        retry_after_seconds: u64,
+    }
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for RateLimitedSimulatorProvider {
+        fn for_run(
+            self: Arc<Self>,
+            _scope: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
+        async fn read_requirement(
+            &self,
+            _: &CanvasSyncResources,
+            _: &Value,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            Err(CanvasProviderReadError::RateLimited {
+                retry_after_seconds: self.retry_after_seconds,
+            })
+        }
+
+        async fn roster(
+            &self,
+            _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
+            _: &[Value],
+            _: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            panic!("application rate-limit test must not request a roster")
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_after_matrix_keeps_parser_delay_and_processor_category_without_io() {
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        let now: DateTime<Utc> = "2026-09-02T00:00:00Z".parse().unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for case in matrix["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            assert!(seen.insert(name), "duplicate retry-after case: {name}");
+            let raw = if let Some(offset) = case["retry_after_offset_seconds"].as_i64() {
+                let epoch_seconds = now
+                    .timestamp()
+                    .checked_add(offset)
+                    .and_then(|seconds| u64::try_from(seconds).ok())
+                    .expect("bounded retry-after date");
+                let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(epoch_seconds);
+                httpdate::fmt_http_date(when)
+            } else {
+                case["headers"]["Retry-After"].as_str().unwrap().to_owned()
+            };
+            let expected_hint = match name {
+                "http_date_future" => Some(60),
+                "http_date_past" | "negative" | "zero" => Some(0),
+                "malformed" => None,
+                "clamped" | "huge_integer" => Some(86_400),
+                _ => panic!("unclassified retry-after case: {name}"),
+            };
+            let hint = crate::canvas_sync_worker::retry_after_seconds(&raw, now);
+            assert_eq!(hint, expected_hint, "{name}");
+            let (minimum, maximum) = if name == "http_date_future" {
+                assert!(case.get("delay_bounds").is_none());
+                (60, 60)
+            } else {
+                (
+                    case["delay_bounds"][0].as_u64().unwrap(),
+                    case["delay_bounds"][1].as_u64().unwrap(),
+                )
+            };
+            for jitter in [0, 5, u64::MAX] {
+                let delay = crate::canvas_sync_worker::job_retry_delay_seconds(1, hint, jitter);
+                assert!((minimum..=maximum).contains(&delay), "{name}: {delay}");
+            }
+
+            let repository = Arc::new(SimulatorRepository {
+                resources: simulator_resources(vec![requirement(
+                    "assignment",
+                    "canvas_rest",
+                    "canvas.assignment_score",
+                    json!({"course_id":"1","activity_id":"2"}),
+                    json!({"min_score_percent":70}),
+                )]),
+                facts: Mutex::new(Vec::new()),
+                identities: Mutex::new(None),
+                candidates: Mutex::new(BTreeMap::new()),
+                observations: Mutex::new(BTreeMap::new()),
+                observation_payloads: Mutex::new(BTreeMap::new()),
+                cursor: Mutex::new(None),
+                disabled: Mutex::new(false),
+            });
+            let processor = NativeCanvasSyncProcessor::new(
+                repository.clone(),
+                Arc::new(RateLimitedSimulatorProvider {
+                    retry_after_seconds: hint.unwrap_or(0),
+                }),
+                enabled_config(),
+                500,
+                5000,
+            );
+            let error = run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "canvas_rate_limited", "{name}");
+            assert_eq!(
+                error.summary, "Canvas rate limited one or more authoritative evidence reads",
+                "{name}"
+            );
+            assert!(error.retryable, "{name}");
+            assert_eq!(error.retry_after_seconds, Some(hint.unwrap_or(0)), "{name}");
+            assert!(repository.facts.lock().unwrap().is_empty(), "{name}");
+            assert!(repository.candidates.lock().unwrap().is_empty(), "{name}");
+            assert_eq!(*repository.cursor.lock().unwrap(), None, "{name}");
+            assert!(!*repository.disabled.lock().unwrap(), "{name}");
+        }
+        assert_eq!(seen.len(), 7);
     }
 
     #[test]

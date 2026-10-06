@@ -85,7 +85,14 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert (
         script.splitlines().count(composition_full + ' >"$composition_log" 2>&1 &') == 1
     )
-    assert script.splitlines().count(worker_full + ' >"$worker_log" 2>&1 &') == 1
+    assert (
+        script.splitlines().count(
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
+            + worker_full
+            + ' >"$worker_log" 2>&1 &'
+        )
+        == 1
+    )
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
@@ -279,6 +286,9 @@ elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
   done < "registrations-$name"
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
+  if [[ "$name" == worker-contract && "$*" == *--test-threads=4* ]]; then
+    printf 'retry-tier|%s\n' "${MARTY_CANVAS_WORKER_RETRY_AFTER_TIER:-absent}" >> "$TEST_LOG"
+  fi
   if [[ "$TEST_FAILURE" == json-serial && "$name" == contract &&
     "$1" == json_consumer_diagnostic_matches_published_boundaries ]]; then
     exit 26
@@ -423,6 +433,41 @@ source "$CONTRACT_SOURCE" "$@"
         return result, calls
 
     return run
+
+
+@pytest.mark.parametrize(
+    "arguments,qualification,expected",
+    [
+        ([], False, "full"),
+        (["full"], False, "full"),
+        (["full"], True, "full"),
+        (["full-after-preflights"], False, "routine"),
+        (["full-after-preflights"], True, "full"),
+    ],
+)
+def test_retry_tier_is_explicit_only_on_the_worker_target(
+    shell_case, tmp_path, arguments, qualification, expected
+):
+    if arguments == ["full-after-preflights"]:
+        evidence = tmp_path / "canvas-published-preflights.sha256"
+        evidence.write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + f"\n12345\n1\ntest-rust-services\n{int(qualification)}\n",
+            newline="\n",
+        )
+    result, calls = shell_case(arguments, qualification=qualification)
+    assert result.returncode == 0, result.stderr
+    assert [call for call in calls if call[0] == "retry-tier"] == [
+        ["retry-tier", expected]
+    ]
+
+
+def test_caller_cannot_override_native_retry_tier(shell_case, monkeypatch):
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", "routine")
+    result, calls = shell_case(["full"], qualification=True)
+    assert result.returncode == 2
+    assert "tier is owned by this runner" in result.stderr
+    assert not any(call[0] in {"docker", "child"} for call in calls)
 
 
 @pytest.mark.parametrize("arguments", [[], ["full"]])

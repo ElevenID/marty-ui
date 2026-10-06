@@ -98,9 +98,9 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json)
-                  # Rust-lane startup evidence or compiled-test discovery
-                  # consumes these inputs; release tests validate ownership.
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json)
+                  # Retain Rust qualification for contract metadata and also
+                  # run release-collected evidence/obligation ownership checks.
                   rust=true
                   release=true
                   ;;
@@ -715,13 +715,15 @@ jobs:
             cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
           else
             : > "$artifacts"
-            cargo test --locked -p marty-canvas-acceptance \
+            # Resolve shared test features once; the Canvas library is an empty
+            # ownership marker, guarded separately from its two real targets.
+            cargo test --locked -p marty-canvas-acceptance -p marty-issuance-service \
+              --lib \
               --test canvas_published_worker_contract \
               --test canvas_published_schema_contract \
+              --test canvas_oauth_behavior --test issuance-behavior \
               --no-run --timings --message-format=json >> "$artifacts"
-            cargo test --locked -p marty-issuance-service \
-              --lib --test canvas_oauth_behavior --test issuance-behavior \
-              --no-run --timings --message-format=json >> "$artifacts"
+            # Keep each real binary's package-specific feature resolution.
             cargo build --locked -p marty-issuance-service \
               --bin marty-issuance-service --bin marty-canvas-sync-worker \
               --message-format=json >> "$artifacts"

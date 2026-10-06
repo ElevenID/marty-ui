@@ -147,6 +147,11 @@ def scenario_inputs(source: Path) -> tuple[list[str], list[str]]:
 def harness_mount_inputs(source: str) -> dict[str, list[str]]:
     # This inventories syntax in one builder, not values passed by its callers,
     # mounts built elsewhere, or qualification evidence for reuse.
+    implementation = "impl PublishedDatabase {"
+    destructor = "impl Drop for PublishedDatabase {"
+    if implementation in source:
+        assert source.count(implementation) == source.count(destructor) == 1
+        source = source.split(implementation, 1)[1].split(destructor, 1)[0]
     start = "    async fn start_probe_with_scope("
     end = "    fn cleanup("
     assert source.count(start) == source.count(end) == 1
@@ -493,6 +498,26 @@ def test_harness_mount_inventory_detects_new_paths_and_expressions():
     changed = source.replace("scripts/fixture.py", "untracked/path")
     with pytest.raises(AssertionError, match="Review mount source"):
         harness_mount_inputs(changed)
+
+
+def test_harness_mount_inventory_bounds_cleanup_to_the_database_owner():
+    database = (
+        "impl PublishedDatabase {\n"
+        "    async fn start_probe_with_scope(\n"
+        '        let mount = root.join("scripts/fixture.py");\n'
+        "    fn cleanup(\n"
+        "}\nimpl Drop for PublishedDatabase {\n}\n"
+    )
+    image_owner = "impl PublishedImageOracle {\n    fn cleanup(\n}\n"
+    assert harness_mount_inputs(database + image_owner) == harness_mount_inputs(
+        database
+    )
+    # A second boundary *inside* the inventoried owner remains ambiguous.
+    duplicate = database.replace("    fn cleanup(\n", "    fn cleanup(\n" * 2)
+    with pytest.raises(AssertionError):
+        harness_mount_inputs(duplicate + image_owner)
+    with pytest.raises(AssertionError):
+        harness_mount_inputs(database.replace("impl Drop for PublishedDatabase {", ""))
 
 
 def test_harness_extra_scenario_inventory_fails_closed_on_new_syntax():

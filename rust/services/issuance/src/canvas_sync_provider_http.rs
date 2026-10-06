@@ -29,7 +29,7 @@ use crate::{
         CanvasOperationHttpClient, CanvasOperationHttpError, CanvasOperationResponse,
     },
     canvas_provider_http::{
-        canvas_retry_after_seconds, client_for_canvas_origin, validate_canvas_origin,
+        canvas_retry_after_header_seconds, client_for_canvas_origin, validate_canvas_origin,
         CanvasHttpClientPolicy, CanvasOriginPolicy,
     },
     canvas_sync_processor::{
@@ -957,9 +957,7 @@ async fn read_json_response(
         return Err(CanvasProviderReadError::Unavailable);
     }
     if response.status().as_u16() == 429 {
-        return Err(CanvasProviderReadError::RateLimited {
-            retry_after_seconds: canvas_retry_after_seconds(response).unwrap_or(0),
-        });
+        return Err(rate_limit_error(response.headers(), Utc::now()));
     }
     if !response.status().is_success() {
         return Err(CanvasProviderReadError::Unavailable);
@@ -978,6 +976,15 @@ async fn read_json_response(
         bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| CanvasProviderReadError::Unavailable)
+}
+
+fn rate_limit_error(
+    headers: &reqwest::header::HeaderMap,
+    now: DateTime<Utc>,
+) -> CanvasProviderReadError {
+    CanvasProviderReadError::RateLimited {
+        retry_after_seconds: canvas_retry_after_header_seconds(headers, now).unwrap_or(0),
+    }
 }
 
 fn reject_embedded_credentials(url: &Url) -> Result<(), CanvasProviderReadError> {
@@ -1357,6 +1364,47 @@ mod operation_scope_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_after_headers_use_the_actual_rate_limit_converter_at_a_fixed_clock() {
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        let now: DateTime<Utc> = "2026-09-02T00:00:00Z".parse().unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for case in matrix["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            assert!(seen.insert(name), "duplicate Retry-After case: {name}");
+            let raw = if let Some(offset) = case["retry_after_offset_seconds"].as_i64() {
+                let seconds = now.timestamp() + offset;
+                let at = std::time::UNIX_EPOCH
+                    + std::time::Duration::from_secs(u64::try_from(seconds).unwrap());
+                httpdate::fmt_http_date(at)
+            } else {
+                case["headers"]["Retry-After"].as_str().unwrap().to_owned()
+            };
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert(
+                reqwest::header::RETRY_AFTER,
+                reqwest::header::HeaderValue::from_str(&raw).unwrap(),
+            );
+            let seconds = match name {
+                "http_date_future" => 60,
+                "http_date_past" | "negative" | "zero" | "malformed" => 0,
+                "clamped" | "huge_integer" => 86_400,
+                _ => panic!("unclassified Retry-After case: {name}"),
+            };
+            assert_eq!(
+                rate_limit_error(&headers, now),
+                CanvasProviderReadError::RateLimited {
+                    retry_after_seconds: seconds,
+                },
+                "{name}"
+            );
+        }
+        assert_eq!(seen.len(), 7);
+    }
 
     // Exercise the unchanged token/collection HTTP adapters on synthetic local
     // transport. Public-provider HTTPS/trust parity remains a separate gate.

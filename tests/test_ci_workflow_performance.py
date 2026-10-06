@@ -870,6 +870,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_tier_obligations.py",
             "tests/test_ci_workflow_performance.py",
         },
+        "python-value-fast-obligations.json": {
+            ".github/workflows/ci.yml",
+            "scripts/ci/check_python_value_fast_obligations.py",
+            "tests/test_python_value_fast_obligations.py",
+            "tests/test_ci_workflow_performance.py",
+        },
     }
     for manifest, expected in inventory_consumers.items():
         references = subprocess.run(
@@ -924,6 +930,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
         "contracts/canvas-worker-tier-obligations.json",
+        "contracts/python-value-fast-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
     ):
@@ -1735,7 +1742,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -1812,7 +1819,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -1910,8 +1917,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            '"$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(

@@ -10,6 +10,7 @@ contracts/canvas-worker-oracle-producers.json
 contracts/canvas-worker-oracle-script-imports.json
 contracts/canvas-worker-startup-current-inputs.json
 contracts/canvas-worker-tier-obligations.json
+contracts/python-value-fast-obligations.json
 !services/
 !services/entrypoint.sh
 !scripts/
@@ -23,3 +24,12 @@ rust/**/target
 rust/**/.git
 rust/**/*.log
 rust/**/.env*
+# Exact #[cfg(test)] source leaves are checked from the checkout, not release images.
+rust/services/issuance/src/canvas_operation_http_prepared_tests.rs
+rust/services/issuance/src/canvas_sync_provider_http_tests.rs
+rust/services/issuance/src/canvas_sync_worker_retry_tests.rs
+rust/services/issuance/src/passport_http_reconciliation_tests.rs
+rust/services/issuance/src/python_format_tests.rs
+rust/services/issuance/src/signing_http_projection_tests.rs
+rust/services/issuance/src/signing_http_response_tests.rs
+rust/services/issuance/src/token_rate_limit_http_tests.rs

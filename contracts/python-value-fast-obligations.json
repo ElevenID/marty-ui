@@ -1,0 +1,99 @@
+{
+  "schema": "marty.python-value-fast-obligations/v1",
+  "scope": "Four extracted pure unit cases and their 12 signing-detail and seven real-HTTP retained consumers; not a complete response-compat or issuance test inventory.",
+  "owner": {
+    "package": "marty-response-compat",
+    "target": "lib",
+    "source": "rust/crates/response-compat/src/python_value.rs",
+    "cargo_manifest": "rust/crates/response-compat/Cargo.toml",
+    "layer": "pure unit",
+    "tier": "routine workspace contracts and complete official qualification",
+    "common_inputs": [
+      "rust/crates/response-compat/src/lossless_json_tree.rs",
+      "contracts/python-text-semantics.json"
+    ]
+  },
+  "cases": [
+    {
+      "test": "python_value::tests::borrowed_json_view_retains_lossless_projection_and_scalar_compatibility",
+      "assertion": "Borrowed scalar and lossless-tree views agree on nested field/first/truthiness projection and preserve unpaired surrogate and non-finite number representations.",
+      "inputs": ["inline JSON scalar and byte fixtures", "lossless JsonTree production type"],
+      "oracle_role": "Inline expected scalar and lossless-tree outcomes; no external process or independent wire oracle.",
+      "cheapest_proving_layer": "pure unit"
+    },
+    {
+      "test": "python_value::tests::truthiness_never_materializes_a_view",
+      "assertion": "Truthy checks never call the view allocator; falsey/null and nested Python-style representation remain stable.",
+      "inputs": ["inline Cheap view and JSON values"],
+      "oracle_role": "Inline expected truthiness and representation values; no external process oracle.",
+      "cheapest_proving_layer": "pure unit"
+    },
+    {
+      "test": "python_value::tests::frozen_unicode_ranges_are_valid_disjoint_and_sorted",
+      "assertion": "Frozen printable/whitespace tables are bounded, disjoint, sorted and strip Python control whitespace.",
+      "inputs": ["contracts/python-text-semantics.json"],
+      "oracle_role": "Frozen published-Python text-semantics observations; this test validates the table shape and a whitespace sample, not live Python behavior.",
+      "cheapest_proving_layer": "pure unit"
+    },
+    {
+      "test": "python_value::tests::large_json_integers_keep_their_exact_decimal_identity",
+      "assertion": "Arbitrary-precision positive and negative integers retain exact decimal JSON and Python display identity.",
+      "inputs": ["inline integer strings", "serde_json arbitrary_precision feature"],
+      "oracle_role": "Inline exact-decimal expected values; no external process oracle.",
+      "cheapest_proving_layer": "pure unit"
+    }
+  ],
+  "retained_signing_detail": {
+    "package": "marty-issuance-service",
+    "target": "signing_error_detail_contract",
+    "source": "rust/services/issuance/tests/signing_error_detail_contract.rs",
+    "shared_projection_source": "rust/services/issuance/src/signing_error_detail.rs",
+    "fixture": "contracts/canvas-worker-privacy-reference.json",
+    "oracle_role": "Digest-checked frozen Python signing-context observations for 45 detail and six operation cases; the remaining tests prove pure helper boundaries, not HTTP execution.",
+    "role": "Pure signing diagnostic, operation ordering, frozen corpus and error-boundary assertions; does not execute HTTP or signing adapters. Twelve distinct test names run in this integration target, but one included projection test also executes in the issuance library target.",
+    "duplicated_execution": {
+      "test": "signing_error_detail::scalar_api_remains_a_projection_of_the_shared_owner",
+      "targets": ["marty-issuance-service::lib", "marty-issuance-service::signing_error_detail_contract"],
+      "reason": "The integration target source-includes signing_error_detail.rs, which is also compiled as an issuance library module; its cfg(test) projection assertion appears in both targets. This is not two distinct obligations or two independent oracles."
+    },
+    "tests": [
+      "all_45_frozen_detail_observations_match_exact_strings",
+      "all_six_frozen_operation_error_messages_match_without_claiming_http_execution",
+      "whitespace_first_detail_does_not_fall_through_to_another_json_key",
+      "falsey_selection_preserves_the_unfiltered_final_operand_and_supported_types",
+      "text_read_is_eager_and_its_error_survives_a_valid_json_detail",
+      "error_operations_evaluate_json_then_text_once_and_preserve_text_failures",
+      "status_short_circuits_never_evaluate_either_response_supplier",
+      "operation_prefix_and_status_are_outside_the_detail_character_bound",
+      "python_dictionary_representation_preserves_order_types_quotes_and_unicode",
+      "truncation_counts_unicode_scalars_not_bytes_or_graphemes",
+      "text_fallback_strips_python_whitespace_but_reason_phrase_is_not_trimmed",
+      "signing_error_detail::scalar_api_remains_a_projection_of_the_shared_owner"
+    ]
+  },
+  "retained_http": {
+    "package": "marty-issuance-service",
+    "target": "lib",
+    "source": "rust/services/issuance/src/signing_http_response_tests.rs",
+    "module_owner": "rust/services/issuance/src/signing_http_response.rs",
+    "fixture": "contracts/signing-response-python-reference.json",
+    "oracle_role": "Frozen Python response observations plus loopback HTTP and production Rust adapter assertions; not a deployed signing-service proof.",
+    "role": "Loopback HTTP and production adapter, decoding, request identity, redirect and privacy sentinels; not replaceable by pure JSON units.",
+    "tests": [
+      "signing_http_response::tests::six_frozen_operations_cross_real_http_before_shared_classification",
+      "signing_http_response::tests::fifteen_portable_frozen_lossless_diagnostics_cross_real_http",
+      "signing_http_response::tests::three_production_owners_keep_operation_identity_requests_and_privacy",
+      "signing_http_response::tests::redirects_continue_existing_success_validators_and_404_defaults",
+      "signing_http_response::tests::each_existing_text_error_retains_its_python_exception_category",
+      "signing_http_response::tests::explicit_repository_reason_preserves_scalar_prefix_and_text_boundary",
+      "signing_http_response::tests::compressed_response_uses_existing_content_decoder_before_json_and_text"
+    ]
+  },
+  "execution_evidence": {
+    "scope": "Observed success in historical CI only; current-head discovery and future execution are not proved by this manifest.",
+    "run": "https://github.com/ElevenID/marty-ui/actions/runs/37125503856",
+    "job": "https://github.com/ElevenID/marty-ui/actions/runs/37125503856/job/111220161059",
+    "command": "cargo test --locked --workspace",
+    "observed": "The contracts job log names all four owner cases, 12 distinct signing-detail names (13 ok lines because scalar_api projection also runs in the issuance library target), and all seven HTTP cases as ok."
+  }
+}

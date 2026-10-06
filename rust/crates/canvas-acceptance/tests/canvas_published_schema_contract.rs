@@ -929,16 +929,113 @@ async fn provider_configuration_matches_published_helpers() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_provider_configuration()
+    let oracle = canvas_published_database::provider_configuration_image_oracle()
         .await
         .unwrap();
-    let oracle = owned.oracle.clone().unwrap();
-    owned.close().unwrap();
     let expected: serde_json::Value = serde_json::from_str(include_str!(
         "../../../../contracts/canvas-provider-configuration-oracle.json"
     ))
     .unwrap();
     assert_eq!(oracle, expected);
+}
+
+#[test]
+fn provider_configuration_image_owner_rejects_isolation_and_mount_drift() {
+    let id = "a".repeat(64);
+    let scope = "12345678-1234-4234-8234-123456789abc";
+    let image = "synthetic.invalid/issuance@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let owner = canvas_published_database::PublishedImageOracle::synthetic(scope, image);
+    let mut info = serde_json::json!({
+        "Id": id,
+        "Config": {
+            "Labels": {"com.elevenid.test.canvas-published-schema": scope},
+            "Image": image,
+            "Entrypoint": ["python"],
+            "Cmd": ["-c", canvas_published_database::PROVIDER_ORACLE_COMMAND],
+            "Env": ["PYTHONDONTWRITEBYTECODE=1", "TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key"]
+        },
+        "HostConfig": {
+            "NetworkMode": "none", "ReadonlyRootfs": true,
+            "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges"],
+            "PortBindings": {}
+        },
+        "NetworkSettings": {"Ports": {}},
+        "Mounts": [
+            {"Type": "bind", "RW": false, "Source": "/expected/script.py", "Destination": "/verification/scripts/run_canvas_provider_configuration_oracle.py"},
+            {"Type": "bind", "RW": false, "Source": "/expected/scenarios.json", "Destination": "/verification/contracts/canvas-provider-configuration-scenarios.json"}
+        ]
+    });
+    owner.checked(&info, &id).unwrap();
+    for (pointer, replacement) in [
+        ("/Id", serde_json::json!("c".repeat(64))),
+        (
+            "/Config/Labels/com.elevenid.test.canvas-published-schema",
+            serde_json::json!("foreign"),
+        ),
+        ("/Config/Image", serde_json::json!("other-image")),
+        (
+            "/Config/Cmd",
+            serde_json::json!(["-c", "print('not the oracle')"]),
+        ),
+        (
+            "/Config/Env/0",
+            serde_json::json!("PYTHONDONTWRITEBYTECODE=0"),
+        ),
+        (
+            "/HostConfig/NetworkMode",
+            serde_json::json!("container:database"),
+        ),
+        ("/HostConfig/ReadonlyRootfs", serde_json::json!(false)),
+        ("/HostConfig/CapDrop", serde_json::json!([])),
+        (
+            "/HostConfig/PortBindings",
+            serde_json::json!({"5432/tcp": []}),
+        ),
+        (
+            "/NetworkSettings/Ports",
+            serde_json::json!({"5432/tcp": []}),
+        ),
+        ("/Mounts/0/RW", serde_json::json!(true)),
+        ("/Mounts/0/Source", serde_json::json!("/foreign/script.py")),
+        (
+            "/Mounts/1/Source",
+            serde_json::json!("/foreign/scenarios.json"),
+        ),
+        (
+            "/Mounts/1/Destination",
+            serde_json::json!("/verification/foreign"),
+        ),
+    ] {
+        let previous = info.pointer(pointer).unwrap().clone();
+        *info.pointer_mut(pointer).unwrap() = replacement;
+        assert!(owner.checked(&info, &id).is_err(), "{pointer}");
+        *info.pointer_mut(pointer).unwrap() = previous;
+    }
+}
+
+#[test]
+fn provider_configuration_image_reference_rejects_tags_options_and_malformed_digests() {
+    let valid = format!(
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:{}",
+        "a".repeat(64)
+    );
+    assert_eq!(
+        canvas_published_database::pinned_published_image(&valid).unwrap(),
+        valid
+    );
+    for invalid in [
+        "ghcr.io/elevenid/marty-credentials-issuance:latest".to_owned(),
+        format!("--privileged@sha256:{}", "a".repeat(64)),
+        format!("GHCR.io/elevenid/marty@sha256:{}", "a".repeat(64)),
+        format!("ghcr.io/elevenid/marty@sha256:{}", "a".repeat(63)),
+        format!("ghcr.io/elevenid/marty@sha256:{}", "A".repeat(64)),
+        format!("ghcr.io/elevenid/marty@sha256:{};rm", "a".repeat(64)),
+    ] {
+        assert!(
+            canvas_published_database::pinned_published_image(&invalid).is_err(),
+            "invalid image reference was accepted: {invalid}"
+        );
+    }
 }
 
 #[tokio::test]

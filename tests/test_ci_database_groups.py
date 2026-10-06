@@ -99,9 +99,11 @@ def test_split_lanes_run_exactly_their_owned_database_group(
         assert "run-rust-db-contracts.sh" in observed[expected][-1]
 
 
+@pytest.mark.parametrize("qualification", ["0", "1"])
 def test_preflight_evidence_requires_both_successes_and_same_executable(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, qualification: str
 ) -> None:
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification)
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("GITHUB_RUN_ID", "12345")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
@@ -140,9 +142,11 @@ def test_preflight_evidence_requires_both_successes_and_same_executable(
     failed = False
     assert GROUPS.main("preflights") == 0
     assert GROUPS._has_preflight_evidence()
-    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "1")
+    monkeypatch.setenv(
+        "MARTY_CANVAS_FULL_QUALIFICATION", "1" if qualification == "0" else "0"
+    )
     assert not GROUPS._has_preflight_evidence()
-    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "0")
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification)
     assert GROUPS.main("database") == 0
     assert observed["published-canvas"][-1] == "full-after-preflights"
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
