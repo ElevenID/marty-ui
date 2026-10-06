@@ -20,9 +20,15 @@ if [[ -v MARTY_CANVAS_WORKER_RETRY_AFTER_TIER ]]; then
   echo "Native Retry-After tier is owned by this runner, not caller environment" >&2
   exit 2
 fi
+if [[ -v MARTY_CANVAS_WORKER_VALIDATION_TIER ]]; then
+  echo "Native validation tier is owned by this runner, not caller environment" >&2
+  exit 2
+fi
 retry_after_tier=full
+validation_tier=full
 if [[ "$mode" == full-after-preflights && "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]]; then
   retry_after_tier=routine
+  validation_tier=routine
 fi
 preflight_target=""
 case "$mode" in
@@ -341,7 +347,7 @@ cleanup_target_logs() {
 trap cleanup_target_logs EXIT
 "$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
-MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
+MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"

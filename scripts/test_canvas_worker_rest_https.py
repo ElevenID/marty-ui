@@ -1,5 +1,6 @@
 """Supply frozen HTTPS responses to actual native worker processes on Linux."""
 
+import hashlib
 import json
 import os
 import ssl
@@ -16,6 +17,7 @@ from canvas_worker_https_fixture import ObservedRequestHandler, response_headers
 from test_canvas_lti_https import create_loopback_certificate
 
 RETRY_AFTER_TIER = "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER"
+VALIDATION_TIER = "MARTY_CANVAS_WORKER_VALIDATION_TIER"
 RETRY_AFTER_CASES = frozenset(
     {
         "http_date_future",
@@ -28,6 +30,59 @@ RETRY_AFTER_CASES = frozenset(
     }
 )
 ROUTINE_RETRY_AFTER_CASES = frozenset({"http_date_future", "malformed"})
+VALIDATION_CASES = frozenset(
+    {
+        "invalid_roster_batch",
+        "invalid_roster_limit",
+        "invalid_roster_bounds_do_not_preempt_application",
+        "invalid_evidence_requirements",
+        "missing_lti_subject",
+        "unsupported_award_candidate",
+        "template_removed_after_application_read",
+        "incomplete_logical_key",
+        "prohibited_metadata",
+        "binding_platform_mismatch",
+        "target_disabled",
+        "platform_disabled",
+        "platform_archived",
+        "binding_disabled",
+        "binding_archived",
+        "stale_configuration",
+        "application_missing",
+        "candidate_missing",
+        "application_removed_after_target_read",
+        "candidate_removed_after_target_read",
+    }
+)
+ROUTINE_VALIDATION_CASES = frozenset(
+    {
+        "invalid_roster_batch",
+        "invalid_roster_limit",
+        "invalid_roster_bounds_do_not_preempt_application",
+        "invalid_evidence_requirements",
+        "missing_lti_subject",
+        "unsupported_award_candidate",
+        "template_removed_after_application_read",
+        "prohibited_metadata",
+        "application_removed_after_target_read",
+        "candidate_removed_after_target_read",
+    }
+)
+VALIDATION_CORPUS_SHA256 = {
+    "scenarios": "4933e2fe4108d2ebb6329233c2a42889155ed2c8c6b948ca2a4b938e6b9290a7",
+    "oracle": "927f092c2daf428c37ed3a5e906d13873b10c7f147ea2774c15d9dbd1f245d55",
+}
+
+
+def validate_validation_corpus_files(scenarios: Path, oracle: Path) -> None:
+    """Pin the complete frozen inputs, not just their case-name projections."""
+    for kind, path in (("scenarios", scenarios), ("oracle", oracle)):
+        # Git may check out CRLF locally; pin the committed LF corpus content.
+        if (
+            hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+            != VALIDATION_CORPUS_SHA256[kind]
+        ):
+            raise AssertionError(f"Native validation {kind} corpus changed")
 
 
 def selected_retry_after_cases(cases, reference, tier, qualification="0"):
@@ -49,6 +104,52 @@ def selected_retry_after_cases(cases, reference, tier, qualification="0"):
     return [case for case in cases if case["name"] in selected]
 
 
+def selected_validation_cases(cases, reference, inventory, tier, qualification="0"):
+    """Check all 20 declarations and frozen oracles before any native child."""
+    if qualification not in {"0", "1"}:
+        raise ValueError(f"Invalid Canvas full qualification mode: {qualification!r}")
+    if tier not in {"full", "routine"}:
+        raise ValueError(f"Invalid native validation tier: {tier!r}")
+    if qualification == "1" and tier != "full":
+        raise ValueError("Full qualification requires all native validation cases")
+    names = [case["name"] for case in cases]
+    if (
+        len(names) != 20
+        or set(names) != VALIDATION_CASES
+        or set(reference) != VALIDATION_CASES
+    ):
+        raise AssertionError("Native validation scenario/oracle inventory changed")
+    if (
+        set(ROUTINE_VALIDATION_CASES) - VALIDATION_CASES
+        or len(ROUTINE_VALIDATION_CASES) != 10
+    ):
+        raise AssertionError("Native validation routine membership changed")
+    declared = inventory.get("native_validation", {})
+    routine = declared.get("routine", [])
+    full_only = declared.get("full_only", [])
+    if (
+        declared.get("test") != "worker_validation_matches_frozen_published_process"
+        or declared.get("historical_test")
+        != "worker_validation_reference_matches_published_process"
+        or len(routine) != 10
+        or set(routine) != ROUTINE_VALIDATION_CASES
+        or len(full_only) != 10
+        or {entry.get("case") for entry in full_only}
+        != VALIDATION_CASES - ROUTINE_VALIDATION_CASES
+        or any(
+            entry.get("fast_owners")
+            != [
+                "worker_validation_repository_matches_frozen_errors",
+                "terminal_validation_errors_reach_actual_worker_dead_letter_port",
+            ]
+            for entry in full_only
+        )
+    ):
+        raise AssertionError("Native validation tier obligation inventory changed")
+    selected = VALIDATION_CASES if tier == "full" else ROUTINE_VALIDATION_CASES
+    return [case for case in cases if case["name"] in selected]
+
+
 def run(executable, scenario="rest"):
     assert scenario in {
         "rest",
@@ -60,6 +161,11 @@ def run(executable, scenario="rest"):
         "resources-unavailable",
     }
     root = Path(__file__).resolve().parents[1]
+    if scenario == "validation":
+        validate_validation_corpus_files(
+            root / "contracts/canvas-worker-validation-scenarios.json",
+            root / "contracts/canvas-worker-validation-oracle.json",
+        )
     spec = json.loads(
         (root / f"contracts/canvas-worker-{scenario}-scenarios.json").read_text()
     )
@@ -85,6 +191,17 @@ def run(executable, scenario="rest"):
                 cases,
                 reference,
                 os.environ.get(RETRY_AFTER_TIER, "full"),
+                os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
+            )
+        if scenario == "validation":
+            inventory = json.loads(
+                (root / "contracts/canvas-worker-tier-obligations.json").read_text()
+            )
+            cases = selected_validation_cases(
+                cases,
+                reference,
+                inventory,
+                os.environ.get(VALIDATION_TIER, "full"),
                 os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
             )
         for case in cases:

@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-worker-tier-obligations/v1",
-  "scope": "The 33 historical-reference cases omitted from routine CI and four preflight-capable native cases only; this is not an inventory of either complete Canvas target.",
+  "scope": "The 33 historical-reference cases, four preflight-capable native cases, and 20 nested native-validation cases; this is not an inventory of either complete Canvas target.",
   "package": "marty-canvas-acceptance",
   "target": "canvas_published_worker_contract",
   "test_source": "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
@@ -52,6 +52,35 @@
     {"test": "worker_timeout_matches_frozen_published_process", "mode": "timeout-preflight", "routine": "executed as a routine same-run preflight, then skipped in full-after-preflights", "assertion": "Owned native timeout matrix matches frozen published behavior.", "inputs": ["contracts/canvas-worker-timeout-oracle.json", "contracts/canvas-worker-timeout-scenarios.json"]},
     {"test": "worker_lease_expiry_matches_frozen_published_process", "mode": "lease-expiry-preflight", "routine": "executed as a routine same-run preflight, then skipped in full-after-preflights", "assertion": "Owned native lease-expiry matrix matches frozen published behavior.", "inputs": ["contracts/canvas-worker-lease-expiry-oracle.json", "contracts/canvas-worker-lease-expiry-scenarios.json"]}
   ],
+  "native_validation": {
+    "test": "worker_validation_matches_frozen_published_process",
+    "historical_test": "worker_validation_reference_matches_published_process",
+    "routine": [
+      "invalid_roster_batch",
+      "invalid_roster_limit",
+      "invalid_roster_bounds_do_not_preempt_application",
+      "invalid_evidence_requirements",
+      "missing_lti_subject",
+      "unsupported_award_candidate",
+      "template_removed_after_application_read",
+      "prohibited_metadata",
+      "application_removed_after_target_read",
+      "candidate_removed_after_target_read"
+    ],
+    "full_only": [
+      {"case": "incomplete_logical_key", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "binding_platform_mismatch", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "target_disabled", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "platform_disabled", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "platform_archived", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "binding_disabled", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "binding_archived", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "stale_configuration", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "application_missing", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "candidate_missing", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]}
+    ],
+    "disposition": "Routine runs seven processor/process cases, two actual PostgreSQL lock races, and the prohibited-metadata privacy boundary. Full qualification retains all 20 native cases and the separate unchanged historical-reference test. The ten full-only cases have distinct fast real-PostgreSQL repository and actual worker-port owners; these do not prove process, HTTPS, OAuth, or lock-race behavior. This is a candidate pending hosted routine and full pilots, not execution evidence."
+  },
   "historical_disposition": {
     "layer": "published-process/database compatibility integration",
     "tier": "weekly/manual full qualification and exact-main official-release prerequisite; omitted from routine PR/merge-group Canvas target",

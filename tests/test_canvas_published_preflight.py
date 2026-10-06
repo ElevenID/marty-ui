@@ -88,6 +88,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert (
         script.splitlines().count(
             'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
+            'MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" '
             + worker_full
             + ' >"$worker_log" 2>&1 &'
         )
@@ -288,6 +289,7 @@ else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
   if [[ "$name" == worker-contract && "$*" == *--test-threads=4* ]]; then
     printf 'retry-tier|%s\n' "${MARTY_CANVAS_WORKER_RETRY_AFTER_TIER:-absent}" >> "$TEST_LOG"
+    printf 'validation-tier|%s\n' "${MARTY_CANVAS_WORKER_VALIDATION_TIER:-absent}" >> "$TEST_LOG"
   fi
   if [[ "$TEST_FAILURE" == json-serial && "$name" == contract &&
     "$1" == json_consumer_diagnostic_matches_published_boundaries ]]; then
@@ -445,7 +447,7 @@ source "$CONTRACT_SOURCE" "$@"
         (["full-after-preflights"], True, "full"),
     ],
 )
-def test_retry_tier_is_explicit_only_on_the_worker_target(
+def test_nested_tiers_are_explicit_only_on_the_worker_target(
     shell_case, tmp_path, arguments, qualification, expected
 ):
     if arguments == ["full-after-preflights"]:
@@ -460,11 +462,25 @@ def test_retry_tier_is_explicit_only_on_the_worker_target(
     assert [call for call in calls if call[0] == "retry-tier"] == [
         ["retry-tier", expected]
     ]
+    assert [call for call in calls if call[0] == "validation-tier"] == [
+        ["validation-tier", expected]
+    ]
 
 
 def test_caller_cannot_override_native_retry_tier(shell_case, monkeypatch):
     monkeypatch.setenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", "routine")
     result, calls = shell_case(["full"], qualification=True)
+    assert result.returncode == 2
+    assert "tier is owned by this runner" in result.stderr
+    assert not any(call[0] in {"docker", "child"} for call in calls)
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+def test_caller_cannot_override_native_validation_tier(
+    shell_case, monkeypatch, qualification
+):
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_VALIDATION_TIER", "routine")
+    result, calls = shell_case(["full"], qualification=qualification)
     assert result.returncode == 2
     assert "tier is owned by this runner" in result.stderr
     assert not any(call[0] in {"docker", "child"} for call in calls)
