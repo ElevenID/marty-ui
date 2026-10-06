@@ -62,7 +62,7 @@ fn normalized_sha(path: &Path) -> String {
     )
 }
 
-fn file_sha(path: &Path) -> String {
+pub(super) fn file_sha(path: &Path) -> String {
     let mut source = File::open(path).expect("Startup attestation executable is unavailable");
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -76,6 +76,23 @@ fn file_sha(path: &Path) -> String {
         digest.update(&buffer[..count]);
     }
     format!("{:x}", digest.finalize())
+}
+
+fn verified_worker_binary_sha(path: &Path, before: &str, resolved: &Path) -> String {
+    assert!(
+        path == resolved,
+        "Startup replay worker binary identity changed"
+    );
+    assert!(
+        valid_sha(before, 64),
+        "Invalid startup worker binary digest"
+    );
+    let after = file_sha(path);
+    assert!(
+        after == before,
+        "Startup replay worker binary bytes changed"
+    );
+    after
 }
 
 fn source_inputs(root: &Path, sidecar: &Value) -> BTreeMap<String, String> {
@@ -107,7 +124,13 @@ fn image_digest(reference: &Value) -> &str {
     image
 }
 
-fn startup_evidence(root: &Path, observed: &Value, run: Value, executable: &Path) -> Value {
+fn startup_evidence(
+    root: &Path,
+    observed: &Value,
+    run: Value,
+    executable: &Path,
+    worker_binary_sha: &str,
+) -> Value {
     let sidecar: Value = serde_json::from_slice(
         &fs::read(root.join("contracts/canvas-worker-startup-current-inputs.json"))
             .expect("Startup input sidecar missing"),
@@ -154,6 +177,7 @@ fn startup_evidence(root: &Path, observed: &Value, run: Value, executable: &Path
         .iter()
         .any(|case| case["observe_cycle_result"] == true);
     let executable = file_sha(executable);
+    assert!(valid_sha(worker_binary_sha, 64));
     json!({
         "schema": "marty.canvas-worker-startup-fresh-run/v1",
         "scope": "fresh live full-main startup comparison and native replay, not original-capture attestation or qualification reuse",
@@ -172,18 +196,27 @@ fn startup_evidence(root: &Path, observed: &Value, run: Value, executable: &Path
         "postgres_image": postgres,
         "verified_migration_revisions": revisions,
         "test_executable_sha256": executable,
+        "worker_binary_sha256": worker_binary_sha,
         "published_comparison": "passed",
         "native_replay": "passed",
         "owned_cleanup": "passed",
     })
 }
 
-pub(super) fn emit_after_startup_pass(root: &Path, observed: &Value) {
+pub(super) fn emit_after_startup_pass(
+    root: &Path,
+    observed: &Value,
+    worker_binary: &Path,
+    worker_binary_before: &str,
+) {
+    let resolved = super::canvas_worker_process_signals::worker_executable();
+    let worker_binary_after =
+        verified_worker_binary_sha(worker_binary, worker_binary_before, &resolved);
     let Some(run) = main_run_from(|name| std::env::var(name).ok()) else {
         return;
     };
     let executable = std::env::current_exe().expect("Test executable path missing");
-    let evidence = startup_evidence(root, observed, run, &executable);
+    let evidence = startup_evidence(root, observed, run, &executable, &worker_binary_after);
     let runner_temp =
         std::env::var("RUNNER_TEMP").expect("Startup attestation output directory missing");
     let output = Path::new(&runner_temp).join(ARTIFACT);
@@ -322,8 +355,17 @@ mod tests {
         .unwrap();
         let executable = root.path().join("executable");
         fs::write(&executable, b"abc").unwrap();
+        let worker_binary = root.path().join("worker-binary");
+        fs::write(&worker_binary, b"independent worker bytes").unwrap();
+        let worker_sha = file_sha(&worker_binary);
         let run = json!({"sha":"d".repeat(40), "run_id":"12"});
-        let evidence = startup_evidence(root.path(), &observed, run.clone(), &executable);
+        let evidence = startup_evidence(
+            root.path(),
+            &observed,
+            run.clone(),
+            &executable,
+            &worker_sha,
+        );
         assert_eq!(
             evidence["schema"],
             "marty.canvas-worker-startup-fresh-run/v1"
@@ -337,6 +379,11 @@ mod tests {
         assert_eq!(evidence["issuance_image"], image);
         assert_eq!(evidence["observed_python"], "3.12.13");
         assert_eq!(evidence["test_executable_sha256"], file_sha(&executable));
+        assert_eq!(evidence["worker_binary_sha256"], worker_sha);
+        assert_ne!(
+            evidence["worker_binary_sha256"],
+            evidence["test_executable_sha256"]
+        );
         assert_eq!(evidence["conditional_child_requested"], false);
         let mut different = observed.clone();
         different["python"] = json!("different");
@@ -344,7 +391,8 @@ mod tests {
             root.path(),
             &different,
             run.clone(),
-            &executable
+            &executable,
+            &worker_sha
         ))
         .is_err());
         let mut unpinned = fixture;
@@ -359,7 +407,8 @@ mod tests {
             root.path(),
             &observed,
             run.clone(),
-            &executable
+            &executable,
+            &worker_sha
         ))
         .is_err());
     }
@@ -373,6 +422,29 @@ mod tests {
             file_sha(&path),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn worker_binary_identity_and_bytes_are_stable_across_replay() {
+        let root = tempfile::tempdir().unwrap();
+        let worker = root.path().join("worker");
+        let other = root.path().join("other");
+        fs::write(&worker, b"worker before replay").unwrap();
+        fs::write(&other, b"different worker").unwrap();
+        let before = file_sha(&worker);
+        assert_eq!(
+            verified_worker_binary_sha(&worker, &before, &worker),
+            before
+        );
+        assert!(std::panic::catch_unwind(|| {
+            verified_worker_binary_sha(&other, &before, &worker)
+        })
+        .is_err());
+        fs::write(&worker, b"worker changed during replay").unwrap();
+        assert!(std::panic::catch_unwind(|| {
+            verified_worker_binary_sha(&worker, &before, &worker)
+        })
+        .is_err());
     }
 
     #[test]

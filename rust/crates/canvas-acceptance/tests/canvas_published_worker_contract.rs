@@ -1866,6 +1866,8 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
         oracle, expected,
         "published startup reference must regenerate unchanged"
     );
+    let worker_binary = canvas_worker_process_signals::worker_executable();
+    let worker_binary_before = canvas_startup_attestation::file_sha(&worker_binary);
     let pool = PgPoolOptions::new()
         .max_connections(3)
         .connect(&owned.url)
@@ -1877,6 +1879,8 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
     canvas_startup_attestation::emit_after_startup_pass(
         &canvas_published_database::repository_root(),
         &oracle,
+        &worker_binary,
+        &worker_binary_before,
     );
 }
 
