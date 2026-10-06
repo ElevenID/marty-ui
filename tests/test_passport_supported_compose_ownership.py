@@ -221,7 +221,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                 **support_common, "SERVICE_NAME": "credential_template",
                 "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
                 "RP_GRPC_TARGET": "revocation-profile:9013",
-                "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+                "SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys",
                 "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                     "/run/secrets/signing_keys_internal_api_key",
                 "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
