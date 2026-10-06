@@ -1174,7 +1174,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn frozen_validation_processor_cases_fail_before_provider_reads_or_writes() {
+    async fn frozen_validation_processor_cases_preserve_tracked_state_without_provider_reads() {
         let scenarios: Value = serde_json::from_str(include_str!(
             "../../../../contracts/canvas-worker-validation-scenarios.json"
         ))
@@ -1186,6 +1186,9 @@ mod tests {
         // These seven are processor dispatch, not the thirteen repository
         // validation cases. The template-removal race remains native; this
         // isolated seam proves only its processor error after resources vanish.
+        // The simulator's patch ports are no-op successes, so this is not
+        // durable or comprehensive write-absence evidence; native replay owns
+        // those effects.
         let expected = [
             (
                 "invalid_roster_batch",
@@ -1219,9 +1222,12 @@ mod tests {
             .iter()
             .filter(|case| case["boundary"] == "processor_dispatch")
             .map(|case| case["name"].as_str().unwrap())
-            .collect::<std::collections::BTreeSet<_>>();
+            .collect::<Vec<_>>();
+        assert_eq!(discovered.len(), expected.len());
         assert_eq!(
-            discovered,
+            discovered
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
             expected
                 .iter()
                 .map(|(name, _)| *name)
@@ -1230,6 +1236,13 @@ mod tests {
         assert_eq!(scenarios["cases"].as_array().unwrap().len(), 20);
 
         for (name, expected_code) in expected {
+            let scenario = scenarios["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|case| case["name"] == name)
+                .unwrap();
+            assert_eq!(scenario["code"], expected_code, "{name}");
             let mut resources = simulator_resources(vec![requirement(
                 "assignment",
                 "canvas_rest",
@@ -1300,7 +1313,15 @@ mod tests {
                 enabled_config(),
                 CanvasRosterBounds::from_values(roster_batch, roster_limit),
             );
-            let error = run_simulated(&processor, target(kind)).await.unwrap_err();
+            let mut case_target = target(kind);
+            if matches!(kind, CanvasSyncTargetType::BackgroundRoster) {
+                case_target.application_id = None;
+            }
+            if matches!(kind, CanvasSyncTargetType::AwardCandidate) {
+                case_target.application_id = None;
+                case_target.candidate_id = Some("candidate-unsupported".into());
+            }
+            let error = run_simulated(&processor, case_target).await.unwrap_err();
             let frozen = &oracle[name]["observations"][0]["jobs"][0];
             assert_eq!(error.code, expected_code, "{name}");
             assert_eq!(error.code, frozen["last_error_code"], "{name}");
@@ -1309,9 +1330,24 @@ mod tests {
             assert_eq!(error.retry_after_seconds, None, "{name}");
             assert!(repository.facts.lock().unwrap().is_empty(), "{name}");
             assert!(repository.candidates.lock().unwrap().is_empty(), "{name}");
+            assert!(repository.observations.lock().unwrap().is_empty(), "{name}");
+            assert!(
+                repository.observation_payloads.lock().unwrap().is_empty(),
+                "{name}"
+            );
+            assert!(repository.identities.lock().unwrap().is_none(), "{name}");
             assert_eq!(*repository.cursor.lock().unwrap(), None, "{name}");
             assert!(!*repository.disabled.lock().unwrap(), "{name}");
             assert!(provider.calls.lock().unwrap().is_empty(), "{name}");
+            assert!(
+                provider
+                    .scoped_calls
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .all(|(_, _, action)| *action == "start"),
+                "{name}: provider REST or roster read occurred"
+            );
         }
     }
 
