@@ -138,7 +138,7 @@ def test_actual_setup_creates_owned_directory_and_refuses_reuse(tmp_path):
 
 
 def test_both_stream_capture_is_bounded_before_failure_artifact_write():
-    support = ROOT / "rust/crates/service-acceptance/tests/support"
+    support = ROOT / "rust/crates/canvas-acceptance/tests/support"
     source = (support / "base_runtime_container.rs").read_text()
     assert (
         "let diagnostics = super::runtime_failure_diagnostics::Diagnostics::from_environment()?;"
@@ -153,6 +153,6 @@ def test_both_stream_capture_is_bounded_before_failure_artifact_write():
     assert (
         "mod runtime_failure_diagnostics;"
         in (
-            ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
         ).read_text()
     )

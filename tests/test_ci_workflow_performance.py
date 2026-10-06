@@ -853,7 +853,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/service-acceptance/tests/support/canvas_startup_attestation.rs",
+            "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
         },
     }
     for manifest, expected in inventory_consumers.items():
@@ -1845,7 +1845,7 @@ def test_gateway_operations_candidate_is_required_and_not_dormant(registration) 
     )
     source = (
         ROOT
-        / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     _assert_gateway_operations_registration(published, source, registration)
 
@@ -1877,7 +1877,7 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
     )
     source = (
         ROOT
-        / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     name, module, database, _connections, _message = registration
     if mutation == "inventory":
@@ -2690,7 +2690,7 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
     assert "contracts/*-oracle.json" not in ignore
 
 
-@pytest.mark.parametrize("package", ["services/issuance", "crates/service-acceptance"])
+@pytest.mark.parametrize("package", ["services/issuance", "crates/service-acceptance", "crates/canvas-acceptance"])
 def test_every_issuance_and_acceptance_integration_test_remains_registered(
     package,
 ) -> None:
@@ -2750,6 +2750,35 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
         acceptance["dev-dependencies"]
     )
     assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
+
+
+def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies() -> None:
+    canvas = tomllib.loads(
+        (ROOT / "rust/crates/canvas-acceptance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    gateway = tomllib.loads(
+        (ROOT / "rust/crates/service-acceptance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
+    assert "crates/canvas-acceptance" in workspace["workspace"]["members"]
+    assert {target["name"] for target in canvas["test"]} == {
+        "canvas_published_worker_contract",
+        "canvas_published_schema_contract",
+    }
+    assert {target["name"] for target in gateway["test"]} == {
+        "passport_managed_kms_chain",
+        "passport_gateway_postgres",
+        "gateway_signing_acceptance",
+    }
+    assert "marty-signing-keys" not in canvas["dev-dependencies"]
+    assert "marty-signing-keys" in gateway["dev-dependencies"]
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(encoding="utf-8")
+    groups = (ROOT / "scripts/ci/run-db-contract-groups.py").read_text(encoding="utf-8")
+    assert "-p marty-canvas-acceptance" in workflow
+    assert 'contains("#marty-canvas-acceptance@")' in workflow
+    assert "package=marty-canvas-acceptance" in runner
+    assert '"#marty-canvas-acceptance@"' in groups
 
 
 def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate() -> (

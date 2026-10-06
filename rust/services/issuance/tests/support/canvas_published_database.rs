@@ -15,7 +15,7 @@ pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
     // Cargo's compile-time manifest path still has a fixed package suffix.
     if !start.is_absolute()
         || !(start.ends_with("rust/services/issuance")
-            || start.ends_with("rust/crates/service-acceptance"))
+            || start.ends_with("rust/crates/canvas-acceptance"))
     {
         return None;
     }

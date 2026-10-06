@@ -135,7 +135,7 @@ def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> 
     assert "${{ github.run_id }}-${{ github.run_attempt }}" in upload["with"]["name"]
     source = (
         ROOT
-        / "rust/crates/service-acceptance/tests/canvas_published_worker_contract.rs"
+        / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     startup_test = source.split(
         "async fn worker_startup_matches_published_process_and_idle_heartbeat()", 1

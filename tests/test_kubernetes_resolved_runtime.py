@@ -17,7 +17,7 @@ NAMES = (
 def inputs():
     return (
         (
-            ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
         ).read_text(),
         (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(),
         yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")),
@@ -143,7 +143,7 @@ def test_prepared_model_cleanup_control_is_required(fault):
         "prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored"
     )
     source = (
-        ROOT / "rust/crates/service-acceptance/tests/support/resolved_kubernetes_runtime.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
     ).read_text()
     runner = inputs()[1]
 
