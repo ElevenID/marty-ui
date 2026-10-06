@@ -384,6 +384,8 @@ A further acceptance-only renewal group contains the published-schema Postgres/C
 
 The same combined A1 branch moves the Kubernetes resolver support file byte-for-byte into acceptance ownership, for eighteen R100 support moves total. Both `resolved_runtime` and `resolved_kubernetes_runtime` now resolve from that package; the named Kubernetes process checks and required runner remain unchanged. The exact combined head passes Rust 1.95 acceptance-test `cargo check`, 135 Kubernetes/workflow Python guards, and independent review. Protected CI is still required before merge; no speedup is claimed from this owner move alone.
 
+A3 Trust Profile runtime-edge candidate (local, 2026-10-05): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup, narrower gate, or merge is claimed for this candidate.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.

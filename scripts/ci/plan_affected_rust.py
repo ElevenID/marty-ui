@@ -90,6 +90,18 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "binding": "NOTIFICATION_SERVICE_URL",
         },
     ],
+    "marty-trust-profile": [
+        {
+            "package": "marty-presentation-policy",
+            "evidence": "rust/services/presentation-policy/src/config.rs",
+            "binding": "TRUST_PROFILE_SERVICE_URL",
+            "runtime_evidence": "rust/services/presentation-policy/src/main.rs",
+            "runtime_marker": "&config.trust_profile_url",
+            "request_evidence": "rust/services/presentation-policy/src/control_plane.rs",
+            "request_marker": '"{}/internal/v1/trust-profiles/{profile_id}"',
+            "identity_marker": "returned_id != profile_id || returned_organization != organization_id",
+        },
+    ],
 }
 
 
