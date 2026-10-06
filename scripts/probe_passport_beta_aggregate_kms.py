@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+from functools import partial
 import hashlib
 import json
 import os
@@ -34,6 +35,7 @@ except ImportError:
 
 
 CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
+DOCKER_CONTEXT_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}\Z")
 IDENTIFIER = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 CERTIFICATE_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
 KEY_REFERENCE = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
@@ -75,15 +77,17 @@ def checked_selection(path: Path) -> tuple[dict[str, str], str]:
 
 
 def docker_bytes(command: list[str], payload: bytes = b"",
-                 *, timeout: int = 30) -> bytes:
+                 *, timeout: int = 30, context: str | None = None) -> bytes:
+    require(len(command) >= 2 and command[0] == "docker",
+            "Private beta Docker command is invalid")
     environment = os.environ.copy()
-    for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY",
-                 "DOCKER_CERT_PATH"):
-        environment.pop(name, None)
-    if os.name == "nt":
-        command = ["docker", "--context", "desktop-linux", *command[1:]]
-    else:
-        environment["DOCKER_HOST"] = "unix:///var/run/docker.sock"
+    if context is not None:
+        require(DOCKER_CONTEXT_NAME.fullmatch(context) is not None,
+                "Private beta Docker context is invalid")
+        for name in ("DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_TLS_VERIFY",
+                     "DOCKER_CERT_PATH"):
+            environment.pop(name, None)
+        command = ["docker", "--context", context, *command[1:]]
     try:
         result = subprocess.run(command, input=payload, env=environment,
                                 capture_output=True, check=False, timeout=timeout)
@@ -94,21 +98,41 @@ def docker_bytes(command: list[str], payload: bytes = b"",
     return result.stdout
 
 
-def docker_text(command: list[str]) -> str:
-    return docker_bytes(command).decode("utf-8").strip()
+def docker_text(command: list[str], *, context: str | None = None) -> str:
+    options = {} if context is None else {"context": context}
+    return docker_bytes(command, **options).decode("utf-8").strip()
 
 
-def docker_json(command: list[str], payload: bytes = b"") -> dict[str, Any]:
+def docker_json(command: list[str], payload: bytes = b"",
+                *, context: str | None = None) -> dict[str, Any]:
     try:
-        response = json.loads(docker_bytes(command, payload))
+        options = {} if context is None else {"context": context}
+        response = json.loads(docker_bytes(command, payload, **options))
     except (UnicodeError, ValueError) as exc:
         raise HostProbeError("Private beta KMS response is invalid") from exc
     require(isinstance(response, dict), "Private beta KMS response is invalid")
     return response
 
 
+def checked_docker_context(plan: dict[str, Any]) -> str:
+    docker = plan.get("docker")
+    context = docker.get("context") if isinstance(docker, dict) else None
+    daemon_id = docker.get("daemon_id") if isinstance(docker, dict) else None
+    require(isinstance(context, str)
+            and DOCKER_CONTEXT_NAME.fullmatch(context) is not None
+            and isinstance(daemon_id, str) and 0 < len(daemon_id) <= 256
+            and not any(character in daemon_id for character in "\r\n\0"),
+            "Aggregate beta Docker identity is invalid")
+    require(docker_text(["docker", "context", "show"]) == context
+            and docker_text(["docker", "info", "--format", "{{.ID}}"],
+                            context=context) == daemon_id,
+            "Aggregate beta Docker context or daemon changed")
+    return context
+
+
 def private_signing_request(container: str, route: str,
-                            body: dict[str, Any] | None = None) -> dict[str, Any]:
+                            body: dict[str, Any] | None = None,
+                            *, context: str | None = None) -> dict[str, Any]:
     require(CONTAINER.fullmatch(container) is not None
             and (route in ("/internal/compat/resolve-issuer-did",
                            "/internal/compat/issuer-dids/sign")
@@ -129,12 +153,13 @@ def private_signing_request(container: str, route: str,
     )
     payload = (json.dumps(body, separators=(",", ":")).encode("utf-8")
                if body is not None else b"")
+    options = {} if context is None else {"context": context}
     return docker_json(["docker", "exec", "-i", container, "sh", "-eu", "-c",
-                        script, "sh", PRIVATE_PREFIX + route], payload)
+                        script, "sh", PRIVATE_PREFIX + route], payload, **options)
 
 
 def resolve(container: str, organization: str, did: str,
-            purpose: str) -> dict[str, Any]:
+            purpose: str, *, context: str | None = None) -> dict[str, Any]:
     require(isinstance(did, str) and did.startswith("did:")
             and purpose in ("csca", "x509_doc_signer"),
             "Private issuer resolution input is invalid")
@@ -143,11 +168,11 @@ def resolve(container: str, organization: str, did: str,
         "organization_id": organization, "issuer_did": did,
         "credential_format": "ICAO_EMRTD", "key_purpose": purpose,
         "algorithm": "ES256",
-    })
+    }, context=context)
 
 
 def sign(container: str, organization: str, did: str, purpose: str,
-         challenge: bytes) -> dict[str, Any]:
+         challenge: bytes, *, context: str | None = None) -> dict[str, Any]:
     require(len(challenge) == 48, "Private issuer challenge is invalid")
     return private_signing_request(container,
                                    "/internal/compat/issuer-dids/sign", {
@@ -155,10 +180,11 @@ def sign(container: str, organization: str, did: str, purpose: str,
         "credential_format": "ICAO_EMRTD", "key_purpose": purpose,
         "algorithm": "ES256",
         "payload_b64": base64.urlsafe_b64encode(challenge).decode("ascii").rstrip("="),
-    })
+    }, context=context)
 
 
-def transit_key_version(container: str, reference: str) -> int:
+def transit_key_version(container: str, reference: str,
+                        *, context: str | None = None) -> int:
     require(CONTAINER.fullmatch(container) is not None
             and KEY_REFERENCE.fullmatch(reference) is not None,
             "Managed issuer key reference is invalid")
@@ -168,8 +194,9 @@ def transit_key_version(container: str, reference: str) -> int:
         '[ -n "$VAULT_TOKEN" ] || exit 4; '
         'exec bao read -format=json "transit/keys/$1"'
     )
+    options = {} if context is None else {"context": context}
     response = docker_json(["docker", "exec", container, "sh", "-eu", "-c",
-                            script, "sh", reference])
+                            script, "sh", reference], **options)
     metadata = response.get("data")
     require(isinstance(metadata, dict)
             and metadata.get("type") == "ecdsa-p256"
@@ -314,7 +341,17 @@ def main() -> int:
         plan = json.loads(args.plan.read_text(encoding="utf-8"))
         application, application_hash = checked_application(args.application_file)
         selection, selection_hash = checked_selection(args.issuer_chain_file)
-        result = prove(plan, application, selection, application_hash, selection_hash)
+        context = checked_docker_context(plan)
+        result = prove(
+            plan, application, selection, application_hash, selection_hash,
+            runner=partial(docker_text, context=context),
+            resolver=partial(resolve, context=context),
+            signer=partial(sign, context=context),
+            get_csca=lambda container, org, cert: private_signing_request(
+                container, f"/internal/documents/{org}/csca-certificates/{cert}",
+                context=context),
+            key_version=partial(transit_key_version, context=context),
+        )
     except (OSError, ValueError, HostProbeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

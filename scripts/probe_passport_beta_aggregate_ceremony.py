@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from functools import partial
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ from typing import Any, Callable
 
 try:
     from .probe_passport_beta_aggregate_kms import (CONTAINER, IDENTIFIER,
+                                                    checked_docker_context,
                                                     checked_selection, docker_bytes,
                                                     docker_text, require)
     from .probe_passport_beta_chain import (ChainProbeError, exercise_with_authorities,
@@ -23,6 +25,7 @@ try:
     from .probe_passport_beta_rust_owner_write import checked_application
 except ImportError:
     from probe_passport_beta_aggregate_kms import (CONTAINER, IDENTIFIER,
+                                                   checked_docker_context,
                                                    checked_selection, docker_bytes,
                                                    docker_text, require)
     from probe_passport_beta_chain import (ChainProbeError, exercise_with_authorities,
@@ -95,7 +98,8 @@ def staged_public_domain(plan: dict[str, Any], runner: Callable[[list[str]], str
 
 
 def gateway_post(container: str, route: str, organization: str,
-                 cookie: str, body: dict[str, Any]) -> tuple[int, dict[str, Any], str]:
+                 cookie: str, body: dict[str, Any],
+                 *, context: str | None = None) -> tuple[int, dict[str, Any], str]:
     require(CONTAINER.fullmatch(container) is not None
             and IDENTIFIER.fullmatch(organization) is not None
             and route in ROUTES and body.get("organization_id") == organization
@@ -111,8 +115,10 @@ def gateway_post(container: str, route: str, organization: str,
     url = f"http://127.0.0.1:8000{route}?organization_id={organization}"
     payload = (cookie + "\n").encode("utf-8") + json.dumps(
         body, separators=(",", ":")).encode("utf-8")
+    options = {} if context is None else {"context": context}
     response = docker_bytes(["docker", "exec", "-i", container, "sh", "-eu",
-                             "-c", script, "sh", url], payload, timeout=120)
+                             "-c", script, "sh", url], payload, timeout=120,
+                            **options)
     head, separator, content = response.partition(b"\r\n\r\n")
     require(bool(separator) and head.startswith(b"HTTP/1.1 "),
             "Beta issuer Gateway response is invalid")
@@ -231,9 +237,12 @@ def main() -> int:
         ceremony, ceremony_hash = checked_ceremony(args.ceremony_file, selection)
         csca_cookie = checked_session(args.csca_session_file)
         dsc_cookie = checked_session(args.dsc_session_file)
+        context = checked_docker_context(plan)
         result = issue(plan, application, selection, ceremony,
                        {"application": application_hash, "selection": selection_hash,
-                        "ceremony": ceremony_hash}, csca_cookie, dsc_cookie, args.intent)
+                        "ceremony": ceremony_hash}, csca_cookie, dsc_cookie,
+                       args.intent, runner=partial(docker_text, context=context),
+                       post=partial(gateway_post, context=context))
     except (OSError, ValueError, HostProbeError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

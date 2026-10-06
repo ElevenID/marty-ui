@@ -32,6 +32,45 @@ def selected() -> dict[str, str]:
     }
 
 
+def test_selected_docker_context_is_explicit_and_ignores_ambient_host(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("DOCKER_HOST", "tcp://wrong-daemon:2375")
+    monkeypatch.setenv("DOCKER_CONTEXT", "wrong-context")
+    seen = []
+
+    def run(command, **options):
+        seen.append((command, options["env"]))
+        return type("Result", (), {"returncode": 0, "stdout": b"ok"})()
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    assert gate.docker_bytes(["docker", "exec", SIGNING_KEYS, "true"],
+                             context="beta-selected") == b"ok"
+    command, environment = seen[0]
+    assert command[:4] == ["docker", "--context", "beta-selected", "exec"]
+    assert "DOCKER_HOST" not in environment
+    assert "DOCKER_CONTEXT" not in environment
+
+
+def test_docker_identity_rejects_mismatched_daemon_before_requests(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def text(command, *, context=None):
+        calls.append((command, context))
+        return "beta-selected" if command[1] == "context" else "wrong-daemon"
+
+    monkeypatch.setattr(gate, "docker_text", text)
+    with pytest.raises(HostProbeError, match="context or daemon changed"):
+        gate.checked_docker_context({
+            "docker": {"context": "beta-selected", "daemon_id": "planned-daemon"}})
+    assert calls == [
+        (["docker", "context", "show"], None),
+        (["docker", "info", "--format", "{{.ID}}"], "beta-selected"),
+    ]
+
+
 def test_chain_selection_requires_exact_tenant_and_distinct_dids(tmp_path: Path) -> None:
     path = tmp_path / "selection.json"
     path.write_text(json.dumps(selected()), encoding="utf-8")
