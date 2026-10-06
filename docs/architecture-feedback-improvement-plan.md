@@ -911,6 +911,15 @@ owners, the real-policy/crypto renewal matrix and the independent descriptor
 test as `ok` at 14:28:35 UTC. This is execution proof on #1127's exact source,
 not qualification of the unpublished PostgreSQL refusal addition or main.
 
+The same unpublished follow-up now includes independently reviewed
+`23797c3624d8731c2baa659d2b2c055225cc45de`, assembled as `cfc74604d`.
+It maps the real Signing Keys-to-Flow HTTP signer/key-envelope dependency through
+configuration, authenticated provider startup, request-object signing and
+encrypted-response callbacks to server handlers. Source-marker guards and the
+hypothetical observed reverse chain are lexical inventory, not execution or a
+complete consumer graph. Service changes still select the full workspace.
+The assembled planner suite passed 20 tests and 63 subtests in 1.68s.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
