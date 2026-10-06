@@ -1172,6 +1172,33 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Require all Gateway Signing acceptance cases
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          acceptance_executable="$(jq -sr '
+            [.[] | select(.reason == "compiler-artifact")
+            | select(.target.name == "gateway_signing_acceptance")
+            | select(.package_id | contains("#marty-service-acceptance@"))
+            | select(.executable != null) | .executable] | unique
+            | if length == 1 then .[0] else error("Expected one Gateway Signing acceptance executable") end
+          ' "$RUNNER_TEMP/rust-test-artifacts.json")"
+          [[ -x "$acceptance_executable" ]]
+          listed_tests="$("$acceptance_executable" --list)"
+          for test_name in \
+            authenticated_gateway_reaches_remaining_rust_signing_handlers \
+            authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+            authenticated_gateway_rotates_only_a_dedicated_signing_service \
+            authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
+            authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
+            authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key; do
+            if ! grep -Fxq "$test_name: test" <<< "$listed_tests"; then
+              echo "Missing Gateway Signing acceptance case: $test_name" >&2
+              exit 1
+            fi
+          done
       - name: Exercise authenticated Signing Keys Gateway to Rust routes
         if: matrix.lane == 'contracts'
         working-directory: rust

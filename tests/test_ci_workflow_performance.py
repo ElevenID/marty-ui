@@ -250,6 +250,62 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
     )
 
 
+def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    guard = next(
+        step
+        for step in steps
+        if step.get("name") == "Require all Gateway Signing acceptance cases"
+    )
+    script = guard["run"]
+    assert guard["if"] == "matrix.lane == 'contracts'"
+    assert guard["working-directory"] == "rust"
+    assert "rust-test-artifacts.json" in script
+    assert 'select(.target.name == "gateway_signing_acceptance")' in script
+    assert 'contains("#marty-service-acceptance@")' in script
+    assert script.count('"$acceptance_executable" --list') == 1
+    assert "cargo " not in script
+    names_source = script.split("for test_name in", 1)[1].split("; do", 1)[0]
+    names = re.findall(r"authenticated_gateway_[a-z_]+", names_source)
+    rust_source = (
+        ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
+    ).read_text(encoding="utf-8")
+    actual = re.findall(r"(?m)^async fn (authenticated_gateway_[a-z_]+)\(", rust_source)
+    assert len(names) == len(set(names)) == 6
+    assert set(names) == set(actual)
+
+    # Execute the workflow's real membership loop with synthetic discovery
+    # output, without compiling Rust or contacting Redis/OpenBao.
+    loop = script[script.index("for test_name in") :]
+    bash = "bash"
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git is not None
+        bash = str(Path(git).parent.parent / "bin/bash.exe")
+    for missing in (None, *names):
+        listed = "\n".join(f"{name}: test" for name in names if name != missing)
+        result = subprocess.run(
+            [
+                bash,
+                "-c",
+                f'set -euo pipefail\nlisted_tests="$1"\n{loop}',
+                "guard",
+                listed,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if missing is None:
+            assert result.returncode == 0, result.stderr
+        else:
+            assert result.returncode != 0
+            assert (
+                f"Missing Gateway Signing acceptance case: {missing}" in result.stderr
+            )
+
+
 def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
     _assert_python_service_job_preserves_full_suite(_workflow(CI_PATH)[1])
 
