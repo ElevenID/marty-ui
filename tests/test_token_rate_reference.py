@@ -84,7 +84,10 @@ def test_platform_clock_is_in_workspace_ci_and_shared_image_without_service_expa
     assert service["lints"]["rust"]["unsafe_code"] == "forbid"
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "cargo test --locked --workspace --no-run" in workflow
-    assert "cargo test --locked --workspace >" in workflow
+    assert (
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance >"
+        in workflow
+    )
     assert "cargo clippy --locked --workspace --all-targets" in workflow
     dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
     assert "COPY rust /build/rust" in dockerfile
