@@ -20,6 +20,7 @@ FAST = (
     ROOT
     / "rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs"
 )
+FAST_PARENT = ROOT / "rust/services/issuance/src/initiation_didcomm.rs"
 RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 CONTAINER = (
     ROOT / "rust/crates/canvas-acceptance/tests/support/base_runtime_container.rs"
@@ -109,6 +110,7 @@ def _inputs() -> dict[str, str]:
         "source": SOURCE.read_text(encoding="utf-8"),
         "fixture": FIXTURE.read_text(encoding="utf-8"),
         "fast": FAST.read_text(encoding="utf-8"),
+        "fast_parent": FAST_PARENT.read_text(encoding="utf-8"),
         "runner": RUNNER.read_text(encoding="utf-8"),
         "container": CONTAINER.read_text(encoding="utf-8"),
         "reference": REFERENCE.read_text(encoding="utf-8"),
@@ -140,6 +142,7 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
     source = _without_rust_comments(inputs["source"])
     fixture = _without_rust_comments(inputs["fixture"])
     fast = _without_rust_comments(inputs["fast"])
+    fast_parent = _without_rust_comments(inputs["fast_parent"])
     reference = _without_rust_comments(inputs["reference"])
     container = _without_rust_comments(inputs["container"])
     runner = inputs["runner"]
@@ -152,6 +155,15 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
     )
     assert "contracts/credential-renewal-python-reference.json" in reference
     assert "let corpus = reference::corpus();" in fixture
+    assert (
+        fast_parent.count(
+            '#[cfg(test)]\n    #[path = "initiation_didcomm_renewal_tests.rs"]\n    mod renewal_graph;'
+        )
+        == 1
+    )
+    assert fast_parent.index("#[cfg(test)]\nmod tests {") < fast_parent.index(
+        "mod renewal_graph;"
+    )
     fast_body = _body(
         fast,
         "renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto",
@@ -246,6 +258,7 @@ def test_six_renewal_profiles_retain_distinct_runtime_obligations() -> None:
         "container",
         "source",
         "fast",
+        "fast_module",
         "runner",
         "fixture",
     ],
@@ -275,6 +288,10 @@ def test_renewal_inventory_rejects_owner_and_matrix_drift(fault: str) -> None:
     elif fault == "fast":
         inputs["fast"] = inputs["fast"].replace(
             "for allow_private_ips in [false, true]", "for allow_private_ips in [true]"
+        )
+    elif fault == "fast_module":
+        inputs["fast_parent"] = inputs["fast_parent"].replace(
+            "mod renewal_graph;", "mod disconnected_renewal_graph;"
         )
     elif fault == "runner":
         inputs["runner"] = inputs["runner"].replace(
