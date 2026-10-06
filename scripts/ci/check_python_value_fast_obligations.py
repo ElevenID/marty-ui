@@ -6,13 +6,17 @@ from __future__ import annotations
 import json
 import re
 import sys
+from importlib import import_module
 from pathlib import Path
 
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from scripts.check_gateway_public_protocol_contract import _without_rust_comments
+# Direct script execution needs the repository root before loading the shared lexer.
+_without_rust_comments = import_module(
+    "scripts.check_gateway_public_protocol_contract"
+)._without_rust_comments
 
 INVENTORY = ROOT / "contracts/python-value-fast-obligations.json"
 ATTRIBUTED_FUNCTION = re.compile(
