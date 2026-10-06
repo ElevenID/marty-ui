@@ -1,0 +1,73 @@
+name: Nightly claim intake
+
+on:
+  workflow_run:
+    workflows: [Prepare nightly claim]
+    types: [completed]
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  intake:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Bind completed source workflow before using its artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CLAIM_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+          [[ "$CLAIM_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$CLAIM_RUN_ID" > preparation-run.json
+          jq -e --argjson id "$CLAIM_RUN_ID" \
+            '.id == $id and .path == ".github/workflows/prepare-nightly-claim.yml" and
+             .event == "workflow_dispatch" and .head_branch == "main" and
+             .status == "completed" and .conclusion == "success" and
+             (.head_sha | test("^[0-9a-f]{40}$"))' preparation-run.json
+          gh run download "$CLAIM_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name "nightly-claim-$CLAIM_RUN_ID" --dir claim
+          test "$(find claim -mindepth 1 -maxdepth 1 -printf '%f:%y\n')" = 'nightly-claim.json:f'
+          test "$(wc -c < claim/nightly-claim.json)" -le 65536
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Require same current main and no existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          current_main="$(git rev-parse 'refs/remotes/origin/main^{commit}')"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$current_main"
+          python scripts/nightly_claim.py intake \
+            --claim claim/nightly-claim.json --run-json preparation-run.json \
+            --current-main-sha "$current_main" \
+            --policy .github/stack-tag-policy.json \
+            --output admitted-nightly-claim.json
+          tag="$(jq -er .tag admitted-nightly-claim.json)"
+          tag_refs="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+          if [[ -n "$tag_refs" ]]; then
+            echo "::error::Nightly tag already exists"
+            exit 1
+          fi
+      - name: Publish intake evidence only, without qualification or release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-claim-admitted-${{ github.event.workflow_run.id }}
+          path: admitted-nightly-claim.json
+          if-no-files-found: error
+          retention-days: 30
