@@ -2930,6 +2930,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         env=environment,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stderr
     assert stats_file.read_text(encoding="utf-8") == '{"early":true}\n'
@@ -2942,6 +2943,7 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
         env=environment,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0 and not stats_file.exists()
     assert "Optional compiler cache unavailable" in result.stdout

@@ -4,7 +4,6 @@ import json
 import re
 import sys
 
-
 FIELDS = {
     "Compile requests": "compile_requests",
     "Compile requests executed": "compile_requests_executed",

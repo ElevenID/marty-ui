@@ -7,15 +7,14 @@ Local/standalone full runs without this evidence continue to execute both tests.
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from canvas_worker_owned_process import OwnedProcess, OwnedProcessError  # noqa: E402
-
+from canvas_worker_owned_process import OwnedProcess, OwnedProcessError
 
 TARGET = "canvas_published_schema_contract"
 PACKAGE = "#marty-canvas-acceptance@"

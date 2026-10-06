@@ -1,17 +1,16 @@
 """Bounded source ownership for Canvas renewal profiles, not runtime evidence."""
 
-from copy import deepcopy
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
 from scripts.check_gateway_public_protocol_contract import _without_rust_comments
-
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / "contracts/canvas-renewal-profile-obligations.json"
@@ -215,7 +214,7 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
     assert all(item["retained"].strip() for item in manifest["profiles"])
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in runner
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
         in runner
     )
     assert "--skip renewal_" not in runner
@@ -324,9 +323,16 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
         assert all((ROOT / path).is_file() for path in direct_inputs)
         assert owner["assertions"] and owner["runtime_prerequisites"]
         assert owner["does_not_prove"].strip()
-        assert inputs["runner"].count(f"grep -Fo '{marker}'") == 1
+        expected_marker_checks = 1 if owner["owner"] == "published-sql-private-ip-refusal" else 2
+        assert inputs["runner"].count(f"grep -Fo '{marker}'") == expected_marker_checks
         assert inputs["runner"].count(f"grep -Fx '{test}: test'") == 1
-        assert f"--skip {test}" not in inputs["runner"]
+        if owner["owner"] == "published-sql-private-ip-refusal":
+            assert f"--skip {test}" not in inputs["runner"]
+        else:
+            assert inputs["runner"].count(f"--skip {test}") == 1
+            assert inputs["runner"].index(f"--skip {test}") < inputs["runner"].index(
+                "expected_skipped_config_tests=2"
+            )
     _validate_rendered_config_owner(
         inputs["source"], RENDERED_CONFIG.read_text(encoding="utf-8"), inputs["runner"]
     )
@@ -526,12 +532,15 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
     )
     assert '"$composition_executable" --skip "$serial_composition_test"' in runner
     assert f"--skip {name}" not in runner
-    assert f"--skip rendered_base_process::{name}" not in runner
+    assert runner.count(f"--skip rendered_base_process::{name}") == 1
+    assert runner.index(f"--skip rendered_base_process::{name}") < runner.index(
+        "expected_skipped_config_tests=2"
+    )
     assert (
         runner.count(
             "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l"
         )
-        == 1
+        == 2
     )
     assert runner.index(
         "(( composition_status == 0 && worker_status == 0 ))"
@@ -604,6 +613,10 @@ def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_mark
     assert guard is not None
     marker = "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1"
     log = tmp_path / "composition.log"
+    other_markers = [
+        "RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1",
+        "DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1",
+    ]
     for lines, composition_status, expected in (
         ([f"test case ... {marker}", "ok"], 0, 0),
         (["test case ...", marker, "ok"], 0, 0),
@@ -612,12 +625,12 @@ def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_mark
         ([marker, marker], 0, 1),
         ([marker + marker], 0, 1),
     ):
-        log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log.write_text("\n".join([*lines, *other_markers]) + "\n", encoding="utf-8")
         result = subprocess.run(
             [
                 bash,
                 "-c",
-                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nworker_status=0\n{guard.group()}',
+                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nworker_status=0\nexpected_skipped_config_tests=0\n{guard.group()}',
                 "_",
                 log.as_posix(),
             ],
