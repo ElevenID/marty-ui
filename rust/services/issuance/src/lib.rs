@@ -8,15 +8,11 @@
 
 #![forbid(unsafe_code)]
 
-pub mod lossless_json;
-pub mod lossless_json_tree;
-mod lossless_json_write;
-pub mod owned_json_value;
+pub use marty_response_compat::{lossless_json, lossless_json_tree, owned_json_value, python_text};
 mod python_datetime;
 mod python_format;
 mod python_json_diagnostic;
-pub mod python_text;
-mod python_value;
+pub(crate) use marty_response_compat::python_value;
 
 pub mod canvas_award_candidate;
 pub mod canvas_award_candidate_approval;

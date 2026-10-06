@@ -26,9 +26,9 @@ import test_canvas_worker_timeout_https as header
 ROOT = Path(__file__).resolve().parents[1]
 CASE_NAMES = [case[0] for case in body.CASE_LAYOUT]
 # Publication added a default-identity handler hook to the shared HTTPS fixture.
-# Contract tests prove this corpus changes the independent capture only at the
-# six fixture-provenance values; hosted regeneration must still match exactly.
-CORPUS_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
+# Contract tests account exactly for the fixture and TLS-helper provenance
+# updates; hosted regeneration must still match the frozen bytes.
+CORPUS_SHA256 = "7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8"
 CASE_TIMEOUT_SECONDS = 90
 require = header.require
 assert_control = header.assert_control
@@ -124,7 +124,7 @@ def validate_matrix(matrix, reports):
 def load_inputs(root):
     raw = (root / "contracts/canvas-worker-body-timeout-oracle.json").read_bytes()
     require(
-        len(raw) == 46_042 and hashlib.sha256(raw).hexdigest() == CORPUS_SHA256,
+        len(raw) == 46_618 and hashlib.sha256(raw).hexdigest() == CORPUS_SHA256,
         "Native body frozen raw corpus differs",
     )
     reports = json.loads(raw)

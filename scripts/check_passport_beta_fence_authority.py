@@ -171,17 +171,33 @@ def verify_issuance_attestation(
             and isinstance(target, dict) and target.get("type") == "commit"
             and target.get("sha") == source_commit,
             "Credentials issuance release tag differs from signed source")
-    try:
-        subprocess.run([
-            "gh", "attestation", "verify", f"oci://{reference}",
-            "--repo", "ElevenID/marty-credentials",
-            "--signer-workflow",
-            "ElevenID/marty-credentials/.github/workflows/release-images.yml",
-            "--source-digest", source_commit, "--source-ref", f"refs/tags/v{version}",
-            "--deny-self-hosted-runners",
-        ], check=True, capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise HostProbeError("Credentials issuance image attestation is invalid") from exc
+    # The deployed v1.1.217 baseline contains a Credentials image built on
+    # main before v0.1.72 was tagged. Its annotated tag still names this exact
+    # commit; no later release may substitute a main-branch attestation.
+    legacy_main_build = (
+        version == "0.1.72"
+        and source_commit == "85b128a85426b3f5aeaf6f948ba5dfa2836e95d8"
+        and reference == "ghcr.io/elevenid/marty-credentials-issuance@sha256:"
+        "9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
+    )
+    source_refs = (f"refs/tags/v{version}", "refs/heads/main") if legacy_main_build else (
+        f"refs/tags/v{version}",
+    )
+    for source_ref in source_refs:
+        try:
+            subprocess.run([
+                "gh", "attestation", "verify", f"oci://{reference}",
+                "--repo", "ElevenID/marty-credentials",
+                "--signer-workflow",
+                "ElevenID/marty-credentials/.github/workflows/release-images.yml",
+                "--source-digest", source_commit, "--source-ref", source_ref,
+                "--deny-self-hosted-runners",
+            ], check=True, capture_output=True, text=True, timeout=120)
+            break
+        except (OSError, subprocess.SubprocessError):
+            continue
+    else:
+        raise HostProbeError("Credentials issuance image attestation is invalid")
     return True
 
 

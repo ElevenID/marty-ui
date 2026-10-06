@@ -1,19 +1,52 @@
 """Supply frozen HTTPS responses to actual native worker processes on Linux."""
 
-from http.server import ThreadingHTTPServer
-from datetime import datetime
-from email.utils import parsedate_to_datetime
 import json
 import os
-from pathlib import Path
 import ssl
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+from http.server import ThreadingHTTPServer
+from pathlib import Path
 from threading import Lock, Thread
 
-from test_canvas_lti_https import create_loopback_certificate
 from canvas_worker_https_fixture import ObservedRequestHandler, response_headers
+from test_canvas_lti_https import create_loopback_certificate
+
+RETRY_AFTER_TIER = "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER"
+RETRY_AFTER_CASES = frozenset(
+    {
+        "http_date_future",
+        "http_date_past",
+        "malformed",
+        "negative",
+        "zero",
+        "clamped",
+        "huge_integer",
+    }
+)
+ROUTINE_RETRY_AFTER_CASES = frozenset({"http_date_future", "malformed"})
+
+
+def selected_retry_after_cases(cases, reference, tier, qualification="0"):
+    """Classify the whole frozen matrix before selecting nested native cases."""
+    if qualification not in {"0", "1"}:
+        raise ValueError(f"Invalid Canvas full qualification mode: {qualification!r}")
+    if tier not in {"full", "routine"}:
+        raise ValueError(f"Invalid native Retry-After tier: {tier!r}")
+    if qualification == "1" and tier != "full":
+        raise ValueError("Full qualification requires all native Retry-After cases")
+    names = [case["name"] for case in cases]
+    if len(names) != len(RETRY_AFTER_CASES) or set(names) != RETRY_AFTER_CASES:
+        raise AssertionError("Native Retry-After case inventory changed")
+    if set(reference) != RETRY_AFTER_CASES:
+        raise AssertionError("Frozen Retry-After oracle inventory changed")
+    selected = RETRY_AFTER_CASES if tier == "full" else ROUTINE_RETRY_AFTER_CASES
+    if len(selected) != (7 if tier == "full" else 2):
+        raise AssertionError("Native Retry-After tier membership changed")
+    return [case for case in cases if case["name"] in selected]
 
 
 def run(executable, scenario="rest"):
@@ -46,7 +79,15 @@ def run(executable, scenario="rest"):
         assert names, "Worker scenario matrix must not be empty"
         assert len(set(names)) == len(names)
         assert set(names) == set(reference)
-        for case in spec["cases"]:
+        cases = spec["cases"]
+        if scenario == "retry-after":
+            cases = selected_retry_after_cases(
+                cases,
+                reference,
+                os.environ.get(RETRY_AFTER_TIER, "full"),
+                os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
+            )
+        for case in cases:
             stage = {
                 **case,
                 "status": 429 if scenario == "retry-after" else 500,
@@ -163,6 +204,7 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
                 capture_output=True,
                 text=True,
                 timeout=240,
+                check=False,
             )
             assert child.returncode == 0, (
                 f"Native worker replay failed: {child.stdout} {child.stderr}"

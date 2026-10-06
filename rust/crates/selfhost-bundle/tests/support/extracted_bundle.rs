@@ -303,8 +303,10 @@ impl ExtractedBundle {
     }
 }
 
-#[test]
-fn jointly_mutated_verified_bundle_is_refused() {
+// This helper is source-included by acceptance, but only the bundle test owns
+// the pure inventory check.
+#[allow(dead_code)]
+pub(super) fn assert_jointly_mutated_verified_bundle_is_refused() {
     let owned = tempfile::tempdir().unwrap();
     let output = owned.path().join("output");
     let extracted = owned.path().join("extracted");
@@ -330,8 +332,9 @@ fn jointly_mutated_verified_bundle_is_refused() {
     fixture.verify_unchanged();
 }
 
-#[test]
-fn extracted_inputs_survive_child_unwind_until_parent_removes_scratch() {
+// Acceptance reuses the fixture; the bundle test owns its cleanup control.
+#[allow(dead_code)]
+pub(super) fn assert_extracted_inputs_survive_child_unwind_until_parent_removes_scratch() {
     let parent = tempfile::tempdir().unwrap();
     let owned = tempfile::tempdir_in(parent.path()).unwrap();
     let root = owned.path().to_owned();

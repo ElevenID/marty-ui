@@ -21,5 +21,9 @@
       "path": ".github/workflows/codeql-actions.yml",
       "event": "merge_group"
     }
-  ]
+  ],
+  "required_full_qualification": {
+    "path": ".github/workflows/ci.yml",
+    "events": ["schedule", "workflow_dispatch"]
+  }
 }

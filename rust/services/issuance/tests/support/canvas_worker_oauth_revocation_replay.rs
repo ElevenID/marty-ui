@@ -255,12 +255,33 @@ pub async fn replay(pool: &PgPool, database_url: &str, origin: &str, name: &str,
             .fetch_one(pool)
             .await
             .unwrap();
-        assert!(
-            sqlx::query_scalar::<_, bool>(matrix["queue_delay_sql"].as_str().unwrap())
-                .fetch_one(pool)
-                .await
-                .unwrap()
-        );
+        // The worker chooses retry_at before the repository's later updated_at
+        // write. Compare actual selected deadlines with the worker-decision
+        // window, not with that write's wall clock to a 100 ms tolerance.
+        let retry_after = case["headers"]["Retry-After"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+        let delay = TimeDelta::seconds(retry_after);
+        let deadlines: Vec<DateTime<Utc>> = sqlx::query_scalar(
+            "SELECT c.revoke_retry_at FROM issuance_service.canvas_oauth_connections c \
+             JOIN issuance_service.synthetic_revocation_acquisitions a ON a.connection_id=c.id \
+             ORDER BY a.ordinal",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        assert_eq!(deadlines.len(), order.len());
+        let earliest = retry_window_start + delay;
+        let latest = retry_window_end + delay;
+        for deadline in deadlines {
+            assert!(
+                deadline >= earliest && deadline <= latest,
+                "selected retry deadline {deadline} falls outside the worker decision window \
+                 [{earliest}, {latest}]"
+            );
+        }
         let mut observation = json!({"lease_order": order, "connections": connections, "unselected_rows_unchanged": true});
         if let Some(seconds) = case.get("lease_seconds") {
             let durations: Value =

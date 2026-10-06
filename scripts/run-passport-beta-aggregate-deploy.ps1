@@ -32,6 +32,7 @@ if ($output.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
 }
 $planPath = $output + '.plan.json'
 $productionPostflightPath = $output + '.production-postflight.json'
+$productionRecoveryPath = $output + '.production-recovery-' + [Guid]::NewGuid().ToString('N') + '.json'
 $fenceRecheckPath = $output + '.pretransition-fence.json'
 $credentialsPretransitionPath = $output + '.credentials-pretransition.json'
 $ceremonyIntentPath = $output + '.issuer-ceremony-intent.json'
@@ -141,6 +142,67 @@ function Assert-ProductionContinuity {
         throw 'Production continuity differs from signed aggregate plan'
     }
     return $proof
+}
+
+function Invoke-ProductionRecovery {
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $rows = @(& python (Join-Path $PSScriptRoot 'recover_passport_beta_production.py') `
+            --restore --baseline $productionRecoveryPath `
+            --expected-sha256 $script:productionRecoveryDigest 2>$null)
+        if ($rows.Count -ne 1) {
+            throw 'Production recovery did not return one receipt'
+        }
+        $receipt = $rows[0] | ConvertFrom-Json -ErrorAction Stop
+        if ($receipt.schema -cne 'marty.passport-beta-production-recovery/v1' -or
+            $receipt.verified -isnot [bool] -or
+            $receipt.continuity_breached -isnot [bool]) {
+            throw 'Production recovery receipt is invalid'
+        }
+        return $receipt
+    }
+    finally { $ErrorActionPreference = $previous }
+}
+
+function Write-ProductionPostflight {
+    $postflight = [ordered]@{
+        schema = 'marty.passport-beta-production-postflight/v1'
+        deployment_failed = $true
+        verified = $false
+        production_running = $false
+        recovery_attempted = $script:productionRecoveryReady
+        checked_at_utc = [DateTime]::UtcNow.ToString('o')
+    }
+    $postflightFailure = $null
+    $recovery = $null
+    if ($script:productionRecoveryReady) {
+        try {
+            $recovery = Invoke-ProductionRecovery
+            $postflight.recovery = $recovery
+            $postflight.production_running = ($recovery.verified -eq $true)
+            if ($recovery.verified -ne $true) {
+                $postflightFailure = 'Production recovery did not verify health and public route'
+            }
+        }
+        catch { $postflightFailure = 'Production recovery result is unavailable' }
+    }
+    try {
+        $proof = Assert-ProductionContinuity -MaintenanceOnly
+        $postflight.verified = ($null -eq $postflightFailure -and
+            ($null -eq $recovery -or $recovery.continuity_breached -ne $true))
+        $postflight.production_running = $true
+        $postflight.proof = $proof
+    }
+    catch { if ($null -eq $postflightFailure) { $postflightFailure = $_.Exception.Message } }
+    try {
+        Replace-DurableJson -Path $productionPostflightPath `
+            -Json ($postflight | ConvertTo-Json -Depth 10 -Compress)
+    }
+    catch { if ($null -eq $postflightFailure) { $postflightFailure = 'Production postflight receipt write failed' } }
+    if ($null -ne $postflightFailure) {
+        Write-Warning "Production postflight failed: $postflightFailure"
+    }
 }
 
 function Write-DurableJson {
@@ -639,6 +701,8 @@ function Start-OldBetaContainer {
 }
 
 $script:plan = $null
+$script:productionRecoveryReady = $false
+$script:productionRecoveryDigest = $null
 $lock = Enter-BetaDeploymentLock -AllowPending
 try {
     if (-not (Test-Path -LiteralPath (Get-BetaPassportFenceMarkerPath)) -or
@@ -707,6 +771,20 @@ try {
     if ([string]$script:plan.beta_origin -cne 'https://beta.elevenidllc.com') {
         throw 'Aggregate deployment plan has the wrong public beta origin'
     }
+    $null = Assert-ProductionContinuity
+    $recoveryBaseline = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'recover_passport_beta_production.py'),
+        '--capture', '--output', $productionRecoveryPath)
+    if ($recoveryBaseline.schema -cne 'marty.passport-beta-production-recovery-capture/v1' -or
+        [string]$recoveryBaseline.baseline_sha256 -notmatch '^[0-9a-f]{64}$' -or
+        $recoveryBaseline.snapshot_sha256 -cne [string]$script:plan.production_snapshot_sha256 -or
+        $recoveryBaseline.attachments_sha256 -cne [string]$script:plan.production_attachments_sha256 -or
+        $recoveryBaseline.docker.context -cne [string]$script:intent.docker.context -or
+        $recoveryBaseline.docker.daemon_id -cne [string]$script:intent.docker.daemon_id) {
+        throw 'Production recovery baseline differs from protected maintenance plan'
+    }
+    $script:productionRecoveryDigest = [string]$recoveryBaseline.baseline_sha256
+    $script:productionRecoveryReady = $true
     $null = Assert-ProductionContinuity
     $applicationProof = Invoke-Plan -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_write.py'),
@@ -1160,27 +1238,7 @@ try {
 }
 catch {
     $deploymentFailure = $_
-    $postflight = [ordered]@{
-        schema = 'marty.passport-beta-production-postflight/v1'
-        deployment_failed = $true
-        verified = $false
-        checked_at_utc = [DateTime]::UtcNow.ToString('o')
-    }
-    $postflightFailure = $null
-    try {
-        $proof = Assert-ProductionContinuity -MaintenanceOnly
-        $postflight.verified = $true
-        $postflight.proof = $proof
-    }
-    catch { $postflightFailure = $_ }
-    try {
-        Replace-DurableJson -Path $productionPostflightPath `
-            -Json ($postflight | ConvertTo-Json -Depth 10 -Compress)
-    }
-    catch { if ($null -eq $postflightFailure) { $postflightFailure = $_ } }
-    if ($null -ne $postflightFailure) {
-        Write-Warning "Production postflight failed: $($postflightFailure.Exception.Message)"
-    }
+    Write-ProductionPostflight
     throw $deploymentFailure
 }
 finally { Exit-BetaDeploymentLock -Lock $lock }

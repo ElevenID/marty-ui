@@ -264,7 +264,7 @@ impl OwnedEnvoy {
                 && images[0]["Os"] == "linux",
             "Exact Linux Envoy image is unavailable",
         )?;
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let root = super::canvas_published_database::repository_root();
         let source = regular_file(&root.join("config/envoy/envoy.yaml"))?;
         let proto = regular_file(&root.join("config/envoy/proto_descriptor.pb"))?;
         let source_before = digest(&source)?;
@@ -647,40 +647,6 @@ fn fixture_projection_preserves_every_field_except_fixture_socket_and_cadence() 
         assert_eq!(
             parse(encode(&changed).unwrap().as_bytes()).unwrap(),
             selected
-        );
-    }
-}
-
-#[test]
-fn feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers() {
-    let source = include_bytes!("../../../../../config/envoy/envoy.yaml");
-    let parsed = parse(source).unwrap();
-    assert_eq!(
-        parsed["static_resources"]["listeners"][0]["address"]["socket_address"]["port_value"]
-            .as_u64(),
-        Some(9000)
-    );
-    let candidate = render(source, marty_release_evidence::envoy_config::DESCRIPTOR).unwrap();
-    let encoded = encode(&candidate).unwrap();
-    assert!(!encoded.contains("$serde_json::private::Number"));
-    // Independent YAML consumer must see scalar numeric nodes. A JSON-only
-    // roundtrip can silently reconstruct the private Number marker instead.
-    let yaml: serde_yaml::Value = serde_yaml::from_str(&encoded).unwrap();
-    assert_eq!(
-        yaml["static_resources"]["listeners"][0]["address"]["socket_address"]["port_value"]
-            .as_u64(),
-        Some(9000)
-    );
-    for cluster in yaml["static_resources"]["clusters"].as_sequence().unwrap() {
-        assert!(
-            cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
-                ["socket_address"]["port_value"]
-                .as_u64()
-                .is_some()
-        );
-        assert_eq!(
-            cluster["health_checks"][0]["healthy_threshold"].as_u64(),
-            Some(2)
         );
     }
 }

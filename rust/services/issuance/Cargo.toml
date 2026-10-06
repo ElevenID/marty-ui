@@ -69,6 +69,7 @@ marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
+marty-response-compat = { path = "../../crates/response-compat", features = ["postgres"] }
 num-bigint.workspace = true
 num-traits.workspace = true
 p256.workspace = true
@@ -102,18 +103,13 @@ zeroize.workspace = true
 const-oid.workspace = true
 der.workspace = true
 redis.workspace = true
-marty-signing-keys = { path = "../signing-keys" }
 spki.workspace = true
 x509-cert.workspace = true
-marty-selfhost-bundle = { path = "../../crates/selfhost-bundle" }
 tempfile.workspace = true
 zip.workspace = true
-marty-release-evidence = { path = "../../crates/release-evidence" }
 serde_yaml.workspace = true
 ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
-marty-flow = { path = "../flow" }
-marty-gateway = { path = "../gateway" }
 mmf-platform.workspace = true
 rand08.workspace = true
 rsa.workspace = true
@@ -129,10 +125,6 @@ unsafe_code = "forbid"
 
 # Explicit targets let independent behavior modules share one link step.
 # tests/test_ci_workflow_performance.py rejects unregistered test files.
-[[test]]
-name = "canvas_published_schema_contract"
-path = "tests/canvas_published_schema_contract.rs"
-
 [[test]]
 name = "issuance-behavior"
 path = "tests/behavior_suite.rs"
@@ -324,7 +316,3 @@ path = "tests/retention_postgres_contract.rs"
 [[test]]
 name = "passport_postgres_contract"
 path = "tests/passport_postgres_contract.rs"
-
-[[test]]
-name = "passport_managed_kms_chain"
-path = "tests/passport_managed_kms_chain.rs"

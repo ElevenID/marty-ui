@@ -359,11 +359,35 @@ restore occurred.
 PR #814 now also carries a provenance-only refresh for the shared HTTPS
 fixture's default-identity publication hook. Exact controls reconstruct the
 historical A/B captures by changing only six body and two expiry provenance
-digests. Current corpus SHA256 values are
+digests. The 2026-09-19 corpus SHA256 values were
 `bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`
 (body) and
 `e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853`
 (expiry). Hosted exact regeneration remains pending; no parity claim is made.
+
+The 2026-10-03 provenance update additionally pins the imported loopback TLS
+helper in both corpora. Hashes immediately after that update were
+`7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8`
+(46,618-byte body) and
+`340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181`
+(19,767-byte expiry). Exact reverse-migration checks preserve the earlier
+corpus hashes and all behavioral observations; hosted regeneration is still
+required.
+
+A diagnostic-only lease follow-up splits the post-join body-schedule and
+durable-observation assertions without changing either condition. The then-current
+19,767-byte expiry corpus hash is
+`335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7`;
+the sole change from the prior expiry corpus is its capture-script provenance
+hash. Exact published-process regeneration remains required.
+
+The 2026-10-04 bounded post-join diagnostic retains exact durable-observation
+equality and reports only fixed changed-section flags on failure. Its current
+19,767-byte corpus hash is
+`24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50`;
+the native expiry driver's raw-corpus pin matches it. The reverse-provenance
+test proves that only the lease-script source pin changed from the preceding
+corpus. A hosted published-process regeneration is still required.
 
 ## Historical 121-entry checkpoint
 

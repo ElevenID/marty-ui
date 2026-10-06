@@ -32,11 +32,14 @@ SELECTED = frozenset({
 ISOLATED_DEPENDENCIES = frozenset({"postgres", "openbao", "redis"})
 RUST_DEPENDENCIES = frozenset({
     "organization", "event-stream", "revocation-profile", "revocation-profile-migrate",
-    "credential-template", "trust-profile", "presentation-policy", "deployment-profile",
+    "credential-template", "compliance-profile", "trust-profile",
+    "presentation-policy", "deployment-profile",
 })
 DISPOSABLE_SERVICES = SELECTED | ISOLATED_DEPENDENCIES | RUST_DEPENDENCIES | frozenset({
     "db-migrate", "issuance-migrations", "signing-keys", "edge",
 })
+DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing", "ingress"})
+INGRESS_NETWORK = "ingress"
 ALLOWED_SERVICES = frozenset({
     "applicant", "auth", "canvas-sync-worker", "compliance-profile",
     "credential-template", "db-migrate", "deployment-profile",
@@ -263,16 +266,15 @@ def validate_model(
             "Resolved Compose model has an unexpected or missing service")
     infra_images = qualified_images(verify_registry=False)
     networks = model.get("networks")
-    require(isinstance(networks, dict) and bool(networks),
+    require(isinstance(networks, dict) and set(networks) == DISPOSABLE_NETWORKS,
             "Disposable Compose networks are missing")
-    for network in networks.values():
+    for name, network in networks.items():
         require(isinstance(network, dict)
                 and network.get("external") not in (True, "true")
                 and network.get("driver", "bridge") == "bridge"
                 and not network.get("driver_opts")
-                and network.get("internal") is True
-                and isinstance(network.get("name"), str)
-                and network["name"].startswith(project + "_"),
+                and network.get("internal", False) is (name != INGRESS_NETWORK)
+                and network.get("name") == f"{project}_{name}",
                 "Compose network is external or shared")
     volumes = model.get("volumes", {})
     require(isinstance(volumes, dict), "Compose volumes are invalid")
@@ -479,6 +481,7 @@ def validate_model(
         "passport-callback-signer": {"callback_signing"},
         "passport-beta-bureau": {"private", "callback_signing"},
         "openbao": {"private", "callback_signing"},
+        "edge": {"private", INGRESS_NETWORK},
     }
     for name in services:
         expected = callback_networks.get(name, {"private"})
@@ -577,6 +580,12 @@ def validate_model(
         "ORG_GRPC_TARGET": "organization:9002",
     }
     rust_requirements = {
+        "compliance-profile": ({
+            **shared_rust, "SERVICE_NAME": "compliance_profile",
+            "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+        }, {"marty_db_password", "grpc_service_token"},
+         {"db-migrate": "service_completed_successfully", "organization": "service_healthy"},
+         8008),
         "trust-profile": ({
             **shared_rust, "SERVICE_NAME": "trust_profile",
             "TRUST_PROFILE_SERVICE_PORT": "8004",
@@ -675,8 +684,6 @@ def validate_model(
             "00000000-0000-0000-0000-000000000001|"
             "https://edge:8443/__disposable/flow-callback?nonce=__MARTY_TOKEN__"),
         "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
-        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
-            "/run/secrets/flow_application_event_hmac_key",
         "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_KEY": "/run/secrets/flow_workload_client_key",
@@ -685,12 +692,16 @@ def validate_model(
         "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
     }
     flow_secret_names = {
-        "flow_webhook_secret", "flow_application_event_hmac_key",
+        "flow_webhook_secret",
         "flow_workload_client_cert", "flow_workload_client_key",
         "flow_workload_server_cert", "flow_workload_server_key",
         "workload_identity_ca_cert",
     }
     actual_flow_secrets = {item.get("source") for item in services["flow"].get("secrets", [])}
+    require(flow.get("FLOW_APPLICATION_EVENT_HMAC_KEY_FILE")
+            == "/run/secrets/flow_application_event_hmac_key"
+            and "flow_application_event_hmac_key" in actual_flow_secrets,
+            "Disposable Flow application event authentication is missing")
     require((surface == "selfhost"
              and all(flow.get(key) == value for key, value in flow_selfhost.items())
              and flow_secret_names <= actual_flow_secrets)
@@ -710,6 +721,7 @@ def validate_model(
                         name, {}).get("condition") == "service_healthy"
                     for key, name, port in (
                         ("CREDENTIAL_TEMPLATE_SERVICE_URL", "credential-template", 8003),
+                        ("COMPLIANCE_PROFILE_SERVICE_URL", "compliance-profile", 8008),
                         ("TRUST_PROFILE_SERVICE_URL", "trust-profile", 8004),
                         ("PRESENTATION_POLICY_SERVICE_URL", "presentation-policy", 8009),
                         ("DEPLOYMENT_PROFILE_SERVICE_URL", "deployment-profile", 8010))),
@@ -725,6 +737,8 @@ def validate_model(
         == {"marty_db_password"}
         and issuance_migration.get("depends_on", {}).get("db-migrate", {}).get("condition")
         == "service_completed_successfully"
+        and issuance_migration.get("depends_on", {}).get("organization", {}).get("condition")
+        == "service_healthy"
         and issuance_migration.get("healthcheck") == {"disable": True}
         and issuance_migration.get("restart") == "no"
         and services["issuance-native"].get("depends_on", {}).get(
@@ -868,10 +882,12 @@ def validate_model(
         and native.get("PASSPORT_BETA_RECONCILIATION_ENABLED") == "true"
         and native.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE")
         == "/run/secrets/passport_beta_reconciliation_operator_token"
-        and all(settings.get("ISSUANCE_SERVICE_URL")
-                == settings.get("ISSUANCE_NATIVE_SERVICE_URL")
-                == "http://issuance-native:8005"
-                for settings in (gateway, flow)),
+        and gateway.get("ISSUANCE_SERVICE_URL")
+        == gateway.get("ISSUANCE_NATIVE_SERVICE_URL")
+        == "http://issuance-native:8005"
+        and flow.get("ISSUANCE_NATIVE_SERVICE_URL")
+        == "http://issuance-native:8005"
+        and "ISSUANCE_SERVICE_URL" not in flow,
         "Disposable passport routes do not have one Rust owner",
     )
     require(

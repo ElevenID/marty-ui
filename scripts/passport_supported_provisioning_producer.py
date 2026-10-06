@@ -30,7 +30,8 @@ if __package__:
         verify as verify_ownership,
     )
     from .check_passport_supported_rust_model import (
-        DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
+        DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
+        ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
     from .passport_supported_provisioning_plan import (
@@ -44,7 +45,8 @@ else:
         verify as verify_ownership,
     )
     from check_passport_supported_rust_model import (
-        DISPOSABLE_SERVICES, PROJECT, ModelPreflightError, preflight_attested_plan,
+        DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
+        ModelPreflightError, preflight_attested_plan,
         source_identity,
     )
     from passport_supported_provisioning_plan import (
@@ -86,7 +88,6 @@ EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
     "passport_acceptance_api_key", "passport_acceptance_operator_api_key",
     "passport_acceptance_tenant_probe_api_key",
 })
-DISPOSABLE_NETWORKS = frozenset({"private", "callback_signing"})
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
 })
@@ -500,6 +501,8 @@ def _destroy_recorded_project(
                     # Compose may choose either owned attachment as the
                     # primary mode for these dual-network services.
                     expected_modes.add(project + "_callback_signing")
+                if service == "edge":
+                    expected_modes.add(project + "_ingress")
                 require(isinstance(host_config, dict)
                         and host_config.get("NetworkMode") in expected_modes
                         and (isinstance(parent_id, str) and not host_config.get("PortBindings")
@@ -512,6 +515,8 @@ def _destroy_recorded_project(
                 if service in {"openbao", "passport-beta-bureau"}:
                     expected_networks.add(project + "_private")
                     expected_networks.add(project + "_callback_signing")
+                if service == "edge":
+                    expected_networks.add(project + "_ingress")
                 state = item.get("State")
                 created = isinstance(state, dict) and state.get("Status") == "created"
                 detached_startup = (isinstance(state, dict)
@@ -569,9 +574,12 @@ def _destroy_recorded_project(
             _labels(item.get("Labels"), record, project)
             if not complete:
                 members = item.get("Containers", {})
-                require(item.get("Driver") == "bridge" and item.get("Internal") is True
+                require(item.get("Driver") == "bridge"
+                        and item.get("Internal") is (name != f"{project}_{INGRESS_NETWORK}")
                         and isinstance(members, dict)
-                        and set(members) <= set(containers.values()),
+                        and set(members) <= ({containers.get("edge")}
+                                             if name == f"{project}_{INGRESS_NETWORK}"
+                                             else set(containers.values())),
                         "Partial disposable network is not isolated")
         for name in volumes:
             item = _inspect("volume", name, inspector)

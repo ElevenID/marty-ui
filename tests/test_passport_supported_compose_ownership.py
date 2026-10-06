@@ -53,6 +53,7 @@ SECRETS = {
     "organization": ("marty_db_password", "grpc_service_token"),
     "credential-template": ("marty_db_password", "grpc_service_token",
                             "signing_keys_internal_api_key"),
+    "compliance-profile": ("marty_db_password", "grpc_service_token"),
     "trust-profile": ("marty_db_password", "grpc_service_token",
                       "signing_keys_internal_api_key"),
     "presentation-policy": ("marty_db_password", "grpc_service_token",
@@ -63,7 +64,7 @@ SECRETS = {
                         "integration_secret_master_key",
                         "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
-             "grpc_service_token"),
+             "grpc_service_token", "flow_application_event_hmac_key"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
@@ -123,6 +124,8 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     network_id = "e" * 64
     callback_network_name = PROJECT + "_callback_signing"
     callback_network_id = "f" * 64
+    ingress_network_name = PROJECT + "_ingress"
+    ingress_network_id = "a" * 64
     volume_names = [f"{PROJECT}_{name}" for name, _ in DATA.values()]
     record = {
         "schema": "marty.passport-supported-compose-ownership/v1",
@@ -135,7 +138,8 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "disposable_root": str(ROOT),
         "containers": containers, "networks": {
-            network_name: network_id, callback_network_name: callback_network_id},
+            network_name: network_id, callback_network_name: callback_network_id,
+            ingress_network_name: ingress_network_id},
         "volumes": volume_names,
     }
     calls: dict[tuple[str, ...], str] = {
@@ -143,7 +147,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "\n".join(containers.values()),
         ("network", "ls", "-q", "--no-trunc", "--filter",
          f"label=com.docker.compose.project={PROJECT}"):
-            "\n".join((network_id, callback_network_id)),
+            "\n".join((network_id, callback_network_id, ingress_network_id)),
         ("volume", "ls", "-q", "--filter",
          f"label=com.docker.compose.project={PROJECT}"): "\n".join(volume_names),
     }
@@ -206,6 +210,10 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "ORG_GRPC_TARGET": "organization:9002",
         }
         support_env = {
+            "compliance-profile": {
+                **support_common, "SERVICE_NAME": "compliance_profile",
+                "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+            },
             "trust-profile": {
                 **support_common, "SERVICE_NAME": "trust_profile",
                 "TRUST_PROFILE_SERVICE_PORT": "8004",
@@ -253,18 +261,24 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        revocation_env if service == "revocation-profile" else
                        migration_env if service == "revocation-profile-migrate" else
                        gateway_env if service == "gateway" else
-                       {"ENVIRONMENT": "development"} if service == "flow" else
+                       {"ENVIRONMENT": "development",
+                        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
+                            "/run/secrets/flow_application_event_hmac_key"}
+                       if service == "flow" else
                        native_env if service == "issuance-native" else
                        {**signing_env, "PUBLIC_DOMAIN": "localhost:29876"}
                        if service == "signing-keys" else
                        support_env.get(service, {}))
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         primary_network = (callback_network_name if service == "passport-callback-signer"
-                           else network_name)
+                           else ingress_network_name if service == "edge" else network_name)
         attached_networks = {primary_network: {"NetworkID": (
-            callback_network_id if primary_network == callback_network_name else network_id)}}
+            callback_network_id if primary_network == callback_network_name else
+            ingress_network_id if primary_network == ingress_network_name else network_id)}}
         if service in {"openbao", "passport-beta-bureau"}:
             attached_networks[callback_network_name] = {"NetworkID": callback_network_id}
+        if service == "edge":
+            attached_networks[network_name] = {"NetworkID": network_id}
         calls[("container", "inspect", identifier)] = json.dumps([{
             "Id": identifier, "Name": f"/{PROJECT}-{service}-1",
             "HostConfig": {"NetworkMode": primary_network,
@@ -300,6 +314,11 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        if service in {"passport-callback-signer", "openbao",
                                       "passport-beta-bureau"}},
     }])
+    calls[("network", "inspect", ingress_network_id)] = json.dumps([{
+        "Id": ingress_network_id, "Name": ingress_network_name,
+        "Driver": "bridge", "Internal": False, "Labels": LABELS,
+        "Containers": {containers["edge"]: {}},
+    }])
     for volume_name in volume_names:
         calls[("volume", "inspect", volume_name)] = json.dumps([{
             "Name": volume_name, "Driver": "local", "Options": None,
@@ -332,6 +351,7 @@ def test_credentials_schema_container_is_exact_signed_one_shot() -> None:
 
 
 @pytest.mark.parametrize("service,key,value", [
+    ("compliance-profile", "COMPLIANCE_PROFILE_SERVICE_PORT", "8009"),
     ("credential-template", "PUBLIC_API_URL", "http://localhost:8000"),
     ("credential-template", "MARTY_MIGRATION_PROFILE", "other"),
     ("trust-profile", "MARTY_ISSUER_BASE_URL", "http://production.example"),
@@ -515,6 +535,20 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
             f"label=com.docker.compose.project={PROJECT}"] in observed
 
 
+@pytest.mark.parametrize("mutation", [
+    lambda item: item.update(Internal=True),
+    lambda item: item["Containers"].update({"f" * 64: {}}),
+])
+def test_ingress_is_external_bridge_with_edge_as_sole_member(mutation) -> None:
+    record, calls = fixture()
+    key = ("network", "inspect", "a" * 64)
+    item = json.loads(calls[key])
+    mutation(item[0])
+    calls[key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="isolation|unowned member"):
+        run(record, calls)
+
+
 @pytest.mark.parametrize("service,mutation,match", [
     ("passport-callback-signer",
      lambda item: item["NetworkSettings"]["Networks"].update({
@@ -529,6 +563,10 @@ def test_exact_live_project_ownership_is_read_only_and_still_blocked() -> None:
     ("passport-callback-signer",
      lambda item: item["HostConfig"].update(
          NetworkMode=PROJECT + "_private"), "network mode"),
+    ("edge", lambda item: item["NetworkSettings"]["Networks"].pop(
+        PROJECT + "_ingress"), "network attachments"),
+    ("gateway", lambda item: item["NetworkSettings"]["Networks"].update({
+        PROJECT + "_ingress": {"NetworkID": "a" * 64}}), "network attachments"),
 ])
 def test_runtime_network_membership_matches_rust_model(
     service: str, mutation, match: str,

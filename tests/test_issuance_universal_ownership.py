@@ -195,7 +195,7 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     }
     published = (
         ROOT
-        / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     lifecycle = (
         ROOT

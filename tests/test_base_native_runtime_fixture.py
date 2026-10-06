@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+ACCEPTANCE_SUPPORT = ROOT / "rust/crates/canvas-acceptance/tests/support"
 FIXTURE = runpy.run_path(str(ROOT / "scripts/render_base_native_runtime_fixture.py"))
 
 
@@ -164,10 +165,10 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
 
 def test_native_launch_has_no_post_render_smoke_overrides():
     renderer = (
-        ROOT / "rust/services/issuance/tests/support/rendered_base_process.rs"
+        ACCEPTANCE_SUPPORT / "rendered_base_process.rs"
     ).read_text()
     text = (
-        ROOT / "rust/services/issuance/tests/support/resolved_runtime.rs"
+        ACCEPTANCE_SUPPORT / "resolved_runtime.rs"
     ).read_text()
     assert re.search(r"\.env_clear\(\)\s*\.envs\(environment\)", text)
     assert "isolated_smoke_command" not in text + renderer
@@ -187,7 +188,7 @@ RUNTIME_GATES = {
 
 
 def runtime_registration(script, source, name):
-    line = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert script.splitlines().count(line) == 1
     match = re.search(
         rf"#\[tokio::test\]\s*async fn {name}\(\) \{{(.*?)^\}}",
@@ -227,10 +228,10 @@ def runtime_registration(script, source, name):
 def test_runtime_names_require_exact_owned_composition(name, fault):
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
     source = (
-        ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text()
     runtime_registration(script, source, name)
-    line = f"\"${{executables[0]}}\" --list | grep -Fx '{name}: test'"
+    line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     if fault == "missing":
         script = script.replace(line, "")
     elif fault == "duplicate":
@@ -325,7 +326,7 @@ def compatibility_ci(workflow):
     assert names.index("Compile reusable Rust test executables") < index
     assert index < names.index("Prepare required rendered base executable acceptance")
     source = (
-        ROOT / "rust/services/issuance/tests/support/base_runtime_container.rs"
+        ACCEPTANCE_SUPPORT / "base_runtime_container.rs"
     ).read_text()
     assert (
         "const COMPAT_TEST_EXECUTABLE: &str = "
@@ -464,7 +465,7 @@ def test_shared_renderer_bootstrap_retains_frozen_hash_and_verifies_before_execu
 )
 def test_inner_acceptance_roster_cannot_drop_a_capability(owner):
     source = (
-        ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs"
     ).read_text()
 
     def check(text):
@@ -485,7 +486,7 @@ def test_inner_acceptance_roster_cannot_drop_a_capability(owner):
 
 def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications():
     renewal = (
-        ROOT / "rust/services/issuance/tests/support/renewal_fresh_main.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs"
     ).read_text(encoding="utf-8")
 
     def check(source):
@@ -592,7 +593,7 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
             check(weakened)
 
     canvas = (
-        ROOT / "rust/services/issuance/tests/support/renewal_canvas_binding.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/support/renewal_canvas_binding.rs"
     ).read_text(encoding="utf-8")
     for required in [
         'format!("notification-renewal-canvas-{}", transaction.id)',
@@ -604,7 +605,7 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
 
 def test_ordinary_token_snapshot_proves_bounded_expiry_without_ignoring_state():
     ordinary = (
-        ROOT / "rust/services/issuance/tests/support/base_runtime_ordinary.rs"
+        ACCEPTANCE_SUPPORT / "base_runtime_ordinary.rs"
     ).read_text(encoding="utf-8")
 
     def check(source):

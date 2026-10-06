@@ -65,10 +65,14 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     assert source.count(binding) == source.count(anchor) == 1
     # Keep the historical duplicate-binding fixture stable as new, independent
     # configuration keys are added to the current ConfigMap.
-    historical = source.replace('  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""\n', '')
-    historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"\n', '')
-    historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', '')
-    historical = historical.replace('  PERSONALIZATION_BUREAU_URL: ""\n', '')
+    historical = source.replace(
+        '  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""\n', ""
+    )
+    historical = historical.replace(
+        '  PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"\n', ""
+    )
+    historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', "")
+    historical = historical.replace('  PERSONALIZATION_BUREAU_URL: ""\n', "")
     original = historical.replace(anchor, anchor + binding)
     assert hashlib.sha256(original.encode()).hexdigest() == (
         "31868e16c09c815461cd42eb6b7d08ca35d251828428c7069bf05f1cd76a47d9"
@@ -252,7 +256,8 @@ def native_inventory(value):
             "key": name,
             **(
                 {"optional": True}
-                if name in {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"}
+                if name
+                in {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"}
                 else {}
             ),
         }
@@ -314,9 +319,7 @@ def test_all_production_native_configuration_inputs_have_a_classification():
     ):
         covered |= constants(category)
     assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint(covered)
-    assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint(
-        {v["name"] for v in native["env"]}
-    )
+    assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint({v["name"] for v in native["env"]})
     assert PASSPORT_NOT_KUBERNETES_BOUND <= inputs
     covered |= PASSPORT_NOT_KUBERNETES_BOUND
     assert inputs - covered == {
@@ -394,7 +397,11 @@ def test_native_issuance_receives_configured_bureau_provider_profile():
     native = resources("k8s/oracle/07a-issuance-native.yaml")
     env = owner(deployment(native, "issuance-native"))["env"]
     assert config["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == ""
-    assert [entry for entry in env if entry["name"] == "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == [
+    assert [
+        entry
+        for entry in env
+        if entry["name"] == "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"
+    ] == [
         {
             "name": "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
             "valueFrom": {
@@ -405,7 +412,9 @@ def test_native_issuance_receives_configured_bureau_provider_profile():
             },
         }
     ]
-    assert "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" in constants("INHERITED_SETTINGS")
+    assert "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" in constants(
+        "INHERITED_SETTINGS"
+    )
 
 
 def test_provider_ingress_gateway_defaults_are_disabled_in_kubernetes():
@@ -468,7 +477,9 @@ def ci_prerequisites(workflow):
     assert found[0] < compile_index
     assert "cargo test --locked --workspace --no-run" in steps[compile_index]["run"]
     assert any(
-        "cargo test --locked --workspace >" in step.get("run", "") for step in steps
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance >"
+        in step.get("run", "")
+        for step in steps
     )
 
 
@@ -520,7 +531,8 @@ def test_ci_prerequisites_are_required_before_actual_workspace_gates(fault):
     elif fault == "disconnected":
         for candidate in steps:
             candidate["run"] = candidate.get("run", "").replace(
-                "cargo test --locked --workspace >", "echo disconnected >"
+                "cargo test --locked --workspace --exclude marty-canvas-acceptance >",
+                "echo disconnected >",
             )
     if fault:
         with pytest.raises(AssertionError):

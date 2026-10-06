@@ -7,7 +7,8 @@ from copy import deepcopy
 import pytest
 
 from scripts.passport_supported_flow_references import (
-    DISPOSABLE_REVOCATION_PROFILE_ID, FlowReferenceError,
+    DISPOSABLE_REVOCATION_PROFILE_ID, PASSPORT_COMPLIANCE_PROFILE_ID,
+    FlowReferenceError,
     provision_physical_passport_references,
 )
 
@@ -75,6 +76,7 @@ def test_reference_setup_uses_real_activated_tenant_resources() -> None:
     assert calls[0][2]["supported_formats"] == ["ICAO_EMRTD"]
     assert calls[0][2]["issuer_did"] == ISSUER
     assert calls[0][2]["revocation_profile_id"] == DISPOSABLE_REVOCATION_PROFILE_ID
+    assert calls[0][2]["compliance_profile_id"] == PASSPORT_COMPLIANCE_PROFILE_ID
     assert calls[4][2]["form_fields"][0]["claim_mapping"] == "document_number"
     assert calls[6][0:2] == ("POST", f"/v1/application-templates/{APPLICATION}/validate")
     assert calls[4][3] == {"idempotency-key": "acceptance-123456-template"}
@@ -114,3 +116,54 @@ def test_reference_setup_rejects_another_organization_before_writes() -> None:
             request, "00000000-0000-0000-0000-000000000002",
             PREFIX, ISSUER, "acceptance-123456-template",
         )
+
+
+@pytest.mark.parametrize("index,operation,expected", [
+    (0, "POST /v1/credential-templates", 200),
+    (1, "GET /v1/credential-templates/{id}", 200),
+    (2, "POST /v1/credential-templates/{id}/activate", 200),
+    (3, "GET /v1/credential-templates/{id}", 200),
+    (4, "POST /v1/application-templates", 200),
+    (5, "GET /v1/application-templates/{id}", 200),
+    (6, "POST /v1/application-templates/{id}/validate", 200),
+    (7, "POST /v1/application-templates/{id}/activate", 200),
+    (8, "GET /v1/application-templates/{id}", 200),
+    (9, "POST /v1/delivery-destinations", 201),
+    (10, "GET /v1/delivery-destinations/{id}", 200),
+])
+def test_reference_failure_identifies_only_fixed_operation_and_http_status(
+    index: int, operation: str, expected: int,
+) -> None:
+    queue = responses()
+    queue[index] = (404, {"detail": "sensitive response marker"})
+    calls = []
+
+    def request(method, path, body, headers):
+        calls.append((method, path))
+        return queue.pop(0)
+
+    with pytest.raises(FlowReferenceError) as exc:
+        provision_physical_passport_references(
+            request, ORG, PREFIX, ISSUER, "sensitive-idempotency-key",
+        )
+    assert str(exc.value) == (
+        f"Disposable reference request failed: {operation} HTTP 404 expected {expected}"
+    )
+    assert len(calls) == index + 1
+    for private in (PREFIX, ORG, ISSUER, CREDENTIAL, APPLICATION,
+                    DESTINATION, "sensitive", "idempotency"):
+        assert private not in str(exc.value)
+
+
+def test_reference_failure_rejects_non_object_without_echoing_it() -> None:
+    def request(method, path, body, headers):
+        return 200, "sensitive response marker"
+
+    with pytest.raises(FlowReferenceError) as exc:
+        provision_physical_passport_references(
+            request, ORG, PREFIX, ISSUER, "sensitive-idempotency-key",
+        )
+    assert str(exc.value) == (
+        "Disposable reference request failed: "
+        "POST /v1/credential-templates invalid response"
+    )

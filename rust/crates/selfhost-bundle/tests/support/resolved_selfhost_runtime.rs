@@ -832,8 +832,9 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     }
 }
 
-#[test]
-fn prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
+// Acceptance reuses the fixture; the bundle test owns its cleanup control.
+#[allow(dead_code)]
+pub(super) fn assert_prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
     // Cleanup-only owner control: this intentionally does not qualify a model.
     let parent = tempfile::tempdir().unwrap();
     let owned = tempfile::tempdir_in(parent.path()).unwrap();

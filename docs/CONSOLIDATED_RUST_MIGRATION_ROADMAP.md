@@ -1138,9 +1138,15 @@ Python evidence, not worker cutover approval.
 Current PR #814 integration refreshes only the shared HTTPS fixture provenance
 after the publication adapter added a default-identity handler hook. Exact
 contracts reconstruct the historical body corpus by changing only its six
-provenance digests. The current 46,042-byte corpus SHA256 is
+provenance digests. The 2026-09-19 46,042-byte corpus SHA256 was
 `bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`;
 hosted published-process regeneration remains required before qualification.
+
+The 2026-10-03 provenance update also pins the imported loopback TLS helper.
+The current 46,618-byte body corpus SHA256 is
+`7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8`;
+exact reverse-migration checks preserve the prior and independent A/B hashes.
+Hosted regeneration remains required before qualification.
 
 Historical qualified deadline/composition checkpoint:
 `f0b60073093a89567e43a6fd6452100b2ddc67ec`:

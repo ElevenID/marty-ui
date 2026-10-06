@@ -21,6 +21,12 @@ from sqlalchemy import create_engine, text
 DATABASE = "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test"
 
 
+def source_sha256():
+    """Pin this mounted entrypoint with platform-independent line endings."""
+    source = Path(__file__).read_bytes().replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    return hashlib.sha256(source).hexdigest()
+
+
 def safe_timing_diagnostics(failure):
     # Do not import a new oracle while handling unrelated failures. The deadline
     # branch already loaded this exact class through its normal named import.
@@ -46,6 +52,22 @@ def safe_timing_diagnostics(failure):
     return dict(values)
 
 
+def safe_lease_observation_diagnostics(failure):
+    # The lease oracle is imported only by its explicit dispatch branch.
+    owner = sys.modules.get("run_canvas_worker_lease_expiry_oracle")
+    expected_type = getattr(owner, "LeaseObservationChanged", None)
+    if expected_type is None or type(failure) is not expected_type:
+        return None
+    values = failure.__dict__.get("changed_sections")
+    fields = {"jobs", "facts", "oauth", "snapshot", "heartbeat", "target", "shape"}
+    if type(values) is not dict or set(values) != fields:
+        return None
+    if not all(type(value) is bool for value in values.values()):
+        return None
+    # Never return rows, tokens, dynamic timestamps, exception args, or notes.
+    return dict(values)
+
+
 def failure_report(failure):
     report = {
         "status": "failed",
@@ -62,6 +84,9 @@ def failure_report(failure):
     timing = safe_timing_diagnostics(failure)
     if timing is not None:
         report["timing_diagnostics"] = timing
+    lease_observation = safe_lease_observation_diagnostics(failure)
+    if lease_observation is not None:
+        report["lease_observation_diagnostics"] = lease_observation
     return report
 
 
@@ -71,6 +96,8 @@ def prepare():
             "/verification/contracts/canvas-worker-consumer-range-oracle.json"
         ).read_text()
     )
+    if source_sha256() != fixture["schema_preparer_source_sha256"]:
+        raise RuntimeError("Published schema preparer provenance mismatch")
     worker = Path(importlib.util.find_spec("issuance.canvas_worker").origin)
     worker_hash = hashlib.sha256(
         worker.read_text(encoding="utf-8").encode()

@@ -1,14 +1,32 @@
-//! Exact-owned disposable Docker database; no deployment URL is accepted.
+// Exact-owned disposable Docker database; no deployment URL is accepted.
 
 use serde_json::Value;
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
     time::Duration,
 };
 use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
+
+pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
+    // The packaged child mounts only reviewed inputs, not the entire checkout.
+    // Cargo's compile-time manifest path still has a fixed package suffix.
+    if !start.is_absolute()
+        || !(start.ends_with("rust/services/issuance")
+            || start.ends_with("rust/crates/canvas-acceptance"))
+    {
+        return None;
+    }
+    start.ancestors().nth(3)
+}
+
+pub(super) fn repository_root() -> PathBuf {
+    repository_root_from(Path::new(env!("CARGO_MANIFEST_DIR")))
+        .expect("Canvas contract manifest directory has an unexpected package layout")
+        .to_path_buf()
+}
 
 fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
     if report["error_class"] != "DeadlineClockDisagreement" {
@@ -287,10 +305,7 @@ fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<St
                     return Err(error.into());
                 }
             }
-            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .ancestors()
-                .nth(3)
-                .ok_or(error)?;
+            let root = repository_root_from(Path::new(env!("CARGO_MANIFEST_DIR"))).ok_or(error)?;
             let mounts = info["Mounts"].as_array().ok_or(error)?;
             if mounts.len() != 2 {
                 return Err(error.into());
@@ -511,16 +526,6 @@ impl PublishedDatabase {
             Some("canvas-issued-review-scenarios.json"),
             true,
         )
-        .await
-    }
-
-    pub async fn start_with_provider_configuration() -> Result<Self, String> {
-        Self::start_probe(Some((
-            "provider_configuration",
-            "provider-configuration",
-            "provider_configuration",
-            "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE=1",
-        )))
         .await
     }
 
@@ -1158,10 +1163,7 @@ impl PublishedDatabase {
             return Err("Non-loopback test port".into());
         }
         owned.url = format!("postgresql://oracle:synthetic-local-only@127.0.0.1:{port}/canvas_published_schema_test");
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(3)
-            .unwrap();
+        let root = repository_root();
         // Mount only the two public test inputs, not the checkout or its Git
         // configuration. The native client connects through an owned loopback
         // port; unlike the Python-only oracle this runner is not network-none.
@@ -1705,265 +1707,253 @@ impl Drop for PublishedDatabase {
     }
 }
 
-#[cfg(test)]
-mod diagnostic_tests {
-    use super::*;
-    use serde_json::json;
+const PROVIDER_ORACLE_SCRIPT: &str =
+    "/verification/scripts/run_canvas_provider_configuration_oracle.py";
+const PROVIDER_ORACLE_SCENARIOS: &str =
+    "/verification/contracts/canvas-provider-configuration-scenarios.json";
+pub(super) const PROVIDER_ORACLE_COMMAND: &str = r#"import json,runpy; print(json.dumps(runpy.run_path('/verification/scripts/run_canvas_provider_configuration_oracle.py')['run'](), sort_keys=True))"#;
 
-    fn recovery_rows() -> (Uuid, Vec<(String, Value)>) {
-        let (mut database, id, scope) = borrow_fixture();
-        database["HostConfig"]["Privileged"] = json!(false);
-        database["HostConfig"]["PortBindings"] =
-            json!({"5432/tcp":[{"HostIp":"127.0.0.1","HostPort":""}]});
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
-        ))
-        .unwrap();
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .ancestors()
-            .nth(3)
-            .unwrap();
-        let probe_id = "b".repeat(64);
-        let probe = json!({
-            "Id":probe_id,
-            "Config":{"Image":fixture["observed_image"],"Labels":{LABEL:scope},
-                "Entrypoint":["python"],"Cmd":["/verification/scripts/prepare_canvas_published_schema.py"],
-                "Env":["PYTHONDONTWRITEBYTECODE=1","TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key"]},
-            "HostConfig":{"NetworkMode":format!("container:{id}"),"ReadonlyRootfs":true,"Privileged":false,"CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"]},
-            "Mounts":[
-                {"Type":"bind","RW":false,"Source":root.join("scripts/prepare_canvas_published_schema.py"),"Destination":"/verification/scripts/prepare_canvas_published_schema.py"},
-                {"Type":"bind","RW":false,"Source":root.join("contracts/canvas-worker-consumer-range-oracle.json"),"Destination":"/verification/contracts/canvas-worker-consumer-range-oracle.json"}
-            ]
-        });
-        (
-            Uuid::parse_str(&scope).unwrap(),
-            vec![(id, database), (probe_id, probe)],
-        )
+pub(super) fn pinned_published_image(value: &str) -> Result<&str, String> {
+    let (repository, digest) = value
+        .split_once("@sha256:")
+        .ok_or("Published image must use a SHA-256 digest")?;
+    if !repository
+        .bytes()
+        .next()
+        .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        || !repository.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'.' | b'/' | b'_' | b'-')
+        })
+        || digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Published image reference is not an immutable safe digest".into());
+    }
+    Ok(value)
+}
+
+// This helper owns only the pinned published-image probe. The Python oracle
+// executes selected published source and fresh full-module imports; neither
+// needs a database or network. Keep its lifecycle separate from migrations.
+pub(super) struct PublishedImageOracle {
+    scope: String,
+    image: String,
+    script_source: String,
+    scenarios_source: String,
+    id: Option<String>,
+    creation_attempted: bool,
+}
+
+impl PublishedImageOracle {
+    #[cfg(test)]
+    pub(super) fn synthetic(scope: &str, image: &str) -> Self {
+        Self {
+            scope: scope.to_owned(),
+            image: image.to_owned(),
+            script_source: "/expected/script.py".into(),
+            scenarios_source: "/expected/scenarios.json".into(),
+            id: None,
+            creation_attempted: false,
+        }
     }
 
-    #[test]
-    fn caller_scope_recovery_rejects_foreign_or_incomplete_ownership_before_removal() {
-        let (scope, rows) = recovery_rows();
-        assert_eq!(
-            checked_recovery_rows(scope, &rows).unwrap(),
-            [rows[1].0.clone(), rows[0].0.clone()]
-        );
-        let mut mutations = Vec::new();
-        for (index, pointer, replacement) in [
-            (
-                0,
-                "/Config/Labels/com.elevenid.test.canvas-published-schema",
-                json!(Uuid::new_v4().to_string()),
-            ),
-            (0, "/Config/Image", json!("unowned:latest")),
-            (0, "/Mounts", json!([{"Type":"bind","Source":"/operator"}])),
-            (
-                0,
-                "/HostConfig/PortBindings/5432~1tcp/0/HostIp",
-                json!("0.0.0.0"),
-            ),
-            (1, "/HostConfig/NetworkMode", json!("host")),
-            (1, "/HostConfig/SecurityOpt", json!([])),
-            (1, "/Config/Env", json!(["TOKEN_HMAC_KEY=changed"])),
-            (1, "/Mounts/0/RW", json!(true)),
-            (1, "/Mounts/0/Source", json!("/operator")),
-            (1, "/Config/Entrypoint", json!(["sh"])),
-        ] {
-            let mut changed = rows.clone();
-            *changed[index].1.pointer_mut(pointer).unwrap() = replacement;
-            mutations.push(changed);
+    pub(super) fn checked(&self, info: &Value, id: &str) -> Result<(), String> {
+        PublishedDatabase::accept_id(id)?;
+        if info["Id"] != id
+            || info["Config"]["Labels"][LABEL] != self.scope
+            || info["Config"]["Image"] != self.image
+            || info["Config"]["Entrypoint"] != serde_json::json!(["python"])
+            || info["Config"]["Cmd"] != serde_json::json!(["-c", PROVIDER_ORACLE_COMMAND])
+            || info["HostConfig"]["NetworkMode"] != "none"
+            || info["HostConfig"]["ReadonlyRootfs"] != true
+            || info["HostConfig"]["CapDrop"] != serde_json::json!(["ALL"])
+            || info["HostConfig"]["SecurityOpt"] != serde_json::json!(["no-new-privileges"])
+            || info["HostConfig"]["PortBindings"]
+                .as_object()
+                .is_none_or(|ports| !ports.is_empty())
+            || info["NetworkSettings"]["Ports"]
+                .as_object()
+                .is_none_or(|ports| !ports.is_empty())
+        {
+            return Err(
+                "Refusing published image oracle access or cleanup: identity/isolation mismatch"
+                    .into(),
+            );
         }
-        mutations.push(vec![rows[0].clone(), rows[0].clone()]);
-        mutations.push(vec![rows[1].clone()]);
-        mutations.push(vec![rows[0].clone(), rows[1].clone(), rows[0].clone()]);
-        for changed in mutations {
-            let writes = std::cell::RefCell::new(Vec::new());
-            let invoke = |args: &[&str]| -> Result<String, String> {
-                match args[0] {
-                    "ps" => Ok(changed
-                        .iter()
-                        .map(|v| v.0.clone())
-                        .collect::<Vec<_>>()
-                        .join("\n")),
-                    "inspect" => Ok(changed
-                        .iter()
-                        .find(|v| v.0 == args[3])
-                        .unwrap()
-                        .1
-                        .to_string()),
-                    _ => {
-                        writes.borrow_mut().push(args[0].to_owned());
-                        Err("Unexpected write".into())
-                    }
+        let mounts = info["Mounts"]
+            .as_array()
+            .ok_or("Missing published image oracle mounts")?;
+        let actual: std::collections::BTreeSet<_> = mounts
+            .iter()
+            .map(|mount| {
+                if mount["Type"] != "bind" || mount["RW"] != false {
+                    return Err("Published image oracle mount is not read-only bind");
                 }
-            };
-            assert!(PublishedDatabase::recover_scope(scope, &invoke).is_err());
-            assert!(writes.borrow().is_empty());
+                Ok((
+                    mount["Source"]
+                        .as_str()
+                        .ok_or("Invalid published image oracle source")?,
+                    mount["Destination"]
+                        .as_str()
+                        .ok_or("Invalid published image oracle destination")?,
+                ))
+            })
+            .collect::<Result<_, _>>()?;
+        if mounts.len() != 2
+            || actual
+                != std::collections::BTreeSet::from([
+                    (self.script_source.as_str(), PROVIDER_ORACLE_SCRIPT),
+                    (self.scenarios_source.as_str(), PROVIDER_ORACLE_SCENARIOS),
+                ])
+        {
+            return Err("Published image oracle mount allowlist differs".into());
         }
-        assert!(scope_ids(Uuid::nil(), &|_| panic!(
-            "invalid UUID must not invoke Docker"
-        ))
-        .is_err());
-    }
-
-    #[tokio::test]
-    async fn caller_scope_constructor_rejects_invalid_uuid_before_docker() {
-        assert!(PublishedDatabase::start_with_scope(Uuid::nil())
-            .await
-            .is_err());
-    }
-
-    fn borrow_fixture() -> (Value, String, String) {
-        let id = "a".repeat(64);
-        let scope = "12345678-1234-4234-8234-123456789abc".to_owned();
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
-        ))
-        .unwrap();
-        let info = json!({
-            "Id": id,
-            "Config": { "Labels": { LABEL: scope }, "Image": fixture["observed_postgres_image"],
-                "Env": ["POSTGRES_USER=oracle", "POSTGRES_PASSWORD=synthetic-local-only", "POSTGRES_DB=canvas_published_schema_test"] },
-            "Mounts": [],
-            "HostConfig": {"Tmpfs": {"/var/lib/postgresql/data": "rw", "/var/run/postgresql": "rw"}},
-            "State": {"Running": true},
-            "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "127.0.0.1", "HostPort": "25432"}]}}
-        });
-        (info, id, scope)
-    }
-
-    #[test]
-    fn borrowed_database_descriptor_is_closed_and_never_accepts_connection_strings() {
-        let (_, id, scope) = borrow_fixture();
-        let valid = json!({"postgres_id": id, "scope": scope});
-        assert_eq!(
-            checked_borrow_descriptor(&valid.to_string()).unwrap(),
-            (id, scope)
-        );
-        for rejected in [
-            json!("postgresql://private-sentinel@deployment.invalid/live"),
-            json!({"postgres_id": "--all", "scope": valid["scope"]}),
-            json!({"postgres_id": valid["postgres_id"], "scope": "private-sentinel"}),
-            json!({"postgres_id": valid["postgres_id"], "scope": "00000000-0000-0000-0000-000000000000"}),
-            json!({"postgres_id": valid["postgres_id"], "scope": valid["scope"], "url": "private-sentinel"}),
-            json!({"scope": valid["scope"]}),
-            json!([]),
-            json!(null),
+        let environment = info["Config"]["Env"]
+            .as_array()
+            .ok_or("Missing published image oracle environment")?;
+        for expected in [
+            "PYTHONDONTWRITEBYTECODE=1",
+            "TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key",
         ] {
-            let error = checked_borrow_descriptor(&rejected.to_string()).unwrap_err();
-            assert!(!error.contains("private-sentinel"));
+            let name = expected.split_once('=').unwrap().0;
+            let prefix = format!("{name}=");
+            if environment
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| value.starts_with(&prefix))
+                .collect::<Vec<_>>()
+                != [expected]
+            {
+                return Err("Published image oracle environment differs".into());
+            }
         }
-        assert!(checked_borrow_descriptor(&"x".repeat(257)).is_err());
-        let duplicate = format!(
-            "{{\"postgres_id\":{},\"scope\":{},\"scope\":{}}}",
-            valid["postgres_id"], valid["scope"], valid["scope"]
-        );
-        assert!(checked_borrow_descriptor(&duplicate).is_err());
-        let non_rfc = json!({"postgres_id": valid["postgres_id"], "scope": "12345678-1234-4234-1234-123456789abc"});
-        assert!(checked_borrow_descriptor(&non_rfc.to_string()).is_err());
+        Ok(())
     }
 
-    #[test]
-    fn borrowed_database_requires_exact_identity_storage_image_and_loopback_configuration() {
-        let (valid, id, scope) = borrow_fixture();
-        assert_eq!(
-            checked_borrowed_url(&valid, &id, &scope).unwrap(),
-            "postgresql://oracle:synthetic-local-only@127.0.0.1:25432/canvas_published_schema_test"
-        );
-        for (pointer, value) in [
-            ("/Id", json!("b".repeat(64))),
-            ("/Config/Image", json!("wrong-image")),
-            ("/Config/Env", json!(["POSTGRES_USER=private-sentinel"])),
-            ("/State/Running", json!(false)),
-            ("/Mounts", json!([{"Source": "private-sentinel"}])),
-            ("/HostConfig/Tmpfs", json!({})),
-            (
-                "/NetworkSettings/Ports/5432~1tcp/0/HostIp",
-                json!("0.0.0.0"),
-            ),
-            ("/NetworkSettings/Ports/5432~1tcp/0/HostPort", json!("0")),
-            (
-                "/NetworkSettings/Ports/5432~1tcp/0/HostPort",
-                json!("65536"),
-            ),
-            (
-                "/NetworkSettings/Ports/5432~1tcp/0/HostPort",
-                json!("private-sentinel"),
-            ),
-            ("/NetworkSettings/Ports/5432~1tcp", json!([])),
-        ] {
-            let mut info = valid.clone();
-            *info.pointer_mut(pointer).unwrap() = value;
-            let error = checked_borrowed_url(&info, &id, &scope).unwrap_err();
-            assert!(!error.contains("private-sentinel"));
+    fn cleanup(&mut self) -> Result<(), String> {
+        if !self.creation_attempted {
+            return Ok(());
         }
-        let mut wrong_scope = valid.clone();
-        wrong_scope["Config"]["Labels"][LABEL] = json!("wrong-scope");
-        assert!(checked_borrowed_url(&wrong_scope, &id, &scope).is_err());
-        let mut extra_tmpfs = valid.clone();
-        extra_tmpfs["HostConfig"]["Tmpfs"]["/unexpected"] = json!("rw");
-        assert!(checked_borrowed_url(&extra_tmpfs, &id, &scope).is_err());
-        let mut duplicate = valid.clone();
-        duplicate["Config"]["Env"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!("POSTGRES_USER=oracle"));
-        assert!(checked_borrowed_url(&duplicate, &id, &scope).is_err());
-        let mut extra = valid.clone();
-        extra["NetworkSettings"]["Ports"]["1234/tcp"] = json!([]);
-        assert!(checked_borrowed_url(&extra, &id, &scope).is_err());
-        let mut doubled = valid.clone();
-        let binding = doubled["NetworkSettings"]["Ports"]["5432/tcp"][0].clone();
-        doubled["NetworkSettings"]["Ports"]["5432/tcp"]
-            .as_array_mut()
-            .unwrap()
-            .push(binding);
-        assert!(checked_borrowed_url(&doubled, &id, &scope).is_err());
+        let filter = format!("label={LABEL}={}", self.scope);
+        let found = docker(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &filter])?;
+        let ids: Vec<_> = found.lines().collect();
+        if ids.len() > 1 || self.id.as_ref().is_some_and(|id| ids != [id.as_str()]) {
+            return Err("Published image oracle resource identity is ambiguous".into());
+        }
+        for id in ids {
+            self.checked(&inspect(id)?, id)?;
+            docker(&["rm", "--force", id])?;
+            let exact = format!("id={id}");
+            if !docker(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &exact])?.is_empty() {
+                return Err("Owned published image oracle remained after cleanup".into());
+            }
+        }
+        self.id = None;
+        self.creation_attempted = false;
+        Ok(())
     }
 
-    #[test]
-    fn timing_diagnostic_forwarding_accepts_only_closed_bounded_numeric_fields() {
-        let valid = json!({
-            "error_class": "DeadlineClockDisagreement",
-            "timing_diagnostics": {
-                "database_elapsed_seconds": 30.1,
-                "monotonic_lower_seconds": 29.4,
-                "monotonic_upper_seconds": 30.5,
-            },
-        });
-        assert_eq!(
-            safe_timing_diagnostics(&valid),
-            valid.get("timing_diagnostics")
-        );
-        for rejected in [
-            json!(true),
-            json!("synthetic-secret"),
-            Value::Null,
-            json!([]),
-            json!({"payload": "synthetic-secret"}),
-            json!(300.001),
-            json!(-300.001),
-        ] {
-            let mut report = valid.clone();
-            report["timing_diagnostics"]["database_elapsed_seconds"] = rejected;
-            assert!(safe_timing_diagnostics(&report).is_none());
-        }
-        for boundary in [-300.0, 300.0] {
-            let mut report = valid.clone();
-            report["timing_diagnostics"]["database_elapsed_seconds"] = json!(boundary);
-            assert!(safe_timing_diagnostics(&report).is_some());
-        }
-        let mut extra = valid.clone();
-        extra["timing_diagnostics"]["unexpected"] = json!("synthetic-secret");
-        assert!(safe_timing_diagnostics(&extra).is_none());
-        let mut missing = valid.clone();
-        missing["timing_diagnostics"]
-            .as_object_mut()
-            .unwrap()
-            .remove("monotonic_lower_seconds");
-        assert!(safe_timing_diagnostics(&missing).is_none());
-        let mut wrong_class = valid;
-        wrong_class["error_class"] = json!("UnrelatedError");
-        assert!(safe_timing_diagnostics(&wrong_class).is_none());
+    fn close(mut self) -> Result<(), String> {
+        self.cleanup()
     }
+}
+
+impl Drop for PublishedImageOracle {
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            eprintln!("Owned published image oracle cleanup requires inspection: {error}");
+        }
+    }
+}
+
+pub(super) async fn provider_configuration_image_oracle() -> Result<Value, String> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+    ))
+    .map_err(|_| "Invalid pinned published-image fixture")?;
+    let image = pinned_published_image(
+        fixture["observed_image"]
+            .as_str()
+            .ok_or("Missing pinned published image")?,
+    )?;
+    let root = repository_root();
+    let script_source = root
+        .join("scripts/run_canvas_provider_configuration_oracle.py")
+        .display()
+        .to_string();
+    let scenarios_source = root
+        .join("contracts/canvas-provider-configuration-scenarios.json")
+        .display()
+        .to_string();
+    let script_mount = format!(
+        "type=bind,source={},target={PROVIDER_ORACLE_SCRIPT},readonly",
+        script_source
+    );
+    let scenarios_mount = format!(
+        "type=bind,source={},target={PROVIDER_ORACLE_SCENARIOS},readonly",
+        scenarios_source
+    );
+    let mut owner = PublishedImageOracle {
+        scope: Uuid::new_v4().to_string(),
+        image: image.to_owned(),
+        script_source,
+        scenarios_source,
+        id: None,
+        creation_attempted: false,
+    };
+    let label = format!("{LABEL}={}", owner.scope);
+    owner.creation_attempted = true;
+    let id = docker(&[
+        "create",
+        "--pull=never",
+        "--label",
+        &label,
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--env",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "--env",
+        "TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key",
+        "--mount",
+        &script_mount,
+        "--mount",
+        &scenarios_mount,
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        PROVIDER_ORACLE_COMMAND,
+    ])?;
+    PublishedDatabase::accept_id(&id)?;
+    owner.id = Some(id.clone());
+    owner.checked(&inspect(&id)?, &id)?;
+    docker(&["start", &id])?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let state = inspect(&id)?;
+        owner.checked(&state, &id)?;
+        if state["State"]["Running"] == false {
+            if state["State"]["ExitCode"] != 0 {
+                return Err("Published image oracle exited unsuccessfully".into());
+            }
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("Published image oracle exceeded deadline".into());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let report: Value = serde_json::from_str(&docker(&["logs", &id])?)
+        .map_err(|_| "Invalid published image oracle report")?;
+    owner.close()?;
+    Ok(report)
 }

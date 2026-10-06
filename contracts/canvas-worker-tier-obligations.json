@@ -1,0 +1,68 @@
+{
+  "schema": "marty.canvas-worker-tier-obligations/v1",
+  "scope": "The 33 historical-reference cases omitted from routine CI and four preflight-capable native cases only; this is not an inventory of either complete Canvas target.",
+  "package": "marty-canvas-acceptance",
+  "target": "canvas_published_worker_contract",
+  "test_source": "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
+  "shared_inputs": [
+    "contracts/canvas-worker-consumer-range-oracle.json",
+    "contracts/canvas-worker-oracle-producers.json",
+    "contracts/canvas-worker-oracle-script-imports.json",
+    "rust/services/issuance/tests/support/canvas_published_database.rs",
+    "scripts/prepare_canvas_published_schema.py"
+  ],
+  "historical": [
+    {"test": "worker_body_timeout_reference_matches_published_process", "assertion": "Complete partial-HTTPS-body published report equals the frozen body-timeout corpus."},
+    {"test": "worker_lease_expiry_reference_matches_published_process", "assertion": "Complete post-lease-expiry published report equals the frozen lease corpus."},
+    {"test": "worker_timeout_reference_matches_published_process", "assertion": "Published deadline and timeout report equals its frozen corpus."},
+    {"test": "worker_deadline_reference_matches_published_process", "assertion": "Published deadline-release report equals its frozen corpus."},
+    {"test": "worker_dispatch_reference_matches_published_process", "assertion": "Published worker dispatch report equals its frozen corpus."},
+    {"test": "worker_mixed_roster_reference_matches_published_process", "assertion": "Published mixed-roster report equals its frozen corpus."},
+    {"test": "worker_provider_recovery_first_reference_matches_published_process", "assertion": "Published recovery-first provider report equals its frozen corpus."},
+    {"test": "worker_provider_completion_reference_matches_published_process", "assertion": "Published provider-completion report equals its frozen corpus."},
+    {"test": "worker_provider_generation_reference_matches_published_process", "assertion": "Published provider-generation report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_secrets_reference_matches_published_process", "assertion": "Published OAuth secret-handling report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_counters_reference_matches_published_cycle", "assertion": "Published OAuth cycle counters equal the frozen corpus."},
+    {"test": "worker_rest_reference_matches_published_process", "assertion": "Published REST worker report equals its frozen corpus."},
+    {"test": "worker_facts_reference_matches_published_process", "assertion": "Published evidence-fact report equals its frozen corpus."},
+    {"test": "worker_reclaimers_retry_reference_matches_published_process", "assertion": "Published retrying-reclaimer report equals its frozen corpus."},
+    {"test": "worker_reclaimers_reference_matches_published_process", "assertion": "Published reclaimer report equals its frozen corpus."},
+    {"test": "worker_concurrent_reference_matches_published_process", "assertion": "Published concurrent-worker report equals its frozen corpus."},
+    {"test": "worker_provider_final_reference_matches_published_process", "assertion": "Published final-provider report equals its frozen corpus."},
+    {"test": "worker_provider_recovery_reference_matches_published_process", "assertion": "Published provider-renewal and recovery reports equal their frozen corpus."},
+    {"test": "worker_provider_signals_reference_matches_published_process", "assertion": "Published SIGINT, SIGTERM and SIGKILL reports equal their frozen corpus."},
+    {"test": "worker_retry_after_reference_matches_published_process", "assertion": "Published Retry-After matrix equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_reference_matches_published_process", "assertion": "Published OAuth revocation report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_fence_reference_matches_published_process", "assertion": "Published OAuth revocation fence report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_patch_reference_matches_published_process", "assertion": "Published OAuth revocation patch report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_retry_after_reference_matches_published_process", "assertion": "Published OAuth Retry-After report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_backoff_reference_matches_published_process", "assertion": "Published OAuth backoff report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_queue_reference_matches_published_process", "assertion": "Published OAuth queue report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_lease_reference_matches_published_process", "assertion": "Published OAuth lease report equals its frozen corpus."},
+    {"test": "worker_oauth_revocation_selection_reference_matches_published_repository", "assertion": "Published OAuth repository-selection report equals its frozen corpus."},
+    {"test": "worker_validation_reference_matches_published_process", "assertion": "Published target-validation report equals its frozen corpus."},
+    {"test": "worker_roster_failure_reference_matches_published_process", "assertion": "Published roster-failure report equals its frozen corpus."},
+    {"test": "worker_resource_race_reference_matches_published_process", "assertion": "Published resource-race report equals its frozen corpus."},
+    {"test": "worker_resources_unavailable_reference_matches_published_process", "assertion": "Published unavailable-resource report equals its frozen corpus."},
+    {"test": "worker_retry_reference_matches_published_process", "assertion": "Published retry report equals its frozen corpus."}
+  ],
+  "preflights": [
+    {"test": "worker_mixed_roster_matches_frozen_published_process", "mode": "mixed-roster-preflight", "routine": "tier-excluded native matrix; not run as a routine preflight", "assertion": "Owned native mixed-roster matrix matches the frozen published behavior.", "inputs": ["contracts/canvas-worker-mixed-roster-oracle.json", "contracts/canvas-worker-mixed-roster-scenarios.json"]},
+    {"test": "worker_body_timeout_matches_frozen_published_process", "mode": "body-timeout-preflight", "routine": "tier-excluded native matrix; not run as a routine preflight", "assertion": "Owned native partial-body timeout matrix matches frozen published behavior.", "inputs": ["contracts/canvas-worker-body-timeout-oracle.json", "contracts/canvas-worker-body-timeout-scenarios.json"]},
+    {"test": "worker_timeout_matches_frozen_published_process", "mode": "timeout-preflight", "routine": "executed as a routine same-run preflight, then skipped in full-after-preflights", "assertion": "Owned native timeout matrix matches frozen published behavior.", "inputs": ["contracts/canvas-worker-timeout-oracle.json", "contracts/canvas-worker-timeout-scenarios.json"]},
+    {"test": "worker_lease_expiry_matches_frozen_published_process", "mode": "lease-expiry-preflight", "routine": "executed as a routine same-run preflight, then skipped in full-after-preflights", "assertion": "Owned native lease-expiry matrix matches frozen published behavior.", "inputs": ["contracts/canvas-worker-lease-expiry-oracle.json", "contracts/canvas-worker-lease-expiry-scenarios.json"]}
+  ],
+  "historical_disposition": {
+    "layer": "published-process/database compatibility integration",
+    "tier": "weekly/manual full qualification and exact-main official-release prerequisite; omitted from routine PR/merge-group Canvas target",
+    "oracle_role": "Independent digest-pinned published Python image and PostgreSQL behavior compared with frozen corpus; native case names are not substitutes for this reference regeneration.",
+    "cheapest_proving_layer": "Retain real published-process replay for the corpus-equality assertion; pure decision assertions can have separate fast owners but cannot replace this independent oracle.",
+    "case_inputs": "Each test also consumes its same-stem canvas-worker-*-oracle.json corpus, corresponding -scenarios.json, producer runner and transitive imports recorded by the existing producer/script/scenario inventories. Those inventories are bounded, not complete environment provenance."
+  },
+  "preflight_disposition": {
+    "layer": "native real-process/database integration",
+    "tier": "timeout and lease-expiry run as routine preflights, while mixed-roster and body-timeout native matrices are tier-excluded from routine CI; all four run in weekly/manual full qualification; the later full-qualification target invocation skips four same-run preflights after executable/run/mode proof",
+    "oracle_role": "Native regression sentinels against frozen published cases, not a replacement for live historical regeneration.",
+    "cheapest_proving_layer": "Retain owned process, PostgreSQL and HTTPS boundaries for these cases; lower-level pure matrices may be additional checks, not substitutes."
+  }
+}

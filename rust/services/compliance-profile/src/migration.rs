@@ -91,6 +91,17 @@ pub fn system_profiles() -> Vec<ComplianceProfile> {
             false,
             false,
         ),
+        (
+            "10000000-0000-0000-0000-000000000005",
+            "ICAO eMRTD passport",
+            "System baseline for ICAO eMRTD physical passport issuance.",
+            "ICAO_EMRTD",
+            CredentialFormat::IcaoEmrtd,
+            IssuanceProtocol::PhysicalDocument,
+            true,
+            true,
+            false,
+        ),
     ]
     .into_iter()
     .map(
@@ -147,15 +158,54 @@ mod tests {
     }
 
     #[test]
-    fn system_catalog_preserves_all_four_python_seed_profiles() {
+    fn system_catalog_preserves_python_seeds_and_adds_physical_passport() {
         let profiles = system_profiles();
-        assert_eq!(profiles.len(), 4);
+        assert_eq!(profiles.len(), 5);
         assert_eq!(
             profiles
                 .iter()
                 .filter_map(|profile| profile.compliance_code.as_deref())
                 .collect::<Vec<_>>(),
-            ["OID4VC", "ISO_18013_5", "OPEN_BADGES_3", "ICAO_VDS_NC"]
+            [
+                "OID4VC",
+                "ISO_18013_5",
+                "OPEN_BADGES_3",
+                "ICAO_VDS_NC",
+                "ICAO_EMRTD"
+            ]
+        );
+        let passport = &profiles[4];
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/compliance-profile-service-behavior.json"
+        ))
+        .expect("compliance profile contract");
+        let frozen = &contract["physical_document_profile"];
+        assert_eq!(passport.id, frozen["id"].as_str().unwrap());
+        assert_eq!(
+            passport.compliance_code.as_deref(),
+            frozen["compliance_code"].as_str()
+        );
+        assert_eq!(passport.credential_format, CredentialFormat::IcaoEmrtd);
+        assert_eq!(
+            passport.issuance_protocol,
+            Some(IssuanceProtocol::PhysicalDocument)
+        );
+        assert_eq!(
+            passport.credential_format.canonical(),
+            frozen["credential_format"]
+        );
+        assert_eq!(
+            serde_json::to_value(passport.issuance_protocol).unwrap(),
+            frozen["issuance_protocol"]
+        );
+        let passport_artifacts = passport.issuer_artifact_requirements.as_ref().unwrap();
+        assert_eq!(
+            passport_artifacts.requires_x509_cert,
+            frozen["requires_x509_cert"].as_bool().unwrap()
+        );
+        assert_eq!(
+            passport_artifacts.requires_did,
+            frozen["requires_did"].as_bool().unwrap()
         );
         let iso = &profiles[1].issuer_artifact_requirements;
         assert_eq!(

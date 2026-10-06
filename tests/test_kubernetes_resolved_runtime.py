@@ -17,7 +17,7 @@ NAMES = (
 def inputs():
     return (
         (
-            ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
         ).read_text(),
         (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(),
         yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")),
@@ -30,12 +30,16 @@ def required(source, runner, workflow):
             r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
         ) == ["#[tokio::test]\n"]
         assert runner.count(f"'{name}: test'") == 1
-    assert 'preflight_skips=()' in runner
+    assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
     assert '[[ -f "$evidence" ]]' in runner
-    assert '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4' in runner
-    for module in ("resolved_runtime", "resolved_kubernetes_runtime"):
-        assert source.count(f'#[path = "support/{module}.rs"]\nmod {module};') == 1
+    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in runner
+    assert source.count(
+        '#[path = "support/resolved_runtime.rs"]\nmod resolved_runtime;'
+    ) == 1
+    assert source.count(
+        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+    ) == 1
     assert "base_runtime_container::run_kubernetes(&owned, &redis)" in source
     assert "renewal_fresh_main::run_kubernetes(" in source
     steps = workflow["jobs"]["test-rust-services"]["steps"]
@@ -89,7 +93,8 @@ def test_missing_or_disconnected_kubernetes_gates_fail(name, fault):
         runner = runner.replace(f"'{name}: test'", "'removed: test'")
     else:
         runner = runner.replace(
-            '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4', "echo disconnected"
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
+            "echo disconnected",
         )
     with pytest.raises(AssertionError):
         required(source, runner, workflow)
@@ -138,7 +143,7 @@ def test_prepared_model_cleanup_control_is_required(fault):
         "prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored"
     )
     source = (
-        ROOT / "rust/services/issuance/tests/support/resolved_kubernetes_runtime.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
     ).read_text()
     runner = inputs()[1]
 

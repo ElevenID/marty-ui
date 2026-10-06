@@ -1,0 +1,54 @@
+[package]
+name = "marty-service-acceptance"
+version = "0.1.0"
+description = "Cross-service acceptance tests for the native Marty stack"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+autotests = false
+
+[dev-dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+der.workspace = true
+hex.workspace = true
+hmac.workspace = true
+marty-gateway = { path = "../../services/gateway" }
+marty-crypto.workspace = true
+marty-issuance-service = { path = "../../services/issuance" }
+marty-passport-auth = { path = "../passport-auth" }
+marty-signing-keys = { path = "../../services/signing-keys" }
+marty-verification = { workspace = true, features = ["csca"] }
+mmf-platform.workspace = true
+mmf-security.workspace = true
+num-bigint.workspace = true
+redis.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tower.workspace = true
+url.workspace = true
+uuid.workspace = true
+x509-cert.workspace = true
+
+[[test]]
+name = "passport_managed_kms_chain"
+path = "tests/passport_managed_kms_chain.rs"
+
+[[test]]
+name = "passport_gateway_postgres"
+path = "tests/passport_gateway_postgres.rs"
+
+[[test]]
+name = "gateway_signing_acceptance"
+path = "tests/gateway_signing_acceptance.rs"
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -114,12 +114,3 @@ fn float_token(value: f64) -> Value {
         }
     ])
 }
-
-#[test]
-fn witness_agrees_with_explicit_typed_python_token_vector() {
-    let tokens = b"marty.json-tree/v1\n[\"object\",[[97],[98]]]\n[\"array\",2]\n[\"integer\",\"0\"]\n[\"bool\",false]\n[\"text\",[55296]]\n";
-    let actual = witness_bytes(br#"{"b":"\ud800","a":[0,false]}"#);
-    assert_eq!(actual["sha256"], hex::encode(Sha256::digest(tokens)));
-    assert_eq!(actual["nodes"], 5);
-    assert_eq!(actual["container_depth"], 2);
-}

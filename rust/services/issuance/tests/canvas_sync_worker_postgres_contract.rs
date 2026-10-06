@@ -6,7 +6,7 @@ use marty_issuance_service::{
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{postgres::PgPoolOptions, Row};
 
 #[path = "support/canvas_worker_range_oracle.rs"]
 mod canvas_worker_range_oracle;
@@ -475,6 +475,10 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             .unwrap(),
         Some(CanvasSyncJobStatus::DeadLetter),
     );
+    // The retry matrix shares this serial, dedicated _test database fixture.
+    // A second test would race this test's destructive schema resets.
+    setup_schema(&pool).await;
+    assert_hinted_retry_persistence(&pool).await;
     // Reset only this test's disposable schema after all existing stateful
     // recovery/fencing assertions. Range observations require empty queues.
     setup_worker_schema(&pool).await;
@@ -492,6 +496,198 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
     canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool).await;
     canvas_worker_renewal_job_outcomes::assert_renewal_job_outcomes(&pool).await;
     pool.close().await;
+}
+
+async fn assert_hinted_retry_persistence(pool: &sqlx::PgPool) {
+    // Effective hints are independent fixtures: HTTP header/date parsing is
+    // checked by the fast unit matrix, and real HTTPS forwarding remains in
+    // the published-process acceptance test. These bounds are not calculated
+    // with the production backoff function being tested here.
+    let cases: [(&str, Option<u64>, f64, f64); 7] = [
+        ("http_date_future", Some(60), 59.0, 61.0),
+        ("http_date_past", Some(0), 14.0, 21.0),
+        ("malformed", Some(0), 14.0, 21.0),
+        ("negative", Some(0), 14.0, 21.0),
+        ("zero", Some(0), 14.0, 21.0),
+        ("clamped", Some(86_400), 86_399.0, 86_401.0),
+        ("huge_integer", Some(86_400), 86_399.0, 86_401.0),
+    ];
+    let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
+    for (name, _, _, _) in cases {
+        let target_id = format!("hint-target-{name}");
+        let job_id = format!("hint-job-{name}");
+        seed_target(pool, &target_id, 900).await;
+        sqlx::query(
+            "INSERT INTO issuance_service.canvas_evidence_sync_jobs
+                (id, organization_id, target_id, status, attempt_count, max_attempts,
+                 available_at, result, created_at, updated_at)
+             VALUES ($1, 'org-1', $2, 'queued', 0, 8,
+                     clock_timestamp(), '{}'::json, clock_timestamp(), clock_timestamp())",
+        )
+        .bind(&job_id)
+        .bind(&target_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let leased = repository
+        .lease_ready("hint-worker", &7_u64.into(), &120_u64.into())
+        .await
+        .unwrap();
+    assert_eq!(leased.len(), cases.len(), "all seven hint jobs must lease");
+    for (name, hint, lower, upper) in cases {
+        let target_id = format!("hint-target-{name}");
+        let job_id = format!("hint-job-{name}");
+        let job = leased.iter().find(|job| job.id == job_id).unwrap();
+        assert_eq!(job.status, CanvasSyncJobStatus::Leased, "{name}");
+        assert_eq!(job.attempt_count, 1, "{name}");
+        assert_eq!(job.max_attempts, 8, "{name}");
+        let original_target: serde_json::Value = sqlx::query_scalar(
+            "SELECT to_jsonb(t) FROM issuance_service.canvas_evidence_sync_targets t WHERE id = $1",
+        )
+        .bind(&target_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        let failure = JobFailure {
+            error_code: "canvas_rate_limited",
+            error_summary: Some("Canvas rate limited the worker"),
+            retry_after_seconds: hint,
+            force_dead_letter: false,
+        };
+        if name == "http_date_future" {
+            let leased_row: serde_json::Value = sqlx::query_scalar(
+                "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j WHERE id = $1",
+            )
+            .bind(&job_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                repository
+                    .fail_job(job, "wrong-worker", &failure, job.target_config_version)
+                    .await
+                    .unwrap(),
+                None,
+            );
+            let mut wrong_attempt = job.clone();
+            wrong_attempt.attempt_count += 1;
+            assert_eq!(
+                repository
+                    .fail_job(
+                        &wrong_attempt,
+                        "hint-worker",
+                        &failure,
+                        job.target_config_version,
+                    )
+                    .await
+                    .unwrap(),
+                None,
+            );
+            let after_fences: serde_json::Value = sqlx::query_scalar(
+                "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j WHERE id = $1",
+            )
+            .bind(&job_id)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                after_fences, leased_row,
+                "stale failures must not mutate {name}"
+            );
+        }
+        assert_eq!(
+            repository
+                .fail_job(job, "hint-worker", &failure, job.target_config_version)
+                .await
+                .unwrap(),
+            Some(CanvasSyncJobStatus::Retry),
+            "{name}",
+        );
+        let persisted = sqlx::query(
+            "SELECT status, EXTRACT(EPOCH FROM (available_at - updated_at))::float8 AS delay_seconds,
+                    lease_owner, lease_expires_at, last_error_code, last_error_summary,
+                    result, attempt_count, max_attempts, completed_at
+             FROM issuance_service.canvas_evidence_sync_jobs WHERE id = $1",
+        )
+        .bind(&job_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            persisted.try_get::<String, _>("status").unwrap(),
+            "retry",
+            "{name}"
+        );
+        let delay_seconds: f64 = persisted.try_get("delay_seconds").unwrap();
+        assert!(
+            (lower..=upper).contains(&delay_seconds),
+            "{name}: persisted retry delay {} outside [{lower}, {upper}]",
+            delay_seconds,
+        );
+        assert_eq!(
+            persisted
+                .try_get::<Option<String>, _>("lease_owner")
+                .unwrap(),
+            None,
+            "{name}"
+        );
+        assert_eq!(
+            persisted
+                .try_get::<Option<chrono::DateTime<Utc>>, _>("lease_expires_at")
+                .unwrap(),
+            None,
+            "{name}"
+        );
+        assert_eq!(
+            persisted
+                .try_get::<Option<String>, _>("last_error_code")
+                .unwrap()
+                .as_deref(),
+            Some("canvas_rate_limited"),
+            "{name}"
+        );
+        assert_eq!(
+            persisted
+                .try_get::<Option<String>, _>("last_error_summary")
+                .unwrap()
+                .as_deref(),
+            Some("Canvas rate limited the worker"),
+            "{name}",
+        );
+        assert_eq!(
+            persisted.try_get::<serde_json::Value, _>("result").unwrap(),
+            serde_json::json!({}),
+            "{name}"
+        );
+        assert_eq!(
+            (
+                persisted.try_get::<i32, _>("attempt_count").unwrap(),
+                persisted.try_get::<i32, _>("max_attempts").unwrap()
+            ),
+            (1, 8),
+            "{name}"
+        );
+        assert_eq!(
+            persisted
+                .try_get::<Option<chrono::DateTime<Utc>>, _>("completed_at")
+                .unwrap(),
+            None,
+            "{name}"
+        );
+        let current_target: serde_json::Value = sqlx::query_scalar(
+            "SELECT to_jsonb(t) FROM issuance_service.canvas_evidence_sync_targets t WHERE id = $1",
+        )
+        .bind(&target_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            current_target, original_target,
+            "{name}: retry must preserve target"
+        );
+        assert_eq!(current_target["enabled"], true, "{name}");
+    }
 }
 
 async fn setup_worker_schema(pool: &sqlx::PgPool) {

@@ -29,6 +29,16 @@ SOURCE = "a" * 40
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
 
 
+def test_producer_uses_frozen_synthetic_mrz_accepted_by_bureau() -> None:
+    application = _application(29877)
+    contract = json.loads((Path(__file__).parents[1] / "contracts"
+                           / "issuance-physical-passport-native.json").read_text())
+    frozen_mrz = contract["bureau_batch_provider"]["frozen_exchange"]["json"]["jobs"][0]["mrz"]
+    assert application["mrz"] == frozen_mrz
+    assert all(application["mrz"][field].strip()
+               for field in ("line_1", "line_2"))
+
+
 def flow_receipt(final_native_id: str = "issuance-native") -> dict:
     values = [f"d0000000-0000-4000-8000-{number:012x}" for number in range(1, 8)]
     hashes = [hashlib.sha256(value.encode()).hexdigest() for value in values]

@@ -20,7 +20,9 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:8443"
-    networks: [private]
+    # Docker does not publish loopback ports from an internal-only bridge.
+    # Only the edge joins the host-facing ingress bridge; Gateway stays private.
+    networks: [private, ingress]
 
   postgres:
     labels: *acceptance-labels
@@ -125,6 +127,8 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      organization:
+        condition: service_healthy
     healthcheck:
       disable: true
     networks: [private]
@@ -251,6 +255,27 @@ services:
         condition: service_healthy
     healthcheck:
       test: [CMD, curl, --fail, http://localhost:8004/health]
+    networks: [private]
+
+  compliance-profile:
+    labels: *acceptance-labels
+    image: ${MARTY_SERVICES_IMAGE:?pin signed services image by digest}
+    environment:
+      SERVICE_NAME: compliance_profile
+      ENVIRONMENT: development
+      COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
+      DATABASE_URL_TEMPLATE: postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      ORG_GRPC_TARGET: organization:9002
+    secrets: [marty_db_password, grpc_service_token]
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      organization:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, curl, --fail, http://localhost:8008/health]
     networks: [private]
 
   credential-template:
@@ -404,6 +429,7 @@ services:
       FLOW_SERVICE_PORT: "8011"
       PASSPORT_NATIVE_FLOW_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"
+      FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
       MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty
       PUBLIC_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
@@ -419,10 +445,9 @@ services:
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      ISSUANCE_SERVICE_URL: http://issuance-native:8005
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-    secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token]
+    secrets: [marty_db_password, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, flow_application_event_hmac_key]
     depends_on:
       issuance-native:
         condition: service_healthy
@@ -499,6 +524,7 @@ services:
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       ORGANIZATION_SERVICE_URL: http://organization:8002
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
+      COMPLIANCE_PROFILE_SERVICE_URL: http://compliance-profile:8008
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       PRESENTATION_POLICY_SERVICE_URL: http://presentation-policy:8009
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -521,6 +547,8 @@ services:
       revocation-profile:
         condition: service_healthy
       credential-template:
+        condition: service_healthy
+      compliance-profile:
         condition: service_healthy
       trust-profile:
         condition: service_healthy
@@ -612,4 +640,7 @@ networks:
     labels: *acceptance-labels
   callback_signing:
     internal: true
+    labels: *acceptance-labels
+  ingress:
+    internal: false
     labels: *acceptance-labels

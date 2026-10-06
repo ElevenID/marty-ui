@@ -11,13 +11,20 @@ Native body replay, runtime body-timeout parity,
 consumer cutover, and deployment remain unqualified.
 
 Integration update, 2026-09-19: the selected publication adapter added a
-default-identity request-handler hook to the shared HTTPS fixture. The current
+default-identity request-handler hook to the shared HTTPS fixture. The then-current
 46,042-byte corpus has SHA-256
 `bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373`.
 An exact contract proves all six changes from the independent A/B capture are
 only the fixture-provenance digest; every behavioral observation remains byte
 identical. PR #814 must still pass exact published-process regeneration before
 this provenance refresh is qualified.
+
+Provenance update, 2026-10-03: the imported loopback TLS helper is now pinned
+alongside the capture scripts. The current 46,618-byte corpus SHA-256 is
+`7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8`.
+An exact contract reverses only the helper pin and capture-script hash to the
+2026-09-19 corpus, then reverses its fixture pin to the independent A/B capture.
+No behavioral observation changed; hosted regeneration must still match exactly.
 
 The implementation is isolated on
 `feat/canvas-worker-body-timeout-reference-v1`, based on `395cab656`. Its isolated

@@ -43,6 +43,26 @@ SOURCE_SHA256 = body.SOURCE_SHA256 | {
 SCENARIO = "canvas-worker-lease-expiry-scenarios.json"
 require = body.require
 late_window_end = body.late_window_end
+OBSERVATION_SECTIONS = ("jobs", "facts", "oauth", "snapshot", "heartbeat", "target")
+
+
+class LeaseObservationChanged(AssertionError):
+    """Carry only fixed equality flags across the published-probe boundary."""
+
+    def __init__(self, changed):
+        super().__init__()
+        self.changed_sections = changed
+
+
+def require_joined_observation(current, expected):
+    if current == expected:
+        return
+    changed = {
+        section: current.get(section) != expected.get(section)
+        for section in OBSERVATION_SECTIONS
+    }
+    changed["shape"] = set(current) != set(expected)
+    raise LeaseObservationChanged(changed)
 
 
 def validate_case(name):
@@ -628,10 +648,10 @@ def run(case_name):
             fixture.close()
             stable()
             require(
-                assert_schedule(fixture, crosses_expiry=crosses_expiry) == chunks
-                and observe() == outcome,
-                "Joined lease-expiry handlers changed observation",
+                assert_schedule(fixture, crosses_expiry=crosses_expiry) == chunks,
+                "Joined lease-expiry handlers changed body schedule",
             )
+            require_joined_observation(observe(), outcome)
             require(
                 observed_log_profile(stdout, stderr, spec["token"]) == logs,
                 "Lease-expiry pre-interrupt output changed",

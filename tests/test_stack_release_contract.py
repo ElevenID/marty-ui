@@ -375,6 +375,28 @@ def test_beta_browser_contracts_run_after_chromium_and_system_dependencies() -> 
     assert dependencies["if"] == "steps.playwright-cache.outputs.cache-hit == 'true'"
 
 
+def test_passport_publication_installs_pinned_chromium_before_verification() -> None:
+    workflow = yaml.safe_load(
+        _text(".github/workflows/passport-beta-demo-publication.yml")
+    )
+    steps = workflow["jobs"]["publish-evidence"]["steps"]
+    install_index = next(
+        index for index, step in enumerate(steps)
+        if step.get("name") == "Install pinned publication verifier dependencies"
+    )
+    verification_index = next(
+        index for index, step in enumerate(steps)
+        if step.get("name")
+        == "Authenticate preliminary and release, then verify live publication"
+    )
+    install = steps[install_index]
+    commands = [line.strip() for line in install["run"].splitlines()]
+    assert install_index < verification_index
+    assert commands.index("npm ci") < commands.index(
+        "npx playwright install --with-deps chromium"
+    ) < commands.index("node --test test/passportPublicationEvidence.test.js")
+
+
 def test_every_rust_toolchain_action_pins_the_workspace_toolchain() -> None:
     action = "dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de"
     matched_steps: list[tuple[str, dict[str, object]]] = []
@@ -516,9 +538,9 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.223"
+    assert lock["release"] == "marty-ui@1.1.227"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.223")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.227")
     qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
         "release_gate"
     ]["qualified_release"]
@@ -768,6 +790,7 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     workflow = _text(".github/workflows/cd.yml")
     prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    ci = _text(".github/workflows/ci.yml")
     policy = json.loads(_text(".github/stack-tag-policy.json"))
 
     assert policy["schema"] == "elevenid.stack-tag-preparation/v1"
@@ -784,6 +807,15 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
         {"path": ".github/workflows/codeql-rust.yml", "event": "merge_group"},
         {"path": ".github/workflows/codeql-actions.yml", "event": "merge_group"},
     ]
+    assert policy["required_full_qualification"] == {
+        "path": ".github/workflows/ci.yml",
+        "events": ["schedule", "workflow_dispatch"],
+    }
+    assert (
+        "MARTY_CANVAS_FULL_QUALIFICATION: "
+        "${{ (github.event_name == 'workflow_dispatch' || "
+        "github.event_name == 'schedule') && '1' || '0' }}"
+    ) in ci
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "git ls-remote --tags" in prepare
     assert "git tag -a" not in prepare

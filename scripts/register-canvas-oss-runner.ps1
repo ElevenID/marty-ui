@@ -15,6 +15,7 @@ $ErrorActionPreference = "Stop"
 $hostMutex = [System.Threading.Mutex]::new($false, "Global\ElevenIDMartyDockerRunner")
 $mutexHeld = $false
 $markerCreated = $false
+$registrationAttempted = $false
 $productionBaseline = ""
 $markerPath = Join-Path $env:ProgramData 'ElevenID\Marty\canvas-oss-runner-active'
 try {
@@ -72,6 +73,14 @@ function Invoke-WslBash([string]$Command) {
         throw "WSL command failed with exit code $LASTEXITCODE"
     }
 }
+
+function Get-RepositoryRunners {
+    $response = & gh api "repos/$Repository/actions/runners?per_page=100" | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw "Could not inventory repository runners" }
+    Assert-CompleteRunnerInventory $response
+}
+
+. (Join-Path $PSScriptRoot "runner-routing-label-policy.ps1")
 
 $installedDistributions = @(
     (Get-WslText @("--list", "--quiet")) -split "`r?`n" |
@@ -142,33 +151,32 @@ if (Test-Path -LiteralPath $markerPath) {
     throw "A prior one-job runner ended without verified host cleanup; host is quarantined"
 }
 
+# A stray dual-purpose registration can accept a passport job before this
+# wrapper starts its own runner. Never proceed while such a route is present.
+$existingRunners = @(Get-RepositoryRunners)
+Assert-ExistingRunnerRouting $existingRunners $runnerLabel
+
 $registrationToken = (& gh api --method POST "repos/$Repository/actions/runners/registration-token" --jq .token).Trim()
 if (-not $registrationToken) { throw "Could not obtain short-lived runner registration token" }
 
 Write-Host "Registering one-job $Purpose runner: $runnerName"
+$registrationAttempted = $true
 Invoke-WslBash "cd '$wslRunnerDirectory' && ./config.sh --url '$repoUrl' --token '$registrationToken' --name '$runnerName' --labels '$runnerLabel' --unattended --ephemeral"
 $registrationToken = $null
 
 # Confirm the server-side registration contains every routing label before the
 # runner accepts a job. The Windows gh identity, not the workflow token, owns
 # this repository-administration check.
-$expectedLabels = @("self-hosted", "linux", "x64", $runnerLabel)
 $registered = $null
 foreach ($attempt in 1..10) {
-    $response = & gh api "repos/$Repository/actions/runners?per_page=100" | ConvertFrom-Json
-    if ($LASTEXITCODE -ne 0) { throw "Could not verify ephemeral runner registration" }
-    $registered = @($response.runners | Where-Object { $_.name -eq $runnerName }) | Select-Object -First 1
+    $registered = @(Get-RepositoryRunners | Where-Object { $_.name -eq $runnerName }) | Select-Object -First 1
     if ($null -ne $registered) { break }
     Start-Sleep -Seconds 2
 }
 if ($null -eq $registered) {
     throw "Ephemeral runner registration did not appear in GitHub; refusing to start it"
 }
-$actualLabels = @($registered.labels | ForEach-Object { ([string]$_.name).ToLowerInvariant() })
-$missingLabels = @($expectedLabels | Where-Object { $_ -notin $actualLabels })
-if ($missingLabels.Count -gt 0) {
-    throw "Ephemeral runner is missing required labels: $($missingLabels -join ', ')"
-}
+Assert-NewRunnerRouting $registered $runnerLabel
 
 # Foreground execution is intentional. A Windows Scheduled Task launched at
 # 01:50 Denver remains alive until the admitted 02:07 job finishes. The marker
@@ -185,6 +193,16 @@ $baselineExport = if ($Purpose -eq "Passport") {
 Invoke-WslBash "export $verificationVariable='$runnerName'; $baselineExport cd '$wslRunnerDirectory' && exec ./run.sh"
 } finally {
     $postRunError = $null
+    if ($registrationAttempted -and -not $markerCreated) {
+        try {
+            $removeToken = (& gh api --method POST "repos/$Repository/actions/runners/remove-token" --jq .token).Trim()
+            if (-not $removeToken) { throw "Could not obtain rejected runner removal token" }
+            Invoke-WslBash "if test -f '$wslRunnerDirectory/.runner'; then cd '$wslRunnerDirectory' && ./config.sh remove --token '$removeToken'; fi"
+            $removeToken = $null
+        } catch {
+            $postRunError = $_
+        }
+    }
     if ($markerCreated) {
         try {
             Invoke-WslBash $preflight
@@ -205,6 +223,9 @@ Invoke-WslBash "export $verificationVariable='$runnerName'; $baselineExport cd '
     }
     $hostMutex.Dispose()
     if ($null -ne $postRunError) {
+        if (-not $markerCreated) {
+            throw "Rejected runner registration cleanup is unverified: $postRunError"
+        }
         throw "Runner host remains quarantined after the job: $postRunError"
     }
 }

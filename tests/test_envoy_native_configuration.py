@@ -128,10 +128,10 @@ def assert_registration(source, runner, workflow):
         )
         assert matches == ["#[tokio::test]\n"], name
         assert f"'{name}: test'" in runner, name
-    assert 'preflight_skips=()' in runner
+    assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
     assert '[[ -f "$evidence" ]]' in runner
-    assert '"${executables[0]}" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4' in runner
+    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in runner
     jobs = workflow["jobs"]
     steps = jobs["test-rust-services"]["steps"]
     builds = [
@@ -159,7 +159,7 @@ def assert_registration(source, runner, workflow):
 def registration_inputs():
     return (
         (
-            ROOT / "rust/services/issuance/tests/canvas_published_schema_contract.rs"
+            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
         ).read_text(encoding="utf-8"),
         (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
             encoding="utf-8"
@@ -169,6 +169,23 @@ def registration_inputs():
 
 
 def test_actual_envoy_gate_is_mandatory_and_unignored():
+    assert_registration(*registration_inputs())
+
+
+def test_scalar_yaml_contract_has_fast_renderer_owner_and_real_envoy_gate():
+    name = "feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers"
+    renderer = (
+        ROOT / "rust/crates/release-evidence/src/envoy_config.rs"
+    ).read_text(encoding="utf-8")
+    runtime = (
+        ROOT / "rust/services/issuance/tests/support/envoy_runtime_sidecar.rs"
+    ).read_text(encoding="utf-8")
+    manifest = (ROOT / "rust/crates/release-evidence/Cargo.toml").read_text(
+        encoding="utf-8"
+    )
+    assert f"#[test]\n    fn {name}()" in renderer
+    assert name not in runtime
+    assert 'serde_json = { workspace = true, features = ["arbitrary_precision"] }' in manifest
     assert_registration(*registration_inputs())
 
 

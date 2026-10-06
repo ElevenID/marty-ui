@@ -8,12 +8,17 @@ env:
   MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty_common-0.2.16-py3-none-any.whl
   MARTY_COMMON_DIGEST: sha256:e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
+  # Weekly and manual runs retain the complete historical-reference matrices.
+  MARTY_CANVAS_FULL_QUALIFICATION: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}
 
 on:
   pull_request:
     branches: [main]
   merge_group:
     types: [checks_requested]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 0'
 
 permissions:
   contents: read
@@ -62,11 +67,20 @@ jobs:
             all=true
           else
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" HEAD)
+            # Preserve both endpoints of moves and paths containing newlines.
+            # A direct command also makes a diff failure fail this gate closed;
+            # process substitution would hide its exit status from mapfile.
+            changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
+            git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
+            mapfile -d '' -t changed_files < "$changed_paths_file"
             for path in "${changed_files[@]}"; do
               case "$path" in
                 rust/services/issuance/src/canvas_sync_processor_contract.md)
                   # include_str! makes this documentation a compiler input.
+                  rust=true
+                  ;;
+                SELFHOST_BUNDLE.md)
+                  # The self-host bundle ships this file as a package asset.
                   rust=true
                   ;;
                 *.md|docs/*|.github/ISSUE_TEMPLATE/*)
@@ -75,7 +89,7 @@ jobs:
                   ui=true
                   security=true
                   ;;
-                services/Dockerfile|services/Dockerfile.dockerignore|services/auth/assets/*)
+                services/Dockerfile|services/Dockerfile.dockerignore|services/entrypoint.sh|services/auth/assets/*)
                   rust=true
                   python=true
                   security=true
@@ -83,6 +97,18 @@ jobs:
                 services/*|packages/*|requirements-services.txt)
                   python=true
                   security=true
+                  ;;
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json)
+                  # Retain Rust qualification for contract metadata and also
+                  # run release-collected evidence/obligation ownership checks.
+                  rust=true
+                  release=true
+                  ;;
+                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
+                  # These exact test-only sources run in release pytest. Their
+                  # manifest inputs retain the Rust discovery/evidence owner;
+                  # unknown siblings and corpora remain conservatively broad.
+                  release=true
                   ;;
                 rust/*|proto/*|contracts/*)
                   rust=true
@@ -93,8 +119,37 @@ jobs:
                 release/*|scripts/stack_tag_gate.py|scripts/release_transaction.py|.github/stack-tag-policy.json)
                   release=true
                   ;;
+                tests/test_stack_tag_gate.py|tests/test_release_transaction.py|tests/test_stack_release_contract.py|tests/test_build_stack_manifest.py|tests/test_prepare_official_beta_release.py|tests/test_stack_pre_promotion.py)
+                  # The release lane executes the complete root Python test
+                  # suite. These exact test sources do not enter runtime
+                  # images; unknown siblings retain the full PR matrix.
+                  release=true
+                  ;;
+                tests/test_check_release_absent.py|tests/test_github_release_environment_preflight.py|tests/test_release_environment_workflow_contract.py|tests/test_create_local_release_manifest.py|tests/test_local_beta_release_runner.py)
+                  # These exact release-environment/manifest contract tests
+                  # also run in the required release lane, not service images.
+                  release=true
+                  ;;
+                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py)
+                  # These test-only policy and fixture guards are collected by
+                  # the root release pytest step, with no other CI/image owner.
+                  # Their implementation inputs still retain their own lanes.
+                  release=true
+                  ;;
+                tests/test_signing_response_reference.py|tests/test_token_rate_reference.py|tests/test_canvas_url_template_reference.py)
+                  # Frozen-reference guards are collected by root release
+                  # pytest only. Their corpora and native Rust consumers keep
+                  # the existing Rust selection; capture scripts stay broad.
+                  release=true
+                  ;;
                 .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
                   verification=true
+                  release=true
+                  ;;
+                scripts/register-canvas-oss-runner.ps1|scripts/runner-routing-label-policy.ps1|scripts/setup-canvas-oss-runner.ps1|tests/test_runner_routing_labels.py|tests/test_canvas_oss_runner_quarantine.py)
+                  # These host-registration inputs are checked by the root
+                  # release pytest suite; they are not public image inputs.
+                  # Manual self-hosted workflows retain their own preflights.
                   release=true
                   ;;
                 tests/*|scripts/*|.github/workflows/*|.github/codeql/*|.dockerignore)
@@ -326,13 +381,38 @@ jobs:
           VITEST_TIMING_OUTPUT: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
         run: node scripts/run-vitest-shard.mjs ${{ matrix.shard }} 4
       - name: Upload per-file test timings
+        id: ui_timing_upload
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ui-vitest-timing-${{ matrix.shard }}
           path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
+      - name: Retry per-file test timings upload
+        id: ui_timing_retry
+        if: always() && steps.ui_timing_upload.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ui-vitest-timing-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+      - name: Require per-file test timings upload
+        if: always()
+        shell: bash
+        env:
+          PRIMARY_OUTCOME: ${{ steps.ui_timing_upload.outcome }}
+          RETRY_OUTCOME: ${{ steps.ui_timing_retry.outcome }}
+        run: |
+          set -euo pipefail
+          if [[ "$PRIMARY_OUTCOME" != success && "$RETRY_OUTCOME" != success ]]; then
+            echo "Both per-file timing artifact uploads failed" >&2
+            exit 1
+          fi
 
   test-services:
     name: Service Tests
@@ -352,10 +432,13 @@ jobs:
         with:
           version: "0.11.3"
           enable-cache: true
+          # PR/merge-queue runs may read the trusted main cache but never publish
+          # one cache per ephemeral PR ref.
+          save-cache: false
           cache-dependency-glob: |
             requirements-services.txt
             release/stack-lock.json
-          cache-suffix: service-tests
+          cache-suffix: python-services
       - name: Install dependencies
         shell: bash
         run: |
@@ -612,6 +695,9 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
+      - name: Keep Rust service tests independent of optional compiler cache
+        shell: bash
+        run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Require Kubernetes deployment contract executables
         if: matrix.lane == 'canvas'
         shell: bash
@@ -622,9 +708,32 @@ jobs:
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash
-        run: >-
-          cargo test --locked --workspace --no-run --timings --message-format=json
-          > "$RUNNER_TEMP/rust-test-artifacts.json"
+        run: |
+          set -euo pipefail
+          artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
+          if [[ "${{ matrix.lane }}" == contracts ]]; then
+            cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
+          else
+            : > "$artifacts"
+            # Resolve shared test features once; the Canvas library is an empty
+            # ownership marker, guarded separately from its two real targets.
+            cargo test --locked -p marty-canvas-acceptance -p marty-issuance-service \
+              --lib \
+              --test canvas_published_worker_contract \
+              --test canvas_published_schema_contract \
+              --test canvas_oauth_behavior --test issuance-behavior \
+              --no-run --timings --message-format=json >> "$artifacts"
+            # Keep each real binary's package-specific feature resolution.
+            cargo build --locked -p marty-issuance-service \
+              --bin marty-issuance-service --bin marty-canvas-sync-worker \
+              --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-gateway --bin marty-gateway \
+              --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-flow --bin marty-flow \
+              --message-format=json >> "$artifacts"
+            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              "$artifacts" target
+          fi
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts'
         shell: bash
@@ -673,13 +782,13 @@ jobs:
             sh -ceu '
               cargo build --locked --offline --quiet -p marty-issuance-service --bin marty-issuance-service
               cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway
-              cargo test --locked --offline -p marty-issuance-service \
+              cargo test --locked --offline -p marty-canvas-acceptance \
                 --test canvas_published_schema_contract --no-run --message-format=json
             ' > "$compat_artifacts"
           compat_executable="$(jq -sr '
             [.[] | select(.reason == "compiler-artifact")
             | select(.target.name == "canvas_published_schema_contract")
-            | select(.package_id | contains("marty-issuance-service"))
+            | select(.package_id | contains("#marty-canvas-acceptance@"))
             | select(.executable != null) | .executable] | unique
             | if length == 1 then .[0] else error("Expected one Bookworm-compatible base runtime executable") end
           ' "$compat_artifacts")"
@@ -805,6 +914,7 @@ jobs:
           fi
           grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
       - name: Prepare database contract executables
+        if: matrix.lane == 'contracts'
         working-directory: rust
         shell: bash
         run: |
@@ -1029,9 +1139,6 @@ jobs:
           cp "$verification_postgres_executable" target/debug/verification-postgres-contract
           cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
-          # The Canvas PostgreSQL contract launches this actual binary and sends
-          # POSIX signals. A test-harness executable is not a substitute.
-          test -x target/debug/marty-canvas-sync-worker
       - name: Preflight published worker parity in two isolated groups
         if: matrix.lane == 'canvas'
         working-directory: rust
@@ -1064,7 +1171,7 @@ jobs:
             set +e
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
-              cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+              cargo test --locked --workspace --exclude marty-canvas-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")
@@ -1098,6 +1205,33 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Require all Gateway Signing acceptance cases
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          acceptance_executable="$(jq -sr '
+            [.[] | select(.reason == "compiler-artifact")
+            | select(.target.name == "gateway_signing_acceptance")
+            | select(.package_id | contains("#marty-service-acceptance@"))
+            | select(.executable != null) | .executable] | unique
+            | if length == 1 then .[0] else error("Expected one Gateway Signing acceptance executable") end
+          ' "$RUNNER_TEMP/rust-test-artifacts.json")"
+          [[ -x "$acceptance_executable" ]]
+          listed_tests="$("$acceptance_executable" --list)"
+          for test_name in \
+            authenticated_gateway_reaches_remaining_rust_signing_handlers \
+            authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+            authenticated_gateway_rotates_only_a_dedicated_signing_service \
+            authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
+            authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
+            authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key; do
+            if ! grep -Fxq "$test_name: test" <<< "$listed_tests"; then
+              echo "Missing Gateway Signing acceptance case: $test_name" >&2
+              exit 1
+            fi
+          done
       - name: Exercise authenticated Signing Keys Gateway to Rust routes
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1108,16 +1242,16 @@ jobs:
           docker exec "${{ job.services.redis.id }}" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
           docker exec "${{ job.services.redis.id }}" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-            cargo test --locked -p marty-gateway --lib \
-              runtime::tests::authenticated_gateway_reaches_remaining_rust_signing_handlers \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_reaches_remaining_rust_signing_handlers \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
-            cargo test --locked -p marty-gateway --lib \
-              runtime::tests::authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_reaches_rust_managed_key_route_without_custody \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-            cargo test --locked -p marty-gateway --lib \
-              runtime::tests::authenticated_gateway_rotates_only_a_dedicated_signing_service \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_rotates_only_a_dedicated_signing_service \
               -- --ignored --exact
       - name: Exercise live Signing Keys public contracts on disposable Redis
         if: matrix.lane == 'contracts'
@@ -1175,15 +1309,20 @@ jobs:
           export MARTY_TEST_OPENBAO_TOKEN=test-only
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
           export BAO_TOKEN=test-only
-          cargo test --locked -p marty-gateway --lib \
-            runtime::tests::authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
             -- --ignored --exact
-          cargo test --locked -p marty-gateway --lib \
-            runtime::tests::authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
             -- --ignored --exact
-          cargo test --locked -p marty-issuance-service --test passport_managed_kms_chain \
-            managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys \
-            -- --ignored --exact
+            test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance -- --list | grep -Fx "$test_name: test"
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
+          chain_test='managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys'
+          cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
+            -- --list | grep -Fx "$chain_test: test"
+          cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
+            "$chain_test" -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite
@@ -1229,9 +1368,9 @@ jobs:
           MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
         run: |
           set -euo pipefail
-          test_name='runtime::tests::passport_gateway_postgres::native_passport_gateway_signed_webhook_updates_durable_tenant_job'
-          cargo test --locked -p marty-gateway --lib -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-gateway --lib "$test_name" -- --exact
+          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -1263,8 +1402,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/rust-build-evidence"
-          sccache --show-stats |
-            python3 scripts/ci/sanitize_sccache_stats.py > "$RUNNER_TEMP/rust-build-evidence/sccache-stats.json"
+          stats_file="$RUNNER_TEMP/rust-build-evidence/sccache-stats.json"
+          if sccache --show-stats 2>/dev/null |
+              python3 scripts/ci/sanitize_sccache_stats.py > "$stats_file.tmp"; then
+            mv "$stats_file.tmp" "$stats_file"
+          else
+            rm -f "$stats_file.tmp"
+            echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
+          fi
           if test -f rust/target/cargo-timings/cargo-timing.html; then
             cp rust/target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/rust-build-evidence/cargo-timing.html"
           fi
@@ -1276,6 +1421,16 @@ jobs:
           path: ${{ runner.temp }}/rust-build-evidence/
           if-no-files-found: warn
           retention-days: 2
+      # Upload only after the entire Canvas job succeeds. The Rust test wrote
+      # this file after its live comparison, native replay, and owned cleanup.
+      - name: Preserve fresh full-main startup attestation
+        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canvas-startup-fresh-run.json
+          if-no-files-found: error
+          retention-days: 14
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes
@@ -1304,6 +1459,9 @@ jobs:
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
         with:
           version: v0.16.0
+      - name: Keep Rust lint independent of optional compiler cache
+        shell: bash
+        run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Check formatting
         working-directory: rust
         run: cargo fmt --all -- --check
@@ -1313,6 +1471,14 @@ jobs:
         run: |
           set -euo pipefail
           cargo metadata --locked --format-version 1 | python3 ../scripts/ci/check_mmf_security_features.py
+      - name: Report affected Rust packages in shadow mode
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          python3 -m unittest tests.test_plan_affected_rust
+          python3 scripts/ci/plan_affected_rust.py
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -1419,7 +1585,14 @@ jobs:
           grep -F 'RUST_LOG: info' <<<"$rendered"
       - name: Report compiler cache effectiveness
         if: always()
-        run: sccache --show-stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          if stats="$(sccache --show-stats 2>/dev/null)"; then
+            printf '%s\n' "$stats"
+          else
+            echo 'Optional compiler cache stats unavailable; Rust lint remains authoritative.'
+          fi
 
   test-rust-service-images:
     name: Rust Service Images
@@ -1892,8 +2065,11 @@ jobs:
         with:
           version: "0.11.3"
           enable-cache: true
-          cache-dependency-glob: requirements-services.txt
-          cache-suffix: public-contract
+          save-cache: false
+          cache-dependency-glob: |
+            requirements-services.txt
+            release/stack-lock.json
+          cache-suffix: python-services
       - name: Install contract-check dependencies
         run: uv pip install --system -r requirements-services.txt jsonschema
       - name: Enforce public response contract
@@ -1927,10 +2103,11 @@ jobs:
         with:
           version: "0.11.3"
           enable-cache: true
+          save-cache: false
           cache-dependency-glob: |
             requirements-services.txt
             release/stack-lock.json
-          cache-suffix: release-contracts
+          cache-suffix: python-services
       - name: Install released test dependencies
         shell: bash
         run: |
@@ -2085,7 +2262,7 @@ jobs:
         run: npm ci
       - name: Restore pinned Chromium headless shell
         id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-headless-${{ hashFiles('tests/package-lock.json') }}
@@ -2158,7 +2335,12 @@ jobs:
 
           timed pip-audit pip-audit -r requirements-services.txt &
           pip_audit_pid=$!
-          (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && bun audit && npm audit --package-lock-only --audit-level=low') &
+          # GHSA-vfj7-8cjw-p6xm has no patched braces release. It enters only
+          # through the prerenderer's optional build-time proxy; our prerender
+          # routes are fixed in vite.config.ts. Bun still audits every package
+          # except this one advisory. npm audits the non-optional graph, which
+          # Bun also covers, until the upstream package can be replaced/patched.
+          (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && bun audit --ignore GHSA-vfj7-8cjw-p6xm && npm audit --omit=optional --package-lock-only --audit-level=low') &
           ui_audit_pid=$!
           (cd tests && timed tests-audit npm audit --package-lock-only --audit-level=low) &
           tests_audit_pid=$!
@@ -2222,28 +2404,114 @@ jobs:
       actions: read
       contents: read
     env:
-      RESULTS: ${{ join(needs.*.result, ' ') }}
+      CI_LANE_RESULTS: ${{ join(needs.*.result, ' ') }}
+      UI_SELECTED: ${{ needs.changes.outputs.ui }}
+      PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
+      RUST_SELECTED: ${{ needs.changes.outputs.rust }}
+      RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
+      VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
+      SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
+      CHANGES_RESULT: ${{ needs.changes.result }}
+      LINT_RESULT: ${{ needs.lint.result }}
+      FAST_FEEDBACK_RESULT: ${{ needs.fast-feedback.result }}
+      CRAWLER_ARTIFACTS_RESULT: ${{ needs.test-ui-crawler-artifacts.result }}
+      CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
+      UI_RESULT: ${{ needs.test-ui.result }}
+      SERVICES_RESULT: ${{ needs.test-services.result }}
+      PASSPORT_FENCE_RESULT: ${{ needs.test-passport-fence-postgres.result }}
+      RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
+      RUST_PASSPORT_RESULT: ${{ needs.test-rust-passport-image.result }}
+      RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
+      RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
+      RUST_IMAGES_RESULT: ${{ needs.test-rust-service-images.result }}
+      PUBLIC_PROTOCOL_RESULT: ${{ needs.public-protocol-contract.result }}
+      RELEASE_CONTRACTS_RESULT: ${{ needs.test-release-contracts.result }}
+      LIFECYCLE_BROWSER_RESULT: ${{ needs.test-credential-lifecycle-browser.result }}
+      SECURITY_RESULT: ${{ needs.security.result }}
+      RUST_SUPPLY_RESULT: ${{ needs.rust-supply-chain.result }}
     steps:
       - name: Require every CI lane
         shell: bash
         run: |
           set -euo pipefail
-          for result in $RESULTS; do
-            if [[ "${{ github.event_name }}" == merge_group ]]; then
-              test "$result" = success
-            else
-              [[ "$result" == success || "$result" == skipped ]]
+          # Keep the explicit map in sync with ci-gate.needs. An added or
+          # removed dependency must update the planned-result policy too.
+          read -r -a results <<< "$CI_LANE_RESULTS"
+          [[ "${#results[@]}" -eq 18 ]]
+          require_result() {
+            local name="$1" actual="$2" expected="$3"
+            if [[ "$actual" != "$expected" ]]; then
+              echo "Unexpected $name result: $actual (expected $expected)" >&2
+              return 1
             fi
+          }
+          require_selected() {
+            local name="$1" actual="$2" selected="$3"
+            case "$selected" in
+              true) require_result "$name" "$actual" success ;;
+              false) require_result "$name" "$actual" skipped ;;
+              *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
+            esac
+          }
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
+            [[ "$selected" == true || "$selected" == false ]]
           done
+          if [[ "${{ github.event_name }}" == merge_group ]]; then
+            for result in "${results[@]}"; do
+              [[ "$result" == success ]]
+            done
+          else
+            require_result changes "$CHANGES_RESULT" success
+            require_result lint "$LINT_RESULT" success
+            require_selected fast-feedback "$FAST_FEEDBACK_RESULT" "$UI_SELECTED"
+            require_selected test-ui-crawler-artifacts "$CRAWLER_ARTIFACTS_RESULT" "$UI_SELECTED"
+            require_selected test-ui-crawler-nginx "$CRAWLER_NGINX_RESULT" "$UI_SELECTED"
+            require_selected test-ui "$UI_RESULT" "$UI_SELECTED"
+            require_selected test-credential-lifecycle-browser "$LIFECYCLE_BROWSER_RESULT" "$UI_SELECTED"
+            require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"
+            require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
+            require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_SELECTED"
+            require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"
+            public_selected=false
+            if [[ "$UI_SELECTED" == true || "$PYTHON_SELECTED" == true || "$RUST_SELECTED" == true || "$RELEASE_SELECTED" == true ]]; then
+              public_selected=true
+            fi
+            require_selected public-protocol-contract "$PUBLIC_PROTOCOL_RESULT" "$public_selected"
+            release_selected=false
+            if [[ "$RELEASE_SELECTED" == true || "$VERIFICATION_SELECTED" == true || "$RUST_SELECTED" == true ]]; then
+              release_selected=true
+            fi
+            require_selected test-release-contracts "$RELEASE_CONTRACTS_RESULT" "$release_selected"
+            require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"
+          fi
       - name: Summarize CI performance
+        # Telemetry must not fail a green required-lane gate during a GitHub API outage.
+        continue-on-error: true
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
             const {owner, repo} = context.repo;
-            const {data: run} = await github.rest.actions.getWorkflowRun({owner, repo, run_id: context.runId});
-            const {data} = await github.rest.actions.listJobsForWorkflowRun({
-              owner, repo, run_id: context.runId, filter: 'latest', per_page: 100,
-            });
+            const retryTransient = async (operation, request) => {
+              for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                  return await request();
+                } catch (error) {
+                  if (![502, 503, 504].includes(error.status) || attempt === 3) throw error;
+                  core.warning(`${operation} returned HTTP ${error.status}; retrying (${attempt}/3).`);
+                  await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+                }
+              }
+            };
+            const {data: run} = await retryTransient('getWorkflowRun', () =>
+              github.rest.actions.getWorkflowRun({owner, repo, run_id: context.runId}));
+            const {data} = await retryTransient('listJobsForWorkflowRun', () =>
+              github.rest.actions.listJobsForWorkflowRun({
+                owner, repo, run_id: context.runId, filter: 'latest', per_page: 100,
+              }));
             const created = new Date(run.created_at);
             const rows = data.jobs.filter(job => job.started_at && job.completed_at).map(job => ({
               name: job.name,

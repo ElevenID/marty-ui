@@ -1284,6 +1284,10 @@ where
 }
 
 #[cfg(test)]
+#[path = "canvas_sync_worker_retry_tests.rs"]
+mod retry_handoff_tests;
+
+#[cfg(test)]
 mod processing_error_tests {
     use super::{CanvasSyncProcessingError, UnexpectedCanvasSyncFailure};
 

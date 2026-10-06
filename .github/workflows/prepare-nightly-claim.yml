@@ -1,0 +1,90 @@
+name: Prepare nightly claim
+
+run-name: Claim nightly at ${{ inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact protected-main source commit
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  claim:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Require exact protected-main dispatch
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = ElevenID/marty-ui
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Bind exact main and derive immutable nightly identity
+        id: identity
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$SOURCE_SHA"
+          version="$(jq -er '.release | capture("^marty-ui@(?<version>(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*))$").version' release/stack-lock.json)"
+          date="$(date -u +%Y%m%d)"
+          tag="v${version}-nightly.${date}.${GITHUB_RUN_ID}"
+          tag_refs="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+          if [[ -n "$tag_refs" ]]; then
+            echo "::error::Immutable nightly tag already exists"
+            exit 1
+          fi
+          printf 'version=%s\ndate=%s\ntag=%s\n' "$version" "$date" "$tag" >> "$GITHUB_OUTPUT"
+      - name: Capture exact-source workflow evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$SOURCE_SHA&per_page=100" \
+            > workflow-runs.json
+      - name: Persist no-write nightly claim
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          VERSION: ${{ steps.identity.outputs.version }}
+          DATE: ${{ steps.identity.outputs.date }}
+        shell: bash
+        run: >-
+          python scripts/nightly_claim.py create
+          --repository "$GITHUB_REPOSITORY"
+          --version "$VERSION"
+          --date "$DATE"
+          --run-id "$GITHUB_RUN_ID"
+          --source-sha "$SOURCE_SHA"
+          --stack-lock release/stack-lock.json
+          --policy .github/stack-tag-policy.json
+          --runs-json workflow-runs.json
+          --output nightly-claim.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: nightly-claim-${{ github.run_id }}
+          path: nightly-claim.json
+          if-no-files-found: error
+          retention-days: 30

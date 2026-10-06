@@ -27,9 +27,9 @@ import test_canvas_worker_timeout_https as header
 ROOT = Path(__file__).resolve().parents[1]
 CASE_NAMES = tuple(name for name, _ in reference.CASE_LAYOUT)
 # Publication added a default-identity handler hook to the shared HTTPS fixture.
-# Contract tests prove this corpus changes the independent capture only at the
-# two fixture-provenance values; hosted regeneration must still match exactly.
-CORPUS_SHA256 = "e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853"
+# Contract tests account exactly for fixture, TLS-helper, and diagnostic-only
+# script provenance updates; hosted regeneration must still match frozen bytes.
+CORPUS_SHA256 = "24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50"
 SCHEMA = "marty.canvas-worker-lease-expiry-native-observation/v1"
 STATUSES = frozenset(("leased", "succeeded", "retry", "dead_letter"))
 FIELDS = frozenset(
@@ -263,7 +263,7 @@ def load_inputs(root):
             "Native expiry reference provenance differs",
         )
         require(
-            len(observed["capture_source_sha256"]) == 18,
+            len(observed["capture_source_sha256"]) == 19,
             "Native expiry reference input closure differs",
         )
         for filename, expected in observed["capture_source_sha256"].items():

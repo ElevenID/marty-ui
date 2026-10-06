@@ -205,14 +205,15 @@ No live Python deletion or production deployment is authorized by these passes.
 
 The new [signing_error_detail.rs](../../rust/services/issuance/src/signing_error_detail.rs)
 implements the pinned Python helper's selection and status/message behavior,
-reusing [python_value.rs](../../rust/services/issuance/src/python_value.rs) for
+reusing [python_value.rs](../../rust/crates/response-compat/src/python_value.rs) for
 Python truthiness, dictionary representation and frozen Unicode whitespace
 semantics. It is not wired into the production library or signing adapters.
 No protected signing implementation, cryptographic policy or frozen reference
 was changed for this slice.
 
 The isolated [signing_error_detail_contract.rs](../../rust/services/issuance/tests/signing_error_detail_contract.rs)
-imports those two modules directly through `#[path]`. Its explicit Cargo test
+imports the signing helper through `#[path]` and the shared Python-value module
+from `marty-response-compat`. Its explicit Cargo test
 registration is necessary because the package disables automatic integration
 test discovery. It checks the unchanged canonical-LF corpus digest, source
 revision and signing helper/test blob identities, then replays all 45 detail

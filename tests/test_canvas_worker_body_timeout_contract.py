@@ -1,19 +1,24 @@
 """Integrity of independently captured Python reports, not native body parity."""
 
-from copy import deepcopy
+import ast
 import hashlib
 import importlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
-CAPTURE_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
+CAPTURE_SHA256 = "7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8"
+PREVIOUS_CAPTURE_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
 ORIGINAL_CAPTURE_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
 ORIGINAL_HTTPS_FIXTURE_SHA256 = "262e9bac321a5e7d4cb40e5bc48dfc51a12c10476c79bfc8ce024e343efad8c4"
 CURRENT_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
+OLD_CAPTURE_SCRIPT_SHA256 = "fca12bc82af56d1cf6f852d9166854f92e41cbe00062ef603c6ae65b0863484a"
+NEW_CAPTURE_SCRIPT_SHA256 = "515b9f7c59180bd2613316dade8d894dfd92c06ddae650acebe9b51bc17b762f"
+TLS_HELPER_SHA256 = "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d"
 CASE_NAMES = [
     "application_body_prompt",
     "roster_body_prompt",
@@ -30,13 +35,20 @@ def corpus():
     return json.loads(ORACLE.read_bytes())
 
 
-def test_current_corpus_differs_from_independent_capture_only_by_fixture_provenance():
+def test_current_corpus_differs_from_independent_capture_only_by_pinned_provenance():
     raw = ORACLE.read_bytes()
+    helper = b', "test_canvas_lti_https.py": "' + TLS_HELPER_SHA256.encode() + b'"'
+    assert raw.count(helper) == 6
+    assert raw.count(NEW_CAPTURE_SCRIPT_SHA256.encode()) == 6
+    previous = raw.replace(helper, b'').replace(
+        NEW_CAPTURE_SCRIPT_SHA256.encode(), OLD_CAPTURE_SCRIPT_SHA256.encode()
+    )
+    assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CAPTURE_SHA256
     current = CURRENT_HTTPS_FIXTURE_SHA256.encode()
     original = ORIGINAL_HTTPS_FIXTURE_SHA256.encode()
-    assert raw.count(current) == 6
-    assert original not in raw
-    assert hashlib.sha256(raw.replace(current, original)).hexdigest() == (
+    assert previous.count(current) == 6
+    assert original not in previous
+    assert hashlib.sha256(previous.replace(current, original)).hexdigest() == (
         ORIGINAL_CAPTURE_SHA256
     )
 
@@ -54,7 +66,7 @@ def observations(corpus):
 
 def test_exact_raw_capture_and_checkout_preserve_numeric_tokens():
     raw = ORACLE.read_bytes()
-    assert len(raw) == 46_042
+    assert len(raw) == 46_618
     assert hashlib.sha256(raw).hexdigest() == CAPTURE_SHA256
     assert b"\r" not in raw and raw.endswith(b"]\n")
     assert (
@@ -98,7 +110,7 @@ def test_full_reports_close_six_cases_and_retain_published_identity(corpus, matr
 
 def test_capture_inputs_bind_actual_unchanged_sources_without_json_rewriting(corpus):
     pins = observations(corpus)[0]["capture_source_sha256"]
-    assert len(pins) == 16
+    assert len(pins) == 17
     for observed in observations(corpus):
         assert observed["capture_source_sha256"] == pins
     for name, digest in pins.items():
@@ -107,6 +119,112 @@ def test_capture_inputs_bind_actual_unchanged_sources_without_json_rewriting(cor
         # Capture provenance deliberately normalizes checkout newlines only.
         source = (ROOT / directory / name).read_text(encoding="utf-8")
         assert hashlib.sha256(source.encode("utf-8")).hexdigest() == digest
+
+
+def unpinned_local_imports(source: Path, pins: set[str], scripts: Path) -> set[str]:
+    missing = set()
+    tree = ast.parse(source.read_text(encoding="utf-8"))
+    dynamic_import_names = {"__import__", "import_module"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+            dynamic_import_names.update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name == "import_module"
+            )
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and (
+            isinstance(node.func, ast.Name)
+            and node.func.id in dynamic_import_names
+            or isinstance(node.func, ast.Attribute) and node.func.attr == "import_module"
+        ):
+            missing.add(f"{source.name}: dynamic import")
+            continue
+        if isinstance(node, ast.Import):
+            modules = (alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                missing.add(f"{source.name}: relative import")
+                continue
+            if not node.module:
+                continue
+            modules = (node.module,)
+        else:
+            continue
+        for module in modules:
+            root_module = module.split(".", 1)[0]
+            if (scripts / root_module).is_dir():
+                missing.add(f"{source.name}: local package {root_module}")
+            filename = root_module + ".py"
+            if (scripts / filename).is_file() and filename not in pins:
+                missing.add(filename)
+    return missing
+
+
+def test_frozen_worker_capture_pins_close_static_local_python_imports(corpus):
+    # This guards statically imported local helpers; pinned image/runtime-version
+    # checks remain separate evidence for installed packages and worker code.
+    scripts = ROOT / "scripts"
+    for reports, field in (
+        (corpus, "worker_body_timeout"),
+        (
+            json.loads(
+                (ROOT / "contracts/canvas-worker-lease-expiry-oracle.json").read_bytes()
+            ),
+            "worker_lease_expiry",
+        ),
+    ):
+        pins = reports[0][field]["capture_source_sha256"]
+        script_names = {name for name in pins if name.endswith(".py")}
+        assert script_names
+        for name in script_names:
+            assert (
+                unpinned_local_imports(scripts / name, script_names, scripts) == set()
+            )
+
+
+def test_local_import_closure_guard_detects_an_unpinned_helper(tmp_path):
+    helper = tmp_path / "helper.py"
+    helper.write_text("VALUE = 1\n", encoding="utf-8")
+    source = tmp_path / "capture.py"
+    source.write_text("from helper import VALUE\n", encoding="utf-8")
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {"helper.py"}
+    source.write_text("import helper\n", encoding="utf-8")
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {"helper.py"}
+    (tmp_path / "deep.py").write_text("VALUE = 2\n", encoding="utf-8")
+    helper.write_text("from deep import VALUE\n", encoding="utf-8")
+    pins = {"capture.py", "helper.py"}
+    assert unpinned_local_imports(source, pins, tmp_path) == set()
+    assert unpinned_local_imports(helper, pins, tmp_path) == {"deep.py"}
+    source.write_text("from .helper import VALUE\n", encoding="utf-8")
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: relative import"
+    }
+    package = tmp_path / "package"
+    package.mkdir()
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    source.write_text("from package.helper import VALUE\n", encoding="utf-8")
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: local package package"
+    }
+    source.write_text("importlib.import_module('helper')\n", encoding="utf-8")
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: dynamic import"
+    }
+    source.write_text(
+        "from importlib import import_module\nimport_module('helper')\n",
+        encoding="utf-8",
+    )
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: dynamic import"
+    }
+    source.write_text(
+        "from importlib import import_module as load\nload('helper')\n",
+        encoding="utf-8",
+    )
+    assert unpinned_local_imports(source, {"capture.py"}, tmp_path) == {
+        "capture.py: dynamic import"
+    }
 
 
 def assert_number_types(corpus):

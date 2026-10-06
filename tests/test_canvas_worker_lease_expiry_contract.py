@@ -12,11 +12,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-lease-expiry-oracle.json"
 BODY_ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
-CAPTURE_SHA256 = "e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853"
-BODY_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
+CAPTURE_SHA256 = "24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50"
+PREVIOUS_DIAGNOSTIC_CAPTURE_SHA256 = "335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7"
+TLS_HELPER_CAPTURE_SHA256 = "340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181"
+PREVIOUS_CAPTURE_SHA256 = "e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853"
+BODY_SHA256 = "7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030f8"
 ORIGINAL_CAPTURE_SHA256 = "455494bc6be253a73747116734c418c9c13e41d13eac09a1c31f721e5d44499d"
 ORIGINAL_HTTPS_FIXTURE_SHA256 = "262e9bac321a5e7d4cb40e5bc48dfc51a12c10476c79bfc8ce024e343efad8c4"
 CURRENT_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
+OLD_CAPTURE_SCRIPT_SHA256 = "fca12bc82af56d1cf6f852d9166854f92e41cbe00062ef603c6ae65b0863484a"
+NEW_CAPTURE_SCRIPT_SHA256 = "515b9f7c59180bd2613316dade8d894dfd92c06ddae650acebe9b51bc17b762f"
+TLS_HELPER_SHA256 = "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d"
+OLD_LEASE_SCRIPT_SHA256 = "73972e23d054b18437f5ffd2e457584aaaa4dcdb45c3f68539b422e44ba8cd39"
+PREVIOUS_LEASE_SCRIPT_SHA256 = "c1f2ac9c3fbee555b8c7e7f230805d626abff58efa20262171e31d4b3559b519"
+NEW_LEASE_SCRIPT_SHA256 = "d6ddca1394799df9b5516369459e1e6e57c6b1406f48f3cc7adba06ef5adbbe4"
 CASES = ("renewal_lock_early_release", "renewal_lock_crosses_expiry")
 PROOFS = (
     "blocked_renewal_observed",
@@ -28,13 +37,36 @@ PROOFS = (
 )
 
 
-def test_current_corpus_differs_from_independent_capture_only_by_fixture_provenance():
+def test_native_expiry_driver_uses_exact_current_reference_hash(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    native = importlib.import_module("test_canvas_worker_lease_expiry_https")
+    assert native.CORPUS_SHA256 == CAPTURE_SHA256
+    assert hashlib.sha256(ORACLE.read_bytes()).hexdigest() == native.CORPUS_SHA256
+
+
+def test_current_corpus_differs_from_independent_capture_only_by_pinned_provenance():
     raw = ORACLE.read_bytes()
+    assert raw.count(NEW_LEASE_SCRIPT_SHA256.encode()) == 2
+    prior_current = raw.replace(
+        NEW_LEASE_SCRIPT_SHA256.encode(), PREVIOUS_LEASE_SCRIPT_SHA256.encode()
+    )
+    assert hashlib.sha256(prior_current).hexdigest() == PREVIOUS_DIAGNOSTIC_CAPTURE_SHA256
+    prior_diagnostic = prior_current.replace(
+        PREVIOUS_LEASE_SCRIPT_SHA256.encode(), OLD_LEASE_SCRIPT_SHA256.encode()
+    )
+    assert hashlib.sha256(prior_diagnostic).hexdigest() == TLS_HELPER_CAPTURE_SHA256
+    helper = b', "test_canvas_lti_https.py": "' + TLS_HELPER_SHA256.encode() + b'"'
+    assert prior_diagnostic.count(helper) == 2
+    assert prior_diagnostic.count(NEW_CAPTURE_SCRIPT_SHA256.encode()) == 2
+    previous = prior_diagnostic.replace(helper, b'').replace(
+        NEW_CAPTURE_SCRIPT_SHA256.encode(), OLD_CAPTURE_SCRIPT_SHA256.encode()
+    )
+    assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CAPTURE_SHA256
     current = CURRENT_HTTPS_FIXTURE_SHA256.encode()
     original = ORIGINAL_HTTPS_FIXTURE_SHA256.encode()
-    assert raw.count(current) == 2
-    assert original not in raw
-    assert hashlib.sha256(raw.replace(current, original)).hexdigest() == (
+    assert previous.count(current) == 2
+    assert original not in previous
+    assert hashlib.sha256(previous.replace(current, original)).hexdigest() == (
         ORIGINAL_CAPTURE_SHA256
     )
 OBSERVATION_FIELDS = {
@@ -69,7 +101,7 @@ def observations(reports):
 
 def assert_raw_capture(raw):
     assert type(raw) is bytes
-    assert len(raw) == 19_575
+    assert len(raw) == 19_767
     assert hashlib.sha256(raw).hexdigest() == CAPTURE_SHA256
     assert b"\r" not in raw and raw.endswith(b"]\n")
 
@@ -207,18 +239,18 @@ def test_observed_two_case_evidence_is_not_native_expected_behavior(corpus):
     assert_evidence(corpus)
 
 
-def test_provenance_keeps_eighteen_capture_inputs_and_four_installed_pins(corpus):
+def test_provenance_keeps_nineteen_capture_inputs_and_four_installed_pins(corpus):
     scenario = json.loads(
         (ROOT / "contracts/canvas-worker-lease-expiry-scenarios.json").read_bytes()
     )
     pins = observations(corpus)[0]["capture_source_sha256"]
-    assert len(pins) == 18
+    assert len(pins) == 19
     assert len(scenario["source_sha256"]) == 4
     body_raw = BODY_ORACLE.read_bytes()
-    assert len(body_raw) == 46_042
+    assert len(body_raw) == 46_618
     assert hashlib.sha256(body_raw).hexdigest() == BODY_SHA256
     body_pins = json.loads(body_raw)[0]["worker_body_timeout"]["capture_source_sha256"]
-    assert len(body_pins) == 16
+    assert len(body_pins) == 17
     assert {key: pins[key] for key in body_pins} == body_pins
     assert set(pins) - set(body_pins) == {
         "run_canvas_worker_lease_expiry_oracle.py",

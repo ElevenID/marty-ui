@@ -29,13 +29,45 @@ read-inactivity mismatch, not another dependency-import failure.
 Native BODY and full-worker live-provider expiry behavior remain unqualified.
 
 Integration update, 2026-09-19: the selected publication adapter added a
-default-identity request-handler hook to the shared HTTPS fixture. The current
+default-identity request-handler hook to the shared HTTPS fixture. The then-current
 19,575-byte expiry corpus has SHA-256
 `e7127f4a28bd0828abcf9f36431e16972670c38457ea4125173626b27db15853`.
 An exact contract proves both changes from the independent A/B capture are only
 the fixture-provenance digest; every behavioral observation remains byte
 identical. PR #814 must still pass exact published-process regeneration before
 this provenance refresh is qualified.
+
+Provenance update, 2026-10-03: the imported loopback TLS helper is now pinned
+alongside the capture scripts. The then-current 19,767-byte expiry corpus SHA-256 was
+`340ed804d206a1bd057cee0369a91de7027b10c8c3da238af26c7def8b102181`.
+An exact contract reverses only the helper pin and capture-script hash to the
+2026-09-19 corpus, then reverses its fixture pin to the independent A/B capture.
+No behavioral observation changed; hosted regeneration must still match exactly.
+
+Diagnostic-only follow-up, 2026-10-03: the post-join assertion now reports
+body-schedule drift separately from durable-observation drift, preserving both
+checks and their order. Only the lease capture-script source hash changed in
+the frozen corpus. Its current 19,767-byte SHA-256 is
+`335edce94ac67dc760d29cfa96092378393a42bc03466dce059e6f107f435fb7`;
+an exact contract reverses that one pin to the previous corpus hash. Hosted
+published-process regeneration remains required.
+
+Diagnostic-only follow-up, 2026-10-04: a protected merge-group run of UI #1086
+passed the native expiry preflight but failed the exact post-join durable
+observation check in the published-process lease test. The body-schedule
+check immediately before it passed. The observed and expected rows were not
+present in the sanitized report, so the changed section is unknown. The
+same exact equality requirement remains; a failure now reports only fixed
+boolean differences for `jobs`, `facts`, `oauth`, `snapshot`, `heartbeat`,
+`target`, and top-level shape. No row values, tokens, or timestamps are
+reported. Only the lease script provenance pin changes in the frozen corpus;
+its 19,767-byte SHA-256 is
+`24e778e35a64cc5c322230a3264c84798b792e56588df15c722db2d15289dd50`.
+The reverse-provenance test proves the prior corpus bytes exactly. Hosted
+published-process regeneration is still required before drawing any conclusion
+about the cause or qualification. The native expiry harness's exact raw-corpus
+pin follows the same digest; a focused contract now checks that the native and
+historical consumers agree on the current bytes.
 
 The first actual Linux native expiry preflight ran at
 `3967412b7fbe4627a12f313e9d4a4b8156f14f93` in

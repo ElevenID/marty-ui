@@ -18,12 +18,14 @@ from typing import Callable
 
 if __package__:
     from .check_passport_supported_rust_model import (
-        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
+        DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
+        RUST_DEPENDENCIES, SELECTED,
     )
     from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rust_model import (
-        DISPOSABLE_SERVICES, PROJECT, RUST_DEPENDENCIES, SELECTED,
+        DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
+        RUST_DEPENDENCIES, SELECTED,
     )
     from passport_supported_infra_images import ROLES
 
@@ -60,6 +62,7 @@ SECRET_MOUNTS = {
     "organization": ("marty_db_password", "grpc_service_token"),
     "credential-template": ("marty_db_password", "grpc_service_token",
                             "signing_keys_internal_api_key"),
+    "compliance-profile": ("marty_db_password", "grpc_service_token"),
     "trust-profile": ("marty_db_password", "grpc_service_token",
                       "signing_keys_internal_api_key"),
     "presentation-policy": ("marty_db_password", "grpc_service_token",
@@ -70,7 +73,8 @@ SECRET_MOUNTS = {
                         "integration_secret_master_key",
                         "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key",
-             "issuance_api_key", "grpc_service_token"),
+             "issuance_api_key", "grpc_service_token",
+             "flow_application_event_hmac_key"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
@@ -211,6 +215,10 @@ def _support_environment(actual: object, service: str, status_origin: str,
     }
     public_origin = status_origin
     expected = {
+        "compliance-profile": {
+            **common, "SERVICE_NAME": "compliance_profile",
+            "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+        },
         "trust-profile": {
             **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
             "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
@@ -277,13 +285,14 @@ def _issuer_origin_environment(actual: object, service: str,
 
 def _flow_surface_environment(actual: object, surface: str) -> None:
     environment = _runtime_environment(actual, "Flow")
+    require(environment.get("FLOW_APPLICATION_EVENT_HMAC_KEY_FILE")
+            == "/run/secrets/flow_application_event_hmac_key",
+            "Disposable Flow application event authentication differs from model")
     expected = {
         "FLOW_CALLBACK_DESTINATIONS": (
             "00000000-0000-0000-0000-000000000001|"
             "https://edge:8443/__disposable/flow-callback?nonce=__MARTY_TOKEN__"),
         "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
-        "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE":
-            "/run/secrets/flow_application_event_hmac_key",
         "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_KEY": "/run/secrets/flow_workload_client_key",
@@ -372,7 +381,7 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
     }
     if surface == "selfhost":
         extra = {
-            "flow": ("flow_webhook_secret", "flow_application_event_hmac_key",
+            "flow": ("flow_webhook_secret",
                      "flow_workload_client_cert", "flow_workload_client_key",
                      "flow_workload_server_cert", "flow_workload_server_key",
                      "workload_identity_ca_cert"),
@@ -465,7 +474,7 @@ def verify(record: dict, surface: str, now: datetime,
     require(set(containers) == DISPOSABLE_SERVICES
             and all(re.fullmatch(r"[a-z][a-z0-9-]+", name) for name in containers),
             "Disposable service ownership is incomplete")
-    require(set(networks) == {project + "_private", project + "_callback_signing"},
+    require(set(networks) == {f"{project}_{name}" for name in DISPOSABLE_NETWORKS},
             "Disposable network identity escapes the project")
     disposable_root = Path(record.get("disposable_root", ""))
     require(disposable_root.is_absolute()
@@ -554,7 +563,7 @@ def verify(record: dict, surface: str, now: datetime,
             _flow_surface_environment(config.get("Env"), surface)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
-        elif service in {"credential-template", "trust-profile",
+        elif service in {"credential-template", "compliance-profile", "trust-profile",
                          "presentation-policy", "deployment-profile"}:
             _support_environment(config.get("Env"), service, status_origin, surface)
         elif service == "revocation-profile-migrate":
@@ -586,9 +595,14 @@ def verify(record: dict, surface: str, now: datetime,
         expected_attached = {expected_mode}
         if service in {"openbao", "passport-beta-bureau"}:
             expected_attached.add(project + "_callback_signing")
+        if service == "edge":
+            expected_attached.add(project + "_ingress")
         host_config = item.get("HostConfig")
+        expected_modes = (expected_attached if service in {
+            "edge", "openbao", "passport-beta-bureau"
+        } else {expected_mode})
         require(isinstance(host_config, dict)
-                and host_config.get("NetworkMode") == expected_mode,
+                and host_config.get("NetworkMode") in expected_modes,
                 "Disposable container network mode differs from Rust model")
         require(set(attached) == expected_attached
                 or (completed_init and not attached),
@@ -630,13 +644,16 @@ def verify(record: dict, surface: str, now: datetime,
         item = _inspect("network", identifier, runner)
         require(item.get("Id") == identifier and item.get("Name") == name
                 and item.get("Driver") == "bridge"
-                and item.get("Internal") is True,
+                and item.get("Internal") is (name != f"{project}_{INGRESS_NETWORK}"),
                 "Disposable network identity or isolation changed")
         _labels(item.get("Labels"), record, project)
         members = item.get("Containers", {})
+        allowed_members = (expected_network_members[name] if name ==
+                           f"{project}_{INGRESS_NETWORK}" else
+                           expected_network_members[name] | completed_init_ids)
         require(isinstance(members, dict)
                 and expected_network_members[name] <= set(members)
-                and set(members) <= expected_network_members[name] | completed_init_ids,
+                and set(members) <= allowed_members,
                 "Disposable network has an unowned member")
     for name in volumes:
         item = _inspect("volume", name, runner)
