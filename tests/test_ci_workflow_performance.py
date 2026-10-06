@@ -916,6 +916,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     canvas = {
         "Prepare isolated Canvas worker harness dependencies",
         "Require Kubernetes deployment contract executables",
+        "Fail fast on image-free Canvas renewal configuration",
         "Compile Bookworm-compatible base runtime acceptance",
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
@@ -953,6 +954,25 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]
     assert "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s" in renderer["run"]
     names = [step.get("name") for step in job["steps"]]
+    early = steps["Fail fast on image-free Canvas renewal configuration"]["run"]
+    assert early.count("bash scripts/ci/install-compose-renderer.sh") == 1
+    assert "run-canvas-config-proofs.py run" in early
+    assert "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1" in early
+    assert "MARTY_DIDCOMM_TEST_PYTHON" in early
+    assert "docker " not in early and "cargo " not in early
+    assert (
+        "install-compose-renderer.sh"
+        not in steps["Prepare required rendered base executable acceptance"]["run"]
+    )
+    late = steps["Prepare required rendered base executable acceptance"]["run"]
+    assert "docker pull redis:7-alpine" in late
+    assert "docker build --tag marty-envoy:native-contract config/envoy" in late
+    assert (
+        names.index("Compile reusable Rust test executables")
+        < names.index("Fail fast on image-free Canvas renewal configuration")
+        < names.index("Compile Bookworm-compatible base runtime acceptance")
+        < names.index("Build public selfhost image")
+    )
     assert (
         names.index("Compile reusable Rust test executables")
         < names.index("Prepare pinned standalone Compose renderer for Rust contracts")
@@ -1624,13 +1644,28 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
 
 
 def _assert_required_canvas_target_completion(published: str) -> None:
+    assert "(( composition_status == 0 && worker_status == 0 ))" in published
+    assert published.index(
+        "(( composition_status == 0 && worker_status == 0 ))"
+    ) < published.index("if (( expected_skipped_config_tests == 0 )); then")
+    assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
+    assert (
+        published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2
+    )
+    assert (
+        published.count("grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1'")
+        == 2
+    )
+    assert (
+        published.count("grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1'")
+        == 1
+    )
+    assert (
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
+        in published
+    )
+    assert '"${config_skips[@]}" --nocapture --test-threads=4' in published
     assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "
-        '"$composition_log" | wc -l) == 1 ]] || {\n'
-        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
-        "  exit 1\n"
-        "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
     )
@@ -1949,7 +1984,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1971,7 +2006,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
         in published
     )
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
@@ -2024,7 +2059,7 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -2133,8 +2168,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")

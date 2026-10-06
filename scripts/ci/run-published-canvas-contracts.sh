@@ -87,6 +87,18 @@ find_issuance_package_binary() {
 }
 composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
+config_skips=()
+expected_skipped_config_tests=0
+# The early image-free proof is tied to this composition executable, not the
+# independently compiled worker preflight executable. Missing/stale proof
+# keeps the ordinary full composition run and its completion-marker checks.
+if python3 "$(dirname "${BASH_SOURCE[0]}")/run-canvas-config-proofs.py" verify "$composition_executable"; then
+  config_skips=(
+    --skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy
+    --skip resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy
+  )
+  expected_skipped_config_tests=2
+fi
 worker_binary=$(find_issuance_package_binary marty-canvas-sync-worker)
 issuance_binary=$(find_issuance_package_binary marty-issuance-service)
 export MARTY_CANVAS_WORKER_TEST_BINARY="$worker_binary"
@@ -325,12 +337,12 @@ printf '%s\n' "$worker_tests" | grep -Fx "$serial_test: test"
 serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
 printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
-composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" | grep -c ': test$')
+composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" | grep -c ': test$')
 worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
-[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]
+[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]
 "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
@@ -348,7 +360,7 @@ cleanup_target_logs() {
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
-"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
@@ -374,16 +386,22 @@ wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
-[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
-  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
-  exit 1
-}
+if (( expected_skipped_config_tests == 0 )); then
+  [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
+    echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
+    exit 1
+  }
+  [[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
+    echo 'Resolved Kubernetes renewal 2x2 configuration proof did not execute and complete exactly once' >&2
+    exit 1
+  }
+else
+  # A test running despite an authorized skip is not the selected full suite.
+  [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
+  [[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
+fi
 [[ $(grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
   echo 'Published-SQL renewal private-IP refusal proof did not execute and complete exactly once' >&2
-  exit 1
-}
-[[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
-  echo 'Resolved Kubernetes renewal 2x2 configuration proof did not execute and complete exactly once' >&2
   exit 1
 }
 python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"

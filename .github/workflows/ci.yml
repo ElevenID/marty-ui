@@ -807,6 +807,19 @@ jobs:
           bash scripts/ci/install-compose-renderer.sh
           printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
+      - name: Fail fast on image-free Canvas renewal configuration
+        if: matrix.lane == 'canvas'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-compose-renderer.sh
+          export MARTY_BASE_COMPOSE_BINARY="$RUNNER_TEMP/compose-render-v5.4.0"
+          export MARTY_DIDCOMM_TEST_PYTHON="$(command -v python3)"
+          export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1
+          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"
+          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"
+          printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$MARTY_DIDCOMM_TEST_PYTHON" >> "$GITHUB_ENV"
+          python3 scripts/ci/run-canvas-config-proofs.py run "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Verify feature-regression observer isolation
         if: matrix.lane == 'contracts'
         shell: bash
@@ -905,7 +918,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/ci/install-compose-renderer.sh
+          test -x "$MARTY_BASE_COMPOSE_BINARY"
           test -x rust/target/debug/marty-issuance-service
           test -x rust/target/debug/marty-gateway
           test -x rust/target/debug/marty-flow
@@ -915,9 +928,8 @@ jobs:
           docker build --tag marty-envoy:native-contract config/envoy
           envoy_image_id="$(docker image inspect --format '{{.Id}}' marty-envoy:native-contract)"
           printf 'MARTY_ENVOY_TEST_IMAGE=%s\n' "$envoy_image_id" >> "$GITHUB_ENV"
-          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
-          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
-          printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
+          test -x "$MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
+          test -x "$MARTY_DIDCOMM_TEST_PYTHON"
       - name: Expose public image compiler cache credentials
         if: matrix.lane == 'canvas'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3

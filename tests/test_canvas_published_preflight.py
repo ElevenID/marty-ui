@@ -113,12 +113,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
-    composition_full = '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
+    composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
     assert sum(line.strip() == preflight for line in script.splitlines()) == 1
     assert sum(line.strip() == serial for line in script.splitlines()) == 1
     assert sum(line.strip() == json_serial for line in script.splitlines()) == 1
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
         in script
     )
     assert (
@@ -136,20 +136,26 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
+    assert script.count("if (( expected_skipped_config_tests == 0 )); then") == 1
+    assert (
+        script.count(
+            "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' \"$composition_log\""
+        )
+        == 1
+    )
     assert script.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
-        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
-        "  exit 1\n"
-        "}\n"
-        "[[ $(grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
-        "  echo 'Published-SQL renewal private-IP refusal proof did not execute and complete exactly once' >&2\n"
-        "  exit 1\n"
-        "}\n"
-        "[[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
-        "  echo 'Resolved Kubernetes renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
-        "  exit 1\n"
-        "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
     )
@@ -396,24 +402,28 @@ else
         substituted) printf 'test wrong_worker_validation_repository_matches_frozen_errors ... ok\n' ;;
       esac
     elif [[ "$name" == contract ]]; then
+      if [[ "$*" != *"--skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
       case "$TEST_RENDERED_CONFIG_MARKER" in
         ok) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
         prefixed) printf 'test %s ... RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'rendered-base-config' ;;
         missing) ;;
         duplicate) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
       esac
+      fi
       case "${TEST_PRIVATE_IP_PG_MARKER:-ok}" in
         ok) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
         prefixed) printf 'test %s ... DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\nok\n' 'private-ip-pg' ;;
         missing) ;;
         duplicate) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
       esac
+      if [[ "$*" != *"--skip resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
       case "${TEST_K8S_CONFIG_MARKER:-ok}" in
         ok) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
         prefixed) printf 'test %s ... RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'k8s-config' ;;
         missing) ;;
         duplicate) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
       esac
+      fi
     fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
@@ -541,6 +551,7 @@ fi
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
                 "GITHUB_JOB": "test-rust-services",
+                "GITHUB_SHA": "a" * 40,
                 "MARTY_CANVAS_FULL_QUALIFICATION": "1" if qualification else "0",
                 SCHEMA_ENV: "0",
             }
@@ -649,6 +660,88 @@ def test_rendered_config_marker_accepts_interleaved_harness_output(shell_case):
         call[:2] == ["child", "contract"] and "--test-threads=4" in call
         for call in calls
     )
+
+
+def _config_evidence(tmp_path, *, qualification=False):
+    record = {
+        "schema": 1,
+        "composition_sha256": hashlib.sha256(
+            (tmp_path / "contract").read_bytes()
+        ).hexdigest(),
+        "run": {
+            "GITHUB_RUN_ID": "12345",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_JOB": "test-rust-services",
+            "GITHUB_SHA": "a" * 40,
+        },
+        "qualification": "1" if qualification else "0",
+        "cases": [RENDERED_CONFIG, K8S_RENDERED_CONFIG],
+    }
+    (tmp_path / "canvas-config-proofs.json").write_text(
+        json.dumps(record) + "\n", encoding="ascii"
+    )
+    return record
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+@pytest.mark.parametrize("mode", ["full", "full-after-preflights"])
+def test_same_run_composition_proof_skips_only_two_completed_cases(
+    shell_case, tmp_path, qualification, mode
+):
+    _config_evidence(tmp_path, qualification=qualification)
+    if mode == "full-after-preflights":
+        (tmp_path / "canvas-published-preflights.sha256").write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + f"\n12345\n1\ntest-rust-services\n{int(qualification)}\n",
+            encoding="ascii",
+            newline="\n",
+        )
+    result, calls = shell_case([mode], qualification=qualification)
+    assert result.returncode == 0, result.stderr
+    composition = [
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    ]
+    assert len(composition) == 1
+    assert composition[0].count(RENDERED_CONFIG) == 1
+    assert composition[0].count(K8S_RENDERED_CONFIG) == 1
+    assert composition[0].count("--skip") == 3  # serial plus the two config cases
+    assert PRIVATE_IP_PG not in composition[0]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "hash", "run", "tier", "source", "cases", "malformed"]
+)
+def test_untrusted_composition_proof_falls_back_to_full_execution(
+    shell_case, tmp_path, mutation
+):
+    if mutation != "missing":
+        record = _config_evidence(tmp_path)
+        if mutation == "hash":
+            record["composition_sha256"] = "0" * 64
+        elif mutation == "run":
+            record["run"]["GITHUB_RUN_ATTEMPT"] = "other"
+        elif mutation == "tier":
+            record["qualification"] = "1"
+        elif mutation == "source":
+            record["run"]["GITHUB_SHA"] = "b" * 40
+        elif mutation == "cases":
+            record["cases"] = [RENDERED_CONFIG]
+        (tmp_path / "canvas-config-proofs.json").write_text(
+            "not-json" if mutation == "malformed" else json.dumps(record),
+            encoding="ascii",
+        )
+    result, calls = shell_case(["full"])
+    assert result.returncode == 0, result.stderr
+    composition = [
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    ]
+    assert len(composition) == 1
+    assert RENDERED_CONFIG not in composition[0]
+    assert K8S_RENDERED_CONFIG not in composition[0]
 
 
 @pytest.mark.parametrize("marker", ["missing", "duplicate"])
