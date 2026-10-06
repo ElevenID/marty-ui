@@ -2,9 +2,8 @@
 
 import json
 import os
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 TEST_TARGETS = (
     ("marty-canvas-acceptance", "canvas_published_worker_contract", "test"),
