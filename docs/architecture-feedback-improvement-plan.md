@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-06 checkpoint). The Canvas acceptance targets and their base-runtime, Flow, DIDComm, renewal, and Kubernetes support now have an acceptance-package owner. Later merged slices mapped more runtime dependencies in shadow mode, moved pure fixture matrices to fast owners, and selected proven test-only inputs without weakening protected merge validation. Gateway-to-Issuance and Gateway-to-Signing acceptance ownership has merged. The separate Canvas package and fresh startup evidence are proposed in this batch; nightly release qualification remains incomplete. No whole-pipeline speedup is attributed to those ownership changes.
+Status: active implementation (2026-10-06 checkpoint). The Canvas acceptance targets and their base-runtime, Flow, DIDComm, renewal, and Kubernetes support now have an acceptance-package owner. Later merged slices mapped more runtime dependencies in shadow mode, moved pure fixture matrices to fast owners, and selected proven test-only inputs without weakening protected merge validation. Gateway-to-Issuance and Gateway-to-Signing acceptance ownership and the separate Canvas package have merged. Fresh startup evidence was produced on main, but its enclosing full workflow failed and cannot authorize release or reuse. UI #1124 remains in hosted validation; nightly release qualification remains incomplete. No whole-pipeline speedup is attributed to those ownership changes.
 
 ## Objective and scope
 
@@ -448,6 +448,18 @@ container payload/cache input. The guard records discovery and exact selection,
 not proof that every selected case executed or complete historical provenance.
 
 ## Latest validation checkpoint
+
+### 2026-10-06 next local maintenance batch (unpublished)
+
+The reviewed #1124 final source is `5448ad90d744bce86df62bbc7a775e82954be3bb`; normal run `37437829353` and full run `37437847991` target that same source. Earlier failed candidate runs are obsolete, not qualification evidence. Keep this next batch unpublished until the parent is merged and rebase onto then-current main before opening its maintenance PR.
+
+Two independently reviewed follow-ups are assembled locally. The worker binary's roster environment lookup now has one private injectable seam at the unchanged initialization point; production still uses `env::var(...).ok()`, the existing lossless parser, and deferred errors. Two new unit tests pin exact environment keys/order, independent default/explicit bounds, invalid-input diagnostics, and no payload disclosure. All nine binary unit tests passed. This closes a fast wiring-coverage gap, but does not authorize dropping native roster cases. A concrete Event Stream-to-Gateway gRPC dependency is now recorded in the shadow planner, backed by configuration, the active SSE handler, client subscription, server registration and the optional-listener condition. All service changes remain full-workspace validation; this is not a complete runtime graph. The assembled Python contracts/planner checks passed 36 tests and 32 subtests.
+
+Main full run `37429957800`'s Canvas job succeeded in 63m06s: host compile 11m18s, Bookworm compile 9m30s, public image 11m16s, preflights 8m08s, and database suites 21m15s. Startup artifact `11399272409` matches its exact main source/run/attempt/job, normalized inputs, executable and pinned image identities; live comparison, native replay and owned cleanup passed. Its required enclosing workflow success is absent, so it remains ineligible for external qualification/reuse. These full-tier timings are not a comparison with routine-tier timings or an attributed speedup.
+
+Next local experiment: retain thirteen independently isolated validation databases while reusing one verified disposable PostgreSQL server and a pristine migrated template. Source/lifecycle review and scoped compilation passed; actual clone, frozen-case and cleanup execution are still pending. Do not change native case selection from this preliminary evidence.
+
+A8 transport investigation found that Flow forwards the outer VP without the stored presentation query/submission, and Presentation Policy attempts credential verification of that outer VP. The intended correction must authenticate the VP, select the exact embedded credential against server-bound query evidence, and reuse existing issuer-trust/status/policy checks. Core #352 supplies an additive authenticated-proof API on merged Core 0.2, but UI's 0.1.62 pin is not compatible with a rev-only refresh: consumed crypto features and authority-issuance APIs changed. A coordinated compatibility audit is required, not duplicated cryptography or unchecked extraction. Existing bearer defaults remain unchanged; holder-key policy remains a separate user decision. Nightly cannot be qualified solely by existing health/discovery cases.
 
 ### 2026-10-06 08:40 UTC assembled-batch follow-up
 
