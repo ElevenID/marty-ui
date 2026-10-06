@@ -4235,6 +4235,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-canonical-digest"
+version = "0.2.0"
+source = "git+https://github.com/ElevenID/marty-core?rev=fc7d029883d25a13c216756ff3e0056f2739c662#fc7d029883d25a13c216756ff3e0056f2739c662"
+dependencies = [
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "marty-canvas-acceptance"
 version = "0.1.0"
 dependencies = [
@@ -4808,7 +4817,7 @@ name = "marty-oid4vp-contract"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "marty-verification",
+ "marty-canonical-digest",
  "percent-encoding",
  "serde",
  "serde_json",
