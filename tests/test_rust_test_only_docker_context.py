@@ -105,7 +105,10 @@ def _is_ignored(path: str, lines: list[str]) -> bool:
 
 
 def _active_owner_spans(text: str, name: str) -> list[tuple[int, int]]:
-    clean = _without_rust_comments(text)
+    return _active_owner_spans_from_clean(_without_rust_comments(text), name)
+
+
+def _active_owner_spans_from_clean(clean: str, name: str) -> list[tuple[int, int]]:
     # The shared comment lexer retains strings; its optional string mask does
     # not handle Rust character literals in these owners. Bound raw-string
     # detection here and reject syntax beyond the supported hash delimiter.
@@ -134,17 +137,34 @@ def _active_owner_spans(text: str, name: str) -> list[tuple[int, int]]:
     ]
 
 
-def _assert_test_only_owner(root: Path, name: str, owner: str) -> None:
-    assert (root / ISSUANCE_SRC / name).is_file()
-    references = []
+def _ownership_sources(root: Path, names: tuple[str, ...]) -> dict[str, str]:
+    """Read one fresh tracked-source snapshot per proof, without persistent caching."""
+    sources = {}
     for path in _tracked_paths(root, "rust/**/*.rs"):
         source = (root / path).read_text(encoding="utf-8")
-        if name not in source:
+        if any(name in source for name in names):
+            sources[path] = _without_rust_comments(source)
+    return sources
+
+
+def _assert_test_only_owner(
+    root: Path,
+    name: str,
+    owner: str,
+    sources: dict[str, str] | None = None,
+) -> None:
+    assert (root / ISSUANCE_SRC / name).is_file()
+    references = []
+    if sources is None:
+        sources = _ownership_sources(root, (name,))
+    for path, clean in sources.items():
+        if name not in clean:
             continue
-        clean = _without_rust_comments(source)
         start = 0
         while (position := clean.find(name, start)) != -1:
-            references.append((path, position, _active_owner_spans(source, name)))
+            references.append(
+                (path, position, _active_owner_spans_from_clean(clean, name))
+            )
             start = position + len(name)
     expected_path = ISSUANCE_SRC + owner
     assert len(references) == 1, f"Review additional Rust consumer of {name}"
@@ -167,8 +187,9 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
     assert "--cfg test" not in build_script and "--all-targets" not in build_script
 
     manifests = [ROOT / path for path in _tracked_paths(ROOT, "rust/**/Cargo.toml")]
+    sources = _ownership_sources(ROOT, tuple(TEST_LEAVES))
     for name, owner in TEST_LEAVES.items():
-        _assert_test_only_owner(ROOT, name, owner)
+        _assert_test_only_owner(ROOT, name, owner, sources)
     for manifest in manifests:
         parsed = tomllib.loads(manifest.read_text(encoding="utf-8"))
         targets = [
@@ -199,6 +220,60 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         .splitlines()
     )
     assert not _is_ignored("services/auth/assets/credential-login.js", public_lines)
+
+
+def test_ownership_snapshot_reads_and_lexes_shared_source_once(monkeypatch) -> None:
+    names = ("first_tests.rs", "second_tests.rs")
+    contents = {
+        "owner.rs": "\n".join(f'#[path = "{name}"] mod owned;' for name in names),
+        "other.rs": "fn unrelated() {}",
+    }
+    reads = []
+    lexed = []
+    original_lexer = _without_rust_comments
+
+    def read_source(path: Path, **kwargs) -> str:
+        assert kwargs == {"encoding": "utf-8"}
+        reads.append(path.name)
+        return contents[path.name]
+
+    def lex_source(source: str) -> str:
+        lexed.append(source)
+        return original_lexer(source)
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_tracked_paths", lambda *args: list(contents)
+    )
+    monkeypatch.setattr(Path, "read_text", read_source)
+    monkeypatch.setattr(sys.modules[__name__], "_without_rust_comments", lex_source)
+    first = _ownership_sources(Path("synthetic"), names)
+    assert reads == ["owner.rs", "other.rs"]
+    assert lexed == [contents["owner.rs"]]
+    assert first == {"owner.rs": original_lexer(contents["owner.rs"])}
+    # A later invocation reads again and observes an added consumer: there is
+    # no persistent cache which could conceal source drift.
+    contents["other.rs"] = '#[path = "first_tests.rs"] mod unexpected;'
+    second = _ownership_sources(Path("synthetic"), names)
+    assert reads == ["owner.rs", "other.rs", "owner.rs", "other.rs"]
+    assert "other.rs" in second and "other.rs" not in first
+
+
+def test_snapshot_owner_proof_rejects_additional_and_non_test_consumers() -> None:
+    import pytest
+
+    name = "canvas_sync_worker_retry_tests.rs"
+    owner = "canvas_sync_worker.rs"
+    path = ISSUANCE_SRC + owner
+    valid = f'#[cfg(test)]\n#[path = "{name}"]\nmod retry_handoff_tests;'
+    _assert_test_only_owner(ROOT, name, owner, {path: valid})
+    with pytest.raises(AssertionError, match="additional Rust consumer"):
+        _assert_test_only_owner(
+            ROOT, name, owner, {path: valid, "rust/extra.rs": f'include!("{name}");'}
+        )
+    with pytest.raises(AssertionError):
+        _assert_test_only_owner(
+            ROOT, name, owner, {path: valid.replace("#[cfg(test)]\n", "")}
+        )
 
 
 def test_source_ownership_guard_rejects_inert_and_feature_gated_wiring() -> None:
