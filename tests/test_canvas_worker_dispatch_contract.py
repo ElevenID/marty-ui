@@ -1,13 +1,13 @@
 """Dispatch corpus/controlled-hook integrity; not native runtime qualification."""
 
 import asyncio
-from copy import deepcopy
 import hashlib
 import importlib
 import inspect
 import json
-from pathlib import Path
 import runpy
+from copy import deepcopy
+from pathlib import Path
 
 import pytest
 
