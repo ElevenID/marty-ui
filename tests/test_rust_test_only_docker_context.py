@@ -25,6 +25,7 @@ ISSUANCE_SRC = "rust/services/issuance/src/"
 TEST_LEAVES = {
     "canvas_operation_http_prepared_tests.rs": "canvas_operation_http.rs",
     "canvas_sync_provider_http_tests.rs": "canvas_sync_provider_http.rs",
+    "canvas_sync_processor_tests.rs": "canvas_sync_processor.rs",
     "canvas_sync_worker_retry_tests.rs": "canvas_sync_worker.rs",
     "passport_http_reconciliation_tests.rs": "passport_http.rs",
     "python_format_tests.rs": "python_format.rs",

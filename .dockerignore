@@ -83,6 +83,7 @@ k8s/
 # Checkout tests keep them; release Docker COPY rust does not need them.
 rust/services/issuance/src/canvas_operation_http_prepared_tests.rs
 rust/services/issuance/src/canvas_sync_provider_http_tests.rs
+rust/services/issuance/src/canvas_sync_processor_tests.rs
 rust/services/issuance/src/canvas_sync_worker_retry_tests.rs
 rust/services/issuance/src/passport_http_reconciliation_tests.rs
 rust/services/issuance/src/python_format_tests.rs
