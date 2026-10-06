@@ -874,6 +874,9 @@ refusal precedes encryption: this is not an encryption interoperability proof.
 The local opted-in case passed and owned resources were verified removed.
 The author passed 185 runner-policy tests with one skip; independent review
 cleared its source and execution guards. All existing native cases remain.
+On the assembled successor, the complete runner-policy/context sweep passed
+192 tests with one skip in 331.21s; the shared service-image policies passed
+another ten tests. Touched Python Ruff checks, shell syntax and diff checks passed.
 
 The public Dockerfile's `!services/` rule admitted Python event modules into the
 build context even though runtime `COPY` instructions do not use them. A tiny
@@ -903,6 +906,10 @@ was updated while retaining independent initiation RPC/type/route assertions.
 Both fixes passed scoped checks and independent review. Exact-head normal CI
 `37477668436` and CodeQL `37477668755` were live at this checkpoint; the Linux
 rendered-config completion proof and protected merge are still required.
+The contracts lane subsequently passed: its Linux log records both roster fast
+owners, the real-policy/crypto renewal matrix and the independent descriptor
+test as `ok` at 14:28:35 UTC. This is execution proof on #1127's exact source,
+not qualification of the unpublished PostgreSQL refusal addition or main.
 
 ## Design references
 
