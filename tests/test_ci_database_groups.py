@@ -310,7 +310,7 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
         '{"phase":"scenario","name":"x","duration_ms":true,"status":"ok"}',
         '{"phase":"scenario","name":"x","duration_ms":1,"status":["ok"]}',
         '{"phase":"scenario","name":"x","duration_ms":1,"status":"ok","payload":"secret"}',
-        '{"phase":"scenario","name":"x","duration_ms":3600001,"status":"ok"}',
+        '{"phase":"scenario","name":"x","duration_ms":43200001,"status":"ok"}',
     ],
 )
 def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> None:
@@ -325,7 +325,9 @@ def test_unavailable_optional_timing_file_does_not_change_contract_result(
     monkeypatch.setenv("RUNNER_TEMP", str(unavailable))
     command = [sys.executable, "-c", "print('contract-passed')"]
     assert GROUPS.run_groups({"rust-db": command}, tmp_path) == {"rust-db": 0}
-    assert "optional timing evidence unavailable" in capsys.readouterr().out
+    progress = capsys.readouterr().out
+    assert "optional timing evidence unavailable" in progress
+    assert "group=rust-db phase=contract name=group_total" in progress
     assert "contract-passed" in (tmp_path / "rust-db.log").read_text()
 
 

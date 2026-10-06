@@ -14,6 +14,10 @@ durations. The concurrent composition and worker target durations overlap;
 their sum is not the DB-step duration. `group_total` measures each owner's
 complete subprocess, including its cleanup. Preflight groups use the same
 schema and preserve their existing execution and proof rules.
+Parallel target completion is observed by a timing-only log relay at 100 ms
+polling resolution. The runner still waits and cancels the actual Rust child
+PIDs; if a relay cannot drain, its optional target duration is omitted rather
+than estimated from the other target's completion time.
 
 Canvas's exact-owned PostgreSQL fixture emits `container_startup`,
 `database_readiness`, `migration_seed`, and `cleanup`, including failed phase
@@ -24,6 +28,9 @@ REST worker harness separately times each corpus-owned `scenario`, plus its
 own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS fixture,
 not PostgreSQL seeding. A case's scenario duration includes its nested setup,
 worker run, assertions, and cleanup, so these durations must not be added.
+Explicit verified close and the following Rust destructor produce one cleanup
+phase when the first close succeeds; a failed partial cleanup can be timed
+again if the destructor retries remaining owned resources.
 
 This is instrumentation, not a speedup or evidence to remove tests. All
 existing cases, image/source pins, connection limits, qualification tiers,

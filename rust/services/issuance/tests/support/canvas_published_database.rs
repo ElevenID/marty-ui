@@ -1680,6 +1680,12 @@ impl PublishedDatabase {
     }
 
     fn cleanup(&mut self) -> Result<(), String> {
+        // Explicit close is followed by Drop. Only the call that still owns
+        // resources emits a cleanup duration; a failed partial close remains
+        // timed again when Drop retries the remaining resource.
+        if self.probe.is_none() && self.postgres.is_none() {
+            return Ok(());
+        }
         let cleanup_timing = PhaseTimer::start("cleanup", "published_database");
         if let Some(probe) = &self.probe {
             let info = inspect(probe)?;

@@ -78,7 +78,7 @@ VALIDATION_CORPUS_SHA256 = {
 def emit_phase(phase, name, started, status):
     """Emit only a fixed phase, corpus-owned case ID, duration and outcome."""
     print(
-        "MARTY_CI_PHASE_V1 "
+        "\nMARTY_CI_PHASE_V1 "
         + json.dumps(
             {
                 "phase": phase,
@@ -371,7 +371,7 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
             # owned fixture; the group relay validates every field again.
             for line in child.stderr.splitlines():
                 if line.startswith("MARTY_CI_PHASE_V1 "):
-                    print(line, flush=True)
+                    print("\n" + line, flush=True)
             assert child.returncode == 0, (
                 f"Native worker replay failed: {child.stdout} {child.stderr}"
             )

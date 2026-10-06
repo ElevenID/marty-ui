@@ -75,7 +75,7 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
         )
         or isinstance(duration, bool)
         or not isinstance(duration, int)
-        or not 0 <= duration <= 3_600_000
+        or not 0 <= duration <= 43_200_000
         or not isinstance(status, str)
         or status not in TIMING_STATUSES
     ):
@@ -199,6 +199,11 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
     timing_lock = Lock()
 
     def record(value: dict[str, object]) -> None:
+        print(
+            f"[db-timing] group={value['group']} phase={value['phase']} "
+            f"name={value['name']} duration_ms={value['duration_ms']} status={value['status']}",
+            flush=True,
+        )
         if timing_path is None:
             return
         with timing_lock:
@@ -211,11 +216,6 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
             except OSError:
                 print("[db-timing] optional timing evidence unavailable", flush=True)
                 return
-            print(
-                f"[db-timing] group={value['group']} phase={value['phase']} "
-                f"name={value['name']} duration_ms={value['duration_ms']} status={value['status']}",
-                flush=True,
-            )
 
     def run(name: str, command: list[str]) -> int:
         group_started = monotonic()

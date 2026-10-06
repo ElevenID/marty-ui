@@ -1924,16 +1924,23 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '( set -o pipefail; timed canvas_target composition "$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 2>&1 | tee "$composition_log" | sed -u -n \'/^MARTY_CI_PHASE_V1 /p\' ) &'
+            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
     assert (
         published.splitlines().count(
-            '( set -o pipefail; MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" timed canvas_target worker "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log" | sed -u -n \'/^MARTY_CI_PHASE_V1 /p\' ) &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
+    assert 'kill "$composition_pid" "$worker_pid"' in published
+    assert 'tail --pid="$pid"' in published
+    assert (
+        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
+        in published
+    )
+    assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (

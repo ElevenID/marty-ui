@@ -357,15 +357,51 @@ timed canvas_serial json_consumer "$composition_executable" "$serial_composition
 target_logs=$(mktemp -d "${RUNNER_TEMP:?}/canvas-targets.XXXXXX")
 composition_log="$target_logs/composition.log"
 worker_log="$target_logs/worker.log"
+composition_end="$target_logs/composition.end"
+worker_end="$target_logs/worker.end"
 cleanup_target_logs() {
-  rm -f -- "$composition_log" "$worker_log"
+  rm -f -- "$composition_log" "$worker_log" "$composition_end" "$worker_end"
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
-( set -o pipefail; timed canvas_target composition "$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 2>&1 | tee "$composition_log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ) &
+relay_target_timing() {
+  local pid="$1" log="$2" end_file="$3"
+  # This observer cannot own or obscure the Rust child exit status. Its
+  # completion clock has at most the 100 ms tail polling resolution.
+  if ( set -o pipefail; tail --pid="$pid" --sleep-interval=0.1 -n +1 -f "$log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ); then
+    python3 -c 'import time; print(time.monotonic_ns())' >"$end_file"
+  fi
+}
+composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
+"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
-( set -o pipefail; MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" timed canvas_target worker "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ) &
+relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &
+composition_relay_pid=$!
+worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
+MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
+relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &
+worker_relay_pid=$!
+report_target_timing() {
+  local name="$1" started="$2" status="$3" end_file="$4" ended
+  if [[ ! -s "$end_file" ]]; then
+    echo "Optional Canvas target timing unavailable for $name" >&2
+    return 0
+  fi
+  ended=$(<"$end_file")
+  if [[ ! "$ended" =~ ^[0-9]+$ ]]; then
+    echo "Optional Canvas target timing malformed for $name" >&2
+    return 0
+  fi
+  printf 'MARTY_CI_PHASE_V1 {"phase":"canvas_target","name":"%s","duration_ms":%s,"status":"%s"}\n' \
+    "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
+}
+drain_target_relays() {
+  # Relays observe only the exact Rust child PIDs; they never own cancellation
+  # or gate status. Drain before deleting the complete raw diagnostic logs.
+  wait "$composition_relay_pid" || true
+  wait "$worker_relay_pid" || true
+}
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"
   cat "$composition_log"
@@ -374,9 +410,13 @@ report_target_logs() {
 }
 stop_targets() {
   local composition_stopped=0 worker_stopped=0
+  trap - INT TERM
   kill "$composition_pid" "$worker_pid" 2>/dev/null || true
   wait "$composition_pid" 2>/dev/null || composition_stopped=$?
   wait "$worker_pid" 2>/dev/null || worker_stopped=$?
+  drain_target_relays
+  report_target_timing composition "$composition_started" "$composition_stopped" "$composition_end"
+  report_target_timing worker "$worker_started" "$worker_stopped" "$worker_end"
   report_target_logs "$composition_stopped" "$worker_stopped"
   exit "$1"
 }
@@ -386,6 +426,9 @@ composition_status=0
 worker_status=0
 wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
+drain_target_relays
+report_target_timing composition "$composition_started" "$composition_status" "$composition_end"
+report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
 [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
