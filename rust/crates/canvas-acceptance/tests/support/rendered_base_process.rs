@@ -148,6 +148,10 @@ impl RenderedBase {
 fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() {
     use serde_json::json;
 
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Rendered base configuration requires the configured Linux Canvas gate");
+        return;
+    }
     // This is a renderer/component proof, not a substitute for the owned
     // database, ingress, process, wallet, and cleanup acceptance cases.
     let directory = tempfile::tempdir().expect("owned synthetic policy directory");
@@ -236,4 +240,5 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             Some("redis://127.0.0.1:16379")
         );
     }
+    println!("\nRENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1");
 }

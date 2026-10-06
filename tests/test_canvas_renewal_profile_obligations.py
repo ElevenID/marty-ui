@@ -2,8 +2,11 @@
 
 from copy import deepcopy
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -272,6 +275,14 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
     ):
         assert case in body
     assert "RenderedBase::render(&spec)" in body
+    assert (
+        'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref()!=Ok("1")'
+        in body
+    )
+    assert 'println!("\\nRENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1")' in body
+    assert body.index(
+        'println!("\\nRENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1")'
+    ) > body.index('gateway.get("REDIS_URL")')
     for field in (
         "DIDCOMM_ALLOW_PRIVATE_IPS",
         "DIDCOMM_TLS_CA_FILE",
@@ -291,6 +302,18 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
     assert '"$composition_executable" --skip "$serial_composition_test"' in runner
     assert f"--skip {name}" not in runner
     assert f"--skip rendered_base_process::{name}" not in runner
+    assert (
+        runner.count(
+            f"grep -Fxc 'test {expected_row.removesuffix(': test')} ... ok' \"$composition_log\""
+        )
+        == 1
+    )
+    assert (
+        runner.count(
+            "grep -Fxc 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 1
+    )
 
 
 def test_rendered_config_matrix_has_one_registered_composition_owner() -> None:
@@ -301,7 +324,10 @@ def test_rendered_config_matrix_has_one_registered_composition_owner() -> None:
     )
 
 
-@pytest.mark.parametrize("fault", ["missing", "case", "renderer", "runner", "platform"])
+@pytest.mark.parametrize(
+    "fault",
+    ["missing", "case", "renderer", "runner", "platform", "gate", "marker", "proof"],
+)
 def test_rendered_config_owner_rejects_drift(fault: str) -> None:
     source = SOURCE.read_text(encoding="utf-8")
     config = RENDERED_CONFIG.read_text(encoding="utf-8")
@@ -316,6 +342,20 @@ def test_rendered_config_owner_rejects_drift(fault: str) -> None:
         config = config.replace(
             '#[cfg(target_os = "linux")]', '#[cfg(target_os = "windows")]'
         )
+    elif fault == "gate":
+        config = config.replace(
+            'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")',
+            'std::env::var("UNRELATED_FLAG")',
+        )
+    elif fault == "marker":
+        config = config.replace(
+            "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1", "EARLY_NOOP_COMPLETE"
+        )
+    elif fault == "proof":
+        runner = runner.replace(
+            "grep -Fxc 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'",
+            "grep -Fxc 'NOOP_SUCCESS'",
+        )
     else:
         runner += (
             "\n--skip rendered_base_renewal_config_crosses_encryption_"
@@ -323,6 +363,51 @@ def test_rendered_config_owner_rejects_drift(fault: str) -> None:
         )
     with pytest.raises(AssertionError):
         _validate_rendered_config_owner(source, config, runner)
+
+
+def test_rendered_config_execution_guard_rejects_early_return_and_duplicate_rows(
+    tmp_path: Path,
+) -> None:
+    bash = shutil.which("bash")
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git is not None
+        bash = str(Path(git).parent.parent / "bin/bash.exe")
+    assert bash is not None
+    runner = RUNNER.read_text(encoding="utf-8")
+    guard = re.search(
+        r"(?ms)^\[\[ \$\(grep -Fxc 'test rendered_base_process::rendered_base_renewal_config.*?^\}",
+        runner,
+    )
+    assert guard is not None
+    test_row = (
+        "test rendered_base_process::"
+        "rendered_base_renewal_config_crosses_encryption_and_private_address_policy ... ok"
+    )
+    marker = "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1"
+    log = tmp_path / "composition.log"
+    for lines, expected in (
+        ([test_row, marker], 0),
+        ([test_row], 1),
+        ([marker], 1),
+        ([test_row.replace("ok", "ignored"), marker], 1),
+        ([test_row, marker, marker], 1),
+        ([test_row, test_row, marker], 1),
+    ):
+        log.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        result = subprocess.run(
+            [
+                bash,
+                "-c",
+                f'composition_log="$1"\n{guard.group()}',
+                "_",
+                log.as_posix(),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == expected, result.stderr
 
 
 @pytest.mark.parametrize(
