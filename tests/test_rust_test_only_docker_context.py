@@ -103,6 +103,15 @@ def _is_ignored(path: str, lines: list[str]) -> bool:
             matches = path.startswith(pattern)
         elif pattern == "**":
             matches = True
+        elif pattern in {"rust/services/*/tests", "rust/crates/*/tests"}:
+            # These owned directory rules exclude their descendants. Keep
+            # this bounded to the two actual Dockerignore patterns; a later
+            # negation still wins under the ordered rule loop below.
+            prefix = pattern.split("/*/", 1)[0] + "/"
+            parts = (
+                path.removeprefix(prefix).split("/") if path.startswith(prefix) else []
+            )
+            matches = len(parts) >= 2 and bool(parts[0]) and parts[1] == "tests"
         elif "*" not in pattern:
             matches = path == pattern or path.startswith(pattern + "/")
         else:
@@ -302,6 +311,8 @@ def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None
             assert _is_ignored(path, lines), (
                 f"Docker COPY still includes {ignore_path}: {path}"
             )
+            assert not _is_ignored(path, [*lines, f"!{path}"])
+            assert not _is_ignored(path, [*lines, "!**"])
             if ignore_path == ".dockerignore":
                 assert lines.count(path) == 1, f"Root exclusion must be exact: {path}"
         assert not _is_ignored(OID4VP_CORPUS, lines)
