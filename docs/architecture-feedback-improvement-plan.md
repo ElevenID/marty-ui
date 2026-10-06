@@ -553,6 +553,29 @@ target disablement, issued rows/ciphertext or process/idle/SIGINT behavior.
 All five native roster-failure cases and historical qualification remain intact.
 Separate real database/provider evidence is needed before any native tier cut.
 
+## Roster component experiment disposition (2026-10-06)
+
+The real five-case worker/provider/OAuth/PostgreSQL component draft is deferred,
+uncommitted and unpublished in `worktrees/a4-roster-failure-component-20261006`.
+Two owned HTTP-loopback experiments failed before worker execution: the pinned
+published schema requires `canvas_oauth_connections.canvas_base_url` to start
+with `https://`. Owned fixture containers were verified absent after those
+failures. Neither schema nor production trust policy was changed to admit HTTP.
+
+A single-child TLS draft reuses the existing acceptance executable and HTTPS
+fixture. Cached Windows compilation, scoped Clippy and ten Python driver controls
+passed, but these do not qualify real Linux Rust TLS/SQL execution. Its proposed
+240s internal deadline and 1080s outer limit are not an absolute cleanup guarantee:
+the outer timeout cannot prove Docker CLI descendants and pending daemon creates
+are terminal. Existing exact UUID recovery verifies topology, but safe reuse also
+needs the closed-endpoint and pending-operation protocol already implemented in
+`selfhost_packaged_runtime.rs`. Merely widening timeouts is not a substitute.
+
+Retain all five native roster cases and current tiers. Do not include the draft
+in the reviewed unit/renewal batch or use it as demotion evidence. Revisit this
+slice only with a reviewed lifecycle design and real hosted Linux qualification;
+no component speedup is attributed to the failed or mocked experiments.
+
 ## A6 container-input audit disposition (2026-10-06)
 
 The dedicated event-stream and revocation-profile Dockerfiles still cook the
