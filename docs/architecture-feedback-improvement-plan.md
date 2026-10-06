@@ -529,6 +529,30 @@ The provider-configuration historical oracle now has an image-only candidate own
 
 Review correction for that local candidate: the 12 signing-detail names are distinct within the integration target, but `signing_error_detail::scalar_api_remains_a_projection_of_the_shared_owner` is source-included there and also runs in the issuance library target. The historical contracts log has 13 signing-related `ok` lines across those two targets, not 13 unique obligations or independent oracles. The static guard rejects ignored/conditional test attributes and commented-out ownership wiring; it does not discover current Cargo runtime execution. The combined batch makes manifest-only changes select release checks in addition to the existing conservative Rust lane, and excludes this CI-only manifest from service images. Helper/test changes remain broad. No new execution exclusion or release-only shortcut is authorized.
 
+## Assembled next test-layer batch (unpublished, 2026-10-06)
+
+Exact combined source `4b2bd952511bc8818954db43fecdcc6d95f36f65`, based on
+#1126's corrected `e18d9c9d0`, passed independent assembled review and all
+16 `canvas_sync_processor::tests` plus 41 `initiation_didcomm::tests` library
+tests. Their harness execution took 0.01s and 0.06s respectively, excluding
+compilation (the first invocation compiled for 1m14s). These are current local
+results, not a comparative benchmark or a hosted turnaround saving. Direct
+formatting and diff checks passed. The renewal/context classifier component
+passed 125 Python checks before assembly; the roster component passed 37 related
+policy checks. Parent #1126 still requires exact-head hosted qualification and
+protected merge; this follow-up remains unpublished until that parent merges.
+
+The additional roster owner is
+`canvas_sync_processor::tests::roster_failure_processor_dispatch_preserves_tracked_state`.
+It injects five existing provider error variants into the real processor's
+BackgroundRoster path, checks independent literal error/retry expectations
+against the frozen scenario/oracle names, and observes one run-scoped roster
+call with no tracked simulator-state mutations. It does not exercise the real
+OAuth/HTTPS provider, worker handoff, durable job retry/dead-letter transitions,
+target disablement, issued rows/ciphertext or process/idle/SIGINT behavior.
+All five native roster-failure cases and historical qualification remain intact.
+Separate real database/provider evidence is needed before any native tier cut.
+
 ## A7 current-run revalidation (2026-10-06)
 
 Core's latest successful [PR CI run 37419154761](https://github.com/ElevenID/marty-core/actions/runs/37419154761)
