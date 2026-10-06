@@ -503,6 +503,32 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert queued["rust_matrix"] == '["canvas","contracts"]'
 
 
+def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
+    tmp_path: Path,
+) -> None:
+    # The generated-image check is owned by the runtime/image job. None of
+    # its production, Compose, helper, or workflow inputs may take leaf-only CI.
+    for path in (
+        "rust/services/issuance/src/lib.rs",
+        "docker-compose.beta.yml",
+        "scripts/beta-application-image-plan.ps1",
+        "scripts/test_beta_application_image_compose.py",
+        ".github/workflows/ci.yml",
+    ):
+        assert (ROOT / path).is_file(), path
+        selected = _classify_changed_paths([path], tmp_path, include_rust_plan=True)[0]
+        assert selected["rust"] == selected["rust_runtime"] == "true", path
+        assert selected["rust_matrix"] == '["canvas","contracts"]', path
+    queued = _classify_changed_paths(
+        ["rust/services/issuance/src/lib.rs"],
+        tmp_path,
+        event="merge_group",
+        include_rust_plan=True,
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
