@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.227",
+  "release": "marty-ui@1.1.228",
   "release_state": "eligible",
   "components": [
     {
