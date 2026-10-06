@@ -27,7 +27,7 @@ def test_gateway_public_dto_shape_manifest_is_unique_and_versioned() -> None:
     assert all(len(model["fields"]) == len(set(model["fields"])) for model in models)
 
 
-def test_every_gateway_behavior_vector_has_an_executable_rust_test_owner() -> None:
+def test_every_gateway_behavior_vector_has_a_declared_rust_test_owner() -> None:
     assert len(VECTOR_TEST_OWNERS) == 23
     _assert_rust_behavior_vector_test_owners()
 
@@ -100,6 +100,15 @@ def test_vector_owner_guard_rejects_dead_or_nonexecuting_owners(
 
     source.write_text(
         original.replace(
+            "    #[test]\n", '    #[ignore = "needs a service"]\n    #[test]\n'
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="ignored"):
+        _assert_rust_behavior_vector_test_owners()
+
+    source.write_text(
+        original.replace(
             "    #[test]\n", '    #[cfg(feature = "hidden")]\n    #[test]\n'
         ),
         encoding="utf-8",
@@ -117,11 +126,38 @@ def test_vector_owner_guard_rejects_dead_or_nonexecuting_owners(
     with pytest.raises(AssertionError, match="not loaded by its Rust test"):
         _assert_rust_behavior_vector_test_owners()
 
+    source.write_text(
+        original.replace(
+            '        let _ = include_str!("../../../../contracts/gateway-example-behavior.json");',
+            '        let _ = r#"include_str!("../../../../contracts/gateway-example-behavior.json")"#;',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="not loaded by its Rust test"):
+        _assert_rust_behavior_vector_test_owners()
+
+    source.write_text(
+        original.replace(
+            '        let _ = include_str!("../../../../contracts/gateway-example-behavior.json");',
+            '        let url = "https://example.test"; // include_str!("../../../../contracts/gateway-example-behavior.json")',
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="not loaded by its Rust test"):
+        _assert_rust_behavior_vector_test_owners()
+
     source.write_text(original, encoding="utf-8")
-    (source.parent / "lib.rs").write_text(
+    lib_source = source.parent / "lib.rs"
+    lib_source.write_text(
         "// pub mod vector_tests;\n", encoding="utf-8"
     )
     with pytest.raises(AssertionError, match="module is not registered"):
+        _assert_rust_behavior_vector_test_owners()
+
+    lib_source.write_text(
+        '#[cfg(feature = "hidden")]\npub mod vector_tests;\n', encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="conditionally registered"):
         _assert_rust_behavior_vector_test_owners()
 
 
@@ -175,7 +211,19 @@ def test_vector_owner_guard_rejects_uncalled_loader_and_production_only_referenc
     _assert_rust_behavior_vector_test_owners()
 
     source.write_text(
-        loader_source.replace("let _ = contract();", "let _ = 1;"), encoding="utf-8"
+        loader_source.replace(
+            "let _ = contract();", 'let _ = r#"https://example.test"#; // contract()'
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="not loaded by its Rust test"):
+        _assert_rust_behavior_vector_test_owners()
+
+    source.write_text(
+        loader_source.replace(
+            "let _ = contract();", 'let _ = r#"contract() at https://example.test"#;'
+        ),
+        encoding="utf-8",
     )
     with pytest.raises(AssertionError, match="not loaded by its Rust test"):
         _assert_rust_behavior_vector_test_owners()

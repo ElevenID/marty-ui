@@ -103,9 +103,8 @@ class VectorTestOwner:
     loader: str | None = None
 
 
-# One executable Rust test owner per public vector. Some vectors have additional
-# consumers; this inventory deliberately requires only one independently
-# discoverable owner, not an exhaustive list of all uses.
+# One declared Rust test owner per public vector. Some vectors have additional
+# consumers; this static inventory is not an exhaustive list of all uses.
 VECTOR_TEST_OWNERS = {
     "credential-metadata-behavior.json": VectorTestOwner(
         "rust/services/gateway/src/credential_metadata.rs",
@@ -382,19 +381,19 @@ def _rust_function_body(source: str, declaration: re.Match[str]) -> str:
     # declaration's indentation closes the function, not a nested block.
     line_start = source.rfind("\n", 0, declaration.start()) + 1
     indentation = re.match(r"[ \t]*", source[line_start:]).group()
-    closing = re.search(
-        rf"(?m)^{re.escape(indentation)}\}}[ \t]*$", source[declaration.end() :]
-    )
+    code = _without_rust_comments(source, mask_strings=True)
+    closing = re.search(rf"(?m)^{re.escape(indentation)}\}}[ \t]*$", code[declaration.end() :])
     if closing is None:
         raise AssertionError("Rust vector test/helper has no function boundary")
     return source[declaration.end() : declaration.end() + closing.start()]
 
 
 def _test_section(source: str, test_name: str) -> str:
+    code = _without_rust_comments(source, mask_strings=True)
     attributes_and_function = re.search(
         rf"(?m)((?:^[ \t]*#\[[^\n]+\]\r?\n)+)[ \t]*(?:async[ \t]+)?"
         rf"fn[ \t]+{re.escape(test_name)}[ \t]*\(",
-        source,
+        code,
     )
     if attributes_and_function is None:
         raise AssertionError(
@@ -403,31 +402,92 @@ def _test_section(source: str, test_name: str) -> str:
     attributes = attributes_and_function.group(1)
     if not re.search(r"(?m)^[ \t]*#\[(?:tokio::)?test\][ \t]*$", attributes):
         raise AssertionError(f"Rust vector test is not executable: {test_name}")
-    if re.search(r"(?m)^[ \t]*#\[ignore(?:\([^\n]*\))?\][ \t]*$", attributes):
+    # Rust accepts bare `#[ignore]` and valued `#[ignore = "reason"]` (and
+    # rustc may accept other attribute payloads). Any ignore token is unsafe
+    # for a test promised to run in the default workspace command.
+    if re.search(r"(?m)^[ \t]*#\[[ \t]*ignore\b", attributes):
         raise AssertionError(f"Rust vector test is ignored: {test_name}")
     if re.search(r"(?m)^[ \t]*#\[cfg(?:_attr)?\(", attributes):
         raise AssertionError(f"Rust vector test is conditionally compiled: {test_name}")
     if not re.search(
-        r"(?m)^[ \t]*#\[cfg\(test\)\]", source[: attributes_and_function.start()]
+        r"(?m)^[ \t]*#\[cfg\(test\)\]", code[: attributes_and_function.start()]
     ):
         raise AssertionError(f"Rust vector test has no test-only module: {test_name}")
     return _rust_function_body(source, attributes_and_function)
 
 
+def _without_rust_comments(source: str, *, mask_strings: bool = False) -> str:
+    """Mask comments, optionally strings, without treating URL slashes as comments."""
+
+    def masked(value: str) -> str:
+        return "".join("\n" if char == "\n" else " " for char in value)
+
+    output: list[str] = []
+    index = 0
+    while index < len(source):
+        if source.startswith("//", index):
+            end = source.find("\n", index)
+            if end < 0:
+                end = len(source)
+            output.append(" " * (end - index))
+            index = end
+            continue
+        if source.startswith("/*", index):
+            start = index
+            depth = 1
+            index += 2
+            while index < len(source) and depth:
+                if source.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            output.append(masked(source[start:index]))
+            continue
+        raw = re.match(r'r(#{0,16})"', source[index:])
+        if raw:
+            end_marker = '"' + raw.group(1)
+            end = source.find(end_marker, index + len(raw.group()))
+            end = len(source) if end < 0 else end + len(end_marker)
+            output.append(masked(source[index:end]) if mask_strings else source[index:end])
+            index = end
+            continue
+        if source[index] == '"':
+            start = index
+            index += 1
+            while index < len(source):
+                if source[index] == "\\":
+                    index += 2
+                elif source[index] == '"':
+                    index += 1
+                    break
+                else:
+                    index += 1
+            output.append(masked(source[start:index]) if mask_strings else source[start:index])
+            continue
+        output.append(source[index])
+        index += 1
+    return "".join(output)
+
+
 def _loads_vector(source: str, vector_name: str) -> bool:
-    return bool(
-        re.search(
-            rf'(?m)^[ \t]*(?!//)[^\n]*\binclude_str!\([ \t\r\n]*"[^"\n]*/{re.escape(vector_name)}"',
-            source,
-        )
-    )
+    clean = _without_rust_comments(source)
+    code = _without_rust_comments(source, mask_strings=True)
+    for macro in re.finditer(r"\binclude_str!\s*\(", code):
+        argument = re.match(r'\s*"([^"\n]+)"\s*\)', clean[macro.end() :])
+        if argument and argument.group(1).endswith("/" + vector_name):
+            return True
+    return False
 
 
 def _assert_rust_behavior_vector_test_owners() -> None:
-    """Bind each vector to a registered, non-ignored test in the workspace lane.
+    """Check static owner/reference prerequisites for the workspace test lane.
 
-    This proves test discovery/ownership, not per-case dynamic coverage. The
-    unchanged Rust workspace test job remains the execution authority.
+    This does not prove Cargo discovery, per-case execution, or dynamic vector
+    coverage. The unchanged Rust workspace test job is the execution authority.
     """
     vectors = {
         path.name for path in (REPO_ROOT / "contracts").glob("gateway-*-behavior.json")
@@ -473,32 +533,48 @@ def _assert_rust_behavior_vector_test_owners() -> None:
             raise AssertionError(
                 f"public vector library tests are disabled: {vector_name}"
             )
-        lib_source = (crate / "src/lib.rs").read_text(encoding="utf-8")
-        if not re.search(
+        lib_source = _without_rust_comments(
+            (crate / "src/lib.rs").read_text(encoding="utf-8")
+        )
+        module = re.search(
             rf"(?m)^[ \t]*(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+"
             rf"{re.escape(source_path.stem)}[ \t]*;",
             lib_source,
-        ):
+        )
+        if module is None:
             raise AssertionError(
                 f"public vector test module is not registered: {vector_name}"
             )
+        adjacent_attributes = re.search(
+            r"(?m)(?:^[ \t]*#\[[^\n]+\]\r?\n)+\Z", lib_source[: module.start()]
+        )
+        if adjacent_attributes and re.search(
+            r"(?m)^[ \t]*#\[[ \t]*cfg(?:_attr)?\b", adjacent_attributes.group()
+        ):
+            raise AssertionError(
+                f"public vector test module is conditionally registered: {vector_name}"
+            )
 
-        source = source_path.read_text(encoding="utf-8")
+        source = _without_rust_comments(source_path.read_text(encoding="utf-8"))
+        code = _without_rust_comments(source, mask_strings=True)
         test_section = _test_section(source, owner.test)
         if owner.loader is None:
             loaded = _loads_vector(test_section, vector_name)
         else:
             loader = re.search(
                 rf"(?m)^[ \t]*fn[ \t]+{re.escape(owner.loader)}[ \t]*\(",
-                source,
+                code,
             )
-            if loader is None or loader.start() > source.index(f"fn {owner.test}("):
+            if loader is None or loader.start() > code.index(f"fn {owner.test}("):
                 raise AssertionError(
                     f"public vector test helper is missing: {vector_name}"
                 )
             helper_section = _rust_function_body(source, loader)
             loaded = _loads_vector(helper_section, vector_name) and bool(
-                re.search(rf"\b{re.escape(owner.loader)}\s*\(\s*\)", test_section)
+                re.search(
+                    rf"\b{re.escape(owner.loader)}\s*\(\s*\)",
+                    _without_rust_comments(test_section, mask_strings=True),
+                )
             )
         if not loaded:
             raise AssertionError(
