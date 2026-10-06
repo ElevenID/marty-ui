@@ -553,6 +553,26 @@ target disablement, issued rows/ciphertext or process/idle/SIGINT behavior.
 All five native roster-failure cases and historical qualification remain intact.
 Separate real database/provider evidence is needed before any native tier cut.
 
+## A6 container-input audit disposition (2026-10-06)
+
+The dedicated event-stream and revocation-profile Dockerfiles still cook the
+workspace, but neither is selected by current CI/CD or Compose. Current CI uses
+shared `rust/services/Dockerfile.ci` targets; release uses `services/Dockerfile`.
+Pinned cargo-chef 0.1.78 supports binary-scoped preparation and package/bin cooking,
+but changing these unused recipes would not improve the current critical path.
+Keep shared workspace cooking for the actual multi-service consumers. Revisit
+dedicated recipe narrowing only if those builds become active, with locked image
+validation rather than dependency counts as timing evidence.
+
+A tracked-file inventory finds 335 files under service/crate `tests` trees,
+totalling 5,352,231 bytes (5.10 MiB) before Dockerignore rules. The two dedicated
+shared service/CI ignore policies exclude those trees; the root-context policy
+does not exclude them as a class. This is an input inventory, not measured Docker
+transfer, proof of complete production-input closure, or a claimed speedup.
+Further exclusion requires checking actual compiler/recipe consumers and image
+validation; do not replace the existing exact cfg(test) source-leaf guard with a
+blanket source glob.
+
 ## A7 current-run revalidation (2026-10-06)
 
 Core's latest successful [PR CI run 37419154761](https://github.com/ElevenID/marty-core/actions/runs/37419154761)
