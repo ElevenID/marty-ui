@@ -1,13 +1,12 @@
 """Keep the Canvas compile narrow without weakening its executable contract."""
 
 import json
-from pathlib import Path
 import runpy
-import tomllib
+from pathlib import Path
 
 import pytest
+import tomllib
 import yaml
-
 
 ROOT = Path(__file__).parents[1]
 VERIFY = runpy.run_path(str(ROOT / "scripts/ci/verify-canvas-test-artifacts.py"))
