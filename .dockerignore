@@ -57,6 +57,7 @@ Thumbs.db
 # Documentation
 *.md
 !README.md
+!rust/services/issuance/src/canvas_sync_processor_contract.md
 
 # Logs
 *.log

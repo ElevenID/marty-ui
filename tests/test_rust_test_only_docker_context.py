@@ -45,6 +45,7 @@ PRODUCTION_INPUTS = (
     "rust/Cargo.lock",
     "rust/services/issuance/Cargo.toml",
     "rust/services/issuance/src/canvas_sync_worker.rs",
+    "rust/services/issuance/src/canvas_sync_processor_contract.md",
     "rust/services/issuance/src/http.rs",
     "rust/services/issuance/src/signing_http_response.rs",
     "proto/v1/issuance_service.proto",

@@ -7,6 +7,7 @@ import importlib
 import inspect
 import json
 from pathlib import Path
+import runpy
 
 import pytest
 
@@ -31,7 +32,15 @@ def test_compiler_contract_documentation_is_a_packaged_source_dependency():
     # rustdoc must stay in the packaged source tree, not that excluded directory.
     assert "!rust/**" in image_inputs
     assert "rust/services/*/tests" in image_inputs
-    assert not any("src" in rule for rule in image_inputs if not rule.startswith("#"))
+    is_ignored = runpy.run_path(
+        str(ROOT / "tests/test_rust_test_only_docker_context.py")
+    )["_is_ignored"]
+    contract_path = contract.relative_to(ROOT).as_posix()
+    assert not is_ignored(contract_path, image_inputs)
+    # Reject both exact and broad source exclusions, while allowing the
+    # independently guarded cfg(test)-only leaves to stay outside images.
+    assert is_ignored(contract_path, [*image_inputs, contract_path])
+    assert is_ignored(contract_path, [*image_inputs, "rust/services/*/src/*"])
 
 
 @pytest.fixture
