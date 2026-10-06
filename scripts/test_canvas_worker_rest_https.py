@@ -30,10 +30,14 @@ RETRY_AFTER_CASES = frozenset(
 ROUTINE_RETRY_AFTER_CASES = frozenset({"http_date_future", "malformed"})
 
 
-def selected_retry_after_cases(cases, reference, tier):
+def selected_retry_after_cases(cases, reference, tier, qualification="0"):
     """Classify the whole frozen matrix before selecting nested native cases."""
+    if qualification not in {"0", "1"}:
+        raise ValueError(f"Invalid Canvas full qualification mode: {qualification!r}")
     if tier not in {"full", "routine"}:
         raise ValueError(f"Invalid native Retry-After tier: {tier!r}")
+    if qualification == "1" and tier != "full":
+        raise ValueError("Full qualification requires all native Retry-After cases")
     names = [case["name"] for case in cases]
     if len(names) != len(RETRY_AFTER_CASES) or set(names) != RETRY_AFTER_CASES:
         raise AssertionError("Native Retry-After case inventory changed")
@@ -78,7 +82,10 @@ def run(executable, scenario="rest"):
         cases = spec["cases"]
         if scenario == "retry-after":
             cases = selected_retry_after_cases(
-                cases, reference, os.environ.get(RETRY_AFTER_TIER, "full")
+                cases,
+                reference,
+                os.environ.get(RETRY_AFTER_TIER, "full"),
+                os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0"),
             )
         for case in cases:
             stage = {

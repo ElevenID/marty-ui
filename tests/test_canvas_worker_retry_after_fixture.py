@@ -13,6 +13,7 @@ import pytest
 def native(monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "scripts"))
     monkeypatch.delenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", raising=False)
+    monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
     return importlib.import_module("test_canvas_worker_rest_https")
 
 
@@ -142,6 +143,37 @@ def test_invalid_retry_tier_fails_before_any_child(native, monkeypatch, tier):
     with pytest.raises(ValueError, match="Invalid native Retry-After tier"):
         native.run("synthetic-test-executable", "retry-after")
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "tier,qualification",
+    [
+        ("routine", "1"),
+        ("routine", "invalid"),
+        ("full", "invalid"),
+        ("full", ""),
+    ],
+)
+def test_full_qualification_or_invalid_mode_rejects_before_any_child(
+    native, monkeypatch, tier, qualification
+):
+    monkeypatch.setenv(native.RETRY_AFTER_TIER, tier)
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification)
+    calls = []
+    monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
+    with pytest.raises(ValueError, match="qualification"):
+        native.run("synthetic-test-executable", "retry-after")
+    assert calls == []
+
+
+def test_explicit_full_qualification_runs_every_case(native, monkeypatch):
+    monkeypatch.setenv(native.RETRY_AFTER_TIER, "full")
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "1")
+    calls = []
+    monkeypatch.setattr(native, "run_scenario", lambda *args: calls.append(args))
+    native.run("synthetic-test-executable", "retry-after")
+    assert {call[4]["name"] for call in calls} == native.RETRY_AFTER_CASES
+    assert len(calls) == 7
 
 
 @pytest.mark.parametrize(
