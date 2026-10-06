@@ -323,6 +323,11 @@ async fn retry_hint_reaches_the_actual_worker_failure_port() {
             )],
             "retry hint {hint}"
         );
+        assert_eq!(
+            *repository.failed_job_ids.lock().unwrap(),
+            ["retry-job"],
+            "retry hint {hint}"
+        );
     }
 }
 
