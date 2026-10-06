@@ -35,18 +35,33 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
         if kind != "lib":
             assert target in canvas_branch
     assert "verify-canvas-test-artifacts.py" in canvas_branch
+    assert "cargo fetch --locked" in canvas_branch
+    assert "docker run --rm --network none --read-only" in canvas_branch
+    assert '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"' in canvas_branch
+    assert (
+        '--volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw"'
+        in canvas_branch
+    )
+    assert '"$bookworm_builder"' in canvas_branch
+    assert '--env "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/target"' in canvas_branch
+    assert (
+        '[[ -z "$(find target -mindepth 1 -maxdepth 1 -print -quit)" ]]'
+        in canvas_branch
+    )
+    assert canvas_branch.count("--message-format=json") == 4
     # Test packages resolve together. Real binaries keep their independently
     # resolved features; preserve every exact target/profile/artifact flag.
     commands = [
         shlex.split(line.strip())
         for line in canvas_branch.replace("\\\n", " ").splitlines()
-        if line.strip().startswith("cargo ")
+        if line.strip().startswith(("cargo test ", "cargo build "))
     ]
     assert commands == [
         [
             "cargo",
             "test",
             "--locked",
+            "--offline",
             "-p",
             "marty-canvas-acceptance",
             "-p",
@@ -63,13 +78,12 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "--no-run",
             "--timings",
             "--message-format=json",
-            ">>",
-            "$artifacts",
         ],
         [
             "cargo",
             "build",
             "--locked",
+            "--offline",
             "-p",
             "marty-issuance-service",
             "--bin",
@@ -77,32 +91,28 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "--bin",
             "marty-canvas-sync-worker",
             "--message-format=json",
-            ">>",
-            "$artifacts",
         ],
         [
             "cargo",
             "build",
             "--locked",
+            "--offline",
             "-p",
             "marty-gateway",
             "--bin",
             "marty-gateway",
             "--message-format=json",
-            ">>",
-            "$artifacts",
         ],
         [
             "cargo",
             "build",
             "--locked",
+            "--offline",
             "-p",
             "marty-flow",
             "--bin",
             "marty-flow",
             "--message-format=json",
-            ">>",
-            "$artifacts",
         ],
     ]
     assert by_name["Prepare database contract executables"]["if"] == (

@@ -313,33 +313,48 @@ def compatibility_ci(workflow):
     assert step["if"] == "matrix.lane == 'canvas'"
     assert step["shell"] == "bash"
     script = step["run"]
+    compile_step = next(
+        item
+        for item in job["steps"]
+        if item.get("name") == "Compile reusable Rust test executables"
+    )
+    compile_script = compile_step["run"]
     required = (
         "set -euo pipefail",
-        'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }\' services/Dockerfile',
-        "[[ ${#builder_images[@]} == 1 ]]",
-        "^rust:1\\.95-bookworm@sha256:[a-f0-9]{64}$",
-        'docker pull "$bookworm_builder"',
-        'compat_target="$RUNNER_TEMP/marty-bookworm-target"',
-        'compat_artifacts="$RUNNER_TEMP/marty-bookworm-artifacts.json"',
-        "docker run --rm --network none --read-only",
-        '--user "$(id -u):$(id -g)"',
-        '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
-        '--volume "$compat_target:$compat_target"',
-        '--workdir "$GITHUB_WORKSPACE/rust"',
-        "cargo build --locked --offline --quiet -p marty-issuance-service --bin marty-issuance-service",
-        "cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway",
-        "--test canvas_published_schema_contract --no-run --message-format=json",
+        'compat_target="$GITHUB_WORKSPACE/rust/target"',
+        'compat_artifacts="$RUNNER_TEMP/rust-test-artifacts.json"',
         'select(.target.name == "canvas_published_schema_contract")',
         '[[ "$(dirname "$compat_executable")" == "$compat_target/debug/deps" ]]',
         "^canvas_published_schema_contract-[a-f0-9]{16}$",
         'test -x "$compat_target/debug/marty-issuance-service"',
         'test -x "$compat_target/debug/marty-gateway"',
+        'readelf -l "$executable"',
+        'readelf --version-info "$executable"',
+        "GLIBC_([3-9][0-9]*|2\\.(3[7-9]|[4-9][0-9]|[0-9]{3,}))",
         "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s",
         '>> "$GITHUB_ENV"',
     )
     for value in required:
         assert value in script
-    assert script.count("--network none") == 1
+    for value in (
+        'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }\' ../services/Dockerfile',
+        "[[ ${#builder_images[@]} == 1 ]]",
+        "^rust:1\\.95-bookworm@sha256:[a-f0-9]{64}$",
+        'docker pull "$bookworm_builder"',
+        "docker run --rm --network none --read-only",
+        '--user "$(id -u):$(id -g)"',
+        '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
+        '--volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw"',
+        '--workdir "$GITHUB_WORKSPACE/rust"',
+        "cargo build --locked --offline -p marty-issuance-service",
+        "cargo build --locked --offline -p marty-gateway",
+        "--test canvas_published_schema_contract",
+        "--no-run --timings --message-format=json",
+        "python3 ../scripts/ci/verify-canvas-test-artifacts.py",
+    ):
+        assert value in compile_script
+    assert compile_script.count("--network none") == 1
+    assert "docker run" not in script and "cargo build" not in script
     assert script.count("MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s") == 1
     names = [step.get("name") for step in job["steps"]]
     assert names.index("Compile reusable Rust test executables") < index
@@ -365,7 +380,10 @@ def compatibility_ci(workflow):
         "builder",
         "network",
         "workspace",
+        "target",
         "gateway",
+        "elf",
+        "glibc",
         "selector",
     ],
 )
@@ -387,18 +405,58 @@ def test_runtime_ci_builds_closed_bookworm_compatible_child_artifacts(fault):
     elif fault == "conditional":
         step["if"] = "false"
     elif fault == "builder":
-        step["run"] = step["run"].replace("services/Dockerfile", "unowned")
+        compile_step = next(
+            item
+            for item in steps
+            if item.get("name") == "Compile reusable Rust test executables"
+        )
+        compile_step["run"] = compile_step["run"].replace(
+            "../services/Dockerfile", "unowned"
+        )
     elif fault == "network":
-        step["run"] = step["run"].replace("--network none", "--network host")
+        compile_step = next(
+            item
+            for item in steps
+            if item.get("name") == "Compile reusable Rust test executables"
+        )
+        compile_step["run"] = compile_step["run"].replace(
+            "--network none", "--network host"
+        )
     elif fault == "workspace":
-        step["run"] = step["run"].replace(
+        compile_step = next(
+            item
+            for item in steps
+            if item.get("name") == "Compile reusable Rust test executables"
+        )
+        compile_step["run"] = compile_step["run"].replace(
             '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
             '--volume "$GITHUB_WORKSPACE:/workspace:ro"',
         )
     elif fault == "gateway":
-        step["run"] = step["run"].replace(
-            "cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway",
+        compile_step = next(
+            item
+            for item in steps
+            if item.get("name") == "Compile reusable Rust test executables"
+        )
+        compile_step["run"] = compile_step["run"].replace(
+            "cargo build --locked --offline -p marty-gateway --bin marty-gateway",
             "true",
+        )
+    elif fault == "target":
+        compile_step = next(
+            item
+            for item in steps
+            if item.get("name") == "Compile reusable Rust test executables"
+        )
+        compile_step["run"] = compile_step["run"].replace(
+            '--volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw"',
+            '--volume "$RUNNER_TEMP/other-target:$RUNNER_TEMP/other-target:rw"',
+        )
+    elif fault == "elf":
+        step["run"] = step["run"].replace('readelf -l "$executable"', "true")
+    elif fault == "glibc":
+        step["run"] = step["run"].replace(
+            'readelf --version-info "$executable"', "true"
         )
     elif fault == "selector":
         step["run"] = step["run"].replace(
