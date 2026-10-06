@@ -1,6 +1,7 @@
 // A fast composition proof for renewal admission through the real DIDComm
 // policy, resolution, endpoint and envelope owners. Process/SQL/HTTP delivery
 // remain the responsibility of the published Canvas acceptance cases.
+use super::*;
 use crate::{
     credential_renewal::{
         CredentialRenewalService, RenewalRepository, RenewalRepositoryError, RenewalSource,

@@ -1661,13 +1661,9 @@ fn preflight_plaintext(
 mod tests {
     use super::*;
 
-    mod renewal_graph {
-        use super::*;
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/src/initiation_didcomm_renewal_tests.rs"
-        ));
-    }
+    #[cfg(test)]
+    #[path = "initiation_didcomm_renewal_tests.rs"]
+    mod renewal_graph;
 
     #[test]
     fn persisted_transport_failures_accept_only_failed_http_statuses() {

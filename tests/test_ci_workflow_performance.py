@@ -446,8 +446,13 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 10
+    assert verified[-1] == b"" and len(verified) == 11
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    nested = (
+        "rust/services/issuance/src/initiation_didcomm/tests/"
+        "initiation_didcomm_renewal_tests.rs"
+    )
+    assert nested in leaves
     for leaf in leaves:
         selected = _classify_changed_paths([leaf], tmp_path, include_rust_plan=True)[0]
         assert selected == {
@@ -491,6 +496,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert deleted["rust_runtime"] == "true"
     assert deleted["rust_matrix"] == '["canvas","contracts"]'
+    nested_without_proof = _classify_changed_paths(
+        [nested], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert nested_without_proof["rust_runtime"] == "true"
+    assert nested_without_proof["rust_matrix"] == '["canvas","contracts"]'
     empty = _classify_changed_paths(
         [], tmp_path, combined=True, include_rust_plan=True
     )[0]

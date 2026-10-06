@@ -27,6 +27,7 @@ TEST_LEAVES = {
     "canvas_sync_provider_http_tests.rs": "canvas_sync_provider_http.rs",
     "canvas_sync_processor_tests.rs": "canvas_sync_processor.rs",
     "canvas_sync_worker_retry_tests.rs": "canvas_sync_worker.rs",
+    "initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs": "initiation_didcomm.rs",
     "passport_http_reconciliation_tests.rs": "passport_http.rs",
     "python_format_tests.rs": "python_format.rs",
     "signing_http_projection_tests.rs": "http.rs",
@@ -46,6 +47,7 @@ PRODUCTION_INPUTS = (
     "rust/Cargo.lock",
     "rust/services/issuance/Cargo.toml",
     "rust/services/issuance/src/canvas_sync_worker.rs",
+    "rust/services/issuance/src/initiation_didcomm.rs",
     "rust/services/issuance/src/canvas_sync_processor_contract.md",
     "rust/services/issuance/src/http.rs",
     "rust/services/issuance/src/signing_http_response.rs",
@@ -134,8 +136,25 @@ def _active_owner_spans(text: str, name: str) -> list[tuple[int, int]]:
     ]
 
 
-def _assert_test_only_owner(root: Path, name: str, owner: str) -> None:
-    assert (root / ISSUANCE_SRC / name).is_file()
+def _nested_renewal_owner_is_direct_cfg_test(text: str, name: str) -> bool:
+    """Bind Rust's `initiation_didcomm::tests` path resolution, not a glob."""
+    clean = _without_rust_comments(text)
+    pattern = (
+        r"(?m)^#\[cfg\(test\)\]\s*\nmod tests \{\s*\n\s*use super::\*;\s*\n"
+        + r"\s*#\[cfg\(test\)\]\s*\n\s*#\[path\s*=\s*\""
+        + re.escape(name)
+        + r"\"\]\s*\n\s*mod renewal_graph;"
+    )
+    match = re.search(pattern, clean)
+    if match is None:
+        return False
+    preceding = clean[: match.start()].rstrip().splitlines()
+    return not preceding or not preceding[-1].lstrip().startswith("#[")
+
+
+def _assert_test_only_owner(root: Path, leaf: str, owner: str) -> None:
+    name = Path(leaf).name
+    assert (root / ISSUANCE_SRC / leaf).is_file()
     references = []
     for path in _tracked_paths(root, "rust/**/*.rs"):
         source = (root / path).read_text(encoding="utf-8")
@@ -151,6 +170,11 @@ def _assert_test_only_owner(root: Path, name: str, owner: str) -> None:
     path, position, spans = references[0]
     assert path == expected_path and len(spans) == 1
     assert spans[0][0] <= position < spans[0][1], f"Non-test owner of {name}"
+    if "/" in leaf:
+        assert leaf == "initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs"
+        assert _nested_renewal_owner_is_direct_cfg_test(
+            (root / expected_path).read_text(encoding="utf-8"), name
+        ), f"Nested Rust module no longer resolves exact test-only leaf: {leaf}"
 
 
 def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
@@ -167,8 +191,8 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
     assert "--cfg test" not in build_script and "--all-targets" not in build_script
 
     manifests = [ROOT / path for path in _tracked_paths(ROOT, "rust/**/Cargo.toml")]
-    for name, owner in TEST_LEAVES.items():
-        _assert_test_only_owner(ROOT, name, owner)
+    for leaf, owner in TEST_LEAVES.items():
+        _assert_test_only_owner(ROOT, leaf, owner)
     for manifest in manifests:
         parsed = tomllib.loads(manifest.read_text(encoding="utf-8"))
         targets = [
@@ -186,13 +210,16 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
 
     for ignore_path in set(DOCKER_CONTEXTS.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
-        for name in TEST_LEAVES:
-            path = ISSUANCE_SRC + name
+        for leaf in TEST_LEAVES:
+            path = ISSUANCE_SRC + leaf
             assert lines.count(path) == 1, (
                 f"Exact exclusion missing: {ignore_path}: {path}"
             )
             assert _is_ignored(path, lines), f"Later rule re-includes {path}"
         assert all(not _is_ignored(path, lines) for path in PRODUCTION_INPUTS)
+        assert not _is_ignored(
+            ISSUANCE_SRC + "initiation_didcomm/tests/unreviewed.rs", lines
+        ), "Review broad nested test-directory exclusion"
     public_lines = (
         (ROOT / "services/Dockerfile.dockerignore")
         .read_text(encoding="utf-8")
@@ -217,12 +244,34 @@ def test_source_ownership_guard_rejects_inert_and_feature_gated_wiring() -> None
     ):
         assert not _active_owner_spans(source, name)
 
+    nested = "initiation_didcomm_renewal_tests.rs"
+    owned = (
+        "#[cfg(test)]\nmod tests {\n    use super::*;\n"
+        f'    #[cfg(test)]\n    #[path = "{nested}"]\n    mod renewal_graph;'
+    )
+    assert _nested_renewal_owner_is_direct_cfg_test(owned, nested)
+    for source in (
+        owned.replace("mod tests {", "mod other_tests {"),
+        owned.replace("#[cfg(test)]\nmod tests", "mod tests"),
+        owned.replace("#[cfg(test)]\nmod tests", '#[cfg(feature = "test")]\nmod tests'),
+        '#[cfg(feature = "slow")]\n' + owned,
+        owned.replace("mod renewal_graph;", "mod other_graph;"),
+        owned.replace(f'#[path = "{nested}"]', '#[path = "other.rs"]'),
+    ):
+        assert not _nested_renewal_owner_is_direct_cfg_test(source, nested)
+
 
 def test_dockerignore_guard_rejects_reincluded_leaf_and_excluded_runtime() -> None:
     leaf = ISSUANCE_SRC + "canvas_sync_worker_retry_tests.rs"
     assert not _is_ignored(leaf, [leaf, "!" + leaf])
     assert _is_ignored(ISSUANCE_SRC + "canvas_sync_worker.rs", ["rust/**"])
     assert _is_ignored(leaf, ["**", "!rust/**", leaf])
+    nested = (
+        ISSUANCE_SRC + "initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs"
+    )
+    sibling = ISSUANCE_SRC + "initiation_didcomm/tests/unreviewed.rs"
+    assert not _is_ignored(nested, [nested, "!" + nested])
+    assert _is_ignored(sibling, [ISSUANCE_SRC + "initiation_didcomm/tests/"])
 
 
 def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:

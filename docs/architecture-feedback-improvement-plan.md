@@ -529,6 +529,49 @@ The provider-configuration historical oracle now has an image-only candidate own
 
 Review correction for that local candidate: the 12 signing-detail names are distinct within the integration target, but `signing_error_detail::scalar_api_remains_a_projection_of_the_shared_owner` is source-included there and also runs in the issuance library target. The historical contracts log has 13 signing-related `ok` lines across those two targets, not 13 unique obligations or independent oracles. The static guard rejects ignored/conditional test attributes and commented-out ownership wiring; it does not discover current Cargo runtime execution. The combined batch makes manifest-only changes select release checks in addition to the existing conservative Rust lane, and excludes this CI-only manifest from service images. Helper/test changes remain broad. No new execution exclusion or release-only shortcut is authorized.
 
+## A7 current-run revalidation (2026-10-06)
+
+Core's latest successful [PR CI run 37419154761](https://github.com/ElevenID/marty-core/actions/runs/37419154761)
+ran from 05:33:47 to 05:48:15 UTC (14m28s including orchestration).
+Affected Rust Tests took 13m41s, including affected packages (6m57s),
+private-key/session security (3m58s) and OID4VCI benchmark smoke (2m28s).
+Fast Rust Preflight took 10m52s, including exact KMS/public-key graphs
+(5m09s) and trusted-list client validation (2m21s).
+The subsequent [complete-main run 37420390043](https://github.com/ElevenID/marty-core/actions/runs/37420390043)
+had preflight 15m02s and Windows Platform Tests 16m49s; these are different
+workloads, not a before/after speed comparison. Both workflows succeeded.
+This fresh evidence retains A7's deferred disposition: moving preflight work
+to another job is not yet shown to reduce the critical path, and no security,
+feature, benchmark or platform qualification is removed on that assumption.
+
+## Next renewal decomposition: bounded obligations (unpublished)
+
+The additive library owner is
+`initiation_didcomm::tests::renewal_graph::renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto`
+in `rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs`.
+It composes the existing renewal, initiation and native DIDComm delivery services;
+it does not implement a parallel renewal algorithm. Its four scenarios cross
+authcrypt/anoncrypt with private-address allow/refuse. Existing private harness
+repository and builder, plus a test lifecycle, remain test doubles; the endpoint
+validator, peer-DID resolution and envelope encryption are production code.
+Authcrypt sender resolution uses a loopback HTTP fixture, so this is a fast
+service-owned component test, not a completely I/O-free pure unit test.
+
+| Obligation | New fast owner | Retained acceptance owner |
+| --- | --- | --- |
+| Renewal reservation and offer composition | All four scenarios record the reservation; refusal returns a pending offer | Real SQL admission, source snapshots and offer fields in `support/renewal_fresh_main.rs` |
+| Address refusal before irreversible native work | No credential-builder invocation, finalization, completion or recorded send; send fence remains Idle. An initial read-only transport-claim lookup is permitted | Actual wallet captures, unchanged source database state, no publication/events and no legacy fallback |
+| Allowed encrypted delivery | Exactly one recorded send, Delivered state and decrypted recipient/message assertions; authcrypt also checks sender key identity | Packaged service, real HTTP wallet, persisted delivery/credential/event state and configured ingress |
+| Deployment and process guarantees | Not proved by the new owner | Existing Gateway, Envoy and Kubernetes ingress profiles, Redis/configuration, startup and owned process cleanup |
+
+The three proxy-ingress profiles still execute all four combinations in
+`renewal_fresh_main::run_with_profile`; direct profiles retain their two allowed
+encryption cases. No native case or tier is removed in this maintenance batch.
+This mapping is a source-review inventory, not compiled discovery, execution
+evidence, a complete dependency graph or authority to skip acceptance. Any later
+tiering needs separately demonstrated database/process proof and an exact-head
+hosted pilot. No hosted speedup is attributed to this additive proof.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
