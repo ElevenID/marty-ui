@@ -187,12 +187,16 @@ pub(super) fn emit_after_startup_pass(root: &Path, observed: &Value) {
     let runner_temp =
         std::env::var("RUNNER_TEMP").expect("Startup attestation output directory missing");
     let output = Path::new(&runner_temp).join(ARTIFACT);
+    persist_evidence(&output, &evidence);
+}
+
+fn persist_evidence(output: &Path, evidence: &Value) {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(output)
         .expect("Refusing to overwrite startup attestation");
-    serde_json::to_writer_pretty(&mut file, &evidence).expect("Startup attestation write failed");
+    serde_json::to_writer_pretty(&mut file, evidence).expect("Startup attestation write failed");
     file.write_all(b"\n")
         .expect("Startup attestation write failed");
     file.sync_all().expect("Startup attestation sync failed");
@@ -201,6 +205,24 @@ pub(super) fn emit_after_startup_pass(root: &Path, observed: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evidence_write_rejects_existing_record_without_overwriting_it() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(ARTIFACT);
+        let first = json!({"run_id": "12"});
+        persist_evidence(&path, &first);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+            first
+        );
+        let second = json!({"run_id": "13"});
+        assert!(std::panic::catch_unwind(|| persist_evidence(&path, &second)).is_err());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap(),
+            first
+        );
+    }
 
     #[test]
     fn startup_input_mutation_fails_closed() {
