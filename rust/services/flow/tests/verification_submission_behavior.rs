@@ -73,6 +73,7 @@ fn instance(callback: bool) -> FlowInstanceRecord {
         "nonce": "nonce-with-at-least-32-bytes-1234567890",
         "oid4vp_expected_state": "state-1",
         "oid4vp_verifier_context": true,
+        "oid4vp_client_id": "did:web:verifier.example",
         "presentation_policy_id": "policy-1",
         "_marty_verification_principal_id": "user-1",
         "verification_audience": "did:web:verifier.example",
@@ -104,6 +105,20 @@ fn instance(callback: bool) -> FlowInstanceRecord {
         created_at: now(),
         updated_at: now(),
     }
+}
+
+fn with_emitted_query(
+    mut instance: FlowInstanceRecord,
+    field: &str,
+    query: Value,
+) -> FlowInstanceRecord {
+    let mut payload = json!({
+        "nonce": "nonce-with-at-least-32-bytes-1234567890",
+        "client_id": "did:web:verifier.example"
+    });
+    payload[field] = query;
+    instance.context["mip_messages"]["presentation_request"] = json!({"payload": payload});
+    instance
 }
 
 fn allowed() -> PresentationEvaluationResult {
@@ -168,6 +183,178 @@ fn input(token: &str) -> VerificationSubmissionInput {
         state: Some("state-1".into()),
         audience_override: None,
     }
+}
+
+#[tokio::test]
+async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict() {
+    let query = json!({"id": "definition-1", "input_descriptors": [{"id": "member"}]});
+    let instance = with_emitted_query(instance(false), "presentation_definition", query.clone());
+    let mut wallet = input("header.payload.signature");
+    let submission = json!({
+        "id": "submission-1", "definition_id": "definition-1",
+        "descriptor_map": [{"id": "member", "format": "jwt_vp", "path": "$"}],
+        "legacy_extension": true
+    });
+    wallet.presentation_submission = Some(submission.clone());
+    let (providers, seen) = providers(Ok(allowed()));
+    let PreparedVerificationSubmission::Final(finalization) =
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now())
+            .await
+            .unwrap()
+    else {
+        panic!("existing allow result expected")
+    };
+    assert_eq!(
+        finalization.instance.result.as_ref().unwrap()["decision"],
+        "allow"
+    );
+    let requests = seen.lock().unwrap();
+    let transport = requests[0].oid4vp_transport.as_ref().unwrap();
+    assert_eq!(
+        transport.query_kind,
+        marty_oid4vp_contract::QueryKind::PresentationExchange
+    );
+    assert_eq!(transport.query_document, query);
+    assert_eq!(transport.presentation_submission, Some(submission));
+    assert!(transport.compatible_presentation_submission().is_err());
+    assert_eq!(transport.vp_token_raw, "header.payload.signature");
+    assert_eq!(transport.verifier_client_id, "did:web:verifier.example");
+    assert_eq!(
+        transport.request_nonce,
+        "nonce-with-at-least-32-bytes-1234567890"
+    );
+    transport.validate_transport().unwrap();
+    assert_eq!(requests[0].presentation, "header.payload.signature");
+}
+
+#[tokio::test]
+async fn dcql_query_transport_does_not_require_presentation_submission() {
+    let query = json!({"credentials": [{"id": "member"}]});
+    let instance = with_emitted_query(instance(false), "dcql_query", query.clone());
+    let raw_tokens = json!({"member": ["header.payload.signature"]}).to_string();
+    let mut wallet = input(&raw_tokens);
+    wallet.presentation_submission = None;
+    let (providers, seen) = providers(Ok(allowed()));
+    assert!(matches!(
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now()).await,
+        Ok(PreparedVerificationSubmission::Final(_))
+    ));
+    let requests = seen.lock().unwrap();
+    let transport = requests[0].oid4vp_transport.as_ref().unwrap();
+    assert_eq!(transport.query_kind, marty_oid4vp_contract::QueryKind::Dcql);
+    assert_eq!(transport.query_document, query);
+    assert!(transport.presentation_submission.is_none());
+    assert_eq!(transport.vp_token_raw, raw_tokens);
+    assert_eq!(requests[0].presentation, "header.payload.signature");
+}
+
+#[tokio::test]
+async fn dc_api_preserves_legacy_empty_audience_while_carrying_emitted_client_id() {
+    let mut instance = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    instance
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove("verification_audience");
+    let (providers, seen) = providers(Ok(allowed()));
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            instance,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Ok(PreparedVerificationSubmission::Final(_))
+    ));
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests[0].audience, "");
+    assert_eq!(
+        requests[0]
+            .oid4vp_transport
+            .as_ref()
+            .unwrap()
+            .verifier_client_id,
+        "did:web:verifier.example"
+    );
+}
+
+#[tokio::test]
+async fn oversized_legacy_submission_keeps_existing_verdict_without_transport_claim() {
+    let instance = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    let mut wallet = input("header.payload.signature");
+    wallet.presentation_submission = Some(json!({
+        "id": "submission-1", "definition_id": "definition-1", "descriptor_map": [],
+        "legacy_extension": "x".repeat(marty_oid4vp_contract::MAX_WALLET_SUBMISSION_BYTES)
+    }));
+    let (providers, seen) = providers(Ok(allowed()));
+    let PreparedVerificationSubmission::Final(finalization) =
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now())
+            .await
+            .unwrap()
+    else {
+        panic!("legacy result must remain available")
+    };
+    assert_eq!(
+        finalization.instance.result.as_ref().unwrap()["decision"],
+        "allow"
+    );
+    assert!(seen.lock().unwrap()[0].oid4vp_transport.is_none());
+}
+
+#[tokio::test]
+async fn malformed_recorded_query_cannot_be_promoted_to_transport_metadata() {
+    let mut stored = with_emitted_query(instance(false), "dcql_query", json!({"credentials": []}));
+    stored.context["mip_messages"]["presentation_request"]["payload"]["client_id"] =
+        json!("attacker-client");
+    let (providers, seen) = providers(Ok(allowed()));
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            stored,
+            input("header.payload.signature"),
+            &options(None),
+            now()
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_binding"
+        ))
+    ));
+    assert!(seen.lock().unwrap().is_empty());
+
+    // Unlike an absent historical request, a contradictory persisted request
+    // is a producer-state error and now fails before legacy evaluation.
+    let mut ambiguous = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    ambiguous.context["mip_messages"]["presentation_request"]["payload"]
+        ["presentation_definition"] = json!({"id": "definition-1", "input_descriptors": []});
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            ambiguous,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_query"
+        ))
+    ));
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

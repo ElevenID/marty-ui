@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 base64.workspace = true
-marty-verification.workspace = true
+marty-canonical-digest.workspace = true
 percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true

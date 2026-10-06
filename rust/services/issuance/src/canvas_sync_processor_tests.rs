@@ -685,6 +685,7 @@ struct RunCountingProvider {
     scoped_calls: Arc<Mutex<Vec<ScopedProviderCall>>>,
     run_id: Option<usize>,
     run_scope: Option<CanvasProviderRunScope>,
+    roster_error: Option<CanvasProviderReadError>,
 }
 
 type ScopedProviderCall = (usize, CanvasProviderRunScope, &'static str);
@@ -706,6 +707,7 @@ impl CanvasAuthoritativeProvider for RunCountingProvider {
             scoped_calls: self.scoped_calls.clone(),
             run_id: Some(run_id),
             run_scope: Some(scope),
+            roster_error: self.roster_error.clone(),
         })
     }
 
@@ -746,6 +748,9 @@ impl CanvasAuthoritativeProvider for RunCountingProvider {
             self.run_id.is_some(),
             "roster must also use the run provider"
         );
+        if let Some(error) = &self.roster_error {
+            return Err(error.clone());
+        }
         SimulatorProvider
             .roster(target, resources, requirements, limit)
             .await
@@ -1405,6 +1410,149 @@ fn roster_failure_summaries_match_published_process() {
         assert_eq!(actual.summary, job["last_error_summary"], "{name}");
         assert_eq!(actual.retryable, job["status"] == "retry", "{name}");
     }
+}
+
+#[tokio::test]
+async fn roster_failure_processor_dispatch_preserves_tracked_state() {
+    let scenarios: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-roster-failure-scenarios.json"
+    ))
+    .unwrap();
+    let reference: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-roster-failure-oracle.json"
+    ))
+    .unwrap();
+    let cases = [
+        (
+            "roster_oauth_unavailable",
+            CanvasProviderReadError::RosterOAuthUnavailable,
+            "canvas_roster_oauth_unavailable",
+            "Canvas background roster OAuth requires reauthorization",
+            true,
+        ),
+        (
+            "nrps_context_unavailable",
+            CanvasProviderReadError::NrpsRosterUnavailable,
+            "canvas_nrps_roster_unavailable",
+            "Canvas NRPS roster URL is unavailable",
+            true,
+        ),
+        (
+            "roster_collection_too_large",
+            CanvasProviderReadError::RosterCollectionTooLarge,
+            "canvas_roster_collection_too_large",
+            "Canvas roster exceeds the configured complete-read limit",
+            false,
+        ),
+        (
+            "roster_authoritative_read_failed",
+            CanvasProviderReadError::Unavailable,
+            "canvas_authoritative_read_failed",
+            "Canvas background evidence could not be read",
+            true,
+        ),
+        (
+            "roster_http_status_failed",
+            CanvasProviderReadError::RosterHttpStatusFailure,
+            "canvas_sync_unexpected_error",
+            "Canvas synchronization failed (HTTPException)",
+            true,
+        ),
+    ];
+    assert_eq!(scenarios["cases"].as_array().unwrap().len(), cases.len());
+    assert_eq!(reference.as_object().unwrap().len(), cases.len());
+    let mut scenario_names = std::collections::BTreeSet::new();
+    for scenario in scenarios["cases"].as_array().unwrap() {
+        assert!(scenario_names.insert(scenario["name"].as_str().unwrap()));
+    }
+    for (name, provider_error, code, summary, retryable) in cases {
+        assert!(scenario_names.remove(name), "missing scenario: {name}");
+        let scenario = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        assert_eq!(scenario["code"], code, "{name}");
+        assert_eq!(scenario["retryable"], retryable, "{name}");
+        let job = &reference[name]["observations"][0]["jobs"][0];
+        assert_eq!(job["last_error_code"], code, "{name}");
+        assert_eq!(job["last_error_summary"], summary, "{name}");
+        assert_eq!(job["status"] == "retry", retryable, "{name}");
+
+        let requirement = if name == "nrps_context_unavailable" {
+            requirement(
+                "ags",
+                "ags_result",
+                "canvas.assignment_score",
+                json!({"course_id":"42","line_item_url":"https://canvas.example.edu/api/lti/courses/42/line_items/5"}),
+                json!({"min_score_percent":80}),
+            )
+        } else {
+            requirement(
+                "roster",
+                "canvas_rest",
+                "canvas.course_completion",
+                json!({"course_id":"42"}),
+                json!({"completed":true}),
+            )
+        };
+        let repository = Arc::new(SimulatorRepository {
+            resources: simulator_resources(vec![requirement]),
+            facts: Mutex::new(Vec::new()),
+            identities: Mutex::new(None),
+            candidates: Mutex::new(BTreeMap::new()),
+            observations: Mutex::new(BTreeMap::new()),
+            observation_payloads: Mutex::new(BTreeMap::new()),
+            cursor: Mutex::new(None),
+            disabled: Mutex::new(false),
+        });
+        let provider = Arc::new(RunCountingProvider {
+            roster_error: Some(provider_error),
+            ..RunCountingProvider::default()
+        });
+        let processor = NativeCanvasSyncProcessor::new(
+            repository.clone(),
+            provider.clone(),
+            enabled_config(),
+            500,
+            5000,
+        );
+        let mut roster_target = target(CanvasSyncTargetType::BackgroundRoster);
+        roster_target.application_id = None;
+        roster_target
+            .metadata
+            .insert("roster_cursor".into(), json!(1));
+        roster_target
+            .metadata
+            .insert("synthetic_marker".into(), json!("preserve"));
+        let error = run_simulated(&processor, roster_target).await.unwrap_err();
+        assert_eq!(error.code, code, "{name}");
+        assert_eq!(error.summary, summary, "{name}");
+        assert_eq!(error.retryable, retryable, "{name}");
+        assert_eq!(error.retry_after_seconds, None, "{name}");
+        assert_eq!(provider.runs.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            *provider.scoped_calls.lock().unwrap(),
+            vec![
+                (0, CanvasProviderRunScope::BackgroundRoster, "start"),
+                (0, CanvasProviderRunScope::BackgroundRoster, "roster"),
+            ],
+            "{name}"
+        );
+        assert!(provider.calls.lock().unwrap().is_empty(), "{name}");
+        // The simulator tracks these mutations, not every repository port or SQL write.
+        assert!(repository.facts.lock().unwrap().is_empty(), "{name}");
+        assert!(repository.candidates.lock().unwrap().is_empty(), "{name}");
+        assert!(repository.observations.lock().unwrap().is_empty(), "{name}");
+        assert!(
+            repository.observation_payloads.lock().unwrap().is_empty(),
+            "{name}"
+        );
+        assert_eq!(*repository.cursor.lock().unwrap(), None, "{name}");
+        assert!(!*repository.disabled.lock().unwrap(), "{name}");
+    }
+    assert!(scenario_names.is_empty());
 }
 
 #[derive(Debug)]

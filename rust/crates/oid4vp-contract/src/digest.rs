@@ -1,4 +1,4 @@
-use marty_verification::governance::canonical_digest_json;
+use marty_canonical_digest::canonical_digest_json;
 use serde::Serialize;
 use serde_json::Value;
 

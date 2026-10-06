@@ -93,6 +93,7 @@ export MARTY_CANVAS_WORKER_TEST_BINARY="$worker_binary"
 export MARTY_ISSUANCE_TEST_BINARY="$issuance_binary"
 composition_tests=$("$composition_executable" --list)
 worker_tests=$("$worker_executable" --list)
+printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy: test'
 all_test_names=$(printf '%s\n%s\n' "$composition_tests" "$worker_tests" | grep ': test$')
 if [[ -z "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
@@ -371,4 +372,8 @@ wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
+[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
+  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
+  exit 1
+}
 python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"

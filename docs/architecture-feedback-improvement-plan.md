@@ -1,7 +1,19 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-06 checkpoint). The Canvas acceptance targets and their base-runtime, Flow, DIDComm, renewal, and Kubernetes support now have an acceptance-package owner. Later merged slices mapped more runtime dependencies in shadow mode, moved pure fixture matrices to fast owners, and selected proven test-only inputs without weakening protected merge validation. Gateway-to-Issuance and Gateway-to-Signing acceptance ownership and the separate Canvas package have merged. Fresh startup evidence was produced on main, but its enclosing full workflow failed and cannot authorize release or reuse. UI #1124 remains in hosted validation; nightly release qualification remains incomplete. No whole-pipeline speedup is attributed to those ownership changes.
+Status: active implementation (2026-10-06 refreshed checkpoint). Gateway and Canvas
+acceptance ownership, narrow compatibility code and further fast test layers have
+merged, including UI #1124 at `e9f140e00` and #1126 at `8d42d1bdc`. #1126's
+normal/full PR CI and protected merge-queue validation passed; it merged at
+13:11:46 UTC on 2026-10-06.
+The combined unit/renewal/typed-transport follow-up is unpublished; the separate
+roster component draft is deferred for lifecycle/qualification reasons. Core #352
+merged its authenticated presentation-proof API and #353 its narrow digest crate,
+but UI migration and nightly
+release qualification remain incomplete. Earlier failed main evidence remains
+ineligible for release/reuse. No whole-pipeline speedup is attributed from these
+partial milestones. The detailed historical checkpoints below are not current
+merge-status claims.
 
 ## Objective and scope
 
@@ -50,7 +62,16 @@ Batch related, independently reviewed changes into one coherent PR when they sha
 
 2026-10-06 local A0 candidate (not yet merged or qualified): `contracts/canvas-worker-tier-obligations.json` records exactly 33 historical-reference worker cases and four preflight-capable native cases from `marty-canvas-acceptance` / `canvas_published_worker_contract`. The 37 routine `full-after-preflights` skips comprise 33 historical replays, two timeout/lease native preflights already executed in the same run, and two mixed-roster/body-timeout native matrices excluded from the routine tier. All four native cases run as preflights in weekly/manual full qualification, then are skipped only in that later target invocation with same-run proof. Each named case has a unique assertion summary; the inventory identifies its Rust target/source, tier, test layer, independent-oracle role, cheapest proving layer, common inputs and case corpus/scenario or preflight inputs. The existing producer/scenario/import manifests bound the named files, not complete transitive runtime or historical-capture provenance. The additive runner guard compares this narrow inventory with the compiled worker `--list` before selection, then checks exact selected IDs from the existing libtest-filtered list. Missing, extra, duplicate, or same-count substituted cases fail closed; `--list` proves discovery and selection, not execution. Existing run-bound preflight evidence, invocation/skip commands, count checks, and protected gates remain unchanged. This slice is incomplete A0/A8 coverage: the other Canvas tests, service acceptance targets, release-stack cases, and non-Cargo consumers still require explicit obligation mapping. Do not derive additional skips or a nightly qualification claim from it.
 
-2026-10-06 A8 checkpoint: Core [#352](https://github.com/ElevenID/marty-core/pull/352) has a reviewed additive proof prerequisite (`f0303df`, 43 targeted tests passed and two pre-existing ignored); its protected CI is still running through the normal queue. The integration wallet same-key signed-VP helper has a locally reviewed draft (`a847`, 25 targeted tests passed), but independent review and nightly activation are pending. Whether `OpenBadgeLogin` requires holder-key proof remains a user policy choice; existing bearer policy defaults false. UI typed VP/submission/query, credential trust, and holder-binding work is not implemented. None of these drafts establishes nightly qualification or a measured speedup.
+2026-10-06 refreshed A8 checkpoint: Core [#352](https://github.com/ElevenID/marty-core/pull/352)
+merged at 06:06:38 UTC as `d949f65362b63157e4e4ecee23ea4610a6411089` after
+protected validation. Its additive authenticated presentation-proof API had 43
+targeted tests passing and two pre-existing ignored cases. The integration wallet
+same-key signed-VP helper remains a locally reviewed unpublished draft (`a847`,
+25 targeted tests passed). UI typed VP/submission/query and credential-trust
+integration remain incomplete. Existing `OpenBadgeLogin` bearer/holder-binding
+defaults remain unchanged; a new holder-key requirement is not implied by this
+maintenance work. Neither the merged Core prerequisite nor the wallet draft
+establishes nightly qualification or a measured pipeline speedup.
 
 2026-10-05 checkpoint: [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) added owned mixed-roster/body-reader tests, retained native timeout/lease checks on routine CI, and moved 33 pinned historical process replays to weekly/manual full qualification. [#1106](https://github.com/ElevenID/marty-ui/pull/1106) merged the requirement for successful full qualification on the exact main SHA before stable tag preparation; a new main commit requires a new full run. The nightly release path is not yet implemented, and no nightly speedup is claimed.
 
@@ -528,6 +549,311 @@ The provider-configuration historical oracle now has an image-only candidate own
 2026-10-06 local A0/A4 inventory candidate (not merged): `contracts/python-value-fast-obligations.json` maps the four pure `marty-response-compat` `python_value::tests::*` cases to distinct assertions and inline/frozen Unicode inputs, and links the retained 12 signing-detail and seven loopback-HTTP signing cases to their source, target, and fixture owners. The source/target guard checks source declarations and input wiring, not compiled discovery or current execution. Historical #1060 contracts [job 111220161059](https://github.com/ElevenID/marty-ui/actions/runs/37125503856/job/111220161059) logged all four, all 12, and all seven as `ok` under `cargo test --locked --workspace`; this is execution evidence for that run only, not a no-Postgres feature qualification. `marty-response-compat` permits standalone validation without Postgres; issuance activates its Postgres feature in workspace validation. No skip or production behavior changes in this inventory slice.
 
 Review correction for that local candidate: the 12 signing-detail names are distinct within the integration target, but `signing_error_detail::scalar_api_remains_a_projection_of_the_shared_owner` is source-included there and also runs in the issuance library target. The historical contracts log has 13 signing-related `ok` lines across those two targets, not 13 unique obligations or independent oracles. The static guard rejects ignored/conditional test attributes and commented-out ownership wiring; it does not discover current Cargo runtime execution. The combined batch makes manifest-only changes select release checks in addition to the existing conservative Rust lane, and excludes this CI-only manifest from service images. Helper/test changes remain broad. No new execution exclusion or release-only shortcut is authorized.
+
+## Current routine feedback observation (2026-10-06)
+
+#1126's [normal PR run 37454314639](https://github.com/ElevenID/marty-ui/actions/runs/37454314639)
+passed all 23 jobs at source `ce70c40bd07f0629db2549d5a39af94d2fc1b7ea`.
+Its Canvas log executed the ten declared routine validation cases, including all
+three retained lock races and the privacy case, and named the real PostgreSQL
+validation owner as passing. Full run `37454308609` also passed all 23 jobs,
+including the twenty declared full-tier native validation cases. Protected queue
+run `37462723875` remains live at this checkpoint; no merge or release authority
+is claimed from PR qualification alone.
+
+| Observed normal PR run | #1124 `37437829353` | #1126 `37454314639` |
+| --- | --- | --- |
+| Workflow created-to-final-update | 53m33s | 31m43s |
+| Canvas job | 51m32s | 30m25s |
+| Host acceptance compilation | 10m42s | 6m28s |
+| Bookworm acceptance compilation | 10m14s | 5m46s |
+| Public selfhost image build | 12m56s | 8m00s |
+| Isolated database contract group | 13m52s | 6m50s |
+
+This is observed routine feedback roughly 22 minutes shorter in these two
+successful runs (about 41% for workflow wall time), not a controlled benchmark.
+Cache state, runner load, source and validation work differ; do not attribute
+the entire difference to one refactoring or extrapolate steady-state/official
+release savings. The full tier and protected queue must still qualify independently.
+
+## Assembled next test-layer batch (unpublished, 2026-10-06)
+
+Exact combined source `4b2bd952511bc8818954db43fecdcc6d95f36f65`, based on
+#1126's corrected `e18d9c9d0`, passed independent assembled review and all
+16 `canvas_sync_processor::tests` plus 41 `initiation_didcomm::tests` library
+tests. Their harness execution took 0.01s and 0.06s respectively, excluding
+compilation (the first invocation compiled for 1m14s). These are current local
+results, not a comparative benchmark or a hosted turnaround saving. Direct
+formatting and diff checks passed. The renewal/context classifier component
+passed 125 Python checks before assembly; the roster component passed 37 related
+policy checks. Parent #1126 still requires exact-head hosted qualification and
+protected merge; this follow-up remains unpublished until that parent merges.
+
+The additional roster owner is
+`canvas_sync_processor::tests::roster_failure_processor_dispatch_preserves_tracked_state`.
+It injects five existing provider error variants into the real processor's
+BackgroundRoster path, checks independent literal error/retry expectations
+against the frozen scenario/oracle names, and observes one run-scoped roster
+call with no tracked simulator-state mutations. It does not exercise the real
+OAuth/HTTPS provider, worker handoff, durable job retry/dead-letter transitions,
+target disablement, issued rows/ciphertext or process/idle/SIGINT behavior.
+All five native roster-failure cases and historical qualification remain intact.
+Separate real database/provider evidence is needed before any native tier cut.
+
+## Roster component experiment disposition (2026-10-06)
+
+The real five-case worker/provider/OAuth/PostgreSQL component draft is deferred,
+uncommitted and unpublished in `worktrees/a4-roster-failure-component-20261006`.
+Two owned HTTP-loopback experiments failed before worker execution: the pinned
+published schema requires `canvas_oauth_connections.canvas_base_url` to start
+with `https://`. Owned fixture containers were verified absent after those
+failures. Neither schema nor production trust policy was changed to admit HTTP.
+
+A single-child TLS draft reuses the existing acceptance executable and HTTPS
+fixture. Cached Windows compilation, scoped Clippy and ten Python driver controls
+passed, but these do not qualify real Linux Rust TLS/SQL execution. Its proposed
+240s internal deadline and 1080s outer limit are not an absolute cleanup guarantee:
+the outer timeout cannot prove Docker CLI descendants and pending daemon creates
+are terminal. Existing exact UUID recovery verifies topology, but safe reuse also
+needs the closed-endpoint and pending-operation protocol already implemented in
+`selfhost_packaged_runtime.rs`. Merely widening timeouts is not a substitute.
+
+Retain all five native roster cases and current tiers. Do not include the draft
+in the reviewed unit/renewal batch or use it as demotion evidence. Revisit this
+slice only with a reviewed lifecycle design and real hosted Linux qualification;
+no component speedup is attributed to the failed or mocked experiments.
+
+## A8 current API-boundary audit (2026-10-06, read-only)
+
+Core main `d949f65362b63157e4e4ecee23ea4610a6411089` is workspace 0.2;
+UI's six shared Core declarations still use 0.1.62 / `bdbd1510`; issuance also
+declares `marty-emrtd-issuance` 0.2 at separate revision `83cdaeb5`. This is
+already a mixed-generation graph, not six declarations covering every Core
+dependency. A pin-only update would remove callable APIs and an existing opt-in
+capability:
+
+- Gateway `runtime.rs` calls `proof::create_proof_jwt`, now Core test-only.
+  Adopt a legitimate production wallet/delegated signer API without changing
+  authenticated caller authorization or using a test helper as a production API.
+- Flow `request_object.rs` and `verification_submission.rs` generate, seal,
+  persist and later unwrap private HAIP response JWKs. Core's production
+  `HaipResponseDecryptionSession` is opaque and one-shot; it is not a durable
+  serialization replacement. Preserve restart/session custody through a supported
+  boundary, not copied cryptography or an export of Core's test helpers.
+- `marty-crypto/ecdsa` becomes `ecdsa-verification`; verifier
+  `authority-issuance` is removed. Preserve `passport-self-signed-test` and
+  independent CSCA interoperability fixtures with a suitable test-support owner.
+  This opt-in test-image capability is not the ordinary production signer.
+
+After those prerequisites, align Core versions/features and carry verifier-owned
+definitions plus wallet submissions through Flow to policy evaluation. Core's
+authenticated VP proof verifies the signed payload/key and session claims, not
+the embedded VC's issuer, trust or status. Verify those independently. Holder-key
+comparison remains conditional on the existing profile policy; do not silently
+convert `OpenBadgeLogin`'s bearer default to mandatory holder binding. Keep existing
+raw-credential routes distinct from signed-VP handling and reject unverified
+context flags as proof. Only then qualify the same-key wallet happy journey and
+nightly release tier on real Flow/policy/issuance results. This audit changed no
+pins, authentication behavior or release authority.
+
+## A6 container-input audit disposition (2026-10-06)
+
+The dedicated event-stream and revocation-profile Dockerfiles still cook the
+workspace, but neither is selected by current CI/CD or Compose. Current CI uses
+shared `rust/services/Dockerfile.ci` targets; release uses `services/Dockerfile`.
+Pinned cargo-chef 0.1.78 supports binary-scoped preparation and package/bin cooking,
+but changing these unused recipes would not improve the current critical path.
+Keep shared workspace cooking for the actual multi-service consumers. Revisit
+dedicated recipe narrowing only if those builds become active, with locked image
+validation rather than dependency counts as timing evidence.
+
+A tracked-file inventory finds 335 files under service/crate `tests` trees,
+totalling 5,352,231 bytes (5.10 MiB) before Dockerignore rules. The two dedicated
+shared service/CI ignore policies exclude those trees; the root-context policy
+does not exclude them as a class. This is an input inventory, not measured Docker
+transfer, proof of complete production-input closure, or a claimed speedup.
+Further exclusion requires checking actual compiler/recipe consumers and image
+validation; do not replace the existing exact cfg(test) source-leaf guard with a
+blanket source glob.
+
+## A7 current-run revalidation (2026-10-06)
+
+Core's latest successful [PR CI run 37419154761](https://github.com/ElevenID/marty-core/actions/runs/37419154761)
+ran from 05:33:47 to 05:48:15 UTC (14m28s including orchestration).
+Affected Rust Tests took 13m41s, including affected packages (6m57s),
+private-key/session security (3m58s) and OID4VCI benchmark smoke (2m28s).
+Fast Rust Preflight took 10m52s, including exact KMS/public-key graphs
+(5m09s) and trusted-list client validation (2m21s).
+The subsequent [complete-main run 37420390043](https://github.com/ElevenID/marty-core/actions/runs/37420390043)
+had preflight 15m02s and Windows Platform Tests 16m49s; these are different
+workloads, not a before/after speed comparison. Both workflows succeeded.
+This fresh evidence retains A7's deferred disposition: moving preflight work
+to another job is not yet shown to reduce the critical path, and no security,
+feature, benchmark or platform qualification is removed on that assumption.
+
+## Next renewal decomposition: bounded obligations (unpublished)
+
+The additive library owner is
+`initiation_didcomm::tests::renewal_graph::renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto`
+in `rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs`.
+It composes the existing renewal, initiation and native DIDComm delivery services;
+it does not implement a parallel renewal algorithm. Its four scenarios cross
+authcrypt/anoncrypt with private-address allow/refuse. Existing private harness
+repository and builder, plus a test lifecycle, remain test doubles; the endpoint
+validator, peer-DID resolution and envelope encryption are production code.
+Authcrypt sender resolution uses a loopback HTTP fixture, so this is a fast
+service-owned component test, not a completely I/O-free pure unit test.
+
+| Obligation | New fast owner | Retained acceptance owner |
+| --- | --- | --- |
+| Renewal reservation and offer composition | All four scenarios record the reservation; refusal returns a pending offer | Real SQL admission, source snapshots and offer fields in `support/renewal_fresh_main.rs` |
+| Address refusal before irreversible native work | No credential-builder invocation, finalization, completion or recorded send; send fence remains Idle. An initial read-only transport-claim lookup is permitted | Actual wallet captures, unchanged source database state, no publication/events and no legacy fallback |
+| Allowed encrypted delivery | Exactly one recorded send, Delivered state and decrypted recipient/message assertions; authcrypt also checks sender key identity | Packaged service, real HTTP wallet, persisted delivery/credential/event state and configured ingress |
+| Deployment and process guarantees | Not proved by the new owner | Existing Gateway, Envoy and Kubernetes ingress profiles, Redis/configuration, startup and owned process cleanup |
+
+The three proxy-ingress profiles still execute all four combinations in
+`renewal_fresh_main::run_with_profile`; direct profiles retain their two allowed
+encryption cases. No native case or tier is removed in this maintenance batch.
+This mapping is a source-review inventory, not compiled discovery, execution
+evidence, a complete dependency graph or authority to skip acceptance. Any later
+tiering needs separately demonstrated database/process proof and an exact-head
+hosted pilot. No hosted speedup is attributed to this additive proof.
+
+The additive A0 renewal-profile inventory candidate records the six outer
+`canvas_published_schema_contract` owners and three owned container children in
+`contracts/canvas-renewal-profile-obligations.json`. Gateway, Envoy and
+Kubernetes-Gateway each retain all four crypto/private-address combinations;
+Kubernetes-native, rendered-native and packaged-direct retain both allowed
+encryption modes. Its source guard checks exact owner-to-entrypoint wiring,
+the shared case selector, frozen source fixture and fast 2×2 component owner.
+The existing Canvas runner still executes the complete composition target in
+routine and full tiers. Static registration cannot prove that an env-gated
+test ran, a nested container child completed, or any SQL/process/image outcome;
+existing owned-process and protected CI gates remain the execution evidence.
+This inventory authorizes no skips or trigger narrowing. Its value is to expose
+which crypto/policy cases have a fast owner and which real ingress, persistence
+and cleanup obligations would still need proof before future decomposition.
+
+An additive rendered-base configuration component test in the existing
+`canvas_published_schema_contract` target exercises the actual bounded Compose
+renderer for all four authcrypt/anoncrypt and private-address allow/refuse
+combinations. It checks literal native private-IP, CA, policy-file, DID-web and
+port settings plus Gateway legacy/native routes. The base renderer is shared
+by the Gateway, Envoy and rendered-direct acceptance paths, but this one test
+does not validate the Envoy sidecar, Kubernetes renderer, packaged-direct
+defaults, a running service, real PostgreSQL/Redis, wallet I/O, or container
+cleanup. It uses synthetic files and local addresses and needs the Compose CLI;
+it is not an I/O-free unit test. The same composition target is executed by the
+existing Canvas runner, with no case, tier or trigger changes. Local Windows
+execution is not qualification for its Linux renderer: ordinary local tests
+without the published-schema gate do not invoke Compose. The Linux runner
+requires the compiled test name, successful composition executable exit and
+exactly one marker emitted only after all four cases. Hosted exact-head
+execution remains required before this proof can support a tier decision.
+
+## Combined transport and dependency-boundary checkpoint (2026-10-06)
+
+The unpublished UI assembly at `4b3433dcadf538f9ba9cc44ff2d3b8c119adb715`
+combines the reviewed roster/renewal fast owners with typed OID4VP evaluation
+transport. It preserves the producer-owned query, client ID, nonce, raw VP and
+optional submission from Flow to policy without treating them as authenticated
+credential evidence. Metadata requires workload authentication; external HTTP
+cannot set it. The existing evaluator does not yet consume this metadata as
+proof or activate holder binding. Historical requests without metadata and
+existing raw-credential routes retain their legacy handling. Corrupted stored
+query/binding is deliberately rejected before provider evaluation; this limited
+fail-closed correction is not described as universally behavior-neutral.
+
+Review cycles corrected workload authorization, verification-service consumers
+and generated schema coherence. Python and Envoy outputs include the additive
+policy field and current credential-template schema, with a parity guard.
+Component review/test results are not assembly qualification. The assembled
+reviews and targeted checks recorded below are local evidence; hosted CI and
+protected merge remain required. No nightly release qualification is claimed.
+
+Core [#353](https://github.com/ElevenID/marty-core/pull/353) merged at 12:48:16 UTC
+as `a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7` after protected run
+`37463564302` passed. It extracts the existing canonical JSON digest into a narrow
+crate while retaining verification's public delegating API and exact
+serialization/error semantics. The merged crate/manifests/governance code are
+identical to reviewed source `fc7d029883d25a13c216756ff3e0056f2739c662`.
+
+The unpublished UI assembly `0a64af54ae2144d2359736fefc2f1cce66dceafb` adopts
+that verified main revision only for `marty-oid4vp-contract`'s digest dependency.
+Existing Core pins, frozen digest profile identifiers, domain envelopes and error
+mapping are unchanged. Package-scoped vectors (17 tests and one compile-fail
+doctest), direct-dependency guards and strict four-consumer Clippy passed.
+The reviewed consumer's distinct normal package graph entries fell from 456 to
+56 (`cargo tree --edges normal`, duplicate display references removed). This is
+a normal-dependency inventory, not a measured compile or CI timing saving.
+Flow and policy still use heavyweight verification directly, and the additional
+Core Git revision can incur fetch overhead. UI main has not adopted this batch;
+hosted qualification and protected merge remain required.
+
+## Assembled inventory and provenance checkpoint (2026-10-06)
+
+The unpublished assembly `831e9ddd4589ba835ca8f6db04b64d88f1aaad5e`
+passed independent interaction review and 165 targeted Python tests plus 44
+subtests in 66.78s. It adds the six renewal-profile owners with their three
+container children and the fast owner's test-only parent registration, and
+source-backed EventStream publish edges to Auth and Organization. Service
+changes still select the complete workspace; source markers and the hypothetical
+five-package EventStream closure do not establish execution or authorize a cut.
+No additional test or tier exclusion was introduced.
+
+A fresh A5 audit found no new missing source-filename edge in the current
+producer/import inventories. Original capture provenance remains incomplete:
+only two of the 39 committed `canvas-worker-*-oracle.json` files contain
+`capture_source_sha256`. These 39 files are not a one-to-one count of the 33
+historical replay cases. Installed-worker hashes and fresh startup attestations
+do not reconstruct all original helper/scenario/schema/image/runtime inputs.
+Retain weekly/manual historical replay and exact-main full release qualification.
+Do not reuse historical evidence without independently verifiable capture records
+or a controlled, fully attested capture; neither retroactively inferred hashes
+nor replacing expected outputs to match native behavior is acceptable proof.
+
+## HTTPS duplicate experiment disposition (2026-10-06)
+
+When both Rust lanes are selected, both execute
+`canvas_authoritative_https::actual_ags_nrps_https_uses_child_scoped_trust`:
+the contracts workspace invocation and the Canvas lane's exact native HTTPS
+step. The local candidate `00eddfbf66c0abaf48f6512851089967e8179a92` added
+lane-aware exclusion, compiled substring-uniqueness discovery and execution
+guards. Targeted policies passed, but independent review recommends not shipping
+it: the new serial whole-workspace `--list` invocation and six-file policy delta
+are disproportionate to the duplicate cost. In successful normal #1126
+[Canvas job 112238131886](https://github.com/ElevenID/marty-ui/actions/runs/37454314639/job/112238131886),
+that exact HTTPS step started and completed at 11:21:20 UTC (second-resolution
+metadata, not a controlled benchmark). Its reported duration does not justify
+adding another workspace discovery pass. Preserve the unpushed candidate for
+audit and retain existing execution; no speedup or exclusion is promoted.
+
+## Publication readiness checkpoint (2026-10-06)
+
+Assembly `88ee6224e81119a0c8207cb743f3de7b979f412b` includes qualified main
+`8d42d1bdc5cecda79947d6c7b720b83ec4091f01` and passed independent publication
+review. The main merge preserved the previously reviewed tracked tree exactly.
+The expanded local policy sweep passed 270 tests and 44 subtests in 61.68s.
+Preflight-fixture repair passed the full file (174 passed, one skipped), followed
+by focused checks for its final additive negative. The original 165-registration
+fingerprint is still checked after subtracting only the new rendered-config
+owner; a separate 166-registration fingerprint binds the complete new roster.
+No existing registration, native case, deadline, tier or protected gate is removed.
+
+Configured Flow clients now use the existing channel factory's mutual-TLS
+capability to decide whether to send optional OID4VP metadata; other request
+fields and metadata validation remain unchanged. Non-mTLS configured clients
+omit that field while policy still rejects metadata without workload authority.
+Public direct-client API shapes are preserved. This is wire/API compatibility,
+not a claim that production plaintext evaluation works: policy's production main
+already installs workload security even when its local server TLS is absent.
+
+The Linux-only configuration test uses the existing acceptance opt-in. Its
+completion marker is required after successful composition execution and all four
+real-render assertions, with prefix/interleaving-safe counting. Local Windows
+compilation and synthetic controls do not prove real Linux Compose execution.
+Exact-head hosted CI must supply that proof before merge; no test-tier cut or
+nightly release qualification is authorized by local readiness.
 
 ## Design references
 

@@ -449,8 +449,13 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 10
+    assert verified[-1] == b"" and len(verified) == 11
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    nested = (
+        "rust/services/issuance/src/initiation_didcomm/tests/"
+        "initiation_didcomm_renewal_tests.rs"
+    )
+    assert nested in leaves
     for leaf in leaves:
         selected = _classify_changed_paths([leaf], tmp_path, include_rust_plan=True)[0]
         assert selected == {
@@ -494,6 +499,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert deleted["rust_runtime"] == "true"
     assert deleted["rust_matrix"] == '["canvas","contracts"]'
+    nested_without_proof = _classify_changed_paths(
+        [nested], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert nested_without_proof["rust_runtime"] == "true"
+    assert nested_without_proof["rust_matrix"] == '["canvas","contracts"]'
     empty = _classify_changed_paths(
         [], tmp_path, combined=True, include_rust_plan=True
     )[0]
@@ -1037,6 +1047,11 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_python_value_fast_obligations.py",
             "tests/test_ci_workflow_performance.py",
         },
+        "canvas-renewal-profile-obligations.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_renewal_profile_obligations.py",
+            "tests/test_ci_workflow_performance.py",
+        },
     }
     for manifest, expected in inventory_consumers.items():
         references = subprocess.run(
@@ -1092,6 +1107,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-oracle-script-imports.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
+        "contracts/canvas-renewal-profile-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
     ):
@@ -1582,6 +1598,19 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
     }
 
 
+def _assert_required_canvas_target_completion(published: str) -> None:
+    assert published.rstrip().endswith(
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "
+        '\"$composition_log\" | wc -l) == 1 ]] || {\n'
+        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
+        "  exit 1\n"
+        "}\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
+    )
+
+
 def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _, document = _workflow(CI_PATH)
     steps = document["jobs"]["test-rust-services"]["steps"]
@@ -1892,11 +1921,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
         in published
     )
-    assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
-        '--require-execution canvas "$worker_log"'
-    )
+    _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
             '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
@@ -1971,11 +1996,7 @@ def _assert_gateway_operations_registration(
     inventory = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
-    assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
-        '--require-execution canvas "$worker_log"'
-    )
+    _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
             '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'

@@ -32,8 +32,11 @@ pub struct EvaluatePresentationRequest {
     pub audience: Option<String>,
     #[serde(default)]
     pub context: Map<String, Value>,
-    /// Set only by the workload-authenticated gRPC adapter. HTTP JSON cannot
-    /// assert that verifier context was produced by the internal OID4VP flow.
+    /// Parsed only from workload-authenticated gRPC; still unverified metadata.
+    #[serde(skip)]
+    pub oid4vp_transport: Option<marty_oid4vp_contract::Oid4vpEvaluationTransportV1>,
+    /// Set by the internal gRPC adapter (which is workload-authenticated in
+    /// deployed configuration). HTTP JSON cannot assert this marker.
     #[serde(skip)]
     pub trusted_internal_context: bool,
 }
@@ -470,6 +473,7 @@ async fn evaluate_inline(
         nonce: input.nonce,
         audience: input.audience,
         context: input.context,
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
     evaluate(&state, &policy, &request).await.map(Json)

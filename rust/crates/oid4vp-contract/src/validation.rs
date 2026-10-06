@@ -12,16 +12,17 @@ use crate::{
     digest_response_item, digest_wallet_submission, AuthenticatedDecisionAction,
     AuthenticatedResult, CredentialStatusMode, CredentialStatusState, EvidenceCheckOutcome,
     EvidenceFact, EvidenceProcessingStatus, FrozenCredentialRequirement, FrozenOid4vpRequestV1,
-    FrozenPolicyIdentity, Oid4vpCheckId, Oid4vpEvidenceProjectionV1, PresentationDescriptor,
-    QueryKind, VpToken, WalletSubmissionV1, MAX_CLAIMS_PER_CREDENTIAL, MAX_CLAIM_VALUE_BYTES,
-    MAX_CODE_BYTES, MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH, MAX_EVIDENCE_LIST_ITEMS,
-    MAX_EVIDENCE_PROJECTION_BYTES, MAX_FROZEN_REQUEST_BYTES, MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH,
-    MAX_PRIVACY_BASE64_DECODE_LAYERS, MAX_PRIVACY_FRAGMENT_BYTES, MAX_PRIVACY_FRAGMENT_PARTS,
-    MAX_PRIVACY_NORMALIZATION_STATES, MAX_PRIVACY_NORMALIZATION_STEPS,
-    MAX_PRIVACY_NORMALIZED_BYTES, MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES,
-    MAX_QUERY_REQUIREMENTS, MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS,
-    MAX_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES, MIN_NONCE_BYTES, MIN_TOKEN_BYTES,
-    REQUIRED_OID4VP_CHECKS,
+    FrozenPolicyIdentity, Oid4vpCheckId, Oid4vpEvaluationTransportV1, Oid4vpEvidenceProjectionV1,
+    PresentationDescriptor, QueryKind, VpToken, WalletSubmissionV1, MAX_CLAIMS_PER_CREDENTIAL,
+    MAX_CLAIM_VALUE_BYTES, MAX_CODE_BYTES, MAX_CREDENTIALS, MAX_DESCRIPTOR_DEPTH,
+    MAX_EVIDENCE_LIST_ITEMS, MAX_EVIDENCE_PROJECTION_BYTES, MAX_FROZEN_REQUEST_BYTES,
+    MAX_IDENTIFIER_BYTES, MAX_JSON_DEPTH, MAX_PRIVACY_BASE64_DECODE_LAYERS,
+    MAX_PRIVACY_FRAGMENT_BYTES, MAX_PRIVACY_FRAGMENT_PARTS, MAX_PRIVACY_NORMALIZATION_STATES,
+    MAX_PRIVACY_NORMALIZATION_STEPS, MAX_PRIVACY_NORMALIZED_BYTES,
+    MAX_PRIVACY_PERCENT_DECODE_LAYERS, MAX_QUERY_DOCUMENT_BYTES, MAX_QUERY_REQUIREMENTS,
+    MAX_REQUEST_LIFETIME_SECONDS, MAX_STATUS_VALIDITY_SECONDS, MAX_TOKENS, MAX_TOKEN_BYTES,
+    MAX_TRANSPORT_CLIENT_ID_BYTES, MAX_TRANSPORT_RAW_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES,
+    MIN_NONCE_BYTES, MIN_TOKEN_BYTES, REQUIRED_OID4VP_CHECKS,
 };
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -68,6 +69,62 @@ pub enum Oid4vpContractError {
     DecisionMismatch,
     #[error("authenticated evidence contains raw wallet material")]
     PrivacyViolation,
+}
+
+impl Oid4vpEvaluationTransportV1 {
+    /// Check transport integrity and work bounds only. This does not verify a
+    /// VP, credential, descriptor, issuer, holder, or replay decision.
+    pub fn validate_transport(&self) -> Result<(), Oid4vpContractError> {
+        validate_serialized_size(
+            &self.query_document,
+            MAX_QUERY_DOCUMENT_BYTES,
+            "query_document",
+        )?;
+        if !self.query_document.is_object() {
+            return Err(Oid4vpContractError::InvalidField("query_document"));
+        }
+        let shape_matches_kind = match self.query_kind {
+            QueryKind::Dcql => self
+                .query_document
+                .get("credentials")
+                .is_some_and(Value::is_array),
+            QueryKind::PresentationExchange => {
+                self.query_document.get("id").is_some_and(Value::is_string)
+                    && self
+                        .query_document
+                        .get("input_descriptors")
+                        .is_some_and(Value::is_array)
+            }
+        };
+        if !shape_matches_kind {
+            return Err(Oid4vpContractError::InvalidQueryDocument);
+        }
+        if self.query_digest != digest_query_document(&self.query_document)? {
+            return Err(Oid4vpContractError::QueryDigestMismatch);
+        }
+        if let Some(submission) = &self.presentation_submission {
+            validate_serialized_size(
+                submission,
+                MAX_WALLET_SUBMISSION_BYTES,
+                "presentation_submission",
+            )?;
+            if !submission.is_object() {
+                return Err(Oid4vpContractError::InvalidField("presentation_submission"));
+            }
+        }
+        if self.vp_token_raw.is_empty() || self.vp_token_raw.len() > MAX_TRANSPORT_RAW_TOKEN_BYTES {
+            return Err(Oid4vpContractError::SizeLimit("vp_token_raw"));
+        }
+        if self.verifier_client_id.is_empty() || self.request_nonce.is_empty() {
+            return Err(Oid4vpContractError::InvalidField("verifier_binding"));
+        }
+        if self.verifier_client_id.len() > MAX_TRANSPORT_CLIENT_ID_BYTES
+            || self.request_nonce.len() > MAX_IDENTIFIER_BYTES
+        {
+            return Err(Oid4vpContractError::SizeLimit("verifier_binding"));
+        }
+        Ok(())
+    }
 }
 
 impl WalletSubmissionV1 {

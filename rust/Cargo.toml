@@ -42,6 +42,7 @@ marty-didcomm = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-
 marty-iso18013 = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
 marty-oid4vci = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
 marty-verification = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
+marty-canonical-digest = { version = "0.2", git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7" }
 marty-status = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68" }
 mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
 mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }

@@ -8,7 +8,8 @@ use marty_presentation_policy::{
     presentation_policy_proto::{
         presentation_policy_service_server::PresentationPolicyService, CreatePolicyRequest,
         EvaluatePresentationRequest as EvaluatePresentationMessage, GetPolicyRequest,
-        HealthCheckRequest, ListPoliciesRequest, PolicyIdRequest, UpdatePolicyRequest,
+        HealthCheckRequest, ListPoliciesRequest, Oid4vpEvaluationTransport, PolicyIdRequest,
+        UpdatePolicyRequest,
     },
     EvaluatePresentationRequest, PolicyApplication, PolicyAuthorization, PolicyRepository,
     PresentationPolicy, PresentationPolicyGrpcService, PresentationVerificationError,
@@ -165,6 +166,48 @@ fn create_request(organization_id: Uuid) -> CreatePolicyRequest {
         .to_string(),
         ..CreatePolicyRequest::default()
     }
+}
+
+#[tokio::test]
+async fn principal_authenticated_fallback_cannot_supply_workload_oid4vp_transport() {
+    let organization_id = Uuid::new_v4();
+    let service = service(organization_id);
+    let policy = service
+        .create_policy(authenticated(create_request(organization_id)))
+        .await
+        .unwrap()
+        .into_inner();
+    service
+        .activate_policy(authenticated(PolicyIdRequest {
+            policy_id: policy.id.clone(),
+        }))
+        .await
+        .unwrap();
+    let error = service
+        .evaluate_presentation(authenticated(EvaluatePresentationMessage {
+            policy_id: policy.id.clone(),
+            vp_token: "header.payload.signature".into(),
+            nonce: "nonce-1".into(),
+            audience: "verifier-1".into(),
+            oid4vp_transport: Some(Oid4vpEvaluationTransport::default()),
+            ..EvaluatePresentationMessage::default()
+        }))
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), Code::PermissionDenied);
+    let legacy = service
+        .evaluate_presentation(authenticated(EvaluatePresentationMessage {
+            policy_id: policy.id,
+            vp_token: "header.payload.signature".into(),
+            nonce: "nonce-1".into(),
+            audience: "verifier-1".into(),
+            ..EvaluatePresentationMessage::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(legacy.decision, "allow");
+    assert_eq!(legacy.nonce, "nonce-1");
 }
 
 #[tokio::test]

@@ -1,0 +1,67 @@
+{
+  "schema": "marty.canvas-renewal-profile-obligations/v1",
+  "scope": "Six outer Canvas renewal acceptance owners and three owned container children, not the complete Canvas target or authority to skip tests. Source checks do not prove execution.",
+  "package": "marty-canvas-acceptance",
+  "target": "canvas_published_schema_contract",
+  "source": "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
+  "fixture": "rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs",
+  "frozen_source": "contracts/credential-renewal-python-reference.json",
+  "fast_owner": {
+    "test": "initiation_didcomm::tests::renewal_graph::renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto",
+    "source": "rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs",
+    "proves": "Four service-composition scenarios cross anoncrypt/authcrypt and private-address allow/refuse using the production endpoint validator and DIDComm envelope, with fake repository, builder, lifecycle and recording transport ports.",
+    "does_not_prove": "Real PostgreSQL, Redis, configured ingress, an external process, actual HTTPS wallet delivery, image/container cleanup, or durable issued rows and ciphertext."
+  },
+  "profiles": [
+    {
+      "profile": "gateway",
+      "outer": "base_profile_gateway_composition_isolated",
+      "child": "base_profile_gateway_composition_child",
+      "entrypoint": "run_gateway",
+      "cases": ["anoncrypt:private-refused", "authcrypt:private-refused", "anoncrypt:private-allowed", "authcrypt:private-allowed"],
+      "retained": "Linux owned-container Gateway ingress, rendered config, PostgreSQL and Redis, wallet capture, persisted credential/delivery/events, refusal with no legacy fallback, and cleanup."
+    },
+    {
+      "profile": "envoy",
+      "outer": "base_profile_envoy_composition_isolated",
+      "child": "base_profile_envoy_composition_child",
+      "entrypoint": "run_envoy",
+      "cases": ["anoncrypt:private-refused", "authcrypt:private-refused", "anoncrypt:private-allowed", "authcrypt:private-allowed"],
+      "retained": "Linux owned-container Envoy ingress, baseline/candidate sidecar, rendered config, PostgreSQL and Redis, wallet capture, durable rows, and cleanup."
+    },
+    {
+      "profile": "kubernetes-gateway",
+      "outer": "kubernetes_profile_gateway_composition_isolated",
+      "child": "kubernetes_profile_gateway_composition_child",
+      "entrypoint": "run_kubernetes",
+      "gateway": true,
+      "cases": ["anoncrypt:private-refused", "authcrypt:private-refused", "anoncrypt:private-allowed", "authcrypt:private-allowed"],
+      "retained": "Linux owned-container prepared Kubernetes Gateway ingress and model, PostgreSQL and Redis, wallet capture, durable rows, and cleanup."
+    },
+    {
+      "profile": "kubernetes-direct",
+      "outer": "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
+      "child": null,
+      "entrypoint": "run_kubernetes",
+      "gateway": false,
+      "cases": ["anoncrypt:private-allowed", "authcrypt:private-allowed"],
+      "retained": "Resolved Kubernetes native direct configuration, owned PostgreSQL and Redis, real packaged process, wallet capture, durable rows, and cleanup."
+    },
+    {
+      "profile": "rendered-direct",
+      "outer": "base_profile_native_renewal_uses_actual_rendered_configuration",
+      "child": null,
+      "entrypoint": "run_rendered",
+      "cases": ["anoncrypt:private-allowed", "authcrypt:private-allowed"],
+      "retained": "Rendered native configuration, owned PostgreSQL and Redis, packaged process, wallet capture, durable rows, and cleanup."
+    },
+    {
+      "profile": "packaged-direct",
+      "outer": "renewal_fresh_packaged_main_delivers_both_encryption_modes",
+      "child": null,
+      "entrypoint": "run",
+      "cases": ["anoncrypt:private-allowed", "authcrypt:private-allowed"],
+      "retained": "Owned PostgreSQL, packaged native process, wallet capture, signed credential and durable delivery/events, without Redis or proxy ingress."
+    }
+  ]
+}

@@ -78,6 +78,10 @@ impl FlowGrpcChannelFactories {
             issuance,
         ))
     }
+
+    pub(crate) fn presentation_policy_workload_transport(&self) -> bool {
+        self.presentation_policy.config().security == GrpcTransportSecurity::MutualTls
+    }
 }
 
 fn ordinary_factory(target: &str) -> Result<GrpcChannelFactory, PlatformError> {
@@ -152,16 +156,25 @@ impl FlowGrpcClients {
         self,
         service_token: Option<&str>,
     ) -> Result<FlowGrpcProviders, FlowProviderError> {
+        // Preserve the public direct-client API's previous forwarding behavior.
+        self.providers_with_channel_security(service_token, true)
+    }
+
+    pub(crate) fn providers_with_channel_security(
+        self,
+        service_token: Option<&str>,
+        presentation_policy_mtls: bool,
+    ) -> Result<FlowGrpcProviders, FlowProviderError> {
+        let mut presentation_policy =
+            GrpcPresentationPolicyProvider::new(self.presentation_policy, service_token)?;
+        presentation_policy.workload_mtls = presentation_policy_mtls;
         Ok(FlowGrpcProviders {
             tenant_membership: GrpcTenantMembershipProvider::new(self.organization, service_token)?,
             credential_template: GrpcCredentialTemplateProvider::new(
                 self.credential_template,
                 service_token,
             )?,
-            presentation_policy: GrpcPresentationPolicyProvider::new(
-                self.presentation_policy,
-                service_token,
-            )?,
+            presentation_policy,
             issuance: GrpcIssuanceProvider::new(self.issuance, service_token)?,
         })
     }
@@ -387,6 +400,7 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
 pub struct GrpcPresentationPolicyProvider {
     client: PresentationPolicyServiceClient<Channel>,
     auth: GrpcAuthentication,
+    workload_mtls: bool,
 }
 
 impl GrpcPresentationPolicyProvider {
@@ -397,6 +411,9 @@ impl GrpcPresentationPolicyProvider {
         Ok(Self {
             client,
             auth: GrpcAuthentication::new(token)?,
+            // Preserve direct-constructor behavior; configured Flow providers
+            // receive the inspected channel capability from their factory.
+            workload_mtls: true,
         })
     }
 }
@@ -457,6 +474,10 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                                 "evaluation context is not serializable",
                             )
                         })?,
+                        oid4vp_transport: encode_oid4vp_transport_for_channel(
+                            request.oid4vp_transport.as_ref(),
+                            self.workload_mtls,
+                        )?,
                     },
                     &request.principal_id,
                 )?,
@@ -614,6 +635,53 @@ fn invalid_response(provider: &'static str, message: &str) -> FlowProviderError 
     }
 }
 
+fn encode_oid4vp_transport(
+    transport: &marty_oid4vp_contract::Oid4vpEvaluationTransportV1,
+) -> Result<crate::presentation_policy_proto::Oid4vpEvaluationTransport, FlowProviderError> {
+    transport.validate_transport().map_err(|_| {
+        invalid_response(
+            "presentation_policy",
+            "OID4VP transport metadata is invalid",
+        )
+    })?;
+    Ok(
+        crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            query_kind: match transport.query_kind {
+                marty_oid4vp_contract::QueryKind::Dcql => "dcql",
+                marty_oid4vp_contract::QueryKind::PresentationExchange => "presentation_exchange",
+            }
+            .into(),
+            query_document_json: serde_json::to_string(&transport.query_document).map_err(
+                |_| invalid_response("presentation_policy", "query is not serializable"),
+            )?,
+            query_digest: transport.query_digest.clone(),
+            presentation_submission_json: transport
+                .presentation_submission
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| {
+                    invalid_response("presentation_policy", "submission is not serializable")
+                })?,
+            vp_token_raw: transport.vp_token_raw.clone(),
+            verifier_client_id: transport.verifier_client_id.clone(),
+            request_nonce: transport.request_nonce.clone(),
+        },
+    )
+}
+
+fn encode_oid4vp_transport_for_channel(
+    transport: Option<&marty_oid4vp_contract::Oid4vpEvaluationTransportV1>,
+    workload_mtls: bool,
+) -> Result<Option<crate::presentation_policy_proto::Oid4vpEvaluationTransport>, FlowProviderError>
+{
+    // Keep validation unchanged, but do not offer workload-only metadata over
+    // the pre-existing principal-authenticated plaintext route. The policy
+    // service still authorizes the actual peer independently of this flag.
+    let encoded = transport.map(encode_oid4vp_transport).transpose()?;
+    Ok(if workload_mtls { encoded } else { None })
+}
+
 fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
@@ -621,6 +689,69 @@ fn nonempty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_oid4vp_transport_serializes_without_promoting_proof() {
+        let query = serde_json::json!({"credentials": [{"id": "member"}]});
+        let submission = serde_json::json!({"id": "legacy", "descriptor_map": [], "extra": true});
+        let metadata = marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+            query_kind: marty_oid4vp_contract::QueryKind::Dcql,
+            query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
+            query_document: query.clone(),
+            presentation_submission: Some(submission.clone()),
+            vp_token_raw: r#"{"member":["header.payload.signature"]}"#.into(),
+            verifier_client_id: "did:web:verifier.example".into(),
+            request_nonce: "nonce-with-at-least-32-bytes-1234567890".into(),
+        };
+        let wire = encode_oid4vp_transport(&metadata).unwrap();
+        assert_eq!(wire.query_kind, "dcql");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&wire.query_document_json).unwrap(),
+            query
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                wire.presentation_submission_json.as_deref().unwrap()
+            )
+            .unwrap(),
+            submission
+        );
+        assert_eq!(wire.query_digest, metadata.query_digest);
+        assert_eq!(wire.vp_token_raw, metadata.vp_token_raw);
+        assert_eq!(wire.verifier_client_id, metadata.verifier_client_id);
+        assert_eq!(wire.request_nonce, metadata.request_nonce);
+        assert_eq!(
+            encode_oid4vp_transport_for_channel(Some(&metadata), true).unwrap(),
+            Some(wire)
+        );
+        assert!(encode_oid4vp_transport_for_channel(Some(&metadata), false)
+            .unwrap()
+            .is_none());
+        let mut invalid = metadata;
+        invalid.query_digest = "0".repeat(64);
+        assert!(encode_oid4vp_transport(&invalid).is_err());
+        assert!(encode_oid4vp_transport_for_channel(Some(&invalid), false).is_err());
+    }
+
+    #[tokio::test]
+    async fn configured_plaintext_policy_channel_reaches_provider_without_workload_transport() {
+        let factory = || ordinary_factory("http://127.0.0.1:9009").unwrap();
+        let factories = FlowGrpcChannelFactories {
+            organization: factory(),
+            credential_template: factory(),
+            presentation_policy: factory(),
+            issuance: factory(),
+        };
+        assert!(!factories.presentation_policy_workload_transport());
+        let clients = factories.connect_lazy().unwrap();
+        let providers = clients
+            .providers_with_channel_security(
+                None,
+                factories.presentation_policy_workload_transport(),
+            )
+            .unwrap();
+        assert!(!providers.presentation_policy.workload_mtls);
+    }
 
     #[test]
     fn principal_request_carries_service_and_user_authentication() {

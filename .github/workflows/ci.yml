@@ -136,7 +136,7 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json)
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
                   # Retain Rust qualification for contract metadata and also
                   # run release-collected evidence/obligation ownership checks.
                   rust=true
