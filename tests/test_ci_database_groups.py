@@ -106,6 +106,7 @@ def test_preflight_evidence_requires_both_successes_and_same_executable(
     monkeypatch.setenv("GITHUB_RUN_ID", "12345")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     monkeypatch.setenv("GITHUB_JOB", "test-rust-services")
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "0")
     executable = tmp_path / "canvas-contract"
     executable.write_bytes(b"compiled contract v1")
     (tmp_path / "rust-test-artifacts.json").write_text(
