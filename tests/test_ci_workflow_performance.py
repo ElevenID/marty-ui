@@ -332,7 +332,7 @@ def _classify_changed_paths(
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    assert event in {"pull_request", "merge_group"}
+    assert event in {"pull_request", "merge_group", "push"}
     script = classifier["run"].replace("${{ github.event_name }}", event)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
@@ -449,8 +449,12 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 11
+    assert verified[-1] == b"" and len(verified) == 13
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    assert leaves[-2:] == [
+        "rust/crates/oid4vp-contract/tests/contract_vectors.rs",
+        "rust/crates/oid4vp-contract/tests/transport_metadata.rs",
+    ]
     nested = (
         "rust/services/issuance/src/initiation_didcomm/tests/"
         "initiation_didcomm_renewal_tests.rs"
@@ -486,7 +490,13 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert mixed["rust_matrix"] == '["canvas","contracts"]'
     for paths in (
         ["rust/services/issuance/src/unreviewed_tests.rs"],
+        ["rust/crates/oid4vp-contract/tests/unreviewed.rs"],
+        ["rust/crates/oid4vp-contract/tests/contract_vectors.rs\nother"],
+        ["rust/crates/oid4vp-contract/src/lib.rs"],
+        ["contracts/oid4vp-authenticated-contract-v1.json"],
         [leaves[0], "docs/renamed-test-source.md"],
+        [leaves[-1], "rust/crates/oid4vp-contract/src/lib.rs"],
+        [leaves[-1], "rust/crates/oid4vp-contract/tests/renamed_metadata.rs"],
     ):
         selected = _classify_changed_paths(
             paths, tmp_path, combined=True, include_rust_plan=True
@@ -504,6 +514,16 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert nested_without_proof["rust_runtime"] == "true"
     assert nested_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    oid_without_proof = _classify_changed_paths(
+        [leaves[-1]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert oid_without_proof["rust_runtime"] == "true"
+    assert oid_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    oid_deleted = _classify_changed_paths(
+        [leaves[-2]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert oid_deleted["rust_runtime"] == "true"
+    assert oid_deleted["rust_matrix"] == '["canvas","contracts"]'
     empty = _classify_changed_paths(
         [], tmp_path, combined=True, include_rust_plan=True
     )[0]
@@ -514,6 +534,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
     assert queued["rust_matrix"] == '["canvas","contracts"]'
+    on_main = _classify_changed_paths(
+        [leaves[-1]], tmp_path, event="push", include_rust_plan=True
+    )[0]
+    assert on_main["rust_runtime"] == "true"
+    assert on_main["rust_matrix"] == '["canvas","contracts"]'
 
 
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
@@ -1602,7 +1627,7 @@ def _assert_required_canvas_target_completion(published: str) -> None:
     assert published.rstrip().endswith(
         "(( composition_status == 0 && worker_status == 0 ))\n"
         "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "
-        '\"$composition_log\" | wc -l) == 1 ]] || {\n'
+        '"$composition_log" | wc -l) == 1 ]] || {\n'
         "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
         "  exit 1\n"
         "}\n"

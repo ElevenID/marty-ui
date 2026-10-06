@@ -320,6 +320,25 @@ def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None
     assert not _is_ignored(OID4VP_TEST_ROOT + "unreviewed.rs", root_lines)
 
 
+def test_oid4vp_verified_path_proof_rejects_new_rust_consumer(
+    monkeypatch,
+) -> None:
+    import pytest
+
+    original = _ownership_sources
+
+    def with_production_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
+        result = original(root, names)
+        result["rust/services/issuance/src/lib.rs"] = 'include!("contract_vectors.rs");'
+        return result
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_ownership_sources", with_production_consumer
+    )
+    with pytest.raises(AssertionError, match="new Rust source consumer"):
+        test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts()
+
+
 def test_public_context_rejects_reincluded_python_event_adapter() -> None:
     lines = (
         (ROOT / "services/Dockerfile.dockerignore")
@@ -445,8 +464,11 @@ if __name__ == "__main__":
         raise SystemExit(
             "Usage: test_rust_test_only_docker_context.py --emit-verified-leaves"
         )
-    # CI may narrow only when the exact owner, target and image-context proof
-    # still holds. The release pytest lane runs the same assertion separately.
+    # CI may narrow only when both exact module and auto-target ownership,
+    # corpus and image-context proofs still hold. Release pytest repeats them.
     test_exact_test_only_leaves_do_not_invalidate_release_docker_copy()
+    test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts()
     for leaf in TEST_LEAVES:
         sys.stdout.buffer.write((ISSUANCE_SRC + leaf).encode("utf-8") + b"\0")
+    for name in OID4VP_TEST_TARGETS:
+        sys.stdout.buffer.write((OID4VP_TEST_ROOT + name).encode("utf-8") + b"\0")
