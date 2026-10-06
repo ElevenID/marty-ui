@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from contextlib import redirect_stdout
 import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
-
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "ci"))
-import plan_affected_rust as planner  # noqa: E402
+import plan_affected_rust as planner
 
 
 class AffectedRustPlannerTests(unittest.TestCase):
@@ -235,6 +234,61 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
         )
 
+    def test_three_flow_grpc_runtime_consumers_are_observed_without_narrowing(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        for producer, changed in (
+            ("marty-organization", "rust/services/organization/src/lib.rs"),
+            (
+                "marty-presentation-policy",
+                "rust/services/presentation-policy/src/lib.rs",
+            ),
+            ("marty-issuance-service", "rust/services/issuance/src/lib.rs"),
+        ):
+            with self.subTest(producer=producer):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == producer and edge["package"] == "marty-flow"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                for marker, source in (
+                    ("binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("connection_marker", "runtime_evidence"),
+                    ("startup_marker", "startup_evidence"),
+                    ("request_marker", "request_evidence"),
+                    ("callsite_marker", "callsite_evidence"),
+                    ("identity_marker", "runtime_evidence"),
+                    ("provider_marker", "provider_evidence"),
+                ):
+                    self.assertIn(
+                        edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+                    )
+                if producer == "marty-presentation-policy":
+                    for marker in (
+                        "evaluation_request_marker",
+                        "evaluation_identity_marker",
+                    ):
+                        self.assertIn(
+                            edge[marker],
+                            (ROOT / edge["runtime_evidence"]).read_text(
+                                encoding="utf-8"
+                            ),
+                        )
+                self.assertNotIn(
+                    producer,
+                    {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
+                )
+
     def test_trust_profile_presentation_policy_runtime_edge_is_observed(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
@@ -337,19 +391,23 @@ class AffectedRustPlannerTests(unittest.TestCase):
             self.assertFalse(result["all"])
 
     def test_empty_metadata_does_not_prove_no_affected_packages(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "no workspace packages"):
-                planner.plan(
-                    ["rust/crates/core/src/lib.rs"],
-                    {"packages": [], "workspace_members": []},
-                    Path(directory),
-                )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ValueError, "no workspace packages"),
+        ):
+            planner.plan(
+                ["rust/crates/core/src/lib.rs"],
+                {"packages": [], "workspace_members": []},
+                Path(directory),
+            )
 
     def test_missing_diff_revision_reports_full_selection(self) -> None:
         output = io.StringIO()
-        with patch.dict("os.environ", {"BASE_SHA": "", "HEAD_SHA": ""}):
-            with redirect_stdout(output):
-                self.assertEqual(planner.main(), 0)
+        with (
+            patch.dict("os.environ", {"BASE_SHA": "", "HEAD_SHA": ""}),
+            redirect_stdout(output),
+        ):
+            self.assertEqual(planner.main(), 0)
         result = json.loads(output.getvalue().removeprefix("affected-rust-shadow: "))
         self.assertTrue(result["all"])
         self.assertEqual(result["packages"], ["*"])

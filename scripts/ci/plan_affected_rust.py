@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path, PurePosixPath
 import subprocess
 import sys
 from collections import defaultdict, deque
-
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 RUST = ROOT / "rust"
@@ -50,6 +49,23 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_evidence": "rust/services/trust-profile/src/main.rs",
             "runtime_marker": "&config.organization_grpc_target",
         },
+        {
+            "package": "marty-flow",
+            "evidence": "rust/services/flow/src/config.rs",
+            "binding": "ORGANIZATION_GRPC_TARGET",
+            "runtime_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+            "connection_marker": "self.organization.connect()",
+            "startup_evidence": "rust/services/flow/src/connections.rs",
+            "startup_marker": "FlowGrpcChannelFactories::from_config(config)?",
+            "request_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
+            "callsite_evidence": "rust/services/flow/src/providers.rs",
+            "callsite_marker": ".membership(principal_id, organization_id)",
+            "identity_marker": "response.user_id.is_empty() || response.organization_id.is_empty()",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+        },
     ],
     "marty-credential-template": [
         {
@@ -83,6 +99,23 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_evidence": "rust/services/auth/src/main.rs",
             "runtime_marker": "&config.issuance_native_service_url",
         },
+        {
+            "package": "marty-flow",
+            "evidence": "rust/services/flow/src/config.rs",
+            "binding": "ISSUANCE_GRPC_TARGET",
+            "runtime_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "runtime_marker": "&config.issuance_grpc_target",
+            "connection_marker": "self.issuance.connect()",
+            "startup_evidence": "rust/services/flow/src/connections.rs",
+            "startup_marker": "FlowGrpcChannelFactories::from_config(config)?",
+            "request_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "request_marker": ".initiate_issuance(self.auth.request(ProtoIssuance {",
+            "callsite_evidence": "rust/services/flow/src/instance_side_effects.rs",
+            "callsite_marker": ".initiate(&IssuanceInitiationRequest {",
+            "identity_marker": "response.credential_template_id != request.credential_template_id",
+            "provider_evidence": "rust/services/issuance/src/credential_management_grpc.rs",
+            "provider_marker": ".initiate(&request.request, idempotency_key)",
+        },
     ],
     "marty-notification": [
         {
@@ -115,6 +148,27 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_evidence": "rust/services/presentation-policy/src/control_plane.rs",
             "request_marker": '"{}/internal/v1/trust-profiles/{profile_id}"',
             "identity_marker": "returned_id != profile_id || returned_organization != organization_id",
+        },
+    ],
+    "marty-presentation-policy": [
+        {
+            "package": "marty-flow",
+            "evidence": "rust/services/flow/src/config.rs",
+            "binding": "PP_GRPC_TARGET",
+            "runtime_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "runtime_marker": "&config.presentation_policy_grpc_target",
+            "connection_marker": "self.presentation_policy.connect()",
+            "startup_evidence": "rust/services/flow/src/connections.rs",
+            "startup_marker": "FlowGrpcChannelFactories::from_config(config)?",
+            "request_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "request_marker": ".get_policy(self.auth.request(GetPolicyRequest {",
+            "evaluation_request_marker": ".evaluate_presentation(",
+            "callsite_evidence": "rust/services/flow/src/reference_validation.rs",
+            "callsite_marker": "policies.get_policy(policy_id).await?",
+            "identity_marker": "response.id != policy_id || response.organization_id.trim().is_empty()",
+            "evaluation_identity_marker": "response.policy_id != request.policy_id || response.nonce != request.nonce",
+            "provider_evidence": "rust/services/presentation-policy/src/grpc_service.rs",
+            "provider_marker": ".get_for_internal_service(parse_uuid(&request.get_ref().policy_id)?)",
         },
     ],
 }
