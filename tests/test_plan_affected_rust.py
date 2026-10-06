@@ -551,6 +551,69 @@ class AffectedRustPlannerTests(unittest.TestCase):
             },
         )
 
+    def test_signing_keys_flow_signer_and_envelope_edges_are_observed_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/signing-keys/src/http.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        signing_edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-signing-keys"
+        ]
+        self.assertEqual(
+            {edge["package"] for edge in signing_edges},
+            {"marty-flow", "marty-gateway"},
+        )
+        edge = next(edge for edge in signing_edges if edge["package"] == "marty-flow")
+        for marker, source in (
+            ("binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("startup_marker", "runtime_evidence"),
+            ("signing_registration_marker", "runtime_evidence"),
+            ("envelope_registration_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("sign_marker", "request_evidence"),
+            ("response_marker", "request_evidence"),
+            ("wrap_marker", "request_evidence"),
+            ("unwrap_marker", "request_evidence"),
+            ("callsite_marker", "callsite_evidence"),
+            ("envelope_callsite_marker", "callsite_evidence"),
+            ("callback_marker", "callback_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_wrap_marker", "provider_evidence"),
+            ("provider_wrap_handler_marker", "provider_evidence"),
+            ("provider_unwrap_marker", "provider_evidence"),
+            ("provider_unwrap_handler_marker", "provider_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                text = (ROOT / edge[source]).read_text(encoding="utf-8")
+                self.assertIn(edge[marker], text)
+                self.assertNotIn(edge[marker], text.replace(edge[marker], "removed"))
+        self.assertNotIn(
+            "marty-signing-keys",
+            {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
+        )
+        # This is a hypothetical observed reverse chain, not an active selector.
+        flow_consumers = {
+            item["package"]
+            for item in planner.OBSERVED_NON_CARGO_CONSUMERS["marty-flow"]
+        }
+        self.assertEqual(
+            {"marty-signing-keys"}
+            | {item["package"] for item in signing_edges}
+            | flow_consumers,
+            {"marty-signing-keys", "marty-flow", "marty-gateway", "marty-auth"},
+        )
+
     def test_auth_outbound_runtime_edges_are_observed_without_narrowing(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

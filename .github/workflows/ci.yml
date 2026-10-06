@@ -77,7 +77,7 @@ jobs:
             changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
             git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
             mapfile -d '' -t changed_files < "$changed_paths_file"
-            # A nonempty PR consisting solely of proven cfg(test) leaves has
+            # A nonempty PR consisting solely of proven test-only leaves has
             # no production Rust or image input. Keep every actual test owner.
             leaf_only=false
             leaf_candidate=true
@@ -86,7 +86,7 @@ jobs:
             fi
             for path in "${changed_files[@]}"; do
               case "$path" in
-                rust/services/issuance/src/*_tests.rs) ;;
+                rust/services/issuance/src/*_tests.rs|rust/crates/oid4vp-contract/tests/contract_vectors.rs|rust/crates/oid4vp-contract/tests/transport_metadata.rs) ;;
                 *) leaf_candidate=false; break ;;
               esac
             done
@@ -783,6 +783,22 @@ jobs:
             python3 ../scripts/ci/verify-canvas-test-artifacts.py \
               "$artifacts" target
           fi
+      - name: Capture host compiler cache counters after compile
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rust-build-evidence"
+          stats_file="$RUNNER_TEMP/rust-build-evidence/sccache-stats.json"
+          if [[ "${RUSTC_WRAPPER:-}" != sccache ]]; then
+            echo 'Optional compiler cache unavailable; no host counters captured.'
+          elif sccache --show-stats 2>/dev/null |
+              python3 scripts/ci/sanitize_sccache_stats.py > "$stats_file.tmp"; then
+            mv "$stats_file.tmp" "$stats_file"
+          else
+            rm -f "$stats_file.tmp"
+            echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
+          fi
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts'
         shell: bash
@@ -791,6 +807,20 @@ jobs:
           bash scripts/ci/install-compose-renderer.sh
           printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
+      - name: Fail fast on image-free Canvas renewal configuration
+        if: matrix.lane == 'canvas'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/ci/install-compose-renderer.sh
+          export MARTY_BASE_COMPOSE_BINARY="$RUNNER_TEMP/compose-render-v5.4.0"
+          MARTY_DIDCOMM_TEST_PYTHON="$(command -v python3)"
+          export MARTY_DIDCOMM_TEST_PYTHON
+          export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1
+          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"
+          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"
+          printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$MARTY_DIDCOMM_TEST_PYTHON" >> "$GITHUB_ENV"
+          python3 scripts/ci/run-canvas-config-proofs.py run "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Verify feature-regression observer isolation
         if: matrix.lane == 'contracts'
         shell: bash
@@ -889,7 +919,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash scripts/ci/install-compose-renderer.sh
+          test -x "$MARTY_BASE_COMPOSE_BINARY"
           test -x rust/target/debug/marty-issuance-service
           test -x rust/target/debug/marty-gateway
           test -x rust/target/debug/marty-flow
@@ -899,9 +929,8 @@ jobs:
           docker build --tag marty-envoy:native-contract config/envoy
           envoy_image_id="$(docker image inspect --format '{{.Id}}' marty-envoy:native-contract)"
           printf 'MARTY_ENVOY_TEST_IMAGE=%s\n' "$envoy_image_id" >> "$GITHUB_ENV"
-          printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
-          printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
-          printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
+          test -x "$MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
+          test -x "$MARTY_DIDCOMM_TEST_PYTHON"
       - name: Expose public image compiler cache credentials
         if: matrix.lane == 'canvas'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -1455,14 +1484,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/rust-build-evidence"
-          stats_file="$RUNNER_TEMP/rust-build-evidence/sccache-stats.json"
-          if sccache --show-stats 2>/dev/null |
-              python3 scripts/ci/sanitize_sccache_stats.py > "$stats_file.tmp"; then
-            mv "$stats_file.tmp" "$stats_file"
-          else
-            rm -f "$stats_file.tmp"
-            echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
-          fi
+          # The early host snapshot is never overwritten after long Docker/DB work.
           if test -f rust/target/cargo-timings/cargo-timing.html; then
             cp rust/target/cargo-timings/cargo-timing.html "$RUNNER_TEMP/rust-build-evidence/cargo-timing.html"
           fi

@@ -54,6 +54,19 @@ CURRENT_REGISTRATION_COUNT = 166
 CURRENT_REGISTRATION_SHA256 = (
     "74d9216c5c22c8f6446c79b397a2e6024b7f78741b19476e8555f6823a60d9d9"
 )
+PRIVATE_IP_PG = "didcomm_renewal_private_ip_refusal_preserves_published_rows"
+NEW_REGISTRATION_COUNT = 167
+NEW_REGISTRATION_SHA256 = (
+    "38a2ba7d161448622df763cb926fb0e67bfb5e648c000f36d2bb590e1170c3a1"
+)
+K8S_RENDERED_CONFIG = (
+    "resolved_kubernetes_runtime::"
+    "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
+)
+LATEST_REGISTRATION_COUNT = 168
+LATEST_REGISTRATION_SHA256 = (
+    "aea60fcdeff981e4df06b6aa58341e6f6b5bcff481954a47657dee8e0f853025"
+)
 
 
 def required_registrations():
@@ -67,13 +80,25 @@ def required_registrations():
 
 def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     names = required_registrations()
-    assert len(names) == CURRENT_REGISTRATION_COUNT
+    assert len(names) == LATEST_REGISTRATION_COUNT
     assert len(names) == len(set(names))
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        LATEST_REGISTRATION_SHA256
+    )
+    assert names.count(K8S_RENDERED_CONFIG) == 1
+    before_k8s = [name for name in names if name != K8S_RENDERED_CONFIG]
+    assert len(before_k8s) == NEW_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(before_k8s).encode()).hexdigest() == (
+        NEW_REGISTRATION_SHA256
+    )
+    assert names.count(PRIVATE_IP_PG) == 1
+    prior = [name for name in before_k8s if name != PRIVATE_IP_PG]
+    assert len(prior) == CURRENT_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(prior).encode()).hexdigest() == (
         CURRENT_REGISTRATION_SHA256
     )
     assert names.count(RENDERED_CONFIG) == 1
-    historical = [name for name in names if name != RENDERED_CONFIG]
+    historical = [name for name in prior if name != RENDERED_CONFIG]
     assert len(historical) == MANDATORY_REGISTRATION_COUNT
     assert hashlib.sha256("\n".join(historical).encode()).hexdigest() == (
         MANDATORY_REGISTRATION_SHA256
@@ -88,7 +113,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
-    composition_full = '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
+    composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
     assert (
         sum(
             line.strip() == 'timed canvas_serial "$mode" ' + preflight
@@ -111,7 +136,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         == 1
     )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
         in script
     )
     assert script.count(composition_full + ' >"$composition_log" 2>&1 &') == 1
@@ -133,12 +158,26 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
+    assert script.count("if (( expected_skipped_config_tests == 0 )); then") == 1
+    assert (
+        script.count(
+            "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' \"$composition_log\""
+        )
+        == 1
+    )
     assert script.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
-        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
-        "  exit 1\n"
-        "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
     )
@@ -146,6 +185,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
 
 
 RENEWAL_GATES = [
+    (
+        PRIVATE_IP_PG,
+        "didcomm_composed_delivery::run_renewal_private_ip_refusal",
+    ),
     (
         "renewal_postgres_binding_and_same_successor_recovery_are_fenced",
         "renewal_binding_postgres::run",
@@ -187,6 +230,37 @@ def assert_renewal_registration(script, source, name, owner):
     assert "canvas_published_database::PublishedDatabase::start()" in body
     assert f"{owner}(&owned.url).await;" in body
     assert "owned.close_verified().unwrap();" in body
+    if name == PRIVATE_IP_PG:
+        marker = 'println!("\\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");'
+        assert body.count(marker) == 1
+        assert body.index("owned.close_verified().unwrap();") < body.index(marker)
+
+
+def test_renewal_private_ip_pg_owner_keeps_real_adapter_and_fence_assertions() -> None:
+    support = (
+        ROOT / "rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs"
+    ).read_text(encoding="utf-8")
+    graph = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs"
+    ).read_text(encoding="utf-8")
+    required = (
+        "PostgresCredentialRepository::new(",
+        "PostgresCredentialLifecycle::new(",
+        "NativeInitiationDidcommDelivery::new(",
+        "DidcommEndpointValidator::new(false)",
+        "fresh_initiation::services(",
+        "CredentialRenewalService::new(",
+        "NativeDidcommError::EndpointNotPublic",
+        "InitiationDidcommTransportClaimOutcome::Absent",
+        "snapshot(pool, &id).await",
+        "builder.calls.load(Ordering::SeqCst), 0",
+        "transport.attempts.load(Ordering::SeqCst), 0",
+    )
+    for token in required:
+        assert token in support
+    assert "pub(super) async fn run_renewal_private_ip_refusal" in graph
+    assert "renewal::run_private_ip_refusal(&pool).await;" in graph
 
 
 @pytest.mark.parametrize("name,owner", RENEWAL_GATES)
@@ -351,12 +425,28 @@ else
         substituted) printf 'test wrong_worker_validation_repository_matches_frozen_errors ... ok\n' ;;
       esac
     elif [[ "$name" == contract ]]; then
+      if [[ "$*" != *"--skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
       case "$TEST_RENDERED_CONFIG_MARKER" in
         ok) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
         prefixed) printf 'test %s ... RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'rendered-base-config' ;;
         missing) ;;
         duplicate) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
       esac
+      fi
+      case "${TEST_PRIVATE_IP_PG_MARKER:-ok}" in
+        ok) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\nok\n' 'private-ip-pg' ;;
+        missing) ;;
+        duplicate) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
+      esac
+      if [[ "$*" != *"--skip resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
+      case "${TEST_K8S_CONFIG_MARKER:-ok}" in
+        ok) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'k8s-config' ;;
+        missing) ;;
+        duplicate) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+      esac
+      fi
     fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
@@ -407,6 +497,8 @@ fi
         qualification=False,
         fast_owner_row="ok",
         config_marker="ok",
+        private_ip_pg_marker="ok",
+        k8s_config_marker="ok",
     ):
         lines = (
             registrations
@@ -417,7 +509,13 @@ fi
             line
             for line in lines
             if line.startswith(
-                ("heartbeat_readiness_", "json_consumer_diagnostic_", RENDERED_CONFIG)
+                (
+                    "heartbeat_readiness_",
+                    "json_consumer_diagnostic_",
+                    RENDERED_CONFIG,
+                    PRIVATE_IP_PG,
+                    K8S_RENDERED_CONFIG,
+                )
             )
         ]
         worker = [line for line in lines if line not in composition]
@@ -468,6 +566,8 @@ fi
                 "TEST_FAILURE": failure,
                 "TEST_FAST_OWNER_ROW": fast_owner_row,
                 "TEST_RENDERED_CONFIG_MARKER": config_marker,
+                "TEST_PRIVATE_IP_PG_MARKER": private_ip_pg_marker,
+                "TEST_K8S_CONFIG_MARKER": k8s_config_marker,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
@@ -475,6 +575,7 @@ fi
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
                 "GITHUB_JOB": "test-rust-services",
+                "GITHUB_SHA": "a" * 40,
                 "MARTY_CANVAS_FULL_QUALIFICATION": "1" if qualification else "0",
                 SCHEMA_ENV: "0",
             }
@@ -582,6 +683,160 @@ def test_rendered_config_marker_accepts_interleaved_harness_output(shell_case):
     assert any(
         call[:2] == ["child", "contract"] and "--test-threads=4" in call
         for call in calls
+    )
+
+
+def _config_evidence(tmp_path, *, qualification=False):
+    record = {
+        "schema": 1,
+        "composition_sha256": hashlib.sha256(
+            (tmp_path / "contract").read_bytes()
+        ).hexdigest(),
+        "run": {
+            "GITHUB_RUN_ID": "12345",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_JOB": "test-rust-services",
+            "GITHUB_SHA": "a" * 40,
+        },
+        "qualification": "1" if qualification else "0",
+        "cases": [RENDERED_CONFIG, K8S_RENDERED_CONFIG],
+    }
+    (tmp_path / "canvas-config-proofs.json").write_text(
+        json.dumps(record) + "\n", encoding="ascii"
+    )
+    return record
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+@pytest.mark.parametrize("mode", ["full", "full-after-preflights"])
+def test_same_run_composition_proof_skips_only_two_completed_cases(
+    shell_case, tmp_path, qualification, mode
+):
+    _config_evidence(tmp_path, qualification=qualification)
+    if mode == "full-after-preflights":
+        (tmp_path / "canvas-published-preflights.sha256").write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + f"\n12345\n1\ntest-rust-services\n{int(qualification)}\n",
+            encoding="ascii",
+            newline="\n",
+        )
+    result, calls = shell_case([mode], qualification=qualification)
+    assert result.returncode == 0, result.stderr
+    composition = [
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    ]
+    assert len(composition) == 1
+    assert composition[0].count(RENDERED_CONFIG) == 1
+    assert composition[0].count(K8S_RENDERED_CONFIG) == 1
+    assert composition[0].count("--skip") == 3  # serial plus the two config cases
+    assert PRIVATE_IP_PG not in composition[0]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "hash", "run", "tier", "source", "cases", "malformed"]
+)
+def test_untrusted_composition_proof_falls_back_to_full_execution(
+    shell_case, tmp_path, mutation
+):
+    if mutation != "missing":
+        record = _config_evidence(tmp_path)
+        if mutation == "hash":
+            record["composition_sha256"] = "0" * 64
+        elif mutation == "run":
+            record["run"]["GITHUB_RUN_ATTEMPT"] = "other"
+        elif mutation == "tier":
+            record["qualification"] = "1"
+        elif mutation == "source":
+            record["run"]["GITHUB_SHA"] = "b" * 40
+        elif mutation == "cases":
+            record["cases"] = [RENDERED_CONFIG]
+        (tmp_path / "canvas-config-proofs.json").write_text(
+            "not-json" if mutation == "malformed" else json.dumps(record),
+            encoding="ascii",
+        )
+    result, calls = shell_case(["full"])
+    assert result.returncode == 0, result.stderr
+    composition = [
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    ]
+    assert len(composition) == 1
+    assert RENDERED_CONFIG not in composition[0]
+    assert K8S_RENDERED_CONFIG not in composition[0]
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_renewal_private_ip_pg_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], private_ip_pg_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "Published-SQL renewal private-IP refusal proof did not execute"
+        in result.stderr
+    )
+
+
+def test_renewal_private_ip_pg_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], private_ip_pg_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_k8s_renewal_config_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], k8s_config_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "Resolved Kubernetes renewal 2x2 configuration proof did not execute"
+        in result.stderr
+    )
+
+
+def test_k8s_renewal_config_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], k8s_config_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+def test_k8s_renewal_config_owner_is_opt_in_and_completes_after_four_cases() -> None:
+    target = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    source = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
+    ).read_text(encoding="utf-8")
+    assert (
+        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+        in target
+    )
+    owner = "fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy() {"
+    assert source.count(owner) == 1
+    body = source.split(owner, 1)[1]
+    assert "#[test]\n" + owner in source
+    assert 'if !cfg!(target_os = "linux")' in body
+    assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in body
+    assert "let prepared = Prepared::prepare()" in body
+    assert body.count("resolve(&spec, &prepared)") == 1
+    assert "(false, false), (true, false), (false, true), (true, true)" in body
+    assert body.index("assert_eq!(seen.len(), 4);") < body.index(
+        'println!("\\nRESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1");'
     )
 
 

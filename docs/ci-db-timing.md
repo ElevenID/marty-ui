@@ -36,3 +36,23 @@ This is instrumentation, not a speedup or evidence to remove tests. All
 existing cases, image/source pins, connection limits, qualification tiers,
 deadlines, and success gates remain authoritative. Compare hosted runs only
 after this branch is independently reviewed and merged.
+
+## Pre-instrumentation baseline
+
+On 2026-10-06, the same #1129 source passed the [PR run](https://github.com/ElevenID/marty-ui/actions/runs/37503567584)
+and its [protected merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/37510218831)
+on the Canvas lane. GitHub step durations, in seconds:
+
+| Existing step | PR | Merge group |
+| --- | ---: | ---: |
+| Compile reusable Rust test executables | 605 | 596 |
+| Compile Bookworm-compatible base runtime acceptance | 555 | 563 |
+| Build public selfhost image | 738 | 740 |
+| Preflight published worker parity in two isolated groups | 122 | 122 |
+| Run isolated database contract suites concurrently | 775 | 776 |
+
+These are stage baselines, not an optimization result or a claim that the two
+runner caches were identical. Compare later PR and merge-group runs separately
+under the same toolchain, target, features, runner class, and qualification
+tier; record cache state and required-case completion alongside elapsed time.
+The new JSONL explains the DB aggregate but does not by itself shorten it.

@@ -33,7 +33,10 @@ def required(source, runner, workflow):
     assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
     assert '[[ -f "$evidence" ]]' in runner
-    assert '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4' in runner
+    assert (
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+        in runner
+    )
     assert source.count(
         '#[path = "support/resolved_runtime.rs"]\nmod resolved_runtime;'
     ) == 1
@@ -93,7 +96,7 @@ def test_missing_or_disconnected_kubernetes_gates_fail(name, fault):
         runner = runner.replace(f"'{name}: test'", "'removed: test'")
     else:
         runner = runner.replace(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
             "echo disconnected",
         )
     with pytest.raises(AssertionError):

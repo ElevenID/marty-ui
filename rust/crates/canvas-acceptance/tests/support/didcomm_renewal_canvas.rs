@@ -76,7 +76,7 @@ pub(super) async fn run(pool: &PgPool) {
             } else {
                 Scenario::Automatic
             };
-            let source = seed_source(pool, &graph, &id, scenario).await;
+            let source = seed_source(pool, &graph.repository, &id, scenario, None).await;
             let template = InitiationTemplate {
                 credential_type: "OpenBadgeCredential".into(),
                 vct: Some("https://issuer.example/credentials/OpenBadgeCredential".into()),

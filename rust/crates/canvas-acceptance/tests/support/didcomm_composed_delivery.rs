@@ -1788,6 +1788,16 @@ pub(super) async fn run_renewal_http(database_url: &str) {
     run_mode(database_url, Gate::Renewal).await;
 }
 
+pub(super) async fn run_renewal_private_ip_refusal(database_url: &str) {
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(database_url)
+        .await
+        .unwrap();
+    renewal::run_private_ip_refusal(&pool).await;
+    pool.close().await;
+}
+
 pub(super) async fn run_renewal_gateway(database_url: &str) {
     run_mode(database_url, Gate::RenewalGateway).await;
 }

@@ -92,3 +92,7 @@ rust/services/issuance/src/python_format_tests.rs
 rust/services/issuance/src/signing_http_projection_tests.rs
 rust/services/issuance/src/signing_http_response_tests.rs
 rust/services/issuance/src/token_rate_limit_http_tests.rs
+# Cargo auto-discovers these oid4vp-contract test targets only for `cargo test`.
+# Production Docker COPY rust does not compile or execute them.
+rust/crates/oid4vp-contract/tests/contract_vectors.rs
+rust/crates/oid4vp-contract/tests/transport_metadata.rs
