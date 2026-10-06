@@ -219,27 +219,10 @@ impl EvaluationProvider for GrpcEvaluationProvider {
         &self,
         request: &PresentationEvaluationRequest,
     ) -> Result<EvaluationResult, VerificationError> {
-        let context_json = serde_json::to_string(&request.context)
-            .map_err(|_| unavailable("evaluation context is not serializable"))?;
         let mut client = self.client.clone();
         let response = client
             .evaluate_presentation(
-                self.request(
-                    EvaluatePresentationRequest {
-                        policy_id: request.policy_id.clone(),
-                        vp_token: request.presentation.clone(),
-                        nonce: request.nonce.clone(),
-                        audience: request.audience.clone(),
-                        trust_profile_id: request
-                            .context
-                            .get("trust_profile_id")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .into(),
-                        context_json,
-                    },
-                    &request.principal_id,
-                )?,
+                self.request(policy_evaluation_message(request)?, &request.principal_id)?,
             )
             .await
             .map_err(|_| unavailable("Presentation policy service unavailable"))?
@@ -262,6 +245,29 @@ impl EvaluationProvider for GrpcEvaluationProvider {
             nonce: response.nonce,
         })
     }
+}
+
+fn policy_evaluation_message(
+    request: &PresentationEvaluationRequest,
+) -> Result<EvaluatePresentationRequest, VerificationError> {
+    let context_json = serde_json::to_string(&request.context)
+        .map_err(|_| unavailable("evaluation context is not serializable"))?;
+    Ok(EvaluatePresentationRequest {
+        policy_id: request.policy_id.clone(),
+        vp_token: request.presentation.clone(),
+        nonce: request.nonce.clone(),
+        audience: request.audience.clone(),
+        trust_profile_id: request
+            .context
+            .get("trust_profile_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .into(),
+        context_json,
+        // This legacy service has no emitted verifier query or submission
+        // authority to forward. Only Flow may attach the new metadata.
+        oid4vp_transport: None,
+    })
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -401,6 +407,34 @@ fn unavailable(message: &str) -> VerificationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_verification_provider_does_not_claim_flow_owned_oid4vp_metadata() {
+        let request = PresentationEvaluationRequest {
+            policy_id: "policy-1".into(),
+            organization_id: "org-1".into(),
+            principal_id: "user-1".into(),
+            presentation: "header.payload.signature".into(),
+            nonce: "nonce-1".into(),
+            audience: "verifier-1".into(),
+            oid4vp_transport: None,
+            context: std::collections::BTreeMap::from([(
+                "trust_profile_id".into(),
+                serde_json::json!("trust-1"),
+            )]),
+        };
+        let wire = policy_evaluation_message(&request).unwrap();
+        assert!(wire.oid4vp_transport.is_none());
+        assert_eq!(wire.policy_id, request.policy_id);
+        assert_eq!(wire.vp_token, request.presentation);
+        assert_eq!(wire.nonce, request.nonce);
+        assert_eq!(wire.audience, request.audience);
+        assert_eq!(wire.trust_profile_id, "trust-1");
+        assert_eq!(
+            serde_json::from_str::<Value>(&wire.context_json).unwrap(),
+            serde_json::json!({"trust_profile_id": "trust-1"})
+        );
+    }
 
     #[tokio::test]
     async fn evaluation_requests_carry_service_and_initiating_principal_identity() {

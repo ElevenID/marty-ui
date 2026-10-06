@@ -249,6 +249,7 @@ impl VerificationService {
                 presentation: vp_token.into(),
                 nonce: session.nonce.clone(),
                 audience: String::new(),
+                oid4vp_transport: None,
                 context: [("session_id".into(), json!(session_id))]
                     .into_iter()
                     .collect(),
@@ -347,6 +348,7 @@ impl VerificationService {
                 presentation: body.vp_token,
                 nonce: body.nonce.unwrap_or_default(),
                 audience: body.audience.unwrap_or_default(),
+                oid4vp_transport: None,
                 context: body.context.unwrap_or_default().into_iter().collect(),
             })
             .await
