@@ -2817,14 +2817,27 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
     jobs = ci["jobs"]
     scripts = {}
     for job_name in ("test-rust-services", "rust-lint-policy"):
+        step_name = (
+            "Capture host compiler cache counters after compile"
+            if job_name == "test-rust-services"
+            else "Report compiler cache effectiveness"
+        )
         step = next(
-            step
-            for step in jobs[job_name]["steps"]
-            if step.get("name") == "Report compiler cache effectiveness"
+            step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
         assert step["if"] == "always()"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
+    service_steps = jobs["test-rust-services"]["steps"]
+    service_names = [step.get("name") for step in service_steps]
+    assert service_names.index(
+        "Capture host compiler cache counters after compile"
+    ) == (service_names.index("Compile reusable Rust test executables") + 1)
+    late_report = service_steps[
+        service_names.index("Report compiler cache effectiveness")
+    ]["run"]
+    assert "sccache --show-stats" not in late_report
+    assert "cp rust/target/cargo-timings/cargo-timing.html" in late_report
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -2848,7 +2861,9 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
     for exit_code in ("0", "17"):
         for job_name, script in scripts.items():
             stats_file.unlink(missing_ok=True)
-            environment = dict(os.environ, TEST_SCCACHE_EXIT=exit_code)
+            environment = dict(
+                os.environ, TEST_SCCACHE_EXIT=exit_code, RUSTC_WRAPPER="sccache"
+            )
             environment.pop("BASH_ENV", None)
             environment.pop("ENV", None)
             result = subprocess.run(
@@ -2868,6 +2883,33 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
             )
             if exit_code == "17":
                 assert "Optional compiler cache stats unavailable" in result.stdout
+
+    # The late report may copy Cargo timings, but cannot replace the early
+    # snapshot with idle-daemon zero counters or an unavailable-cache result.
+    stats_file.write_text('{"early":true}\n', encoding="utf-8")
+    environment = dict(os.environ, TEST_SCCACHE_EXIT="17", RUSTC_WRAPPER="sccache")
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input='export RUNNER_TEMP="$PWD/runner-temp"\n' + late_report,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stats_file.read_text(encoding="utf-8") == '{"early":true}\n'
+    stats_file.unlink()
+    environment["RUSTC_WRAPPER"] = ""
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input='export RUNNER_TEMP="$PWD/runner-temp"\n' + scripts["test-rust-services"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0 and not stats_file.exists()
+    assert "Optional compiler cache unavailable" in result.stdout
 
 
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:
