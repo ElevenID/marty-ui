@@ -32,6 +32,15 @@ CONTAINER = (
     ROOT / "rust/crates/canvas-acceptance/tests/support/base_runtime_container.rs"
 )
 REFERENCE = ROOT / "rust/services/issuance/tests/support/renewal_reference_fixture.rs"
+COMPOSED = (
+    ROOT / "rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs"
+)
+REFUSAL = (
+    ROOT / "rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs"
+)
+KUBERNETES = (
+    ROOT / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
+)
 REFUSAL_AND_ALLOW = (
     "anoncrypt:private-refused",
     "authcrypt:private-refused",
@@ -120,6 +129,9 @@ def _inputs() -> dict[str, str]:
         "runner": RUNNER.read_text(encoding="utf-8"),
         "container": CONTAINER.read_text(encoding="utf-8"),
         "reference": REFERENCE.read_text(encoding="utf-8"),
+        "composed": COMPOSED.read_text(encoding="utf-8"),
+        "refusal": REFUSAL.read_text(encoding="utf-8"),
+        "kubernetes": KUBERNETES.read_text(encoding="utf-8"),
     }
 
 
@@ -144,6 +156,10 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
     assert "Real PostgreSQL" in manifest["fast_owner"]["does_not_prove"]
     assert "actual HTTPS" in manifest["fast_owner"]["does_not_prove"]
     assert "authority to skip" in manifest["scope"]
+    assert (
+        "not execution proof or complete transitive input closure" in manifest["scope"]
+    )
+    _validate_component_owners(manifest, inputs)
 
     source = _without_rust_comments(inputs["source"])
     fixture = _without_rust_comments(inputs["fixture"])
@@ -251,6 +267,202 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
 
 def test_six_renewal_profiles_retain_distinct_runtime_obligations() -> None:
     _validate(json.loads(MANIFEST.read_text(encoding="utf-8")), _inputs())
+
+
+def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
+    owners = manifest["component_owners"]
+    expected = {
+        "base-rendered-configuration": (
+            "rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy",
+            "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs",
+            "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1",
+            {
+                "scripts/render_base_native_runtime_fixture.py",
+                "docker-compose.base.yml",
+                "docker-compose.profile.issuance-native.yml",
+                "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs",
+            },
+        ),
+        "published-sql-private-ip-refusal": (
+            "didcomm_renewal_private_ip_refusal_preserves_published_rows",
+            SOURCE.relative_to(ROOT).as_posix(),
+            "DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1",
+            {
+                SOURCE.relative_to(ROOT).as_posix(),
+                COMPOSED.relative_to(ROOT).as_posix(),
+                REFUSAL.relative_to(ROOT).as_posix(),
+            },
+        ),
+        "kubernetes-resolved-configuration": (
+            "resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy",
+            KUBERNETES.relative_to(ROOT).as_posix(),
+            "RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1",
+            {
+                KUBERNETES.relative_to(ROOT).as_posix(),
+                "k8s/oracle/01-configmap.yaml",
+                "k8s/oracle/07-microservices.yaml",
+                "k8s/oracle/07a-issuance-native.yaml",
+                "k8s/oracle/07b-signing-keys.yaml",
+                "rust/services/gateway/src/config.rs",
+            },
+        ),
+    }
+    assert len(owners) == len(expected)
+    assert {owner["owner"] for owner in owners} == set(expected)
+    for owner in owners:
+        test, source, marker, direct_inputs = expected[owner["owner"]]
+        assert (owner["test"], owner["source"], owner["runner_completion_marker"]) == (
+            test,
+            source,
+            marker,
+        )
+        assert set(owner["direct_inputs"]) == direct_inputs
+        assert len(owner["direct_inputs"]) == len(direct_inputs)
+        assert all((ROOT / path).is_file() for path in direct_inputs)
+        assert owner["assertions"] and owner["runtime_prerequisites"]
+        assert owner["does_not_prove"].strip()
+        assert inputs["runner"].count(f"grep -Fo '{marker}'") == 1
+        assert inputs["runner"].count(f"grep -Fx '{test}: test'") == 1
+        assert f"--skip {test}" not in inputs["runner"]
+    _validate_rendered_config_owner(
+        inputs["source"], RENDERED_CONFIG.read_text(encoding="utf-8"), inputs["runner"]
+    )
+    kubernetes = _without_rust_comments(inputs["kubernetes"])
+    assert (
+        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+        in _without_rust_comments(inputs["source"])
+    )
+    source_lists = re.findall(
+        r"pub\(super\) const SOURCE_FILES: &\[&str\] = &\[(.*?)\];",
+        kubernetes,
+        re.DOTALL,
+    )
+    assert len(source_lists) == 1
+    assert set(re.findall(r'"([^"]+)"', source_lists[0])) == expected[
+        "kubernetes-resolved-configuration"
+    ][3] - {KUBERNETES.relative_to(ROOT).as_posix()}
+    assert len(re.findall(r'"([^"]+)"', source_lists[0])) == 5
+    k8s_body = re.findall(
+        r"(?ms)^#\[test\]\s*fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy\(\) \{(.*?)^\}",
+        kubernetes,
+    )
+    assert len(k8s_body) == 1
+    k8s_body = _compact(k8s_body[0])
+    for marker in (
+        'cfg!(target_os="linux")',
+        'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")',
+        "Prepared::prepare()",
+        "(false,false),(true,false),(false,true),(true,true)",
+        "resolve(&spec,&prepared)",
+        'native.get("DIDCOMM_ALLOW_PRIVATE_IPS")',
+        'get("DIDCOMM_ENCRYPTION_POLICY_FILE")',
+        'get("DIDCOMM_TLS_CA_FILE")',
+        'gateway.get("ISSUANCE_SERVICE_URL")',
+        "seen.len(),4",
+        "RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1",
+    ):
+        assert marker in k8s_body
+    source = _without_rust_comments(inputs["source"])
+    composed = _without_rust_comments(inputs["composed"])
+    refusal = _without_rust_comments(inputs["refusal"])
+    assert (
+        '#[path = "support/didcomm_composed_delivery.rs"]\nmod didcomm_composed_delivery;'
+        in source
+    )
+    assert '#[path = "didcomm_renewal_composed.rs"]\nmod renewal;' in composed
+    outer = _body(source, expected["published-sql-private-ip-refusal"][0], test=True)
+    assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in outer
+    assert "PublishedDatabase::start()" in outer
+    assert (
+        "didcomm_composed_delivery::run_renewal_private_ip_refusal(&owned.url).await;"
+        in outer
+    )
+    assert outer.index("owned.close_verified().unwrap();") < outer.index(
+        'println!("\\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1")'
+    )
+    assert "renewal::run_private_ip_refusal(&pool).await;" in _body(
+        composed, "run_renewal_private_ip_refusal", test=False
+    )
+    refusal_body = _body(refusal, "run_private_ip_refusal", test=False)
+    for marker in (
+        "for authenticated in [false, true]",
+        "PostgresCredentialRepository::new(",
+        "DidcommEndpointValidator::new(false)",
+        "NativeDidcommEnvelope::new(",
+        "NativeDidcommError::EndpointNotPublic",
+        "builder.calls.load(Ordering::SeqCst), 0",
+        "transport.attempts.load(Ordering::SeqCst), 0",
+        "snapshot(pool, &id).await, state",
+    ):
+        assert marker in refusal_body
+    refusal_owner = next(
+        owner
+        for owner in owners
+        if owner["owner"] == "published-sql-private-ip-refusal"
+    )
+    assert "before either encryption branch" in refusal_owner["does_not_prove"]
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing_owner",
+        "duplicate_owner",
+        "substituted_test",
+        "substituted_input",
+        "missing_completion",
+        "missing_source_wiring",
+        "missing_support_wiring",
+        "missing_refusal_assertion",
+        "missing_kubernetes_wiring",
+        "missing_kubernetes_input",
+        "missing_kubernetes_case",
+        "missing_limit",
+    ],
+)
+def test_component_owner_inventory_rejects_drift(fault: str) -> None:
+    manifest = deepcopy(json.loads(MANIFEST.read_text(encoding="utf-8")))
+    inputs = _inputs()
+    if fault == "missing_owner":
+        manifest["component_owners"].pop()
+    elif fault == "duplicate_owner":
+        manifest["component_owners"].append(manifest["component_owners"][0])
+    elif fault == "substituted_test":
+        manifest["component_owners"][2]["test"] = "unrelated_test"
+    elif fault == "substituted_input":
+        manifest["component_owners"][0]["direct_inputs"][0] = "scripts/other.py"
+    elif fault == "missing_completion":
+        inputs["runner"] = inputs["runner"].replace(
+            "grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1'",
+            "grep -Fo 'NO_REFUSAL_PROOF'",
+        )
+    elif fault == "missing_source_wiring":
+        inputs["source"] = inputs["source"].replace(
+            "mod didcomm_composed_delivery;", "mod absent_delivery;"
+        )
+    elif fault == "missing_support_wiring":
+        inputs["composed"] = inputs["composed"].replace(
+            "mod renewal;", "mod absent_renewal;"
+        )
+    elif fault == "missing_refusal_assertion":
+        inputs["refusal"] = inputs["refusal"].replace(
+            "DidcommEndpointValidator::new(false)",
+            "DidcommEndpointValidator::new(true)",
+        )
+    elif fault == "missing_kubernetes_wiring":
+        inputs["source"] = inputs["source"].replace(
+            "mod resolved_kubernetes_runtime;", "mod absent_kubernetes;"
+        )
+    elif fault == "missing_kubernetes_input":
+        manifest["component_owners"][1]["direct_inputs"].pop()
+    elif fault == "missing_kubernetes_case":
+        inputs["kubernetes"] = inputs["kubernetes"].replace(
+            "(true, true)]", "(true, false)]"
+        )
+    else:
+        manifest["component_owners"][2]["does_not_prove"] = ""
+    with pytest.raises(AssertionError):
+        _validate_component_owners(manifest, inputs)
 
 
 def _validate_rendered_config_owner(source: str, config: str, runner: str) -> None:

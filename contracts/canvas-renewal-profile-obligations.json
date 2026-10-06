@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-renewal-profile-obligations/v1",
-  "scope": "Six outer Canvas renewal acceptance owners and three owned container children, not the complete Canvas target or authority to skip tests. Source checks do not prove execution.",
+  "scope": "Six outer Canvas renewal acceptance owners and three owned container children, not the complete Canvas target or authority to skip tests. Component ownership is lexical source evidence, not execution proof or complete transitive input closure.",
   "package": "marty-canvas-acceptance",
   "target": "canvas_published_schema_contract",
   "source": "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
@@ -12,6 +12,38 @@
     "proves": "Four service-composition scenarios cross anoncrypt/authcrypt and private-address allow/refuse using the production endpoint validator and DIDComm envelope, with fake repository, builder, lifecycle and recording transport ports.",
     "does_not_prove": "Real PostgreSQL, Redis, configured ingress, an external process, actual HTTPS wallet delivery, image/container cleanup, or durable issued rows and ciphertext."
   },
+  "component_owners": [
+    {
+      "owner": "base-rendered-configuration",
+      "test": "rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy",
+      "source": "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs",
+      "runner_completion_marker": "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1",
+      "assertions": ["Four exact authcrypt/anoncrypt × private-address allow/refuse rendered combinations", "Native DIDComm private-IP, TLS CA, encryption policy and DID-web peer fields; Gateway issuance and Redis endpoints"],
+      "direct_inputs": ["scripts/render_base_native_runtime_fixture.py", "docker-compose.base.yml", "docker-compose.profile.issuance-native.yml", "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs"],
+      "runtime_prerequisites": ["Linux test target", "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1", "Python fixture renderer and configured Compose binary"],
+      "does_not_prove": "Rendered configuration is not real TLS, DIDComm encryption, PostgreSQL, ingress, wallet delivery, packaged-process or container cleanup evidence."
+    },
+    {
+      "owner": "kubernetes-resolved-configuration",
+      "test": "resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy",
+      "source": "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs",
+      "runner_completion_marker": "RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1",
+      "assertions": ["Four exact authcrypt/anoncrypt x private-address allow/refuse resolved Kubernetes combinations after one real envsubst preparation", "Native DIDComm private-IP, TLS CA, encryption policy and DID-web peer fields; Gateway issuance and Redis endpoints"],
+      "direct_inputs": ["rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs", "k8s/oracle/01-configmap.yaml", "k8s/oracle/07-microservices.yaml", "k8s/oracle/07a-issuance-native.yaml", "k8s/oracle/07b-signing-keys.yaml", "rust/services/gateway/src/config.rs"],
+      "runtime_prerequisites": ["Linux test target", "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1", "envsubst and the closed synthetic Kubernetes spec"],
+      "does_not_prove": "Resolved configuration is not a deployed Kubernetes process, real TLS, DIDComm encryption, PostgreSQL, ingress or wallet delivery. On Windows the test is discoverable but returns before rendering."
+    },
+    {
+      "owner": "published-sql-private-ip-refusal",
+      "test": "didcomm_renewal_private_ip_refusal_preserves_published_rows",
+      "source": "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
+      "runner_completion_marker": "DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1",
+      "assertions": ["Both configured authcrypt and anoncrypt variants refuse a private DIDComm endpoint before builder allocation or transport", "Real PostgreSQL successor stays pending with pre-send links, no issued credential, delivery or event rows, unchanged source, and absent transport claim"],
+      "direct_inputs": ["rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs", "rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs", "rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs"],
+      "runtime_prerequisites": ["MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1", "Owned published PostgreSQL schema/database", "Synthetic source DID and generated policy file"],
+      "does_not_prove": "Refusal occurs before either encryption branch; this does not execute authcrypt or anoncrypt cryptography, an application process, peer server, HTTPS wallet transport, rendered ingress or deployment configuration."
+    }
+  ],
   "profiles": [
     {
       "profile": "gateway",
