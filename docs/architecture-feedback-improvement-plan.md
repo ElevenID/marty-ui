@@ -717,6 +717,21 @@ evidence, a complete dependency graph or authority to skip acceptance. Any later
 tiering needs separately demonstrated database/process proof and an exact-head
 hosted pilot. No hosted speedup is attributed to this additive proof.
 
+The additive A0 renewal-profile inventory candidate records the six outer
+`canvas_published_schema_contract` owners and three owned container children in
+`contracts/canvas-renewal-profile-obligations.json`. Gateway, Envoy and
+Kubernetes-Gateway each retain all four crypto/private-address combinations;
+Kubernetes-native, rendered-native and packaged-direct retain both allowed
+encryption modes. Its source guard checks exact owner-to-entrypoint wiring,
+the shared case selector, frozen source fixture and fast 2×2 component owner.
+The existing Canvas runner still executes the complete composition target in
+routine and full tiers. Static registration cannot prove that an env-gated
+test ran, a nested container child completed, or any SQL/process/image outcome;
+existing owned-process and protected CI gates remain the execution evidence.
+This inventory authorizes no skips or trigger narrowing. Its value is to expose
+which crypto/policy cases have a fast owner and which real ingress, persistence
+and cleanup obligations would still need proof before future decomposition.
+
 ## Combined transport and dependency-boundary checkpoint (2026-10-06)
 
 The unpublished UI assembly at `4b3433dcadf538f9ba9cc44ff2d3b8c119adb715`
