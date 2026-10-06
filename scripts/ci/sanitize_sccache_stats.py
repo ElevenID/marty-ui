@@ -38,7 +38,7 @@ if __name__ == "__main__":
         json.dumps(
             {
                 "schema_version": 1,
-                "capture_point": "after_reusable_host_compile",
+                "capture_point": "after_reusable_host_compile_step",
                 "counters": counters,
             },
             sort_keys=True,

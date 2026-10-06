@@ -48,7 +48,7 @@ class SanitizeSccacheStatsTest(unittest.TestCase):
             json.loads(result.stdout),
             {
                 "schema_version": 1,
-                "capture_point": "after_reusable_host_compile",
+                "capture_point": "after_reusable_host_compile_step",
                 "counters": {"compile_requests": 12},
             },
         )
