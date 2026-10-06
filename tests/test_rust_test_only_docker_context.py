@@ -249,6 +249,24 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         .splitlines()
     )
     assert not _is_ignored("services/auth/assets/credential-login.js", public_lines)
+    for path in (
+        "services/common/__init__.py",
+        "services/common/events.py",
+        "services/common/grpc_event_bus.py",
+    ):
+        assert _is_ignored(path, public_lines), path
+
+
+def test_public_context_rejects_reincluded_python_event_adapter() -> None:
+    lines = (
+        (ROOT / "services/Dockerfile.dockerignore")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    path = "services/common/grpc_event_bus.py"
+    assert _is_ignored(path, lines)
+    assert not _is_ignored(path, [*lines, "!**"])
+    assert not _is_ignored(path, [*lines, "!services/common/**"])
 
 
 def test_ownership_snapshot_reads_and_lexes_shared_source_once(monkeypatch) -> None:
