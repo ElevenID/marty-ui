@@ -90,7 +90,15 @@ CONTRACT_NAMES = frozenset(
 TIMING_NAMES = {
     "container_startup": frozenset({"postgres_create"}),
     "database_readiness": frozenset({"postgres_ready"}),
-    "migration_seed": frozenset({"published_probe"}),
+    "migration_seed": frozenset(
+        {
+            "published_probe",
+            "json_consumer",
+            "json_depth",
+            "timeout_consumer",
+            "worker_validation_template",
+        }
+    ),
     "fixture_seed": FIXTURE_NAMES,
     "scenario": SCENARIO_NAMES,
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),

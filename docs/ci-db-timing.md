@@ -27,8 +27,14 @@ Canvas's exact-owned PostgreSQL fixture emits `container_startup`,
 status when unwinding. `migration_seed` is deliberately one combined phase:
 the pinned historical producer executes its migrations and fixture seed
 internally, and changing it would invalidate the source/oracle pin. The native
-REST worker harness separately times each corpus-owned `scenario`, plus its
-own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS fixture,
+fixture labels three fixed constructor origins (`json_consumer`, `json_depth`,
+`timeout_consumer`) and the worker-validation repository's single shared
+template (`worker_validation_template`); all other probes retain
+`published_probe`. These labels identify the source-owned setup path, not a
+per-scenario duration or proof that an adjacent parallel test log line owns a
+particular probe. They contain no fixture contents or dynamic identifiers.
+The native REST worker harness separately times each corpus-owned `scenario`,
+plus its own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS fixture,
 not PostgreSQL seeding. A case's scenario duration includes its nested setup,
 worker run, assertions, and cleanup, so these durations must not be added.
 The PostgreSQL cleanup duration measures resource removal, not the subsequent

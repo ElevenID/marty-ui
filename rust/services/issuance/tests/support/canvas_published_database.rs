@@ -420,6 +420,17 @@ impl PublishedDatabase {
         Self::start_probe(None).await
     }
 
+    pub async fn start_for_worker_validation_template() -> Result<Self, String> {
+        Self::start_probe_with_scope(
+            None,
+            None,
+            false,
+            Uuid::new_v4(),
+            "worker_validation_template",
+        )
+        .await
+    }
+
     /// The host coordinator allocates this UUID before launching its child, so
     /// interrupted creation can be recovered by exact scope, never by prefix.
     pub(super) async fn start_with_scope(scope: Uuid) -> Result<Self, String> {
@@ -427,7 +438,7 @@ impl PublishedDatabase {
         if !scope_ids(scope, &docker)?.is_empty() {
             return Err("Caller-owned database scope already exists".into());
         }
-        Self::start_probe_with_scope(None, None, false, scope).await
+        Self::start_probe_with_scope(None, None, false, scope, "published_probe").await
     }
 
     /// Default-schema fixture recovery only. The caller supplies its already
@@ -1127,7 +1138,21 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
     ) -> Result<Self, String> {
-        Self::start_probe_with_scope(oracle, extra_fixture, recovery_schema, Uuid::new_v4()).await
+        // These are fixed constructor origins, not text from a scenario or probe.
+        let timing_name = match oracle.map(|(script, _, _, _)| script) {
+            Some("json_consumer") => "json_consumer",
+            Some("json_depth") => "json_depth",
+            Some("timeout_consumer") => "timeout_consumer",
+            _ => "published_probe",
+        };
+        Self::start_probe_with_scope(
+            oracle,
+            extra_fixture,
+            recovery_schema,
+            Uuid::new_v4(),
+            timing_name,
+        )
+        .await
     }
 
     async fn start_probe_with_scope(
@@ -1135,6 +1160,7 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
         scope: Uuid,
+        timing_name: &'static str,
     ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
@@ -1627,7 +1653,7 @@ impl PublishedDatabase {
         }
         // The pinned producer owns both migrations and seed data. This timer
         // measures their combined verified probe, without editing that input.
-        let migration_timing = PhaseTimer::start("migration_seed", "published_probe");
+        let migration_timing = PhaseTimer::start("migration_seed", timing_name);
         let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());

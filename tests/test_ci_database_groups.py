@@ -346,6 +346,11 @@ def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> Non
 
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
     for phase, name in (
+        ("migration_seed", "published_probe"),
+        ("migration_seed", "json_consumer"),
+        ("migration_seed", "json_depth"),
+        ("migration_seed", "timeout_consumer"),
+        ("migration_seed", "worker_validation_template"),
         ("scenario", "retry-after.http_date_future"),
         ("cleanup", "published_database_removal"),
         ("contract", "canvas_sync_worker_postgres_contract"),
@@ -357,6 +362,29 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+    for name in ("case_from_scenario", "json_depth_extra", "worker_validation_other"):
+        marker = json.dumps(
+            {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert (
+            GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+            is None
+        )
+
+
+def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
+    support = (
+        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
+    ).read_text(encoding="utf-8")
+    worker = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+    ).read_text(encoding="utf-8")
+    for name in ("json_consumer", "json_depth", "timeout_consumer"):
+        assert f'Some("{name}") => "{name}"' in support
+    assert support.count('"worker_validation_template"') == 1
+    assert (
+        worker.count("PublishedDatabase::start_for_worker_validation_template()") == 1
+    )
 
 
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:

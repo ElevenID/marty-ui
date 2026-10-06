@@ -1446,9 +1446,10 @@ async fn worker_validation_repository_matches_frozen_errors() {
     // Clone it into a separate database for each case, so we keep independent
     // schemas and frozen observations without starting thirteen PostgreSQL
     // servers or re-running the same published migrations thirteen times.
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
+    let owned =
+        canvas_published_database::PublishedDatabase::start_for_worker_validation_template()
+            .await
+            .unwrap();
     let mut admin_url = url::Url::parse(&owned.url).unwrap();
     assert_eq!(admin_url.path(), "/canvas_published_schema_test");
     admin_url.set_path("/postgres");
