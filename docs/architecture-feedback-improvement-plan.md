@@ -3,9 +3,9 @@
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
 Status: active implementation (2026-10-06 refreshed checkpoint). Gateway and Canvas
 acceptance ownership, narrow compatibility code and further fast test layers have
-merged, including UI #1124 at `e9f140e00`. UI #1126 is open at `ce70c40bd`; both
-corrected release-check jobs passed, but complete hosted and protected validation
-remain pending. The reviewed unit/renewal follow-up is unpublished; the separate
+merged, including UI #1124 at `e9f140e00`. UI #1126 is open at `ce70c40bd`; normal
+and full hosted CI passed, and protected merge-queue validation remains pending.
+The combined unit/renewal/typed-transport follow-up is unpublished; the separate
 roster component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API, but UI migration and nightly
 release qualification remain incomplete. Earlier failed main evidence remains
@@ -554,8 +554,10 @@ Review correction for that local candidate: the 12 signing-detail names are dist
 passed all 23 jobs at source `ce70c40bd07f0629db2549d5a39af94d2fc1b7ea`.
 Its Canvas log executed the ten declared routine validation cases, including all
 three retained lock races and the privacy case, and named the real PostgreSQL
-validation owner as passing. Full run `37454308609` is still live; no complete
-full-tier qualification, merge, or release authority is claimed at this checkpoint.
+validation owner as passing. Full run `37454308609` also passed all 23 jobs,
+including the twenty declared full-tier native validation cases. Protected queue
+run `37462723875` remains live at this checkpoint; no merge or release authority
+is claimed from PR qualification alone.
 
 | Observed normal PR run | #1124 `37437829353` | #1126 `37454314639` |
 | --- | --- | --- |
@@ -714,6 +716,35 @@ This mapping is a source-review inventory, not compiled discovery, execution
 evidence, a complete dependency graph or authority to skip acceptance. Any later
 tiering needs separately demonstrated database/process proof and an exact-head
 hosted pilot. No hosted speedup is attributed to this additive proof.
+
+## Combined transport and dependency-boundary checkpoint (2026-10-06)
+
+The unpublished UI assembly at `4b3433dcadf538f9ba9cc44ff2d3b8c119adb715`
+combines the reviewed roster/renewal fast owners with typed OID4VP evaluation
+transport. It preserves the producer-owned query, client ID, nonce, raw VP and
+optional submission from Flow to policy without treating them as authenticated
+credential evidence. Metadata requires workload authentication; external HTTP
+cannot set it. The existing evaluator does not yet consume this metadata as
+proof or activate holder binding. Historical requests without metadata and
+existing raw-credential routes retain their legacy handling. Corrupted stored
+query/binding is deliberately rejected before provider evaluation; this limited
+fail-closed correction is not described as universally behavior-neutral.
+
+Review cycles corrected workload authorization, verification-service consumers
+and generated schema coherence. Python and Envoy outputs include the additive
+policy field and current credential-template schema, with a parity guard.
+Component review/test results are not assembly qualification: combined review
+and targeted checks remain required before publication, followed by hosted CI
+and protected merge. No nightly release qualification is claimed.
+
+Core [#353](https://github.com/ElevenID/marty-core/pull/353), source
+`fc7d029883d25a13c216756ff3e0056f2739c662`, extracts the existing canonical
+JSON digest into a narrow crate while retaining verification's public delegating
+API and exact serialization/error semantics. All required PR checks passed and
+it entered the protected merge queue; it has not merged at this checkpoint.
+UI has not adopted the new crate or changed its Core pins. Compile-surface
+savings require a reviewed consumer migration; no timing saving is inferred
+from creating the boundary alone.
 
 ## Design references
 
