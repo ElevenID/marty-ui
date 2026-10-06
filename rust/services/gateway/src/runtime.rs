@@ -4586,10 +4586,6 @@ fn map_failure(
 
 #[cfg(test)]
 mod tests {
-    mod passport_gateway_postgres {
-        include!("runtime/passport_gateway_postgres.rs");
-    }
-
     use super::*;
     use axum::extract::Path;
     use axum::http::HeaderMap;

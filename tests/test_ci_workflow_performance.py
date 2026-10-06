@@ -2540,6 +2540,32 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
     assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
 
 
+def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate() -> None:
+    acceptance = tomllib.loads(
+        (ROOT / "rust/crates/service-acceptance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    gateway = tomllib.loads(
+        (ROOT / "rust/services/gateway/Cargo.toml").read_text(encoding="utf-8")
+    )
+    assert "marty-issuance-service" not in gateway["dev-dependencies"]
+    assert sum(
+        target["name"] == "passport_gateway_postgres"
+        and target["path"] == "tests/passport_gateway_postgres.rs"
+        for target in acceptance["test"]
+    ) == 1
+    _, workflow = _workflow(ROOT / ".github/workflows/ci.yml")
+    contracts = workflow["jobs"]["test-rust-services"]["steps"]
+    gate = next(
+        step for step in contracts
+        if step.get("name") == "Test native passport Gateway signed webhook on PostgreSQL"
+    )
+    assert gate["env"]["MARTY_PASSPORT_GATEWAY_TEST_URL"].endswith(
+        "/marty_passport_gateway_test"
+    )
+    assert "--test passport_gateway_postgres" in gate["run"]
+    assert "-- --exact" in gate["run"]
+
+
 @pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
 @pytest.mark.parametrize("reopened", [False, True])
 def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(

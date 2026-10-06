@@ -49,7 +49,6 @@ der.workspace = true
 hex.workspace = true
 hmac.workspace = true
 marty-crypto.workspace = true
-marty-issuance-service = { path = "../issuance" }
 marty-signing-keys = { path = "../signing-keys" }
 redis.workspace = true
 sqlx.workspace = true
