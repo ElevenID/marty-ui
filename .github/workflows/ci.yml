@@ -98,7 +98,13 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
+                contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json)
+                  # Startup attestation reads these inputs in the Rust lane;
+                  # release tests also validate their ownership and hashes.
+                  rust=true
+                  release=true
+                  ;;
+                contracts/canvas-worker-oracle-producers.json|tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
                   # Only the release-collected inventory tests consume these
                   # manifests; service image contexts exclude them. Other
                   # corpora and unknown test paths retain broad selection.
@@ -1394,6 +1400,16 @@ jobs:
           path: ${{ runner.temp }}/rust-build-evidence/
           if-no-files-found: warn
           retention-days: 2
+      # Upload only after the entire Canvas job succeeds. The Rust test wrote
+      # this file after its live comparison, native replay, and owned cleanup.
+      - name: Preserve fresh full-main startup attestation
+        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canvas-startup-fresh-run.json
+          if-no-files-found: error
+          retention-days: 14
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes

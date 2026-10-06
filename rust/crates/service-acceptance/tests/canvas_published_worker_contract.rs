@@ -1717,6 +1717,8 @@ fn worker_binary_handoff_requires_an_absolute_path_and_keeps_cargo_default() {
     })
     .is_err());
 }
+#[path = "support/canvas_startup_attestation.rs"]
+mod canvas_startup_attestation;
 #[path = "../../../services/issuance/tests/support/canvas_worker_startup_replay.rs"]
 mod canvas_worker_startup_replay;
 
@@ -1745,6 +1747,10 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
     canvas_worker_startup_replay::replay(&pool, &owned.url, &oracle).await;
     pool.close().await;
     owned.close().unwrap();
+    canvas_startup_attestation::emit_after_startup_pass(
+        &canvas_published_database::repository_root(),
+        &oracle,
+    );
 }
 
 #[path = "../../../services/issuance/tests/support/canvas_worker_sql_logging.rs"]

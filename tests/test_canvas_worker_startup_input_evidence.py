@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,3 +112,38 @@ def test_text_hash_is_independent_of_checkout_line_endings(tmp_path: Path) -> No
     assert _normalized_sha256(path) == expected
     path.write_bytes(b"first\rsecond\r")
     assert _normalized_sha256(path) == expected
+
+
+def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    uploads = [
+        step
+        for step in steps
+        if step.get("name") == "Preserve fresh full-main startup attestation"
+    ]
+    assert len(uploads) == 1
+    upload = uploads[0]
+    assert upload["if"] == (
+        "success() && matrix.lane == 'canvas' && "
+        "env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'"
+    )
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert upload["with"]["retention-days"] == 14
+    assert "${{ github.run_id }}-${{ github.run_attempt }}" in upload["with"]["name"]
+    source = (
+        ROOT
+        / "rust/crates/service-acceptance/tests/canvas_published_worker_contract.rs"
+    ).read_text(encoding="utf-8")
+    startup_test = source.split(
+        "async fn worker_startup_matches_published_process_and_idle_heartbeat()", 1
+    )[1].split("\n}\n", 1)[0]
+    assert startup_test.index("assert_eq!(") < startup_test.index("::replay(")
+    assert startup_test.index("::replay(") < startup_test.index(
+        "owned.close().unwrap();"
+    )
+    assert startup_test.index("owned.close().unwrap();") < startup_test.index(
+        "emit_after_startup_pass("
+    )
