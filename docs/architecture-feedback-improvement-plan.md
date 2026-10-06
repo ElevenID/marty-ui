@@ -828,6 +828,33 @@ metadata, not a controlled benchmark). Its reported duration does not justify
 adding another workspace discovery pass. Preserve the unpushed candidate for
 audit and retain existing execution; no speedup or exclusion is promoted.
 
+## Publication readiness checkpoint (2026-10-06)
+
+Assembly `88ee6224e81119a0c8207cb743f3de7b979f412b` includes qualified main
+`8d42d1bdc5cecda79947d6c7b720b83ec4091f01` and passed independent publication
+review. The main merge preserved the previously reviewed tracked tree exactly.
+The expanded local policy sweep passed 270 tests and 44 subtests in 61.68s.
+Preflight-fixture repair passed the full file (174 passed, one skipped), followed
+by focused checks for its final additive negative. The original 165-registration
+fingerprint is still checked after subtracting only the new rendered-config
+owner; a separate 166-registration fingerprint binds the complete new roster.
+No existing registration, native case, deadline, tier or protected gate is removed.
+
+Configured Flow clients now use the existing channel factory's mutual-TLS
+capability to decide whether to send optional OID4VP metadata; other request
+fields and metadata validation remain unchanged. Non-mTLS configured clients
+omit that field while policy still rejects metadata without workload authority.
+Public direct-client API shapes are preserved. This is wire/API compatibility,
+not a claim that production plaintext evaluation works: policy's production main
+already installs workload security even when its local server TLS is absent.
+
+The Linux-only configuration test uses the existing acceptance opt-in. Its
+completion marker is required after successful composition execution and all four
+real-render assertions, with prefix/interleaving-safe counting. Local Windows
+compilation and synthetic controls do not prove real Linux Compose execution.
+Exact-head hosted CI must supply that proof before merge; no test-tier cut or
+nightly release qualification is authorized by local readiness.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
