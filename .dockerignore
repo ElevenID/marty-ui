@@ -16,6 +16,7 @@
 # CI inventory manifests are not product compilation or runtime inputs.
 contracts/canvas-worker-oracle-producers.json
 contracts/canvas-worker-oracle-script-imports.json
+contracts/canvas-worker-startup-current-inputs.json
 
 # Python cache
 **/__pycache__

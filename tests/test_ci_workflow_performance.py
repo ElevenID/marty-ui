@@ -896,7 +896,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     )
     for ignore_path in set(image_contexts.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
-        for manifest in inventory_consumers:
+        for manifest in (
+            *inventory_consumers,
+            "canvas-worker-startup-current-inputs.json",
+        ):
             exclusion = f"contracts/{manifest}"
             assert lines.count(exclusion) == 1, (
                 f"Inventory manifest must be excluded from {ignore_path}"
