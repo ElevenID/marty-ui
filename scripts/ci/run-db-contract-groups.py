@@ -1,15 +1,15 @@
 """Overlap independent database owners, preserving serial execution within each suite."""
 
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import hashlib
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from pathlib import Path
+from threading import Lock
 from time import monotonic
-
 
 HEARTBEAT_SECONDS = 30
 PREFLIGHT_MODES = (
@@ -24,6 +24,132 @@ FULL_QUALIFICATION_PREFLIGHT_MODES = (
 )
 EVIDENCE_NAME = "canvas-published-preflights.sha256"
 RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
+TIMING_PREFIX = "MARTY_CI_PHASE_V1 "
+TIMING_PHASES = {
+    "container_startup",
+    "database_readiness",
+    "migration_seed",
+    "fixture_seed",
+    "scenario",
+    "cleanup",
+    "contract",
+    "canvas_serial",
+    "canvas_target",
+    "image_pull",
+}
+TIMING_STATUSES = {"ok", "failed"}
+REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
+MATRIX_SCENARIOS = frozenset(
+    {"retry-after", "validation", "roster-failure", "resources-unavailable"}
+)
+SCENARIO_NAMES = REST_SCENARIOS | frozenset(
+    f"{scenario}.{case['name']}"
+    for scenario in MATRIX_SCENARIOS
+    for case in json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / f"contracts/canvas-worker-{scenario}-scenarios.json"
+        ).read_text(encoding="utf-8")
+    )["cases"]
+)
+FIXTURE_NAMES = SCENARIO_NAMES
+CONTRACT_NAMES = frozenset(
+    {
+        "general_contracts",
+        "signing_registry",
+        "signing_document",
+        "issuer_profile",
+        "credential_template",
+        "presentation_policy",
+        "issuance_oid4vci_migration",
+        "issuance_transaction",
+        "issuance_credential",
+        "retention",
+        "passport",
+        "application_template",
+        "internal_application",
+        "credential_template_migration",
+        "trust_profile_migration",
+        "organization_migration",
+        "organization_application",
+        "organization_repository",
+        "canvas_sync_worker_postgres_contract",
+        "canvas_oauth_postgres_contract",
+        "canvas_mirror_postgres_contract",
+        "canvas_management_postgres_contract",
+        "canvas_lti_sync_enqueue_postgres_contract",
+        "canvas_lti_login_postgres_contract",
+        "canvas_lti_evidence_postgres_contract",
+        "canvas_lti_deep_linking_postgres_contract",
+        "canvas_event_status_postgres_contract",
+        "canvas_award_candidate_postgres_contract",
+        "proof_nonce_postgres_contract",
+    }
+)
+TIMING_NAMES = {
+    "container_startup": frozenset({"postgres_create"}),
+    "database_readiness": frozenset({"postgres_ready"}),
+    "migration_seed": frozenset({"published_probe"}),
+    "fixture_seed": FIXTURE_NAMES,
+    "scenario": SCENARIO_NAMES,
+    "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
+    "contract": CONTRACT_NAMES,
+    "canvas_serial": frozenset(
+        {
+            "sql_logging",
+            "json_consumer",
+            *PREFLIGHT_MODES,
+            "mixed-roster-preflight",
+            "body-timeout-preflight",
+        }
+    ),
+    "canvas_target": frozenset({"composition", "worker"}),
+    "image_pull": frozenset({"postgres", "published_probe"}),
+}
+
+
+def _timing_path() -> Path | None:
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if not runner_temp:
+        return None
+    return Path(runner_temp) / "rust-build-evidence" / "db-contract-timing.jsonl"
+
+
+def _safe_phase(line: str, group: str) -> dict[str, object] | None:
+    if not line.startswith(TIMING_PREFIX) or len(line) > 256:
+        return None
+    try:
+        value = json.loads(line[len(TIMING_PREFIX) :])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+        "phase",
+        "name",
+        "duration_ms",
+        "status",
+    }:
+        return None
+    phase, name, duration, status = (
+        value[key] for key in ("phase", "name", "duration_ms", "status")
+    )
+    if (
+        not isinstance(phase, str)
+        or phase not in TIMING_PHASES
+        or not isinstance(name, str)
+        or name not in TIMING_NAMES[phase]
+        or not 1 <= len(name) <= 96
+        or not all(
+            character.isascii() and (character.isalnum() or character in "_-.")
+            for character in name
+        )
+        or isinstance(duration, bool)
+        or not isinstance(duration, int)
+        or not 0 <= duration <= 43_200_000
+        or not isinstance(status, str)
+        or status not in TIMING_STATUSES
+    ):
+        return None
+    return {"schema": "marty.ci.db-phase/v1", "group": group, **value}
 
 
 def _run_identity() -> tuple[str, ...] | None:
@@ -138,15 +264,64 @@ def _wait_for_groups(futures: dict[str, Future[int]], started: float) -> dict[st
 
 
 def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int]:
-    def run(name: str, command: list[str]) -> int:
-        with (directory / f"{name}.log").open("w", encoding="utf-8") as log:
+    timing_path = _timing_path()
+    timing_lock = Lock()
+
+    def record(value: dict[str, object]) -> None:
+        print(
+            f"[db-timing] group={value['group']} phase={value['phase']} "
+            f"name={value['name']} duration_ms={value['duration_ms']} status={value['status']}",
+            flush=True,
+        )
+        if timing_path is None:
+            return
+        with timing_lock:
             try:
-                return subprocess.run(
-                    command, stdout=log, stderr=subprocess.STDOUT
-                ).returncode
+                timing_path.parent.mkdir(parents=True, exist_ok=True)
+                with timing_path.open("a", encoding="ascii", newline="\n") as evidence:
+                    evidence.write(
+                        json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+                    )
+            except OSError:
+                print("[db-timing] optional timing evidence unavailable", flush=True)
+                return
+
+    def run(name: str, command: list[str]) -> int:
+        group_started = monotonic()
+        with (directory / f"{name}.log").open("wb") as log:
+            try:
+                with subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                ) as process:
+                    assert process.stdout is not None
+                    for line in process.stdout:
+                        log.write(line)
+                        if not line.startswith(TIMING_PREFIX.encode("ascii")):
+                            continue
+                        try:
+                            marker = line.decode("ascii").rstrip("\r\n")
+                        except UnicodeDecodeError:
+                            continue
+                        phase = _safe_phase(marker, name)
+                        if phase is not None:
+                            record(phase)
+                    status = process.wait()
             except OSError as error:
-                log.write(f"Unable to start contract group: {error}\n")
-                return 1
+                log.write(f"Unable to start contract group: {error}\n".encode())
+                status = 1
+        record(
+            {
+                "schema": "marty.ci.db-phase/v1",
+                "group": name,
+                "phase": "contract",
+                "name": "group_total",
+                "duration_ms": round((monotonic() - group_started) * 1000),
+                "status": "ok" if status == 0 else "failed",
+            }
+        )
+        return status
 
     # Wait for every suite even if another fails, so its assertions and cleanup
     # finish. Separate logs avoid interleaving diagnostics from independent DBs.

@@ -4,11 +4,47 @@ use serde_json::Value;
 use std::{
     path::{Path, PathBuf},
     process::{Command, Output},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
+
+// Only fixed phase labels and elapsed time leave the fixture. Never emit its
+// Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
+struct PhaseTimer {
+    phase: &'static str,
+    name: &'static str,
+    started: Instant,
+    succeeded: bool,
+}
+
+impl PhaseTimer {
+    fn start(phase: &'static str, name: &'static str) -> Self {
+        Self {
+            phase,
+            name,
+            started: Instant::now(),
+            succeeded: false,
+        }
+    }
+
+    fn success(mut self) {
+        self.succeeded = true;
+    }
+}
+
+impl Drop for PhaseTimer {
+    fn drop(&mut self) {
+        eprintln!(
+            "\nMARTY_CI_PHASE_V1 {{\"phase\":\"{}\",\"name\":\"{}\",\"duration_ms\":{},\"status\":\"{}\"}}",
+            self.phase,
+            self.name,
+            self.started.elapsed().as_millis(),
+            if self.succeeded { "ok" } else { "failed" },
+        );
+    }
+}
 
 pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
     // The packaged child mounts only reviewed inputs, not the entire checkout.
@@ -1112,6 +1148,7 @@ impl PublishedDatabase {
             oracle: None,
         };
         let label = format!("{LABEL}={}", owned.scope);
+        let create_timing = PhaseTimer::start("container_startup", "postgres_create");
         let postgres = docker(&[
             "create",
             "--pull=never",
@@ -1133,7 +1170,9 @@ impl PublishedDatabase {
         ])?;
         Self::accept_id(&postgres)?;
         owned.postgres = Some(postgres.clone());
+        create_timing.success();
         eprintln!("Owned published-schema PostgreSQL: {postgres}");
+        let readiness_timing = PhaseTimer::start("database_readiness", "postgres_ready");
         docker(&["start", &postgres])?;
         loop {
             if docker(&[
@@ -1162,6 +1201,7 @@ impl PublishedDatabase {
         if info["NetworkSettings"]["Ports"]["5432/tcp"][0]["HostIp"] != "127.0.0.1" {
             return Err("Non-loopback test port".into());
         }
+        readiness_timing.success();
         owned.url = format!("postgresql://oracle:synthetic-local-only@127.0.0.1:{port}/canvas_published_schema_test");
         let root = repository_root();
         // Mount only the two public test inputs, not the checkout or its Git
@@ -1585,6 +1625,9 @@ impl PublishedDatabase {
                 ],
             );
         }
+        // The pinned producer owns both migrations and seed data. This timer
+        // measures their combined verified probe, without editing that input.
+        let migration_timing = PhaseTimer::start("migration_seed", "published_probe");
         let probe = docker(&arguments)?;
         Self::accept_id(&probe)?;
         owned.probe = Some(probe.clone());
@@ -1632,10 +1675,18 @@ impl PublishedDatabase {
                     .clone(),
             );
         }
+        migration_timing.success();
         Ok(owned)
     }
 
     fn cleanup(&mut self) -> Result<(), String> {
+        // Explicit close is followed by Drop. Only the call that still owns
+        // resources emits a cleanup duration; a failed partial close remains
+        // timed again when Drop retries the remaining resource.
+        if self.probe.is_none() && self.postgres.is_none() {
+            return Ok(());
+        }
+        let cleanup_timing = PhaseTimer::start("cleanup", "published_database_removal");
         if let Some(probe) = &self.probe {
             let info = inspect(probe)?;
             let network = format!(
@@ -1658,6 +1709,7 @@ impl PublishedDatabase {
             docker(&["rm", "--force", postgres])?;
             self.postgres = None;
         }
+        cleanup_timing.success();
         Ok(())
     }
 

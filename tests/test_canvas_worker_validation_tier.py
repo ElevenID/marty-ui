@@ -32,6 +32,44 @@ def corpus():
     return cases, oracle, inventory
 
 
+def test_native_timing_emits_only_corpus_name_duration_and_status(
+    native, monkeypatch, capsys
+):
+    monkeypatch.setattr(native.time, "monotonic", lambda: 10.125)
+    native.emit_phase("scenario", "validation.invalid_roster_batch", 10.0, "failed")
+    assert capsys.readouterr().out == (
+        '\nMARTY_CI_PHASE_V1 {"duration_ms":125,"name":"validation.invalid_roster_batch",'
+        '"phase":"scenario","status":"failed"}\n'
+    )
+
+
+def test_native_timing_marker_starts_new_line_after_libtest_prefix(native, capsys):
+    print("test worker_case ... ", end="")
+    native.emit_phase("scenario", "validation.invalid_roster_batch", 0.0, "ok")
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "test worker_case ... "
+    assert lines[1].startswith("MARTY_CI_PHASE_V1 ")
+
+
+def test_native_matrix_times_failed_case_without_swallowing_failure(
+    native, monkeypatch, capsys
+):
+    def fail_case(*_arguments):
+        raise RuntimeError("synthetic-private-failure")
+
+    monkeypatch.setattr(native, "run_scenario", fail_case)
+    with pytest.raises(RuntimeError, match="synthetic-private-failure"):
+        native.run("unused-executable", "validation")
+    marker = capsys.readouterr().out.strip()
+    assert marker.startswith("MARTY_CI_PHASE_V1 ")
+    value = json.loads(marker.removeprefix("MARTY_CI_PHASE_V1 "))
+    assert set(value) == {"phase", "name", "duration_ms", "status"}
+    assert value["phase"] == "scenario"
+    assert value["name"].startswith("validation.")
+    assert value["status"] == "failed"
+    assert "synthetic-private-failure" not in marker
+
+
 def test_routine_cases_retain_processor_lock_races_and_privacy(native, corpus):
     cases, _, inventory = corpus
     processor = {

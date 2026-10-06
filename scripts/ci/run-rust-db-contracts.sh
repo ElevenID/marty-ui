@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
+run_timed() {
+  local name="$1"
+  shift
+  local started ended status=0
+  started=$(python3 -c 'import time; print(time.monotonic_ns())')
+  "$@" || status=$?
+  ended=$(python3 -c 'import time; print(time.monotonic_ns())')
+  printf 'MARTY_CI_PHASE_V1 {"phase":"contract","name":"%s","duration_ms":%s,"status":"%s"}\n' \
+    "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
+  return "$status"
+}
 export MARTY_TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/0
 export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
@@ -18,72 +29,72 @@ if (( ${#contracts[@]} != 1 )); then
   printf 'Expected one contracts executable, found %s.\n' "${#contracts[@]}" >&2
   exit 1
 fi
-"${contracts[0]}" --ignored --test-threads=1
+run_timed general_contracts "${contracts[0]}" --ignored --test-threads=1
 mapfile -t registry_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'registry_storage_contract-*' -perm -u+x)
 if (( ${#registry_contracts[@]} != 1 )); then
   printf 'Expected one signing registry contract executable, found %s.\n' "${#registry_contracts[@]}" >&2
   exit 1
 fi
-"${registry_contracts[0]}" --ignored --test-threads=1
+run_timed signing_registry "${registry_contracts[0]}" --ignored --test-threads=1
 mapfile -t document_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'document_storage_contract-*' -perm -u+x)
 if (( ${#document_contracts[@]} != 1 )); then
   printf 'Expected one signing document contract executable, found %s.\n' "${#document_contracts[@]}" >&2
   exit 1
 fi
-"${document_contracts[0]}" --ignored --test-threads=1
+run_timed signing_document "${document_contracts[0]}" --ignored --test-threads=1
 mapfile -t issuer_profile_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuer_profile_storage_contract-*' -perm -u+x)
 if (( ${#issuer_profile_contracts[@]} != 1 )); then
   printf 'Expected one issuer profile contract executable, found %s.\n' "${#issuer_profile_contracts[@]}" >&2
   exit 1
 fi
-"${issuer_profile_contracts[0]}" --ignored --test-threads=1
+run_timed issuer_profile "${issuer_profile_contracts[0]}" --ignored --test-threads=1
 test -x target/debug/credential-template-postgres-contract
 test -x target/debug/presentation-policy-postgres-contract
-target/debug/credential-template-postgres-contract --test-threads=1
-target/debug/presentation-policy-postgres-contract --test-threads=1
+run_timed credential_template target/debug/credential-template-postgres-contract --test-threads=1
+run_timed presentation_policy target/debug/presentation-policy-postgres-contract --test-threads=1
 mapfile -t issuance_oid4vci_migration_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'oid4vci_migration_postgres_contract-*' -perm -u+x)
 if (( ${#issuance_oid4vci_migration_contracts[@]} != 1 )); then
   printf 'Expected one Issuance OID4VCI migration PostgreSQL contract executable, found %s.\n' "${#issuance_oid4vci_migration_contracts[@]}" >&2
   exit 1
 fi
-"${issuance_oid4vci_migration_contracts[0]}" --test-threads=1
+run_timed issuance_oid4vci_migration "${issuance_oid4vci_migration_contracts[0]}" --test-threads=1
 mapfile -t issuance_transaction_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'issuance_transaction_postgres_contract-*' -perm -u+x)
 if (( ${#issuance_transaction_contracts[@]} != 1 )); then
   printf 'Expected one Issuance transaction PostgreSQL contract executable, found %s.\n' "${#issuance_transaction_contracts[@]}" >&2
   exit 1
 fi
-"${issuance_transaction_contracts[0]}" --test-threads=1
+run_timed issuance_transaction "${issuance_transaction_contracts[0]}" --test-threads=1
 mapfile -t issuance_credential_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'credential_postgres_contract-*' -perm -u+x)
 if (( ${#issuance_credential_contracts[@]} != 1 )); then
   printf 'Expected one Issuance credential PostgreSQL contract executable, found %s.\n' "${#issuance_credential_contracts[@]}" >&2
   exit 1
 fi
-"${issuance_credential_contracts[0]}" --test-threads=1
+run_timed issuance_credential "${issuance_credential_contracts[0]}" --test-threads=1
 mapfile -t retention_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'retention_postgres_contract-*' -perm -u+x)
 if (( ${#retention_contracts[@]} != 1 )); then
   printf 'Expected one Issuance retention PostgreSQL contract executable, found %s.\n' "${#retention_contracts[@]}" >&2
   exit 1
 fi
-"${retention_contracts[0]}" --test-threads=1
+run_timed retention "${retention_contracts[0]}" --test-threads=1
 
 mapfile -t passport_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'passport_postgres_contract-*' -perm -u+x)
 if (( ${#passport_contracts[@]} != 1 )); then
   printf 'Expected one Issuance passport PostgreSQL contract executable, found %s.\n' "${#passport_contracts[@]}" >&2
   exit 1
 fi
-"${passport_contracts[0]}" --test-threads=1
+run_timed passport "${passport_contracts[0]}" --test-threads=1
 mapfile -t application_template_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'application_template_postgres_contract-*' -perm -u+x)
 if (( ${#application_template_contracts[@]} != 1 )); then
   printf 'Expected one Application Template PostgreSQL contract executable, found %s.\n' "${#application_template_contracts[@]}" >&2
   exit 1
 fi
-"${application_template_contracts[0]}" --test-threads=1
+run_timed application_template "${application_template_contracts[0]}" --test-threads=1
 mapfile -t internal_application_contracts < <(find target/debug/deps -maxdepth 1 -type f -name 'internal_application_postgres_contract-*' -perm -u+x)
 if (( ${#internal_application_contracts[@]} != 1 )); then
   printf 'Expected one internal Application PostgreSQL contract executable, found %s.\n' "${#internal_application_contracts[@]}" >&2
   exit 1
 fi
-"${internal_application_contracts[0]}" --test-threads=1
+run_timed internal_application "${internal_application_contracts[0]}" --test-threads=1
 mapfile -t canvas_issuance_contracts < <(
   find target/debug/deps -maxdepth 1 -type f -perm -u+x \
     \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
@@ -94,15 +105,16 @@ if (( ${#canvas_issuance_contracts[@]} != 11 )); then
   exit 1
 fi
 for contract in "${canvas_issuance_contracts[@]}"; do
-  "$contract" --test-threads=1
+  contract_name=$(basename "$contract")
+  run_timed "${contract_name%-*}" "$contract" --test-threads=1
 done
 test -x target/debug/credential-template-migration-contract
-target/debug/credential-template-migration-contract --test-threads=1
+run_timed credential_template_migration target/debug/credential-template-migration-contract --test-threads=1
 test -x target/debug/trust-profile-migration-contract
-target/debug/trust-profile-migration-contract --test-threads=1
+run_timed trust_profile_migration target/debug/trust-profile-migration-contract --test-threads=1
 test -x target/debug/organization-migration-contract
 test -x target/debug/organization-application-postgres-contract
 test -x target/debug/organization-repository-postgres-contract
-target/debug/organization-migration-contract --test-threads=1
-target/debug/organization-application-postgres-contract --test-threads=1
-target/debug/organization-repository-postgres-contract --test-threads=1
+run_timed organization_migration target/debug/organization-migration-contract --test-threads=1
+run_timed organization_application target/debug/organization-application-postgres-contract --test-threads=1
+run_timed organization_repository target/debug/organization-repository-postgres-contract --test-threads=1

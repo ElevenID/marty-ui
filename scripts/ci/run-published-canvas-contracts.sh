@@ -1,6 +1,17 @@
 #!/usr/bin/env bash
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
+timed() {
+  local phase="$1" name="$2"
+  shift 2
+  local started ended status=0
+  started=$(python3 -c 'import time; print(time.monotonic_ns())')
+  "$@" || status=$?
+  ended=$(python3 -c 'import time; print(time.monotonic_ns())')
+  printf 'MARTY_CI_PHASE_V1 {"phase":"%s","name":"%s","duration_ms":%s,"status":"%s"}\n' \
+    "$phase" "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
+  return "$status"
+}
 # A narrow early diagnostic gate precedes the full suite. The two retained
 # exact native preflights are omitted later only with same-run evidence for
 # this compiled executable. The long mixed-roster/body matrices and their
@@ -156,11 +167,16 @@ if [[ "$mode" == full-after-preflights ]]; then
   fi
 fi
 for image in "${images[@]}"; do
-  docker pull "$image"
+  # Stable ordinal only: never put an image reference in timing evidence.
+  if [[ "$image" == "${images[0]}" ]]; then
+    timed image_pull postgres docker pull "$image"
+  else
+    timed image_pull published_probe docker pull "$image"
+  fi
 done
 if [[ -n "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | grep -Fx "$preflight_target: test"
-  "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
+  timed canvas_serial "$mode" "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
   exit 0
 fi
 printf '%s\n' "$all_test_names" | grep -Fx 'heartbeat_readiness_matches_published_python: test'
@@ -343,11 +359,11 @@ worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]
-"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
+timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
 # runs; contention must not turn its contract into an intermittent timeout.
-"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
+timed canvas_serial json_consumer "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
 # output separate, normally wait for both owners to finish cleanup, and fail
 # if either suite fails. The serial SQL-logging positive control stays outside
@@ -355,26 +371,68 @@ parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
 target_logs=$(mktemp -d "${RUNNER_TEMP:?}/canvas-targets.XXXXXX")
 composition_log="$target_logs/composition.log"
 worker_log="$target_logs/worker.log"
+composition_end="$target_logs/composition.end"
+worker_end="$target_logs/worker.end"
 cleanup_target_logs() {
-  rm -f -- "$composition_log" "$worker_log"
+  rm -f -- "$composition_log" "$worker_log" "$composition_end" "$worker_end"
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
+relay_target_timing() {
+  local pid="$1" log="$2" end_file="$3"
+  # This observer cannot own or obscure the Rust child exit status. Its
+  # completion clock has at most the 100 ms tail polling resolution.
+  if ( set -o pipefail; tail --pid="$pid" --sleep-interval=0.1 -n +1 -f "$log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ); then
+    python3 -c 'import time; print(time.monotonic_ns())' >"$end_file"
+  fi
+}
+composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
+relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &
+composition_relay_pid=$!
+worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
+relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &
+worker_relay_pid=$!
+report_target_timing() {
+  local name="$1" started="$2" status="$3" end_file="$4" ended
+  if [[ ! -s "$end_file" ]]; then
+    echo "Optional Canvas target timing unavailable for $name" >&2
+    return 0
+  fi
+  ended=$(<"$end_file")
+  if [[ ! "$ended" =~ ^[0-9]+$ ]]; then
+    echo "Optional Canvas target timing malformed for $name" >&2
+    return 0
+  fi
+  printf 'MARTY_CI_PHASE_V1 {"phase":"canvas_target","name":"%s","duration_ms":%s,"status":"%s"}\n' \
+    "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
+}
+drain_target_relays() {
+  # Relays observe only the exact Rust child PIDs; they never own cancellation
+  # or gate status. Drain before deleting the complete raw diagnostic logs.
+  wait "$composition_relay_pid" || true
+  wait "$worker_relay_pid" || true
+}
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"
-  cat "$composition_log"
+  # Phase records were relayed live. Keep the complete diagnostic text in the
+  # final replay without presenting those same lines as fresh timing events.
+  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$composition_log"
   printf 'Canvas worker target exit: %s\n' "$2"
-  cat "$worker_log"
+  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
 }
 stop_targets() {
   local composition_stopped=0 worker_stopped=0
+  trap - INT TERM
   kill "$composition_pid" "$worker_pid" 2>/dev/null || true
   wait "$composition_pid" 2>/dev/null || composition_stopped=$?
   wait "$worker_pid" 2>/dev/null || worker_stopped=$?
+  drain_target_relays
+  report_target_timing composition "$composition_started" "$composition_stopped" "$composition_end"
+  report_target_timing worker "$worker_started" "$worker_stopped" "$worker_end"
   report_target_logs "$composition_stopped" "$worker_stopped"
   exit "$1"
 }
@@ -384,6 +442,9 @@ composition_status=0
 worker_status=0
 wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
+drain_target_relays
+report_target_timing composition "$composition_started" "$composition_status" "$composition_end"
+report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
 if (( expected_skipped_config_tests == 0 )); then

@@ -1170,15 +1170,17 @@ fn assert_worker_https(scenario: &str) {
         .arg(root.join("scripts/test_canvas_worker_rest_https.py"))
         .arg(std::env::current_exe().unwrap())
         .arg(scenario)
+        // The Python matrix owns several serial cases. Inherit stdout so
+        // its phase markers reach the CI relay as each case finishes. Its
+        // ordinary output remains in the existing final raw contract log.
+        .stdout(std::process::Stdio::inherit())
         .output()
         .unwrap();
     assert!(
         output.status.success(),
-        "Native worker HTTPS gate failed: {} {}",
-        String::from_utf8_lossy(&output.stdout),
+        "Native worker HTTPS gate failed (stdout retained in contract log): {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    eprintln!("{}", String::from_utf8_lossy(&output.stdout));
 }
 
 #[tokio::test]

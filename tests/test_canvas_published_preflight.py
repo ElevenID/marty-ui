@@ -114,18 +114,34 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
     composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
-    assert sum(line.strip() == preflight for line in script.splitlines()) == 1
-    assert sum(line.strip() == serial for line in script.splitlines()) == 1
-    assert sum(line.strip() == json_serial for line in script.splitlines()) == 1
+    assert (
+        sum(
+            line.strip() == 'timed canvas_serial "$mode" ' + preflight
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    assert (
+        sum(
+            line.strip() == "timed canvas_serial sql_logging " + serial
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    assert (
+        sum(
+            line.strip() == "timed canvas_serial json_consumer " + json_serial
+            for line in script.splitlines()
+        )
+        == 1
+    )
     assert (
         "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
         in script
     )
+    assert script.count(composition_full + ' >"$composition_log" 2>&1 &') == 1
     assert (
-        script.splitlines().count(composition_full + ' >"$composition_log" 2>&1 &') == 1
-    )
-    assert (
-        script.splitlines().count(
+        script.count(
             'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
             'MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" '
             + worker_full
@@ -133,6 +149,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         )
         == 1
     )
+    assert 'tail --pid="$pid"' in script
+    assert (
+        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
+        in script
+    )
+    assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in script
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
@@ -391,6 +413,7 @@ else
   fi
   if [[ "$*" == *--test-threads=4* ]]; then
     printf 'full target %s\n' "$name"
+    printf 'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"%s","duration_ms":1,"status":"ok"}\n' "$name"
     [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
     if [[ "$name" == worker-contract ]]; then
       case "$TEST_FAST_OWNER_ROW" in
@@ -435,8 +458,9 @@ else
       done
       [[ -f "started-$other" ]] || exit 25
       if [[ "$TEST_FAILURE" == signal ]]; then
+        trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
         [[ "$name" != contract ]] || kill -TERM "$TEST_PARENT_PID"
-        sleep 1
+        while :; do sleep 0.05; done
       fi
     fi
   fi
@@ -995,7 +1019,55 @@ def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
     assert "Canvas worker target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert {call[1] for call in calls if call[0] == "stopped"} == {
+        "contract",
+        "worker-contract",
+    }
     assert not list(tmp_path.glob("canvas-targets.*"))
+
+
+def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
+    result, _ = shell_case()
+    assert result.returncode == 0, result.stderr
+    live = result.stdout.split("Canvas composition target exit:", 1)[0]
+    assert live.count('"name":"contract"') == 1
+    assert live.count('"name":"worker-contract"') == 1
+    assert (
+        result.stdout.count('MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"')
+        == 2
+    )
+    assert (
+        result.stdout.count(
+            'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"worker-contract"'
+        )
+        == 2
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"'
+        )
+        == 1
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"worker-contract"'
+        )
+        == 1
+    )
+
+
+def test_explicit_database_close_cannot_emit_second_cleanup_timing():
+    source = (
+        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
+    ).read_text(encoding="utf-8")
+    cleanup = source.split("    fn cleanup(&mut self) -> Result<(), String> {", 1)[1]
+    cleanup = cleanup.split("    pub fn close(mut self)", 1)[0]
+    assert cleanup.index("if self.probe.is_none() && self.postgres.is_none()") < (
+        cleanup.index('PhaseTimer::start("cleanup", "published_database_removal")')
+    )
+    assert "self.probe = None;" in cleanup
+    assert "self.postgres = None;" in cleanup
+    assert "self.cleanup()" in source.split("impl Drop for PublishedDatabase {", 1)[1]
 
 
 @pytest.mark.parametrize("failed", ["contract", "worker-contract"])
