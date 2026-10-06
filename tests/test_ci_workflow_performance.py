@@ -409,7 +409,10 @@ done < "$SYNTHETIC_PATHS_FILE"
         text=True,
         capture_output=True,
         check=False,
-        timeout=10,
+        # This executes the complete tracked-source ownership proof, not just
+        # a string classifier. Bound hangs without treating runner load as
+        # failure evidence; no ownership or full-plan fallback is relaxed.
+        timeout=30,
         env=environment,
     )
     assert result.returncode == 0, result.stderr
