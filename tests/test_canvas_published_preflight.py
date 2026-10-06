@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import runpy
 import shutil
 import subprocess
+import sys
 import tempfile
+from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -141,7 +142,7 @@ def assert_renewal_registration(script, source, name, owner):
 @pytest.mark.parametrize("name,owner", RENEWAL_GATES)
 def test_renewal_gates_require_real_owned_database_and_cleanup(name, owner):
     source = (
-        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     assert_renewal_registration(SCRIPT.read_text(encoding="utf-8"), source, name, owner)
 
@@ -155,7 +156,7 @@ def test_renewal_gate_registration_rejects_weakened_qualification(
 ):
     script = SCRIPT.read_text(encoding="utf-8")
     source = (
-        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     line = next(line for line in script.splitlines() if f"'{name}: test'" in line)
     if mutation == "missing":
@@ -186,6 +187,7 @@ def shell_case(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     doubles = {
+        "python3": f'#!/usr/bin/env bash\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
         "docker": r"""#!/usr/bin/env bash
 set -euo pipefail
 record=docker
@@ -228,7 +230,7 @@ else
   [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
   [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
-  [[ "$7" == marty-service-acceptance ]] || exit 90
+  [[ "$7" == marty-canvas-acceptance ]] || exit 90
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
   if [[ "$TEST_FAILURE" == missing-executable ]]; then
     printf './does-not-exist\n'
@@ -339,8 +341,7 @@ fi
         composition = [
             line
             for line in lines
-            if line.startswith("heartbeat_readiness_")
-            or line.startswith("json_consumer_diagnostic_")
+            if line.startswith(("heartbeat_readiness_", "json_consumer_diagnostic_"))
         ]
         worker = [line for line in lines if line not in composition]
         if duplicate_across_targets:
@@ -372,7 +373,10 @@ fi
                         {
                             "reason": "compiler-artifact",
                             "package_id": "path+file:///checkout/rust/services/issuance#marty-issuance-service@0.1.0",
-                            "target": {"name": "marty-issuance-service", "kind": ["bin"]},
+                            "target": {
+                                "name": "marty-issuance-service",
+                                "kind": ["bin"],
+                            },
                             "profile": {"test": False},
                             "executable": "__ISSUANCE_BINARY__",
                         },
@@ -411,6 +415,7 @@ source "$CONTRACT_SOURCE" "$@"
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
         calls = [
             line.split("|") for line in log.read_text(encoding="utf-8").splitlines()
@@ -921,7 +926,7 @@ def test_preflight_group_owner_runs_exact_modes(tmp_path, monkeypatch, qualifica
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "path+file:///checkout/rust/crates/service-acceptance#marty-service-acceptance@0.1.0",
+                "package_id": "path+file:///checkout/rust/crates/canvas-acceptance#marty-canvas-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
@@ -994,7 +999,7 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
             json.dumps(entry)
             for entry in (
                 artifact("marty-issuance-service", stale),
-                artifact("marty-service-acceptance", acceptance),
+                artifact("marty-canvas-acceptance", acceptance),
             )
         )
         + "\n",

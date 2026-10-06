@@ -57,7 +57,7 @@
     "canvas-worker-result-oracle.json": "docs/rust-migrations/canvas-worker-result-parity.md"
   },
   "standalone_scenarios": {
-    "canvas-worker-final-completion-race-scenarios.json": "rust/crates/service-acceptance/tests/canvas_published_worker_contract.rs",
+    "canvas-worker-final-completion-race-scenarios.json": "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
     "canvas-worker-image-startup-scenarios.json": "scripts/test_canvas_worker_image_startup.py"
   }
 }

@@ -9,6 +9,8 @@
 !contracts/**
 contracts/canvas-worker-oracle-producers.json
 contracts/canvas-worker-oracle-script-imports.json
+contracts/canvas-worker-startup-current-inputs.json
+contracts/canvas-worker-tier-obligations.json
 !services/
 !services/entrypoint.sh
 !services/auth/

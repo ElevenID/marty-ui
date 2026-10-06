@@ -100,7 +100,7 @@ mod runtime_failure_diagnostics;
 fn composition_source_root_matches_acceptance_package_root() {
     let root = canvas_published_database::repository_root();
     assert_eq!(base_runtime_container::lexical_source_root().unwrap(), root);
-    for package in ["rust/services/issuance", "rust/crates/service-acceptance"] {
+    for package in ["rust/services/issuance", "rust/crates/canvas-acceptance"] {
         assert_eq!(
             canvas_published_database::repository_root_from(&root.join(package)),
             Some(root.as_path()),

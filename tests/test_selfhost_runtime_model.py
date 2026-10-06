@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
 SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
 ADAPTER = "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
-PACKAGED = "rust/crates/service-acceptance/tests/support/selfhost_packaged_runtime.rs"
-SIDECAR = "rust/crates/service-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+PACKAGED = "rust/crates/canvas-acceptance/tests/support/selfhost_packaged_runtime.rs"
+SIDECAR = "rust/crates/canvas-acceptance/tests/support/selfhost_runtime_sidecar.rs"
 NAME = (
     "actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references"
 )
@@ -73,7 +73,7 @@ def test_actual_extracted_runtime_model_is_mandatory():
 
 
 def assert_public_image_loader_connected(reader):
-    source = reader("rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs")
+    source = reader("rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs")
     runtime = reader(PACKAGED)
     sidecar = reader(SIDECAR)
     assert '#[path = "support/selfhost_packaged_runtime.rs"]' in source
@@ -206,7 +206,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
         source = read(name)
         replacements = {
             "source": (
-                "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs",
+                "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
                 "selfhost_packaged_runtime::run_isolated_child()",
             ),
             "runner": (

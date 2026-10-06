@@ -98,10 +98,16 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
-                  # Only the release-collected inventory tests consume these
-                  # manifests; service image contexts exclude them. Other
-                  # corpora and unknown test paths retain broad selection.
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json)
+                  # Rust-lane startup evidence or compiled-test discovery
+                  # consumes these inputs; release tests validate ownership.
+                  rust=true
+                  release=true
+                  ;;
+                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
+                  # These exact test-only sources run in release pytest. Their
+                  # manifest inputs retain the Rust discovery/evidence owner;
+                  # unknown siblings and corpora remain conservatively broad.
                   release=true
                   ;;
                 rust/*|proto/*|contracts/*)
@@ -702,9 +708,30 @@ jobs:
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash
-        run: >-
-          cargo test --locked --workspace --no-run --timings --message-format=json
-          > "$RUNNER_TEMP/rust-test-artifacts.json"
+        run: |
+          set -euo pipefail
+          artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
+          if [[ "${{ matrix.lane }}" == contracts ]]; then
+            cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
+          else
+            : > "$artifacts"
+            cargo test --locked -p marty-canvas-acceptance \
+              --test canvas_published_worker_contract \
+              --test canvas_published_schema_contract \
+              --no-run --timings --message-format=json >> "$artifacts"
+            cargo test --locked -p marty-issuance-service \
+              --lib --test canvas_oauth_behavior --test issuance-behavior \
+              --no-run --timings --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-issuance-service \
+              --bin marty-issuance-service --bin marty-canvas-sync-worker \
+              --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-gateway --bin marty-gateway \
+              --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-flow --bin marty-flow \
+              --message-format=json >> "$artifacts"
+            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              "$artifacts" target
+          fi
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts'
         shell: bash
@@ -753,13 +780,13 @@ jobs:
             sh -ceu '
               cargo build --locked --offline --quiet -p marty-issuance-service --bin marty-issuance-service
               cargo build --locked --offline --quiet -p marty-gateway --bin marty-gateway
-              cargo test --locked --offline -p marty-service-acceptance \
+              cargo test --locked --offline -p marty-canvas-acceptance \
                 --test canvas_published_schema_contract --no-run --message-format=json
             ' > "$compat_artifacts"
           compat_executable="$(jq -sr '
             [.[] | select(.reason == "compiler-artifact")
             | select(.target.name == "canvas_published_schema_contract")
-            | select(.package_id | contains("#marty-service-acceptance@"))
+            | select(.package_id | contains("#marty-canvas-acceptance@"))
             | select(.executable != null) | .executable] | unique
             | if length == 1 then .[0] else error("Expected one Bookworm-compatible base runtime executable") end
           ' "$compat_artifacts")"
@@ -885,6 +912,7 @@ jobs:
           fi
           grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
       - name: Prepare database contract executables
+        if: matrix.lane == 'contracts'
         working-directory: rust
         shell: bash
         run: |
@@ -1109,9 +1137,6 @@ jobs:
           cp "$verification_postgres_executable" target/debug/verification-postgres-contract
           cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
-          # The Canvas PostgreSQL contract launches this actual binary and sends
-          # POSIX signals. A test-harness executable is not a substitute.
-          test -x target/debug/marty-canvas-sync-worker
       - name: Preflight published worker parity in two isolated groups
         if: matrix.lane == 'canvas'
         working-directory: rust
@@ -1144,7 +1169,7 @@ jobs:
             set +e
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
-              cargo test --locked --workspace >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+              cargo test --locked --workspace --exclude marty-canvas-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")
@@ -1394,6 +1419,16 @@ jobs:
           path: ${{ runner.temp }}/rust-build-evidence/
           if-no-files-found: warn
           retention-days: 2
+      # Upload only after the entire Canvas job succeeds. The Rust test wrote
+      # this file after its live comparison, native replay, and owned cleanup.
+      - name: Preserve fresh full-main startup attestation
+        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canvas-startup-fresh-run.json
+          if-no-files-found: error
+          retention-days: 14
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes

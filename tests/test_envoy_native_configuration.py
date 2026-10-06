@@ -159,7 +159,7 @@ def assert_registration(source, runner, workflow):
 def registration_inputs():
     return (
         (
-            ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
         ).read_text(encoding="utf-8"),
         (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
             encoding="utf-8"

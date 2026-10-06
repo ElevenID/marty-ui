@@ -8,7 +8,7 @@ NAME = "flow_actual_main_boots_rendered_base_and_preserves_public_admission"
 
 def test_public_flow_main_gate_is_registered_and_required():
     target = (
-        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text()
     assert f"async fn {NAME}()" in target
     body = target.split(f"async fn {NAME}()", 1)[1].split("\n}", 1)[0]
@@ -26,7 +26,7 @@ def test_public_flow_main_gate_is_registered_and_required():
 
 def test_public_flow_gate_uses_real_main_and_retains_historical_gates():
     helper = (
-        ROOT / "rust/crates/service-acceptance/tests/support/flow_public_startup.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/support/flow_public_startup.rs"
     ).read_text()
     assert '"marty-flow.exe"' in helper and '"marty-flow"' in helper
     assert ".env_clear()" in helper
