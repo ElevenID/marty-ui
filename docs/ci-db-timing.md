@@ -34,9 +34,9 @@ template (`worker_validation_template`); all other probes retain
 per-scenario duration or proof that an adjacent parallel test log line owns a
 particular probe. They contain no fixture contents or dynamic identifiers.
 The native REST worker harness separately times each corpus-owned `scenario`,
-plus its own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS fixture,
-not PostgreSQL seeding. A case's scenario duration includes its nested setup,
-worker run, assertions, and cleanup, so these durations must not be added.
+plus its own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS
+fixture, not PostgreSQL seeding. A case's scenario duration includes its nested
+setup, worker run, assertions, and cleanup, so these durations must not be added.
 The PostgreSQL cleanup duration measures resource removal, not the subsequent
 exact-absence verification; a successful removal can still fail that verification
 and fail the test. Explicit close and the following Rust destructor produce one
