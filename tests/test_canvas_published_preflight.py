@@ -54,6 +54,11 @@ CURRENT_REGISTRATION_COUNT = 166
 CURRENT_REGISTRATION_SHA256 = (
     "74d9216c5c22c8f6446c79b397a2e6024b7f78741b19476e8555f6823a60d9d9"
 )
+PRIVATE_IP_PG = "didcomm_renewal_private_ip_refusal_preserves_published_rows"
+NEW_REGISTRATION_COUNT = 167
+NEW_REGISTRATION_SHA256 = (
+    "38a2ba7d161448622df763cb926fb0e67bfb5e648c000f36d2bb590e1170c3a1"
+)
 
 
 def required_registrations():
@@ -67,13 +72,19 @@ def required_registrations():
 
 def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     names = required_registrations()
-    assert len(names) == CURRENT_REGISTRATION_COUNT
+    assert len(names) == NEW_REGISTRATION_COUNT
     assert len(names) == len(set(names))
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        NEW_REGISTRATION_SHA256
+    )
+    assert names.count(PRIVATE_IP_PG) == 1
+    prior = [name for name in names if name != PRIVATE_IP_PG]
+    assert len(prior) == CURRENT_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(prior).encode()).hexdigest() == (
         CURRENT_REGISTRATION_SHA256
     )
     assert names.count(RENDERED_CONFIG) == 1
-    historical = [name for name in names if name != RENDERED_CONFIG]
+    historical = [name for name in prior if name != RENDERED_CONFIG]
     assert len(historical) == MANDATORY_REGISTRATION_COUNT
     assert hashlib.sha256("\n".join(historical).encode()).hexdigest() == (
         MANDATORY_REGISTRATION_SHA256
@@ -117,6 +128,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
         "  exit 1\n"
         "}\n"
+        "[[ $(grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
+        "  echo 'Published-SQL renewal private-IP refusal proof did not execute and complete exactly once' >&2\n"
+        "  exit 1\n"
+        "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
     )
@@ -124,6 +139,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
 
 
 RENEWAL_GATES = [
+    (
+        PRIVATE_IP_PG,
+        "didcomm_composed_delivery::run_renewal_private_ip_refusal",
+    ),
     (
         "renewal_postgres_binding_and_same_successor_recovery_are_fenced",
         "renewal_binding_postgres::run",
@@ -165,6 +184,37 @@ def assert_renewal_registration(script, source, name, owner):
     assert "canvas_published_database::PublishedDatabase::start()" in body
     assert f"{owner}(&owned.url).await;" in body
     assert "owned.close_verified().unwrap();" in body
+    if name == PRIVATE_IP_PG:
+        marker = 'println!("\\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");'
+        assert body.count(marker) == 1
+        assert body.index("owned.close_verified().unwrap();") < body.index(marker)
+
+
+def test_renewal_private_ip_pg_owner_keeps_real_adapter_and_fence_assertions() -> None:
+    support = (
+        ROOT / "rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs"
+    ).read_text(encoding="utf-8")
+    graph = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs"
+    ).read_text(encoding="utf-8")
+    required = (
+        "PostgresCredentialRepository::new(",
+        "PostgresCredentialLifecycle::new(",
+        "NativeInitiationDidcommDelivery::new(",
+        "DidcommEndpointValidator::new(false)",
+        "fresh_initiation::services(",
+        "CredentialRenewalService::new(",
+        "NativeDidcommError::EndpointNotPublic",
+        "InitiationDidcommTransportClaimOutcome::Absent",
+        "snapshot(pool, &id).await",
+        "builder.calls.load(Ordering::SeqCst), 0",
+        "transport.attempts.load(Ordering::SeqCst), 0",
+    )
+    for token in required:
+        assert token in support
+    assert "pub(super) async fn run_renewal_private_ip_refusal" in graph
+    assert "renewal::run_private_ip_refusal(&pool).await;" in graph
 
 
 @pytest.mark.parametrize("name,owner", RENEWAL_GATES)
@@ -334,6 +384,12 @@ else
         missing) ;;
         duplicate) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
       esac
+      case "${TEST_PRIVATE_IP_PG_MARKER:-ok}" in
+        ok) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\nok\n' 'private-ip-pg' ;;
+        missing) ;;
+        duplicate) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
+      esac
     fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
@@ -383,6 +439,7 @@ fi
         qualification=False,
         fast_owner_row="ok",
         config_marker="ok",
+        private_ip_pg_marker="ok",
     ):
         lines = (
             registrations
@@ -393,7 +450,12 @@ fi
             line
             for line in lines
             if line.startswith(
-                ("heartbeat_readiness_", "json_consumer_diagnostic_", RENDERED_CONFIG)
+                (
+                    "heartbeat_readiness_",
+                    "json_consumer_diagnostic_",
+                    RENDERED_CONFIG,
+                    PRIVATE_IP_PG,
+                )
             )
         ]
         worker = [line for line in lines if line not in composition]
@@ -444,6 +506,7 @@ fi
                 "TEST_FAILURE": failure,
                 "TEST_FAST_OWNER_ROW": fast_owner_row,
                 "TEST_RENDERED_CONFIG_MARKER": config_marker,
+                "TEST_PRIVATE_IP_PG_MARKER": private_ip_pg_marker,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
@@ -554,6 +617,29 @@ def test_rendered_config_marker_must_complete_exactly_once(shell_case, marker):
 
 def test_rendered_config_marker_accepts_interleaved_harness_output(shell_case):
     result, calls = shell_case(["full"], config_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_renewal_private_ip_pg_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], private_ip_pg_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "Published-SQL renewal private-IP refusal proof did not execute"
+        in result.stderr
+    )
+
+
+def test_renewal_private_ip_pg_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], private_ip_pg_marker="prefixed")
     assert result.returncode == 0, result.stderr
     assert any(
         call[:2] == ["child", "contract"] and "--test-threads=4" in call

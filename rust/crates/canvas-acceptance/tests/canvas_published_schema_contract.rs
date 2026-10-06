@@ -404,6 +404,20 @@ async fn didcomm_renewal_http_composes_real_delivery_and_renewal_links() {
     owned.close_verified().unwrap();
 }
 
+#[tokio::test]
+async fn didcomm_renewal_private_ip_refusal_preserves_published_rows() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renewal private-IP refusal requires the exact-owned published schema gate");
+        return;
+    }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    didcomm_composed_delivery::run_renewal_private_ip_refusal(&owned.url).await;
+    owned.close_verified().unwrap();
+    println!("\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");
+}
+
 #[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
 mod didcomm_native_grpc_fixture;
 
