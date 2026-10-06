@@ -147,6 +147,13 @@ def test_failed_rerun_removes_prior_evidence(proof, monkeypatch):
     assert not proof.evidence.exists()
 
 
+def test_opt_in_is_required_before_any_child_can_claim_completion(proof, monkeypatch):
+    monkeypatch.delenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")
+    with pytest.raises(ValueError, match="opt-in is required"):
+        proof.module["run"](proof.executable)
+    assert not proof.evidence.exists()
+
+
 @pytest.mark.parametrize(
     "mutation", ["duplicate", "harness", "other-package", "missing"]
 )
