@@ -1,7 +1,17 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-06 checkpoint). The Canvas acceptance targets and their base-runtime, Flow, DIDComm, renewal, and Kubernetes support now have an acceptance-package owner. Later merged slices mapped more runtime dependencies in shadow mode, moved pure fixture matrices to fast owners, and selected proven test-only inputs without weakening protected merge validation. Gateway-to-Issuance and Gateway-to-Signing acceptance ownership and the separate Canvas package have merged. Fresh startup evidence was produced on main, but its enclosing full workflow failed and cannot authorize release or reuse. UI #1124 remains in hosted validation; nightly release qualification remains incomplete. No whole-pipeline speedup is attributed to those ownership changes.
+Status: active implementation (2026-10-06 refreshed checkpoint). Gateway and Canvas
+acceptance ownership, narrow compatibility code and further fast test layers have
+merged, including UI #1124 at `e9f140e00`. UI #1126 is open at `ce70c40bd`; both
+corrected release-check jobs passed, but complete hosted and protected validation
+remain pending. The reviewed unit/renewal follow-up is unpublished; the separate
+roster component draft is deferred for lifecycle/qualification reasons. Core #352
+merged its authenticated presentation-proof API, but UI migration and nightly
+release qualification remain incomplete. Earlier failed main evidence remains
+ineligible for release/reuse. No whole-pipeline speedup is attributed from these
+partial milestones. The detailed historical checkpoints below are not current
+merge-status claims.
 
 ## Objective and scope
 
@@ -50,7 +60,16 @@ Batch related, independently reviewed changes into one coherent PR when they sha
 
 2026-10-06 local A0 candidate (not yet merged or qualified): `contracts/canvas-worker-tier-obligations.json` records exactly 33 historical-reference worker cases and four preflight-capable native cases from `marty-canvas-acceptance` / `canvas_published_worker_contract`. The 37 routine `full-after-preflights` skips comprise 33 historical replays, two timeout/lease native preflights already executed in the same run, and two mixed-roster/body-timeout native matrices excluded from the routine tier. All four native cases run as preflights in weekly/manual full qualification, then are skipped only in that later target invocation with same-run proof. Each named case has a unique assertion summary; the inventory identifies its Rust target/source, tier, test layer, independent-oracle role, cheapest proving layer, common inputs and case corpus/scenario or preflight inputs. The existing producer/scenario/import manifests bound the named files, not complete transitive runtime or historical-capture provenance. The additive runner guard compares this narrow inventory with the compiled worker `--list` before selection, then checks exact selected IDs from the existing libtest-filtered list. Missing, extra, duplicate, or same-count substituted cases fail closed; `--list` proves discovery and selection, not execution. Existing run-bound preflight evidence, invocation/skip commands, count checks, and protected gates remain unchanged. This slice is incomplete A0/A8 coverage: the other Canvas tests, service acceptance targets, release-stack cases, and non-Cargo consumers still require explicit obligation mapping. Do not derive additional skips or a nightly qualification claim from it.
 
-2026-10-06 A8 checkpoint: Core [#352](https://github.com/ElevenID/marty-core/pull/352) has a reviewed additive proof prerequisite (`f0303df`, 43 targeted tests passed and two pre-existing ignored); its protected CI is still running through the normal queue. The integration wallet same-key signed-VP helper has a locally reviewed draft (`a847`, 25 targeted tests passed), but independent review and nightly activation are pending. Whether `OpenBadgeLogin` requires holder-key proof remains a user policy choice; existing bearer policy defaults false. UI typed VP/submission/query, credential trust, and holder-binding work is not implemented. None of these drafts establishes nightly qualification or a measured speedup.
+2026-10-06 refreshed A8 checkpoint: Core [#352](https://github.com/ElevenID/marty-core/pull/352)
+merged at 06:06:38 UTC as `d949f65362b63157e4e4ecee23ea4610a6411089` after
+protected validation. Its additive authenticated presentation-proof API had 43
+targeted tests passing and two pre-existing ignored cases. The integration wallet
+same-key signed-VP helper remains a locally reviewed unpublished draft (`a847`,
+25 targeted tests passed). UI typed VP/submission/query and credential-trust
+integration remain incomplete. Existing `OpenBadgeLogin` bearer/holder-binding
+defaults remain unchanged; a new holder-key requirement is not implied by this
+maintenance work. Neither the merged Core prerequisite nor the wallet draft
+establishes nightly qualification or a measured pipeline speedup.
 
 2026-10-05 checkpoint: [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) added owned mixed-roster/body-reader tests, retained native timeout/lease checks on routine CI, and moved 33 pinned historical process replays to weekly/manual full qualification. [#1106](https://github.com/ElevenID/marty-ui/pull/1106) merged the requirement for successful full qualification on the exact main SHA before stable tag preparation; a new main commit requires a new full run. The nightly release path is not yet implemented, and no nightly speedup is claimed.
 
