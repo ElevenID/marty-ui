@@ -13,6 +13,9 @@ import subprocess
 import sys
 import tempfile
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from canvas_worker_owned_process import OwnedProcess, OwnedProcessError  # noqa: E402
+
 
 TARGET = "canvas_published_schema_contract"
 PACKAGE = "#marty-canvas-acceptance@"
@@ -29,6 +32,7 @@ CASES = (
 )
 IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_SHA")
 PASSED = re.compile(r"test result: ok\. 1 passed; 0 failed; 0 ignored;")
+OUTPUT_LIMIT = 2 * 1024 * 1024
 
 
 def executable_from_artifacts(artifacts: Path) -> Path:
@@ -77,9 +81,30 @@ def verify(executable: Path) -> bool:
     try:
         with evidence_path().open(encoding="ascii") as source:
             actual = json.load(source)
+        if not isinstance(actual, dict) or type(actual.get("schema")) is not int:
+            return False
         return actual == expected(executable)
     except (OSError, UnicodeError, ValueError, KeyError, json.JSONDecodeError):
         return False
+
+
+def run_case(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+    """Bound the whole Rust child and reap its owned renderer process group."""
+    if sys.platform != "linux":
+        raise ValueError("Early Canvas config proof requires Linux process containment")
+    with tempfile.TemporaryFile() as output:
+        child = OwnedProcess(command, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            status = child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            raise ValueError("Canvas config proof child exceeded deadline") from error
+        finally:
+            child.cleanup(timeout=10)
+        output.seek(0)
+        result = output.read(OUTPUT_LIMIT + 1)
+        if len(result) > OUTPUT_LIMIT:
+            raise ValueError("Canvas config proof output exceeded limit")
+        return subprocess.CompletedProcess(command, status, result.decode("utf-8"), "")
 
 
 def run(executable: Path) -> None:
@@ -88,17 +113,16 @@ def run(executable: Path) -> None:
     identity = expected(executable)
     if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
         raise ValueError("Canvas published-schema test opt-in is required")
-    listing = subprocess.run(
-        [str(executable), "--list"], capture_output=True, text=True, check=True
-    ).stdout.splitlines()
+    listed = run_case([str(executable), "--list"], 30)
+    if listed.returncode:
+        raise ValueError("Canvas config proof test discovery failed")
+    listing = listed.stdout.splitlines()
     for name, marker in CASES:
         if listing.count(f"{name}: test") != 1:
             raise ValueError(f"Canvas config proof is not uniquely registered: {name}")
-        result = subprocess.run(
+        result = run_case(
             [str(executable), name, "--exact", "--nocapture", "--test-threads=1"],
-            capture_output=True,
-            text=True,
-            check=False,
+            600,
         )
         output = result.stdout + result.stderr
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
@@ -129,7 +153,7 @@ def main() -> int:
             run(executable_from_artifacts(Path(sys.argv[2])))
             return 0
         return 0 if verify(Path(sys.argv[2])) else 1
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (OSError, UnicodeError, ValueError, OwnedProcessError) as error:
         print(f"Canvas config proof failed: {error}", file=sys.stderr)
         return 1
 

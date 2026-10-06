@@ -3,6 +3,7 @@
 import hashlib
 import json
 import runpy
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,9 +55,10 @@ def test_early_proof_requires_exact_discovery_and_actual_success(
     markers = dict(proof.module["CASES"])
     calls = []
 
-    def fake_run(arguments, **_kwargs):
+    def fake_run(arguments, _timeout):
         calls.append(arguments)
         if arguments[1] == "--list":
+            assert _timeout == 30
             listing = [f"{name}: test" for name in names]
             if mutation == "missing-list":
                 listing.pop()
@@ -64,6 +66,7 @@ def test_early_proof_requires_exact_discovery_and_actual_success(
                 listing.append(listing[-1])
             return SimpleNamespace(stdout="\n".join(listing), stderr="", returncode=0)
         name = arguments[1]
+        assert _timeout == 600
         marker = markers[name]
         if mutation == "missing-marker":
             marker = ""
@@ -80,7 +83,7 @@ def test_early_proof_requires_exact_discovery_and_actual_success(
             returncode=1 if mutation == "nonzero" else 0,
         )
 
-    monkeypatch.setattr(proof.module["subprocess"], "run", fake_run)
+    monkeypatch.setitem(proof.module["run"].__globals__, "run_case", fake_run)
     with pytest.raises(ValueError):
         proof.module["run"](proof.executable)
     assert not proof.evidence.exists()
@@ -91,15 +94,17 @@ def test_verified_proof_is_bound_to_executable_source_run_and_tier(proof, monkey
     cases = proof.module["CASES"]
     calls = []
 
-    def fake_run(arguments, **_kwargs):
+    def fake_run(arguments, _timeout):
         calls.append(arguments)
         if arguments[1] == "--list":
+            assert _timeout == 30
             return SimpleNamespace(
                 stdout="\n".join(f"{name}: test" for name, _ in cases),
                 stderr="",
                 returncode=0,
             )
         marker = dict(cases)[arguments[1]]
+        assert _timeout == 600
         return SimpleNamespace(
             stdout=f"test {arguments[1]} ... {marker}\nok\n"
             "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured;\n",
@@ -107,7 +112,7 @@ def test_verified_proof_is_bound_to_executable_source_run_and_tier(proof, monkey
             returncode=0,
         )
 
-    monkeypatch.setattr(proof.module["subprocess"], "run", fake_run)
+    monkeypatch.setitem(proof.module["run"].__globals__, "run_case", fake_run)
     proof.module["run"](proof.executable)
     assert proof.module["verify"](proof.executable)
     assert len(calls) == 3
@@ -133,14 +138,16 @@ def test_verified_proof_is_bound_to_executable_source_run_and_tier(proof, monkey
     for invalid in ("{}", "not-json", json.dumps({**record, "cases": []})):
         proof.evidence.write_text(invalid, encoding="ascii")
         assert not proof.module["verify"](proof.executable)
+    proof.evidence.write_text(json.dumps({**record, "schema": True}), encoding="ascii")
+    assert not proof.module["verify"](proof.executable)
 
 
 def test_failed_rerun_removes_prior_evidence(proof, monkeypatch):
     proof.evidence.write_text("stale", encoding="ascii")
-    monkeypatch.setattr(
-        proof.module["subprocess"],
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(stdout="", stderr="", returncode=0),
+    monkeypatch.setitem(
+        proof.module["run"].__globals__,
+        "run_case",
+        lambda *_args: SimpleNamespace(stdout="", stderr="", returncode=0),
     )
     with pytest.raises(ValueError):
         proof.module["run"](proof.executable)
@@ -151,6 +158,47 @@ def test_opt_in_is_required_before_any_child_can_claim_completion(proof, monkeyp
     monkeypatch.delenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")
     with pytest.raises(ValueError, match="opt-in is required"):
         proof.module["run"](proof.executable)
+    assert not proof.evidence.exists()
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_whole_child_is_reaped_and_timeout_never_records_proof(
+    proof, monkeypatch, timeout
+):
+    events = []
+
+    class FakeOwnedProcess:
+        def __init__(self, command, *, stdout, stderr):
+            assert command == [str(proof.executable), "--list"]
+            assert stderr == subprocess.STDOUT
+            self.output = stdout
+            events.append("start")
+
+        def wait(self, *, timeout):
+            assert timeout == 30
+            events.append("wait")
+            if timeout_case:
+                raise subprocess.TimeoutExpired("owned child", timeout)
+            self.output.write(b"one: test\n")
+            return 0
+
+        def cleanup(self, *, timeout):
+            assert timeout == 10
+            events.append("cleanup")
+
+    timeout_case = timeout
+    monkeypatch.setattr(proof.module["sys"], "platform", "linux")
+    monkeypatch.setitem(
+        proof.module["run_case"].__globals__, "OwnedProcess", FakeOwnedProcess
+    )
+    if timeout:
+        with pytest.raises(ValueError, match="deadline"):
+            proof.module["run_case"]([str(proof.executable), "--list"], 30)
+    else:
+        result = proof.module["run_case"]([str(proof.executable), "--list"], 30)
+        assert result.stdout == "one: test\n"
+        assert result.returncode == 0
+    assert events == ["start", "wait", "cleanup"]
     assert not proof.evidence.exists()
 
 
