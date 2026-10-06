@@ -215,6 +215,7 @@ async fn native_evidence_projects_to_the_language_neutral_verified_facts_contrac
         nonce: Some("nonce-1".into()),
         audience: Some("verifier-1".into()),
         context: serde_json::Map::new(),
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
 
@@ -263,6 +264,7 @@ async fn malformed_presentations_are_denied_without_invoking_any_format_kernel()
         nonce: None,
         audience: None,
         context: serde_json::Map::new(),
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
 
@@ -294,6 +296,7 @@ async fn unavailable_trust_backend_fails_closed_before_cryptographic_verificatio
         nonce: None,
         audience: None,
         context: serde_json::Map::new(),
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
 
@@ -324,6 +327,7 @@ async fn cross_tenant_trust_profile_evidence_is_rejected_before_kernel_use() {
         nonce: None,
         audience: None,
         context: serde_json::Map::new(),
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
 
@@ -374,6 +378,7 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
             nonce: Some("nonce-1".into()),
             audience: Some("verifier-1".into()),
             context: context_vector["context"].as_object().unwrap().clone(),
+            oid4vp_transport: None,
             trusted_internal_context,
         };
         (orchestrator, request)
@@ -392,6 +397,23 @@ async fn only_authenticated_internal_oid4vp_context_can_project_replay_evidence(
     assert_eq!(
         trusted["replay_check_verified"],
         context_vector["expected_replay_check_verified"]
+    );
+
+    // Transport structure is not proof: it must not alter the current facts.
+    let (orchestrator, mut request) = verify(true);
+    let query = serde_json::json!({"credentials": [{"id": "member"}]});
+    request.oid4vp_transport = Some(marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+        query_kind: marty_oid4vp_contract::QueryKind::Dcql,
+        query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
+        query_document: query,
+        presentation_submission: Some(serde_json::json!({"id": "untrusted"})),
+        vp_token_raw: "header.payload.signature".into(),
+        verifier_client_id: "did:web:verifier.example".into(),
+        request_nonce: "nonce-with-at-least-32-bytes-1234567890".into(),
+    });
+    assert_eq!(
+        orchestrator.verify(&policy(), &request).await.unwrap(),
+        trusted
     );
 
     let (orchestrator, request) = verify(false);
@@ -448,6 +470,7 @@ async fn cedar_authorization_uses_only_complete_verified_evidence_and_denies_wea
             nonce: None,
             audience: None,
             context: serde_json::Map::new(),
+            oid4vp_transport: None,
             trusted_internal_context: false,
         };
 
@@ -505,6 +528,7 @@ async fn presentation_only_verification_bypasses_credential_trust_status_and_ced
         nonce: Some("nonce-1".into()),
         audience: Some("verifier-1".into()),
         context: serde_json::Map::new(),
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
 
@@ -593,6 +617,7 @@ async fn exact_mdoc_direct_pin_relationship_supplies_governed_lifecycle_status()
         nonce: Some("nonce-1".into()),
         audience: Some("verifier-1".into()),
         context: serde_json::Map::new(),
+        oid4vp_transport: None,
         trusted_internal_context: false,
     };
 

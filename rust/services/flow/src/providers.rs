@@ -119,6 +119,9 @@ pub struct PresentationEvaluationRequest {
     pub presentation: String,
     pub nonce: String,
     pub audience: String,
+    /// Unverified OID4VP transport metadata, never policy evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oid4vp_transport: Option<marty_oid4vp_contract::Oid4vpEvaluationTransportV1>,
     #[serde(default)]
     pub context: BTreeMap<String, Value>,
 }

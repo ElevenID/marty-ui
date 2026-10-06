@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration, Utc};
+use marty_oid4vp_contract::{digest_query_document, Oid4vpEvaluationTransportV1, QueryKind};
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_messaging::Message;
 use mmf_push::{payload_digest, WebhookDestinationRegistry, MINIMUM_EVENT_SECRET_BYTES};
@@ -183,6 +184,8 @@ pub async fn prepare_verification_submission(
         .to_owned();
     let presentation_submission = parse_presentation_submission(input.presentation_submission)?;
     let raw_vp_token = input.vp_token;
+    let oid4vp_transport =
+        evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
     let vp_token = select_vp_token(&raw_vp_token);
     let mut evaluation_context = BTreeMap::new();
     if context
@@ -245,6 +248,7 @@ pub async fn prepare_verification_submission(
                     presentation: vp_token.clone(),
                     nonce: nonce.clone(),
                     audience: audience.clone(),
+                    oid4vp_transport,
                     context: evaluation_context,
                 })
                 .await
@@ -485,6 +489,90 @@ fn parse_presentation_submission(
         return Err(FlowVerificationSubmissionError::InvalidPresentationSubmission);
     }
     Ok(Some(parsed))
+}
+
+fn evaluation_transport(
+    context: &Map<String, Value>,
+    submission: Option<&Value>,
+    vp_token_raw: &str,
+) -> Result<Option<Oid4vpEvaluationTransportV1>, FlowVerificationSubmissionError> {
+    if context.get("oid4vp_verifier_context") != Some(&Value::Bool(true)) {
+        return Ok(None);
+    }
+    // Only the request actually emitted and retained by Flow is authoritative.
+    // Legacy records lacking that request keep their current evaluation path;
+    // malformed recorded requests are not silently promoted to metadata.
+    let Some(message) = context
+        .get("mip_messages")
+        .and_then(Value::as_object)
+        .and_then(|messages| messages.get("presentation_request"))
+    else {
+        return Ok(None);
+    };
+    let payload = message.get("payload").and_then(Value::as_object).ok_or(
+        FlowVerificationSubmissionError::InvalidContext("presentation_request"),
+    )?;
+    for (field, expected) in [
+        ("nonce", context.get("nonce")),
+        ("client_id", context.get("oid4vp_client_id")),
+    ] {
+        if expected.and_then(Value::as_str).is_none_or(str::is_empty)
+            || payload.get(field).and_then(Value::as_str) != expected.and_then(Value::as_str)
+        {
+            return Err(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_binding",
+            ));
+        }
+    }
+    let dcql = payload.get("dcql_query").filter(|value| !value.is_null());
+    let definition = payload
+        .get("presentation_definition")
+        .filter(|value| !value.is_null());
+    let (query_kind, query_document) = match (dcql, definition) {
+        (Some(document), None) => (QueryKind::Dcql, document),
+        (None, Some(document)) => (QueryKind::PresentationExchange, document),
+        _ => {
+            return Err(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_query",
+            ))
+        }
+    };
+    let transport = Oid4vpEvaluationTransportV1 {
+        query_kind,
+        query_document: query_document.clone(),
+        query_digest: digest_query_document(query_document).map_err(|_| {
+            FlowVerificationSubmissionError::InvalidContext("presentation_request_query")
+        })?,
+        presentation_submission: submission.cloned(),
+        vp_token_raw: vp_token_raw.into(),
+        verifier_client_id: payload
+            .get("client_id")
+            .and_then(Value::as_str)
+            .ok_or(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_binding",
+            ))?
+            .into(),
+        request_nonce: payload
+            .get("nonce")
+            .and_then(Value::as_str)
+            .ok_or(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_binding",
+            ))?
+            .into(),
+    };
+    match transport.validate_transport() {
+        Ok(()) => {}
+        // Existing accepted payloads can exceed the narrower canonical
+        // transport limits. Keep their legacy policy path, but expose no
+        // transport metadata that a future signed-VP route could accept.
+        Err(marty_oid4vp_contract::Oid4vpContractError::SizeLimit(_)) => return Ok(None),
+        Err(_) => {
+            return Err(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_query",
+            ));
+        }
+    }
+    Ok(Some(transport))
 }
 
 fn select_vp_token(raw: &str) -> String {

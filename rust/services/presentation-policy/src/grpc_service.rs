@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
 use chrono::Utc;
+use marty_oid4vp_contract::{
+    Oid4vpEvaluationTransportV1, QueryKind, MAX_QUERY_DOCUMENT_BYTES,
+    MAX_TRANSPORT_CLIENT_ID_BYTES, MAX_TRANSPORT_RAW_TOKEN_BYTES, MAX_WALLET_SUBMISSION_BYTES,
+};
 use mmf_security::{SecurityError, ServiceTokenAuthenticator};
 use serde_json::{json, Map, Value};
 use tonic::{Request, Response, Status};
@@ -293,12 +297,17 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
                 .cloned()
                 .ok_or_else(|| Status::invalid_argument("context_json must be a JSON object"))?
         };
+        let oid4vp_transport = input
+            .oid4vp_transport
+            .map(parse_oid4vp_transport)
+            .transpose()?;
         let evaluation = EvaluatePresentationRequest {
             vp_token: Value::String(input.vp_token),
             trust_profile_id: optional_text(input.trust_profile_id),
             nonce: optional_text(input.nonce),
             audience: optional_text(input.audience),
             context,
+            oid4vp_transport,
             trusted_internal_context: true,
         };
         let result = evaluate_policy(self.verification.as_ref(), &policy, &evaluation)
@@ -316,6 +325,49 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
             status: "serving".into(),
         }))
     }
+}
+
+fn parse_oid4vp_transport(
+    input: crate::presentation_policy_proto::Oid4vpEvaluationTransport,
+) -> Result<Oid4vpEvaluationTransportV1, Status> {
+    let query_kind = match input.query_kind.as_str() {
+        "dcql" => QueryKind::Dcql,
+        "presentation_exchange" => QueryKind::PresentationExchange,
+        _ => return Err(Status::invalid_argument("unsupported OID4VP query kind")),
+    };
+    if input.query_document_json.len() > MAX_QUERY_DOCUMENT_BYTES
+        || input.vp_token_raw.len() > MAX_TRANSPORT_RAW_TOKEN_BYTES
+        || input.verifier_client_id.len() > MAX_TRANSPORT_CLIENT_ID_BYTES
+        || input
+            .presentation_submission_json
+            .as_ref()
+            .is_some_and(|value| value.len() > MAX_WALLET_SUBMISSION_BYTES)
+    {
+        return Err(Status::invalid_argument(
+            "OID4VP transport exceeds its byte limit",
+        ));
+    }
+    let query_document = serde_json::from_str(&input.query_document_json)
+        .map_err(|_| Status::invalid_argument("OID4VP query is not valid JSON"))?;
+    let presentation_submission = input
+        .presentation_submission_json
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|_| Status::invalid_argument("OID4VP submission is not valid JSON"))?;
+    let transport = Oid4vpEvaluationTransportV1 {
+        query_kind,
+        query_document,
+        query_digest: input.query_digest,
+        presentation_submission,
+        vp_token_raw: input.vp_token_raw,
+        verifier_client_id: input.verifier_client_id,
+        request_nonce: input.request_nonce,
+    };
+    transport
+        .validate_transport()
+        .map_err(|_| Status::invalid_argument("OID4VP transport is invalid"))?;
+    Ok(transport)
 }
 
 fn policy_message(policy: &PresentationPolicy) -> Result<PolicyResponse, Status> {
@@ -454,5 +506,49 @@ fn http_status(error: PresentationPolicyHttpError) -> Status {
         422 => Status::invalid_argument(error.detail),
         503 => Status::unavailable(error.detail),
         _ => Status::internal(error.detail),
+    }
+}
+
+#[cfg(test)]
+mod oid4vp_transport_tests {
+    use super::*;
+
+    #[test]
+    fn bounded_transport_accepts_lossless_legacy_and_rejects_mutations() {
+        let query = json!({"credentials": [{"id": "member"}]});
+        let wire = crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            query_kind: "dcql".into(),
+            query_document_json: query.to_string(),
+            query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
+            presentation_submission_json: Some(
+                json!({"id": "legacy", "descriptor_map": [], "extension": true}).to_string(),
+            ),
+            vp_token_raw: "header.payload.signature".into(),
+            verifier_client_id: "did:web:verifier.example".into(),
+            request_nonce: "nonce-with-at-least-32-bytes-1234567890".into(),
+        };
+        let parsed = parse_oid4vp_transport(wire.clone()).unwrap();
+        assert_eq!(parsed.query_kind, QueryKind::Dcql);
+        assert!(parsed.compatible_presentation_submission().is_err());
+        assert_eq!(parsed.presentation_submission.unwrap()["extension"], true);
+
+        let mut wrong_digest = wire.clone();
+        wrong_digest.query_digest = "0".repeat(64);
+        assert_eq!(
+            parse_oid4vp_transport(wrong_digest).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        let mut wrong_kind = wire.clone();
+        wrong_kind.query_kind = "untrusted".into();
+        assert_eq!(
+            parse_oid4vp_transport(wrong_kind).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
+        let mut oversized = wire;
+        oversized.query_document_json = "x".repeat(MAX_QUERY_DOCUMENT_BYTES + 1);
+        assert_eq!(
+            parse_oid4vp_transport(oversized).unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
     }
 }

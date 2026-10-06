@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const MAX_WALLET_SUBMISSION_BYTES: usize = 1_048_576;
+/// Current HTTP body ceiling, distinct from the canonical wallet contract.
+pub const MAX_TRANSPORT_RAW_TOKEN_BYTES: usize = 2_097_152;
+pub const MAX_TRANSPORT_CLIENT_ID_BYTES: usize = 4_096;
 pub const MAX_FROZEN_REQUEST_BYTES: usize = 262_144;
 pub const MAX_EVIDENCE_PROJECTION_BYTES: usize = 1_048_576;
 pub const MAX_IDENTIFIER_BYTES: usize = 255;
@@ -200,6 +203,54 @@ pub enum CredentialStatusMode {
 pub enum QueryKind {
     Dcql,
     PresentationExchange,
+}
+
+/// Additive internal transport, not authenticated verification evidence.
+/// The wallet submission stays lossless because legacy inputs are less strict
+/// than [`PresentationSubmission`]. A signed-VP consumer must require and
+/// validate the compatible typed form before using descriptor mappings.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Oid4vpEvaluationTransportV1 {
+    pub query_kind: QueryKind,
+    pub query_document: Value,
+    pub query_digest: String,
+    pub presentation_submission: Option<Value>,
+    /// Exact wallet field before legacy single-token selection.
+    pub vp_token_raw: String,
+    /// Exact verifier binding emitted with the request, independent of the
+    /// legacy evaluation audience (which is empty for DC API).
+    pub verifier_client_id: String,
+    pub request_nonce: String,
+}
+
+impl std::fmt::Debug for Oid4vpEvaluationTransportV1 {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Oid4vpEvaluationTransportV1")
+            .field("query_kind", &self.query_kind)
+            .field("query_digest", &self.query_digest)
+            .field(
+                "presentation_submission_present",
+                &self.presentation_submission.is_some(),
+            )
+            .field("vp_token_raw_bytes", &self.vp_token_raw.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Oid4vpEvaluationTransportV1 {
+    pub fn compatible_presentation_submission(
+        &self,
+    ) -> Result<Option<PresentationSubmission>, crate::Oid4vpContractError> {
+        self.presentation_submission
+            .as_ref()
+            .map(|value| {
+                serde_json::from_value(value.clone())
+                    .map_err(|_| crate::Oid4vpContractError::Deserialization)
+            })
+            .transpose()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

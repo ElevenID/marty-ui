@@ -20,6 +20,24 @@ use uuid::Uuid;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
+#[test]
+fn http_json_cannot_claim_internal_oid4vp_transport_or_trust() {
+    let base = json!({
+        "vp_token": "header.payload.signature",
+        "trust_profile_id": null,
+        "nonce": null,
+        "audience": null,
+        "context": {"oid4vp_verifier_context": true}
+    });
+    let parsed: EvaluatePresentationRequest = serde_json::from_value(base.clone()).unwrap();
+    assert!(!parsed.trusted_internal_context);
+    assert!(parsed.oid4vp_transport.is_none());
+    let mut spoofed = base;
+    spoofed["trusted_internal_context"] = json!(true);
+    spoofed["oid4vp_transport"] = json!({"query_kind": "dcql"});
+    assert!(serde_json::from_value::<EvaluatePresentationRequest>(spoofed).is_err());
+}
+
 #[derive(Default)]
 struct Repository(Mutex<BTreeMap<Uuid, PresentationPolicy>>);
 

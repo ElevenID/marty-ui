@@ -317,6 +317,7 @@ async fn execute() -> Result<Value, String> {
             ("oid4vp_verifier_context".into(), json!(true)),
             ("replay_check_verified".into(), json!(true)),
         ]),
+        oid4vp_transport: None,
         trusted_internal_context: true,
     };
     let facts = orchestrator

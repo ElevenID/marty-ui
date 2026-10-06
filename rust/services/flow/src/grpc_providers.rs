@@ -457,6 +457,11 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                                 "evaluation context is not serializable",
                             )
                         })?,
+                        oid4vp_transport: request
+                            .oid4vp_transport
+                            .as_ref()
+                            .map(encode_oid4vp_transport)
+                            .transpose()?,
                     },
                     &request.principal_id,
                 )?,
@@ -614,6 +619,41 @@ fn invalid_response(provider: &'static str, message: &str) -> FlowProviderError 
     }
 }
 
+fn encode_oid4vp_transport(
+    transport: &marty_oid4vp_contract::Oid4vpEvaluationTransportV1,
+) -> Result<crate::presentation_policy_proto::Oid4vpEvaluationTransport, FlowProviderError> {
+    transport.validate_transport().map_err(|_| {
+        invalid_response(
+            "presentation_policy",
+            "OID4VP transport metadata is invalid",
+        )
+    })?;
+    Ok(
+        crate::presentation_policy_proto::Oid4vpEvaluationTransport {
+            query_kind: match transport.query_kind {
+                marty_oid4vp_contract::QueryKind::Dcql => "dcql",
+                marty_oid4vp_contract::QueryKind::PresentationExchange => "presentation_exchange",
+            }
+            .into(),
+            query_document_json: serde_json::to_string(&transport.query_document).map_err(
+                |_| invalid_response("presentation_policy", "query is not serializable"),
+            )?,
+            query_digest: transport.query_digest.clone(),
+            presentation_submission_json: transport
+                .presentation_submission
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|_| {
+                    invalid_response("presentation_policy", "submission is not serializable")
+                })?,
+            vp_token_raw: transport.vp_token_raw.clone(),
+            verifier_client_id: transport.verifier_client_id.clone(),
+            request_nonce: transport.request_nonce.clone(),
+        },
+    )
+}
+
 fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
@@ -621,6 +661,41 @@ fn nonempty(value: String) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_oid4vp_transport_serializes_without_promoting_proof() {
+        let query = serde_json::json!({"credentials": [{"id": "member"}]});
+        let submission = serde_json::json!({"id": "legacy", "descriptor_map": [], "extra": true});
+        let metadata = marty_oid4vp_contract::Oid4vpEvaluationTransportV1 {
+            query_kind: marty_oid4vp_contract::QueryKind::Dcql,
+            query_digest: marty_oid4vp_contract::digest_query_document(&query).unwrap(),
+            query_document: query.clone(),
+            presentation_submission: Some(submission.clone()),
+            vp_token_raw: r#"{"member":["header.payload.signature"]}"#.into(),
+            verifier_client_id: "did:web:verifier.example".into(),
+            request_nonce: "nonce-with-at-least-32-bytes-1234567890".into(),
+        };
+        let wire = encode_oid4vp_transport(&metadata).unwrap();
+        assert_eq!(wire.query_kind, "dcql");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&wire.query_document_json).unwrap(),
+            query
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                wire.presentation_submission_json.as_deref().unwrap()
+            )
+            .unwrap(),
+            submission
+        );
+        assert_eq!(wire.query_digest, metadata.query_digest);
+        assert_eq!(wire.vp_token_raw, metadata.vp_token_raw);
+        assert_eq!(wire.verifier_client_id, metadata.verifier_client_id);
+        assert_eq!(wire.request_nonce, metadata.request_nonce);
+        let mut invalid = metadata;
+        invalid.query_digest = "0".repeat(64);
+        assert!(encode_oid4vp_transport(&invalid).is_err());
+    }
 
     #[test]
     fn principal_request_carries_service_and_user_authentication() {

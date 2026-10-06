@@ -16,6 +16,7 @@ chrono.workspace = true
 hex.workspace = true
 marty-crypto.workspace = true
 marty-oid4vci = { workspace = true, features = ["wallet"] }
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-verification.workspace = true
 mmf-core.workspace = true
 mmf-platform.workspace = true
