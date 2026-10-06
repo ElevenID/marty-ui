@@ -4237,7 +4237,7 @@ dependencies = [
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=fc7d029883d25a13c216756ff3e0056f2739c662#fc7d029883d25a13c216756ff3e0056f2739c662"
+source = "git+https://github.com/ElevenID/marty-core?rev=a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7#a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
