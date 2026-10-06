@@ -14,6 +14,7 @@ struct SpyRepository {
     target: CanvasSyncTarget,
     expected_job_id: String,
     validation_error: Option<CanvasSyncProcessingError>,
+    validation_calls: Mutex<usize>,
     failure_status: CanvasSyncJobStatus,
     failures: Mutex<Vec<FailureCall>>,
     failed_job_ids: Mutex<Vec<String>>,
@@ -62,6 +63,7 @@ impl CanvasSyncWorkerRepository for SpyRepository {
         Ok(true)
     }
     async fn validate_target(&self, _: &CanvasSyncTarget) -> Result<(), CanvasSyncProcessingError> {
+        *self.validation_calls.lock().unwrap() += 1;
         self.validation_error.clone().map_or(Ok(()), Err)
     }
     async fn renew_lease(
@@ -113,6 +115,7 @@ fn spy_repository(
         leased: Mutex::new(Some(job)),
         target,
         validation_error,
+        validation_calls: Mutex::new(0),
         failure_status,
         failures: Mutex::new(Vec::new()),
         failed_job_ids: Mutex::new(Vec::new()),
@@ -168,6 +171,31 @@ impl CanvasSyncProcessor for ProcessorMustNotRun {
         _: &crate::canvas_sync_lease::CanvasSyncLease,
     ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
         panic!("terminal repository validation must precede processor dispatch")
+    }
+}
+
+struct TerminalProcessor {
+    code: &'static str,
+    summary: &'static str,
+    calls: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl CanvasSyncProcessor for TerminalProcessor {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    async fn process(
+        &self,
+        target: &CanvasSyncTarget,
+        lease: &crate::canvas_sync_lease::CanvasSyncLease,
+    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+        assert_eq!(target.id, "processor-target");
+        assert_eq!(lease.job_id, "processor-job");
+        assert_eq!(lease.worker_id, "processor-worker");
+        *self.calls.lock().unwrap() += 1;
+        Err(CanvasSyncProcessingError::terminal(self.code, self.summary))
     }
 }
 
@@ -514,6 +542,182 @@ async fn terminal_validation_errors_reach_actual_worker_dead_letter_port() {
         assert_eq!(
             *repository.failed_job_ids.lock().unwrap(),
             ["validation-job"]
+        );
+        assert_eq!(
+            *repository.heartbeats.lock().unwrap(),
+            [
+                ("scheduling".into(), 0, true),
+                ("processing".into(), 1, true),
+                ("idle".into(), 0, true),
+            ],
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn terminal_processor_errors_reach_actual_worker_dead_letter_port() {
+    // The seven codes and summaries below are independent handoff expectations.
+    // The real processor test owns dispatch/classification; this test injects
+    // its terminal result and proves only the actual worker's port/accounting.
+    // Published PostgreSQL and native replay retain durable/race authority.
+    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-validation-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-validation-oracle.json"
+    ))
+    .unwrap();
+    let expected = [
+        (
+            "invalid_roster_batch",
+            "canvas_roster_configuration_invalid",
+            "Canvas roster bounds are invalid",
+        ),
+        (
+            "invalid_roster_limit",
+            "canvas_roster_configuration_invalid",
+            "Canvas roster bounds are invalid",
+        ),
+        (
+            "invalid_roster_bounds_do_not_preempt_application",
+            "canvas_lti_identity_missing",
+            "Canvas application has no verified LTI subject",
+        ),
+        (
+            "invalid_evidence_requirements",
+            "canvas_requirements_invalid",
+            "Canvas evidence requirements are invalid",
+        ),
+        (
+            "missing_lti_subject",
+            "canvas_lti_identity_missing",
+            "Canvas application has no verified LTI subject",
+        ),
+        (
+            "unsupported_award_candidate",
+            "canvas_sync_target_type_unsupported",
+            "Canvas target type has no authoritative processor",
+        ),
+        (
+            "template_removed_after_application_read",
+            "canvas_application_template_unavailable",
+            "Canvas application template is unavailable",
+        ),
+    ];
+    let registered = scenarios["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["boundary"] == "processor_dispatch")
+        .map(|case| case["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(scenarios["cases"].as_array().unwrap().len(), 20);
+    assert_eq!(registered.len(), expected.len());
+    assert_eq!(
+        registered
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+
+    let now = Utc::now();
+    let target = CanvasSyncTarget {
+        id: "processor-target".into(),
+        organization_id: "processor-org".into(),
+        platform_id: "platform".into(),
+        binding_id: "binding".into(),
+        target_type: CanvasSyncTargetType::LearnerApplication,
+        logical_key: "learner".into(),
+        application_id: Some("processor-application".into()),
+        candidate_id: None,
+        enabled: true,
+        schedule_seconds: 900,
+        config_version: 11,
+        metadata: Map::new(),
+        created_at: now,
+    };
+    let job = CanvasSyncJob {
+        id: "processor-job".into(),
+        organization_id: target.organization_id.clone(),
+        target_id: target.id.clone(),
+        target_config_version: target.config_version,
+        status: CanvasSyncJobStatus::Leased,
+        attempt_count: 1,
+        max_attempts: 8,
+        available_at: now,
+        lease_owner: Some("processor-worker".into()),
+        lease_expires_at: Some(now + TimeDelta::seconds(120)),
+        created_at: now,
+        started_at: Some(now),
+    };
+    for (name, code, summary) in expected {
+        let scenario = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let frozen = &oracle[name]["observations"][0]["jobs"][0];
+        assert_eq!(scenario["code"], code, "{name}");
+        assert_eq!(frozen["last_error_code"], code, "{name}");
+        assert_eq!(frozen["last_error_summary"], summary, "{name}");
+        assert_eq!(frozen["status"], "dead_letter", "{name}");
+        let repository = spy_repository(
+            job.clone(),
+            target.clone(),
+            None,
+            CanvasSyncJobStatus::DeadLetter,
+        );
+        let calls = Arc::new(Mutex::new(0));
+        let oauth = Arc::new(NoOAuth);
+        let worker = CanvasSyncWorker::new(
+            repository.clone(),
+            oauth.clone(),
+            oauth.clone(),
+            oauth,
+            Arc::new(TerminalProcessor {
+                code,
+                summary,
+                calls: calls.clone(),
+            }),
+            worker_config("processor-worker", "processor-org"),
+        );
+        let cycle = worker.run_cycle().await.unwrap();
+        assert_eq!(*repository.validation_calls.lock().unwrap(), 1, "{name}");
+        assert_eq!(*calls.lock().unwrap(), 1, "{name}");
+        assert_eq!(
+            (
+                cycle.scheduled,
+                cycle.leased,
+                cycle.retried,
+                cycle.succeeded,
+                cycle.dead_lettered,
+                cycle.oauth_revocations_succeeded,
+                cycle.oauth_revocations_retried,
+            ),
+            (0, 1, 0, 0, 1, 0, 0),
+            "{name}"
+        );
+        assert_eq!(
+            *repository.failures.lock().unwrap(),
+            vec![(
+                code.into(),
+                summary.into(),
+                None,
+                true,
+                "processor-worker".into(),
+                11,
+            )],
+            "{name}"
+        );
+        assert_eq!(
+            *repository.failed_job_ids.lock().unwrap(),
+            ["processor-job"]
         );
         assert_eq!(
             *repository.heartbeats.lock().unwrap(),
