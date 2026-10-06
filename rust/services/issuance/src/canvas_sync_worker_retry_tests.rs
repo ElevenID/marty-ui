@@ -12,12 +12,25 @@ type FailureCall = (String, String, Option<u64>, bool, String, i32);
 struct SpyRepository {
     leased: Mutex<Option<CanvasSyncJob>>,
     target: CanvasSyncTarget,
+    expected_job_id: String,
+    validation_error: Option<CanvasSyncProcessingError>,
+    failure_status: CanvasSyncJobStatus,
     failures: Mutex<Vec<FailureCall>>,
+    failed_job_ids: Mutex<Vec<String>>,
+    heartbeats: Mutex<Vec<(String, usize, bool)>>,
 }
 
 #[async_trait]
 impl CanvasSyncWorkerRepository for SpyRepository {
-    async fn upsert_heartbeat(&self, _: &WorkerHeartbeat) -> Result<(), CanvasSyncRepositoryError> {
+    async fn upsert_heartbeat(
+        &self,
+        heartbeat: &WorkerHeartbeat,
+    ) -> Result<(), CanvasSyncRepositoryError> {
+        self.heartbeats.lock().unwrap().push((
+            heartbeat.phase.into(),
+            heartbeat.leased_jobs,
+            heartbeat.processor_configured,
+        ));
         Ok(())
     }
     async fn enqueue_due(
@@ -49,7 +62,7 @@ impl CanvasSyncWorkerRepository for SpyRepository {
         Ok(true)
     }
     async fn validate_target(&self, _: &CanvasSyncTarget) -> Result<(), CanvasSyncProcessingError> {
-        Ok(())
+        self.validation_error.clone().map_or(Ok(()), Err)
     }
     async fn renew_lease(
         &self,
@@ -83,9 +96,42 @@ impl CanvasSyncWorkerRepository for SpyRepository {
             worker_id.to_owned(),
             version,
         ));
-        assert_eq!(job.id, "retry-job");
-        Ok(Some(CanvasSyncJobStatus::Retry))
+        assert_eq!(job.id, self.expected_job_id);
+        self.failed_job_ids.lock().unwrap().push(job.id.clone());
+        Ok(Some(self.failure_status))
     }
+}
+
+fn spy_repository(
+    job: CanvasSyncJob,
+    target: CanvasSyncTarget,
+    validation_error: Option<CanvasSyncProcessingError>,
+    failure_status: CanvasSyncJobStatus,
+) -> Arc<SpyRepository> {
+    Arc::new(SpyRepository {
+        expected_job_id: job.id.clone(),
+        leased: Mutex::new(Some(job)),
+        target,
+        validation_error,
+        failure_status,
+        failures: Mutex::new(Vec::new()),
+        failed_job_ids: Mutex::new(Vec::new()),
+        heartbeats: Mutex::new(Vec::new()),
+    })
+}
+
+fn worker_config(worker_id: &str, organization_id: &str) -> CanvasSyncWorkerConfig {
+    let mut config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([
+        ("CANVAS_SYNC_WORKER_ID".into(), worker_id.into()),
+        ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "true".into()),
+        (
+            "CANVAS_PILOT_ORGANIZATION_IDS".into(),
+            organization_id.into(),
+        ),
+    ]))
+    .unwrap();
+    config.job_timeout = Duration::from_secs(5);
+    config
 }
 
 struct RateLimitedProcessor(u64);
@@ -105,6 +151,23 @@ impl CanvasSyncProcessor for RateLimitedProcessor {
             "Canvas rate limited one or more authoritative evidence reads",
         )
         .with_retry_after(self.0))
+    }
+}
+
+struct ProcessorMustNotRun;
+
+#[async_trait]
+impl CanvasSyncProcessor for ProcessorMustNotRun {
+    fn configured(&self) -> bool {
+        true
+    }
+
+    async fn process(
+        &self,
+        _: &CanvasSyncTarget,
+        _: &crate::canvas_sync_lease::CanvasSyncLease,
+    ) -> Result<CanvasSyncResult, CanvasSyncProcessingError> {
+        panic!("terminal repository validation must precede processor dispatch")
     }
 }
 
@@ -221,19 +284,14 @@ async fn retry_hint_reaches_the_actual_worker_failure_port() {
         started_at: Some(now),
     };
     for hint in [0, 60, 86_400] {
-        let repository = Arc::new(SpyRepository {
-            leased: Mutex::new(Some(job.clone())),
-            target: target.clone(),
-            failures: Mutex::new(Vec::new()),
-        });
+        let repository = spy_repository(
+            job.clone(),
+            target.clone(),
+            None,
+            CanvasSyncJobStatus::Retry,
+        );
         let oauth = Arc::new(NoOAuth);
-        let mut config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([
-            ("CANVAS_SYNC_WORKER_ID".into(), "retry-worker".into()),
-            ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "true".into()),
-            ("CANVAS_PILOT_ORGANIZATION_IDS".into(), "retry-org".into()),
-        ]))
-        .unwrap();
-        config.job_timeout = Duration::from_secs(5);
+        let config = worker_config("retry-worker", "retry-org");
         let worker = CanvasSyncWorker::new(
             repository.clone(),
             oauth.clone(),
@@ -264,6 +322,202 @@ async fn retry_hint_reaches_the_actual_worker_failure_port() {
                 7,
             )],
             "retry hint {hint}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn terminal_validation_errors_reach_actual_worker_dead_letter_port() {
+    // This test injects the repository validation result. It proves worker
+    // handoff/accounting, not PostgreSQL validation, target disablement, or
+    // preserved issued rows and ciphertext; existing adapter/native tests own
+    // those boundaries, including the three actual removal races.
+    let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-validation-scenarios.json"
+    ))
+    .unwrap();
+    let oracle: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-validation-oracle.json"
+    ))
+    .unwrap();
+    let expected = [
+        (
+            "incomplete_logical_key",
+            "canvas_sync_target_incomplete",
+            "Canvas sync target is missing logical_key",
+        ),
+        (
+            "prohibited_metadata",
+            "canvas_sync_target_contains_secret",
+            "Canvas sync target metadata contains prohibited authentication material",
+        ),
+        (
+            "binding_platform_mismatch",
+            "canvas_sync_target_scope_invalid",
+            "Canvas sync target platform or binding is unavailable",
+        ),
+        (
+            "target_disabled",
+            "canvas_sync_target_inactive",
+            "Canvas sync target, platform, or binding is inactive",
+        ),
+        (
+            "platform_disabled",
+            "canvas_sync_target_inactive",
+            "Canvas sync target, platform, or binding is inactive",
+        ),
+        (
+            "platform_archived",
+            "canvas_sync_target_inactive",
+            "Canvas sync target, platform, or binding is inactive",
+        ),
+        (
+            "binding_disabled",
+            "canvas_sync_target_inactive",
+            "Canvas sync target, platform, or binding is inactive",
+        ),
+        (
+            "binding_archived",
+            "canvas_sync_target_inactive",
+            "Canvas sync target, platform, or binding is inactive",
+        ),
+        (
+            "stale_configuration",
+            "canvas_sync_target_config_stale",
+            "Canvas sync target does not match the active binding configuration",
+        ),
+        (
+            "application_missing",
+            "canvas_sync_target_application_missing",
+            "Canvas learner synchronization target has no application",
+        ),
+        (
+            "candidate_missing",
+            "canvas_sync_target_candidate_missing",
+            "Canvas award-candidate synchronization target has no candidate",
+        ),
+        (
+            "application_removed_after_target_read",
+            "canvas_sync_target_application_invalid",
+            "Canvas learner synchronization application is unavailable",
+        ),
+        (
+            "candidate_removed_after_target_read",
+            "canvas_sync_target_candidate_invalid",
+            "Canvas award candidate is unavailable",
+        ),
+    ];
+    let registered = scenarios["cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|case| case["boundary"] != "processor_dispatch")
+        .map(|case| case["name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(scenarios["cases"].as_array().unwrap().len(), 20);
+    assert_eq!(registered.len(), expected.len());
+    assert_eq!(
+        registered
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>(),
+        expected
+            .iter()
+            .map(|(name, _, _)| *name)
+            .collect::<std::collections::BTreeSet<_>>()
+    );
+
+    let now = Utc::now();
+    let target = CanvasSyncTarget {
+        id: "validation-target".into(),
+        organization_id: "validation-org".into(),
+        platform_id: "platform".into(),
+        binding_id: "binding".into(),
+        target_type: CanvasSyncTargetType::LearnerApplication,
+        logical_key: "learner".into(),
+        application_id: Some("validation-application".into()),
+        candidate_id: None,
+        enabled: true,
+        schedule_seconds: 900,
+        config_version: 7,
+        metadata: Map::new(),
+        created_at: now,
+    };
+    let job = CanvasSyncJob {
+        id: "validation-job".into(),
+        organization_id: target.organization_id.clone(),
+        target_id: target.id.clone(),
+        target_config_version: target.config_version,
+        status: CanvasSyncJobStatus::Leased,
+        attempt_count: 1,
+        max_attempts: 8,
+        available_at: now,
+        lease_owner: Some("validation-worker".into()),
+        lease_expires_at: Some(now + TimeDelta::seconds(120)),
+        created_at: now,
+        started_at: Some(now),
+    };
+    for (name, code, summary) in expected {
+        let scenario = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let frozen = &oracle[name]["observations"][0]["jobs"][0];
+        assert_eq!(scenario["code"], code, "{name}");
+        assert_eq!(frozen["last_error_code"], code, "{name}");
+        assert_eq!(frozen["last_error_summary"], summary, "{name}");
+        assert_eq!(frozen["status"], "dead_letter", "{name}");
+        let repository = spy_repository(
+            job.clone(),
+            target.clone(),
+            Some(CanvasSyncProcessingError::terminal(code, summary)),
+            CanvasSyncJobStatus::DeadLetter,
+        );
+        let oauth = Arc::new(NoOAuth);
+        let worker = CanvasSyncWorker::new(
+            repository.clone(),
+            oauth.clone(),
+            oauth.clone(),
+            oauth,
+            Arc::new(ProcessorMustNotRun),
+            worker_config("validation-worker", "validation-org"),
+        );
+        let cycle = worker.run_cycle().await.unwrap();
+        assert_eq!(
+            (
+                cycle.leased,
+                cycle.retried,
+                cycle.succeeded,
+                cycle.dead_lettered
+            ),
+            (1, 0, 0, 1),
+            "{name}"
+        );
+        assert_eq!(
+            *repository.failures.lock().unwrap(),
+            vec![(
+                code.into(),
+                summary.into(),
+                None,
+                true,
+                "validation-worker".into(),
+                7,
+            )],
+            "{name}"
+        );
+        assert_eq!(
+            *repository.failed_job_ids.lock().unwrap(),
+            ["validation-job"]
+        );
+        assert_eq!(
+            *repository.heartbeats.lock().unwrap(),
+            [
+                ("scheduling".into(), 0, true),
+                ("processing".into(), 1, true),
+                ("idle".into(), 0, true),
+            ],
+            "{name}"
         );
     }
 }
