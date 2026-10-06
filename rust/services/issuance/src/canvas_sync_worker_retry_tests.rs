@@ -220,46 +220,50 @@ async fn retry_hint_reaches_the_actual_worker_failure_port() {
         created_at: now,
         started_at: Some(now),
     };
-    let repository = Arc::new(SpyRepository {
-        leased: Mutex::new(Some(job)),
-        target,
-        failures: Mutex::new(Vec::new()),
-    });
-    let oauth = Arc::new(NoOAuth);
-    let mut config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([
-        ("CANVAS_SYNC_WORKER_ID".into(), "retry-worker".into()),
-        ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "true".into()),
-        ("CANVAS_PILOT_ORGANIZATION_IDS".into(), "retry-org".into()),
-    ]))
-    .unwrap();
-    config.job_timeout = Duration::from_secs(5);
-    let worker = CanvasSyncWorker::new(
-        repository.clone(),
-        oauth.clone(),
-        oauth.clone(),
-        oauth,
-        Arc::new(RateLimitedProcessor(86_400)),
-        config,
-    );
-    let cycle = worker.run_cycle().await.unwrap();
-    assert_eq!(
-        (
-            cycle.leased,
-            cycle.retried,
-            cycle.succeeded,
-            cycle.dead_lettered
-        ),
-        (1, 1, 0, 0)
-    );
-    assert_eq!(
-        *repository.failures.lock().unwrap(),
-        vec![(
-            "canvas_rate_limited".into(),
-            "Canvas rate limited one or more authoritative evidence reads".into(),
-            Some(86_400),
-            false,
-            "retry-worker".into(),
-            7,
-        )]
-    );
+    for hint in [0, 60, 86_400] {
+        let repository = Arc::new(SpyRepository {
+            leased: Mutex::new(Some(job.clone())),
+            target: target.clone(),
+            failures: Mutex::new(Vec::new()),
+        });
+        let oauth = Arc::new(NoOAuth);
+        let mut config = CanvasSyncWorkerConfig::from_values(&BTreeMap::from([
+            ("CANVAS_SYNC_WORKER_ID".into(), "retry-worker".into()),
+            ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "true".into()),
+            ("CANVAS_PILOT_ORGANIZATION_IDS".into(), "retry-org".into()),
+        ]))
+        .unwrap();
+        config.job_timeout = Duration::from_secs(5);
+        let worker = CanvasSyncWorker::new(
+            repository.clone(),
+            oauth.clone(),
+            oauth.clone(),
+            oauth,
+            Arc::new(RateLimitedProcessor(hint)),
+            config,
+        );
+        let cycle = worker.run_cycle().await.unwrap();
+        assert_eq!(
+            (
+                cycle.leased,
+                cycle.retried,
+                cycle.succeeded,
+                cycle.dead_lettered
+            ),
+            (1, 1, 0, 0),
+            "retry hint {hint}"
+        );
+        assert_eq!(
+            *repository.failures.lock().unwrap(),
+            vec![(
+                "canvas_rate_limited".into(),
+                "Canvas rate limited one or more authoritative evidence reads".into(),
+                Some(hint),
+                false,
+                "retry-worker".into(),
+                7,
+            )],
+            "retry hint {hint}"
+        );
+    }
 }
