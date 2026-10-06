@@ -74,9 +74,11 @@ struct Http {
 
 #[test]
 fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_siblings() {
+    // Reviewed additive policy transport and current credential-template schema;
+    // the twelve remaining descriptor files, including issuance, are unchanged.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "3093b95919ce8a34d3308f0aff7eb2852357e47ec552871ff9664fe0d823af0c"
+        "09a396226f46afabbd9c00dce80bb53fc8ed67bfa0f740816fdaf5ec57dcbe45"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
