@@ -4,6 +4,10 @@ param(
     [Parameter(Mandatory = $true)][string]$MaintenanceReceipt,
     [Parameter(Mandatory = $true)][string]$NativeReceipt,
     [Parameter(Mandatory = $true)][string]$ApplicationFile,
+    [Parameter(Mandatory = $true)][string]$IssuerChainFile,
+    [Parameter(Mandatory = $true)][string]$IssuerCeremonyFile,
+    [Parameter(Mandatory = $true)][string]$CscaSessionFile,
+    [Parameter(Mandatory = $true)][string]$DscSessionFile,
     [Parameter(Mandatory = $true)][string]$FlowFile,
     [Parameter(Mandatory = $true)][string]$SessionFile,
     [Parameter(Mandatory = $true)][string]$OutputPath
@@ -31,6 +35,9 @@ $productionPostflightPath = $output + '.production-postflight.json'
 $productionRecoveryPath = $output + '.production-recovery-' + [Guid]::NewGuid().ToString('N') + '.json'
 $fenceRecheckPath = $output + '.pretransition-fence.json'
 $credentialsPretransitionPath = $output + '.credentials-pretransition.json'
+$ceremonyIntentPath = $output + '.issuer-ceremony-intent.json'
+$ceremonyPath = $output + '.issuer-ceremony.json'
+$kmsPretransitionPath = $output + '.kms-pretransition.json'
 $transitionPath = $output + '.transition.json'
 $writePath = $output + '.rust-write.json'
 $writeIntentPath = $output + '.rust-write-intent.json'
@@ -45,6 +52,31 @@ if (-not [IO.Path]::IsPathRooted($ApplicationFile) -or
 if ($applicationPath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) {
     throw 'Private Rust passport application file must be outside protected source'
+}
+$issuerChainPath = [IO.Path]::GetFullPath($IssuerChainFile)
+if (-not [IO.Path]::IsPathRooted($IssuerChainFile) -or
+    -not (Test-Path -LiteralPath $issuerChainPath -PathType Leaf) -or
+    $issuerChainPath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
+        [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Selected beta issuer chain must be an absolute file outside protected source'
+}
+$issuerCeremonyPath = [IO.Path]::GetFullPath($IssuerCeremonyFile)
+$cscaSessionPath = [IO.Path]::GetFullPath($CscaSessionFile)
+$dscSessionPath = [IO.Path]::GetFullPath($DscSessionFile)
+if (-not [IO.Path]::IsPathRooted($IssuerCeremonyFile) -or
+    -not [IO.Path]::IsPathRooted($CscaSessionFile) -or
+    -not [IO.Path]::IsPathRooted($DscSessionFile)) {
+    throw 'Governed beta issuer ceremony inputs must be absolute files'
+}
+foreach ($privatePath in @($issuerCeremonyPath, $cscaSessionPath, $dscSessionPath)) {
+    if (-not (Test-Path -LiteralPath $privatePath -PathType Leaf) -or
+        $privatePath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Governed beta issuer ceremony input must be outside protected source'
+    }
+}
+if ($cscaSessionPath -ceq $dscSessionPath) {
+    throw 'CSCA and DSC ceremonies require distinct operator sessions'
 }
 $flowPath = [IO.Path]::GetFullPath($FlowFile)
 $sessionPath = [IO.Path]::GetFullPath($SessionFile)
@@ -893,6 +925,72 @@ try {
                 -Algorithm SHA256).Hash.ToLowerInvariant()) {
         throw 'Replacement Credentials pretransition receipt changed'
     }
+    $ceremonyProof = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_aggregate_ceremony.py'),
+        '--plan', $planPath, '--application-file', $applicationPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--ceremony-file', $issuerCeremonyPath,
+        '--csca-session-file', $cscaSessionPath,
+        '--dsc-session-file', $dscSessionPath,
+        '--intent', $ceremonyIntentPath)
+    $ceremonyHash = (Get-FileHash -LiteralPath $issuerCeremonyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ceremonyProof.schema -cne 'marty.passport-beta-aggregate-ceremony/v1' -or
+        $ceremonyProof.verified -ne $true -or
+        $ceremonyProof.source_commit -cne $script:plan.source_commit -or
+        $ceremonyProof.application_file_sha256 -cne [string]$applicationProof.application_file_sha256 -or
+        $ceremonyProof.issuer_chain_file_sha256 -cne
+            (Get-FileHash -LiteralPath $issuerChainPath -Algorithm SHA256).Hash.ToLowerInvariant() -or
+        $ceremonyProof.ceremony_file_sha256 -cne $ceremonyHash -or
+        $ceremonyProof.intent_file_sha256 -cne
+            (Get-FileHash -LiteralPath $ceremonyIntentPath -Algorithm SHA256).Hash.ToLowerInvariant() -or
+        $ceremonyProof.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
+        $ceremonyProof.gateway_request_traces_verified -ne $true -or
+        $ceremonyProof.profile_creation_verified -ne $true -or
+        $ceremonyProof.certificate_chain_verified -ne $true) {
+        throw 'Governed beta issuer ceremony did not complete through signed Gateway'
+    }
+    $ceremonyJson = $ceremonyProof | ConvertTo-Json -Depth 20 -Compress
+    if (Test-Path -LiteralPath $ceremonyPath) {
+        $recordedCeremony = Get-Content -LiteralPath $ceremonyPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+        if (($recordedCeremony | ConvertTo-Json -Depth 20 -Compress) -cne $ceremonyJson) {
+            throw 'Durable beta issuer ceremony differs from current signed Gateway'
+        }
+    }
+    else {
+        Write-DurableJson -Path $ceremonyPath -Json $ceremonyJson
+    }
+    $kmsProof = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_aggregate_kms.py'),
+        '--plan', $planPath, '--application-file', $applicationPath,
+        '--issuer-chain-file', $issuerChainPath)
+    $issuerChainHash = (Get-FileHash -LiteralPath $issuerChainPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($kmsProof.schema -cne 'marty.passport-beta-aggregate-kms-pretransition/v1' -or
+        $kmsProof.verified -ne $true -or
+        $kmsProof.source_commit -cne $script:plan.source_commit -or
+        $kmsProof.application_file_sha256 -cne [string]$applicationProof.application_file_sha256 -or
+        [string]$kmsProof.issuer_chain_file_sha256 -cne $issuerChainHash -or
+        [string]$kmsProof.signing_keys_container_id -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$kmsProof.openbao_container_id -cne
+            [string]$script:plan.old_container_ids_by_service.openbao -or
+        $kmsProof.managed_kms_custody_verified -ne $true -or
+        $kmsProof.chain_verified -ne $true -or
+        $kmsProof.csca_certificate_sha256 -cne $ceremonyProof.csca_certificate_sha256 -or
+        $kmsProof.dsc_certificate_sha256 -cne $ceremonyProof.dsc_certificate_sha256 -or
+        $kmsProof.private_key_exported -ne $false) {
+        throw 'Selected beta issuer chain lacks current managed KMS proof'
+    }
+    $kmsJson = $kmsProof | ConvertTo-Json -Depth 20 -Compress
+    if (Test-Path -LiteralPath $kmsPretransitionPath) {
+        $recordedKms = Get-Content -LiteralPath $kmsPretransitionPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+        if (($recordedKms | ConvertTo-Json -Depth 20 -Compress) -cne $kmsJson) {
+            throw 'Durable beta issuer KMS proof differs from current live chain'
+        }
+    }
+    else {
+        Write-DurableJson -Path $kmsPretransitionPath -Json $kmsJson
+    }
     $owner = Invoke-RustOwnerTransition
     $firstWriteAttempt = -not (Test-Path -LiteralPath $writeIntentPath)
     if ($firstWriteAttempt) {
@@ -1112,6 +1210,10 @@ try {
         credentials_pretransition_receipt_sha256 = (Get-FileHash `
             -LiteralPath $credentialsPretransitionPath -Algorithm SHA256).Hash.ToLowerInvariant()
         credentials_pretransition = $pretransitionCheck
+        issuer_ceremony_receipt_sha256 = (Get-FileHash -LiteralPath $ceremonyPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        issuer_ceremony = $ceremonyProof
+        kms_pretransition_receipt_sha256 = (Get-FileHash -LiteralPath $kmsPretransitionPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        kms_pretransition = $kmsProof
         pretransition_fence_receipt_sha256 = (Get-FileHash `
             -LiteralPath $fenceRecheckPath -Algorithm SHA256).Hash.ToLowerInvariant()
         cutover_snapshot_file_sha256 = $script:plan.cutover_snapshot_file_sha256

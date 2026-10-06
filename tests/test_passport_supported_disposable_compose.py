@@ -80,6 +80,14 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert model["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
         "http://gateway:8000/internal/signing-keys"
     )
+    assert model["services"]["credential-template"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
+        "http://gateway:8000/internal/signing-keys"
+    )
+    direct_template_resolver = deepcopy(model)
+    direct_template_resolver["services"]["credential-template"]["environment"][
+        "SIGNING_KEYS_INTERNAL_URL"] = "http://signing-keys:8017/internal"
+    with pytest.raises(ModelPreflightError, match="credential-template runtime"):
+        validate_model(direct_template_resolver, project, SERVICES, tmp_path)
     bypass = deepcopy(model)
     bypass["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
         "http://signing-keys:8017/internal"
