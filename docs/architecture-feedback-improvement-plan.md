@@ -761,6 +761,28 @@ UI has not adopted the new crate or changed its Core pins. Compile-surface
 savings require a reviewed consumer migration; no timing saving is inferred
 from creating the boundary alone.
 
+## Assembled inventory and provenance checkpoint (2026-10-06)
+
+The unpublished assembly `831e9ddd4589ba835ca8f6db04b64d88f1aaad5e`
+passed independent interaction review and 165 targeted Python tests plus 44
+subtests in 66.78s. It adds the six renewal-profile owners with their three
+container children and the fast owner's test-only parent registration, and
+source-backed EventStream publish edges to Auth and Organization. Service
+changes still select the complete workspace; source markers and the hypothetical
+five-package EventStream closure do not establish execution or authorize a cut.
+No additional test or tier exclusion was introduced.
+
+A fresh A5 audit found no new missing source-filename edge in the current
+producer/import inventories. Original capture provenance remains incomplete:
+only two of the 39 committed `canvas-worker-*-oracle.json` files contain
+`capture_source_sha256`. These 39 files are not a one-to-one count of the 33
+historical replay cases. Installed-worker hashes and fresh startup attestations
+do not reconstruct all original helper/scenario/schema/image/runtime inputs.
+Retain weekly/manual historical replay and exact-main full release qualification.
+Do not reuse historical evidence without independently verifiable capture records
+or a controlled, fully attested capture; neither retroactively inferred hashes
+nor replacing expected outputs to match native behavior is acceptable proof.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
