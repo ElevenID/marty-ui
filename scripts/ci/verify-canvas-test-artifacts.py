@@ -35,6 +35,7 @@ def verify(artifacts: Path, target_directory: Path) -> None:
             and record.get("target", {}).get("name") == target
             and kind in record.get("target", {}).get("kind", ())
             and record.get("executable") is not None
+            and record.get("profile", {}).get("test") is (kind != "bin")
         }
         if len(matches) != 1:
             raise ValueError(
@@ -43,9 +44,9 @@ def verify(artifacts: Path, target_directory: Path) -> None:
         executable, is_test = matches.pop()
         path = Path(executable).resolve()
         if kind == "bin":
-            if is_test or path != debug / target:
+            if is_test is not False or path != debug / target:
                 raise ValueError(f"Expected a real, non-test {package}/{target} binary")
-        elif not is_test or path.parent != debug / "deps":
+        elif is_test is not True or path.parent != debug / "deps":
             raise ValueError(f"Expected a test harness for {package}/{target}")
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ValueError(f"Missing executable for {package}/{target}")

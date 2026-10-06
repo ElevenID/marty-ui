@@ -87,6 +87,35 @@ def test_exact_canvas_artifacts_are_accepted(tmp_path: Path) -> None:
     _verify(artifacts, target_dir, records)
 
 
+@pytest.mark.parametrize("index", [0, 4, 5, 8])
+@pytest.mark.parametrize(
+    "profile", [{}, {"test": None}, {"test": "false"}, {"test": 0}, {"test": 1}]
+)
+def test_canvas_artifact_requires_explicit_boolean_profile(
+    tmp_path: Path, index: int, profile: dict
+) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    records[index]["profile"] = profile
+    with pytest.raises(ValueError, match="Expected exactly one"):
+        _verify(artifacts, target_dir, records)
+
+
+def test_real_worker_is_selected_when_cargo_also_reports_its_test_harness(
+    tmp_path: Path,
+) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    harness = dict(
+        next(
+            record
+            for record in records
+            if record["target"]["name"] == "marty-canvas-sync-worker"
+        )
+    )
+    harness["profile"] = {"test": True}
+    harness["executable"] = str(target_dir / "debug/deps/marty-canvas-sync-worker-test")
+    _verify(artifacts, target_dir, [*records, harness])
+
+
 @pytest.mark.parametrize("index", [0, 2, 4, 5, 8])
 def test_missing_canvas_artifact_fails_closed(tmp_path: Path, index: int) -> None:
     artifacts, target_dir, records = _records(tmp_path)
@@ -118,5 +147,5 @@ def test_test_harness_cannot_substitute_for_real_worker_binary(
         worker["executable"] = str(
             target_dir / "debug/deps/marty-canvas-sync-worker-0123456789abcdef"
         )
-    with pytest.raises(ValueError, match="real, non-test"):
+    with pytest.raises(ValueError, match="Expected exactly one|real, non-test"):
         _verify(artifacts, target_dir, records)

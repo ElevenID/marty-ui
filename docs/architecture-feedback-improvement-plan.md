@@ -399,6 +399,25 @@ A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull
 This proposed maintenance batch records static test ownership for 23 public-protocol vectors, including rejection of ignored owners and comment-only references. It does not prove per-vector dynamic execution; the Rust workspace lane remains authoritative. It also records the source-backed Credential Template-to-Flow gRPC consumer in the shadow planner while preserving full-workspace selection for service changes. The Canvas review-main readiness helper retries within the caller's existing ten-second deadline, preserving the exact healthy JSON and live-child assertions and reporting the child exit status on failure. A focused Rust regression is added; hosted CI must compile and execute it. The assembled Python checks passed 139 tests and 17 subtests, with Ruff and direct Rust formatting checks passing. No whole-pipeline speed improvement is attributed to these pending changes.
 A1 dependency-surface inventory (2026-10-06): locked offline `cargo tree -p marty-gateway --edges normal,build,dev --prefix none --format '{p}'` on main `7ed056861` and merged #1121 branch head `98912cdc2` yields 699 versus 668 unique package entries after removing display deduplication markers and normalizing local worktree paths. Thirty-one entries disappear with no additions, including Signing Keys and its AWS KMS/SSO/STS and Smithy dependencies. This supports the package-scoped compile-boundary benefit of the ownership move; it is not a build-time measurement, and the full workspace CI still compiles the acceptance owner.
 
+### A6 Canvas compilation scope candidate (2026-10-06)
+
+The follow-up to the separate Canvas acceptance package narrows only the Canvas
+lane's host compilation: two Canvas acceptance targets, the issuance library and
+two HTTPS test targets, and real issuance, Canvas worker, Gateway, and Flow
+binaries. The contracts lane retains full workspace compilation and execution.
+Bookworm compatibility, public Docker builds, published-process preflights, and
+all Canvas test execution remain unchanged. A fail-closed artifact guard checks
+package, target, kind, explicit boolean test profile, unique executable, expected
+path, and executable presence before expensive acceptance setup. Independent
+review corrected missing/nonboolean profile acceptance and permits Cargo to
+report a worker test harness alongside its separately verified real binary.
+
+This is a reviewed local candidate, not a merged or measured speed improvement.
+Targeted policy tests and a synthetic Cargo artifact-selection experiment support
+the selectors; hosted Canvas validation is still required to prove package-scoped
+feature unification and all runtime consumers. The complete contracts lane remains
+the full-workspace qualification authority.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
