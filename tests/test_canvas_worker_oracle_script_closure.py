@@ -136,9 +136,7 @@ def scenario_inputs(source: Path) -> tuple[list[str], list[str]]:
                 raise AssertionError(f"Review formatted capture input in {source.name}")
         template = "".join(parts)
         name = Path(template).name
-        if name.startswith("canvas-worker-") and name.endswith(
-            "-scenarios.json"
-        ):
+        if name.startswith("canvas-worker-") and name.endswith("-scenarios.json"):
             assert template in {name, f"/verification/contracts/{name}"}, (
                 f"Review scenario template path in {source.name}: {template}"
             )
@@ -246,13 +244,17 @@ def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
         assert names and len(names) == len(set(names))
         if index < 2:
             # Both list branches interpolate basenames beneath scripts/.
-            assert all(Path(name).name == name and name.endswith(".py") for name in names)
+            assert all(
+                Path(name).name == name and name.endswith(".py") for name in names
+            )
             names = [f"scripts/{name}" for name in names]
         groups.append(names)
     groups.append(paths)
     for group in groups:
         assert all(path.startswith(("scripts/", "contracts/")) for path in group)
-        assert all(".." not in Path(path).parts and (ROOT / path).is_file() for path in group)
+        assert all(
+            ".." not in Path(path).parts and (ROOT / path).is_file() for path in group
+        )
     return groups
 
 
@@ -262,16 +264,42 @@ def test_historical_capture_input_graph_is_reviewed():
         "run_" + name.removesuffix(".json").replace("-", "_") + ".py"
         for name in producers["direct_runner_corpora"]
     } | set(producers["shared_runner_corpora"])
+    harness_source = HARNESS.read_text(encoding="utf-8")
+    harness = harness_mount_inputs(harness_source)
+    mounted_roots = {
+        "canvas_worker_dispatch_hooks.py",
+        "prepare_canvas_published_schema.py",
+    }
+    assert {f"scripts/{name}" for name in mounted_roots} <= set(
+        harness["literal_paths"]
+    ), "Review mounted capture entrypoint roots"
+    launchers = set(producers["standalone_runner_entries"].values())
+    assert all(
+        launcher == f"scripts/{Path(launcher).name}" for launcher in launchers
+    ), "Review standalone launcher paths"
+    entrypoint_roots = mounted_roots | {Path(launcher).name for launcher in launchers}
+    # The preparer also has a literal process edge to the operations oracle.
+    # This is a bounded static graph, not dynamic or host/image input closure.
+    runners |= entrypoint_roots
     inventory = json.loads(IMPORTS.read_text(encoding="utf-8"))
     assert set(inventory) == {
-        "schema", "purpose", "direct_imports", "launched_scripts",
-        "scenario_literals", "scenario_templates", "harness_path_syntax",
+        "schema",
+        "purpose",
+        "entrypoint_roots",
+        "direct_imports",
+        "launched_scripts",
+        "scenario_literals",
+        "scenario_templates",
+        "harness_path_syntax",
         "harness_extra_scenarios",
     }
-    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v4"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v5"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
+    )
+    assert inventory["entrypoint_roots"] == sorted(entrypoint_roots), (
+        "A standalone launcher or mounted entrypoint changed; review its roots"
     )
     actual_imports, actual_launches = capture_script_graph(runners, SCRIPTS)
     assert inventory["direct_imports"] == actual_imports, (
@@ -294,21 +322,24 @@ def test_historical_capture_input_graph_is_reviewed():
     assert inventory["scenario_templates"] == template_inputs, (
         "A capture script changed scenario templates; review its input closure"
     )
-    owned = {
-        name.replace("-oracle.json", "-scenarios.json")
-        for name in producers["direct_runner_corpora"]
-    } | {
-        name.replace("-oracle.json", "-scenarios.json")
-        for names in producers["shared_runner_corpora"].values()
-        for name in names
-    } | set(producers["standalone_scenarios"])
+    owned = (
+        {
+            name.replace("-oracle.json", "-scenarios.json")
+            for name in producers["direct_runner_corpora"]
+        }
+        | {
+            name.replace("-oracle.json", "-scenarios.json")
+            for names in producers["shared_runner_corpora"].values()
+            for name in names
+        }
+        | set(producers["standalone_scenarios"])
+    )
     assert {name for names in literal_inputs.values() for name in names} <= owned
     assert template_inputs == {
         "run_canvas_worker_oauth_revocation_oracle.py": [
             "canvas-worker-{kind}-scenarios.json"
         ]
     }, "Review dynamic scenario dispatch before reusing historical qualification"
-    harness = harness_mount_inputs(HARNESS.read_text(encoding="utf-8"))
     assert inventory["harness_path_syntax"] == {
         "scope": (
             "Static path literals and root.join syntax inside start_probe_with_scope "
@@ -316,12 +347,10 @@ def test_historical_capture_input_graph_is_reviewed():
             "inventoried. This is not complete host-mount closure."
         ),
         **harness,
-    }, (
-        "Published-process harness path syntax changed; review the bounded inventory"
-    )
+    }, "Published-process harness path syntax changed; review the bounded inventory"
     for path in harness["literal_paths"]:
         assert (ROOT / path).is_file(), f"Missing listed harness path: {path}"
-    assert harness_dynamic_helper_mounts(HARNESS.read_text(encoding="utf-8")) == [
+    assert harness_dynamic_helper_mounts(harness_source) == [
         [
             "scripts/run_canvas_validation_boundary_oracle.py",
             "scripts/run_canvas_status_provider_oracle.py",
@@ -343,8 +372,50 @@ def test_historical_capture_input_graph_is_reviewed():
         ],
     ], "Published-process dynamic helper mounts changed; review their inputs"
     assert inventory["harness_extra_scenarios"] == harness_extra_scenario_mounts(
-        HARNESS.read_text(encoding="utf-8")
+        harness_source
     ), "Scenario-dependent harness mounts changed; review the inventory"
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "test_canvas_worker_logging_reference.py",
+        "prepare_canvas_published_schema.py",
+        "canvas_worker_dispatch_hooks.py",
+    ],
+)
+def test_new_entrypoint_local_import_requires_inventory_review(tmp_path, entrypoint):
+    source = tmp_path / entrypoint
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    before, _ = capture_script_graph({entrypoint}, tmp_path)
+    (tmp_path / "new_helper.py").write_text("VALUE = 2\n", encoding="utf-8")
+    source.write_text("from new_helper import VALUE\n", encoding="utf-8")
+    after, _ = capture_script_graph({entrypoint}, tmp_path)
+    assert before != after
+    assert after[entrypoint] == ["new_helper.py"]
+    assert after["new_helper.py"] == []
+
+
+def test_preparer_process_script_change_requires_inventory_review(tmp_path):
+    preparer = tmp_path / "prepare_canvas_published_schema.py"
+    preparer.write_text(
+        'CHILD = "/verification/scripts/run_canvas_operations_oracle.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "run_canvas_operations_oracle.py").write_text(
+        "VALUE = 1\n", encoding="utf-8"
+    )
+    _, before = capture_script_graph({preparer.name}, tmp_path)
+    assert before == {preparer.name: ["run_canvas_operations_oracle.py"]}
+
+    preparer.write_text(
+        'CHILD = "/verification/scripts/new_process_oracle.py"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "new_process_oracle.py").write_text("VALUE = 2\n", encoding="utf-8")
+    _, after = capture_script_graph({preparer.name}, tmp_path)
+    assert after != before
+    assert after == {preparer.name: ["new_process_oracle.py"]}
 
 
 def test_import_graph_detects_transitive_and_dynamic_inputs(tmp_path):
@@ -415,10 +486,8 @@ def test_harness_mount_inventory_detects_new_paths_and_expressions():
         "dynamic_joins": [],
     }
     changed = source.replace("scripts/fixture.py", "scripts/new_fixture.py")
-    assert harness_mount_inputs(changed)["literal_paths"] == [
-        "scripts/new_fixture.py"
-    ]
-    changed = source.replace('root.join("scripts/fixture.py")', 'root.join(input())')
+    assert harness_mount_inputs(changed)["literal_paths"] == ["scripts/new_fixture.py"]
+    changed = source.replace('root.join("scripts/fixture.py")', "root.join(input())")
     with pytest.raises(AssertionError, match="Review new harness mount expression"):
         harness_mount_inputs(changed)
     changed = source.replace("scripts/fixture.py", "untracked/path")
@@ -469,9 +538,7 @@ def test_dynamic_helper_mount_inventory_rejects_unreviewed_inputs():
     )
     with pytest.raises(AssertionError):
         harness_dynamic_helper_mounts(changed)
-    changed = source.replace(
-        '"test_canvas_lti_https.py",', 'dynamic_helper_name(),', 1
-    )
+    changed = source.replace('"test_canvas_lti_https.py",', "dynamic_helper_name(),", 1)
     with pytest.raises(AssertionError, match="Review consumer-helper mount shape"):
         harness_dynamic_helper_mounts(changed)
     changed = source.replace(

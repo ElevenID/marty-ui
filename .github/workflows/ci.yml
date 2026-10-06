@@ -1178,6 +1178,33 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Require all Gateway Signing acceptance cases
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          acceptance_executable="$(jq -sr '
+            [.[] | select(.reason == "compiler-artifact")
+            | select(.target.name == "gateway_signing_acceptance")
+            | select(.package_id | contains("#marty-service-acceptance@"))
+            | select(.executable != null) | .executable] | unique
+            | if length == 1 then .[0] else error("Expected one Gateway Signing acceptance executable") end
+          ' "$RUNNER_TEMP/rust-test-artifacts.json")"
+          [[ -x "$acceptance_executable" ]]
+          listed_tests="$("$acceptance_executable" --list)"
+          for test_name in \
+            authenticated_gateway_reaches_remaining_rust_signing_handlers \
+            authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+            authenticated_gateway_rotates_only_a_dedicated_signing_service \
+            authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
+            authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
+            authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key; do
+            if ! grep -Fxq "$test_name: test" <<< "$listed_tests"; then
+              echo "Missing Gateway Signing acceptance case: $test_name" >&2
+              exit 1
+            fi
+          done
       - name: Exercise authenticated Signing Keys Gateway to Rust routes
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1188,16 +1215,16 @@ jobs:
           docker exec "${{ job.services.redis.id }}" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
           docker exec "${{ job.services.redis.id }}" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-            cargo test --locked -p marty-gateway --lib \
-              runtime::tests::authenticated_gateway_reaches_remaining_rust_signing_handlers \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_reaches_remaining_rust_signing_handlers \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
-            cargo test --locked -p marty-gateway --lib \
-              runtime::tests::authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_reaches_rust_managed_key_route_without_custody \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-            cargo test --locked -p marty-gateway --lib \
-              runtime::tests::authenticated_gateway_rotates_only_a_dedicated_signing_service \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_rotates_only_a_dedicated_signing_service \
               -- --ignored --exact
       - name: Exercise live Signing Keys public contracts on disposable Redis
         if: matrix.lane == 'contracts'
@@ -1255,15 +1282,15 @@ jobs:
           export MARTY_TEST_OPENBAO_TOKEN=test-only
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
           export BAO_TOKEN=test-only
-          cargo test --locked -p marty-gateway --lib \
-            runtime::tests::authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
             -- --ignored --exact
-          cargo test --locked -p marty-gateway --lib \
-            runtime::tests::authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
             -- --ignored --exact
-          test_name='runtime::tests::authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
-          cargo test --locked -p marty-gateway --lib -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-gateway --lib "$test_name" -- --ignored --exact
+            test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance -- --list | grep -Fx "$test_name: test"
+            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
           chain_test='managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys'
           cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
             -- --list | grep -Fx "$chain_test: test"
