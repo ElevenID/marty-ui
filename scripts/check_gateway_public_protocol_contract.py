@@ -12,7 +12,9 @@ import tomllib
 from typing import Any
 
 try:
-    from scripts.check_generated_protocol_bindings import assert_generated_bindings_current
+    from scripts.check_generated_protocol_bindings import (
+        assert_generated_bindings_current,
+    )
     from scripts.check_public_protocol_documentation import (
         assert_documented_public_boundary,
     )
@@ -255,13 +257,17 @@ def _assert_issued_credential_extension_contract(
         protocol_root / "schemas" / "issued-credential-lifecycle-request.json"
     )
     properties = lifecycle.get("properties", {})
-    if lifecycle.get("additionalProperties") is not False or set(properties) != {"reason"}:
+    if lifecycle.get("additionalProperties") is not False or set(properties) != {
+        "reason"
+    }:
         raise AssertionError(
             "public issued-credential lifecycle request must remain a closed reason schema"
         )
     reason = properties.get("reason", {})
     if reason.get("type") != ["string", "null"] or reason.get("maxLength") != 2_000:
-        raise AssertionError("public issued-credential lifecycle reason contract drifted")
+        raise AssertionError(
+            "public issued-credential lifecycle reason contract drifted"
+        )
 
     adapter_contract = _load_json(adapter_contract_path)
     extension = adapter_contract.get("lifecycle_request", {})
@@ -269,12 +275,17 @@ def _assert_issued_credential_extension_contract(
         raise AssertionError("issued-credential lifecycle extension must remain closed")
     for field, limit in (("reason", 2_000), ("comments", 4_000)):
         definition = extension.get(field, {})
-        if definition.get("nullable") is not True or definition.get(
-            "max_unicode_scalars"
-        ) != limit:
-            raise AssertionError(f"issued-credential lifecycle {field} extension drifted")
+        if (
+            definition.get("nullable") is not True
+            or definition.get("max_unicode_scalars") != limit
+        ):
+            raise AssertionError(
+                f"issued-credential lifecycle {field} extension drifted"
+            )
     if extension.get("comments", {}).get("blank_normalized_to_null") is not True:
-        raise AssertionError("issued-credential lifecycle comments normalization drifted")
+        raise AssertionError(
+            "issued-credential lifecycle comments normalization drifted"
+        )
 
     trust_behavior = _load_json(TRUST_BEHAVIOR_CONTRACT)
     machine_case = next(
@@ -382,7 +393,9 @@ def _rust_function_body(source: str, declaration: re.Match[str]) -> str:
     line_start = source.rfind("\n", 0, declaration.start()) + 1
     indentation = re.match(r"[ \t]*", source[line_start:]).group()
     code = _without_rust_comments(source, mask_strings=True)
-    closing = re.search(rf"(?m)^{re.escape(indentation)}\}}[ \t]*$", code[declaration.end() :])
+    closing = re.search(
+        rf"(?m)^{re.escape(indentation)}\}}[ \t]*$", code[declaration.end() :]
+    )
     if closing is None:
         raise AssertionError("Rust vector test/helper has no function boundary")
     return source[declaration.end() : declaration.end() + closing.start()]
@@ -452,7 +465,9 @@ def _without_rust_comments(source: str, *, mask_strings: bool = False) -> str:
             end_marker = '"' + raw.group(1)
             end = source.find(end_marker, index + len(raw.group()))
             end = len(source) if end < 0 else end + len(end_marker)
-            output.append(masked(source[index:end]) if mask_strings else source[index:end])
+            output.append(
+                masked(source[index:end]) if mask_strings else source[index:end]
+            )
             index = end
             continue
         if source[index] == '"':
@@ -466,7 +481,9 @@ def _without_rust_comments(source: str, *, mask_strings: bool = False) -> str:
                     break
                 else:
                     index += 1
-            output.append(masked(source[start:index]) if mask_strings else source[start:index])
+            output.append(
+                masked(source[start:index]) if mask_strings else source[start:index]
+            )
             continue
         output.append(source[index])
         index += 1

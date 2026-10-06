@@ -148,9 +148,7 @@ def test_vector_owner_guard_rejects_dead_or_nonexecuting_owners(
 
     source.write_text(original, encoding="utf-8")
     lib_source = source.parent / "lib.rs"
-    lib_source.write_text(
-        "// pub mod vector_tests;\n", encoding="utf-8"
-    )
+    lib_source.write_text("// pub mod vector_tests;\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="module is not registered"):
         _assert_rust_behavior_vector_test_owners()
 
