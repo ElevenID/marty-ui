@@ -104,11 +104,14 @@ def _is_ignored(path: str, lines: list[str]) -> bool:
 
 def _active_owner_spans(text: str, name: str) -> list[tuple[int, int]]:
     clean = _without_rust_comments(text)
-    # The shared comment lexer retains literal contents. Skip matching text
-    # inside bounded raw-string spans, without a whole-file backtracking regex.
+    # The shared comment lexer retains strings; its optional string mask does
+    # not handle Rust character literals in these owners. Bound raw-string
+    # detection here and reject syntax beyond the supported hash delimiter.
+    if re.search(r'(?<![A-Za-z0-9_])(?:b)?r#{17,}"', clean):
+        return []
     raw_spans = []
     position = 0
-    while opener := re.search(r'(?<![A-Za-z0-9_])r(#{1,16})"', clean[position:]):
+    while opener := re.search(r'(?<![A-Za-z0-9_])(?:b)?r(#{1,16})"', clean[position:]):
         start = position + opener.start()
         body_start = position + opener.end()
         end_marker = '"' + opener.group(1)
@@ -204,6 +207,8 @@ def test_source_ownership_guard_rejects_inert_and_feature_gated_wiring() -> None
         "// " + valid,
         f'r#"{valid}"#',
         f'r#"\n{valid}\n"#',
+        f'br#"\n{valid}\n"#',
+        "r" + "#" * 17 + f'"prefix"\n{valid}\n"' + "#" * 17,
         valid.replace("cfg(test)", 'cfg(feature = "test")'),
         valid.replace("cfg(test)", 'cfg(all(test, feature = "slow"))'),
         valid.replace("#[cfg(test)]\n", ""),
