@@ -59,6 +59,14 @@ NEW_REGISTRATION_COUNT = 167
 NEW_REGISTRATION_SHA256 = (
     "38a2ba7d161448622df763cb926fb0e67bfb5e648c000f36d2bb590e1170c3a1"
 )
+K8S_RENDERED_CONFIG = (
+    "resolved_kubernetes_runtime::"
+    "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
+)
+LATEST_REGISTRATION_COUNT = 168
+LATEST_REGISTRATION_SHA256 = (
+    "aea60fcdeff981e4df06b6aa58341e6f6b5bcff481954a47657dee8e0f853025"
+)
 
 
 def required_registrations():
@@ -72,13 +80,19 @@ def required_registrations():
 
 def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     names = required_registrations()
-    assert len(names) == NEW_REGISTRATION_COUNT
+    assert len(names) == LATEST_REGISTRATION_COUNT
     assert len(names) == len(set(names))
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        LATEST_REGISTRATION_SHA256
+    )
+    assert names.count(K8S_RENDERED_CONFIG) == 1
+    before_k8s = [name for name in names if name != K8S_RENDERED_CONFIG]
+    assert len(before_k8s) == NEW_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(before_k8s).encode()).hexdigest() == (
         NEW_REGISTRATION_SHA256
     )
     assert names.count(PRIVATE_IP_PG) == 1
-    prior = [name for name in names if name != PRIVATE_IP_PG]
+    prior = [name for name in before_k8s if name != PRIVATE_IP_PG]
     assert len(prior) == CURRENT_REGISTRATION_COUNT
     assert hashlib.sha256("\n".join(prior).encode()).hexdigest() == (
         CURRENT_REGISTRATION_SHA256
@@ -130,6 +144,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         "}\n"
         "[[ $(grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
         "  echo 'Published-SQL renewal private-IP refusal proof did not execute and complete exactly once' >&2\n"
+        "  exit 1\n"
+        "}\n"
+        "[[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
+        "  echo 'Resolved Kubernetes renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
         "  exit 1\n"
         "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
@@ -390,6 +408,12 @@ else
         missing) ;;
         duplicate) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
       esac
+      case "${TEST_K8S_CONFIG_MARKER:-ok}" in
+        ok) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'k8s-config' ;;
+        missing) ;;
+        duplicate) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+      esac
     fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
@@ -440,6 +464,7 @@ fi
         fast_owner_row="ok",
         config_marker="ok",
         private_ip_pg_marker="ok",
+        k8s_config_marker="ok",
     ):
         lines = (
             registrations
@@ -455,6 +480,7 @@ fi
                     "json_consumer_diagnostic_",
                     RENDERED_CONFIG,
                     PRIVATE_IP_PG,
+                    K8S_RENDERED_CONFIG,
                 )
             )
         ]
@@ -507,6 +533,7 @@ fi
                 "TEST_FAST_OWNER_ROW": fast_owner_row,
                 "TEST_RENDERED_CONFIG_MARKER": config_marker,
                 "TEST_PRIVATE_IP_PG_MARKER": private_ip_pg_marker,
+                "TEST_K8S_CONFIG_MARKER": k8s_config_marker,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
@@ -644,6 +671,55 @@ def test_renewal_private_ip_pg_marker_accepts_interleaved_harness_output(shell_c
     assert any(
         call[:2] == ["child", "contract"] and "--test-threads=4" in call
         for call in calls
+    )
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_k8s_renewal_config_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], k8s_config_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "Resolved Kubernetes renewal 2x2 configuration proof did not execute"
+        in result.stderr
+    )
+
+
+def test_k8s_renewal_config_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], k8s_config_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+def test_k8s_renewal_config_owner_is_opt_in_and_completes_after_four_cases() -> None:
+    target = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    source = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
+    ).read_text(encoding="utf-8")
+    assert (
+        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+        in target
+    )
+    owner = "fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy() {"
+    assert source.count(owner) == 1
+    body = source.split(owner, 1)[1]
+    assert "#[test]\n" + owner in source
+    assert 'if !cfg!(target_os = "linux")' in body
+    assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in body
+    assert "let prepared = Prepared::prepare()" in body
+    assert body.count("resolve(&spec, &prepared)") == 1
+    assert "(false, false), (true, false), (false, true), (true, true)" in body
+    assert body.index("assert_eq!(seen.len(), 4);") < body.index(
+        'println!("\\nRESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1");'
     )
 
 

@@ -249,6 +249,7 @@ printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_fresh_http_admission_compose
 printf '%s\n' "$all_test_names" | grep -Fx 'renewal_postgres_binding_and_same_successor_recovery_are_fenced: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_renewal_http_composes_real_delivery_and_renewal_links: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_renewal_private_ip_refusal_preserves_published_rows: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'renewal_fresh_packaged_main_delivers_both_encryption_modes: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'renewal_packaged_main_recovers_historical_keyed_offer: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_renewal_gateway_selects_native_with_required_owner_read: test'
@@ -379,6 +380,10 @@ report_target_logs "$composition_status" "$worker_status"
 }
 [[ $(grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
   echo 'Published-SQL renewal private-IP refusal proof did not execute and complete exactly once' >&2
+  exit 1
+}
+[[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
+  echo 'Resolved Kubernetes renewal 2x2 configuration proof did not execute and complete exactly once' >&2
   exit 1
 }
 python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"

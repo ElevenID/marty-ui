@@ -429,7 +429,7 @@ fn owned_url(value: &str, schemes: &[&str]) -> Result<()> {
     )
 }
 
-pub(super) fn render(value: &Value) -> Result<ResolvedRuntime> {
+fn checked_spec(value: &Value) -> Result<Spec> {
     let spec: Spec = serde_json::from_value(value.clone()).map_err(|_| ERROR)?;
     require(
         spec.inputs
@@ -470,11 +470,20 @@ pub(super) fn render(value: &Value) -> Result<ResolvedRuntime> {
             && spec.policy_directory.is_dir()
             && spec.ca_file.parent() == Some(spec.policy_directory.as_path()),
     )?;
+    Ok(spec)
+}
+
+pub(super) fn render(value: &Value) -> Result<ResolvedRuntime> {
+    let spec = checked_spec(value)?;
     let prepared = if std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() == Ok("1") {
         Prepared::from_child()?
     } else {
         Prepared::prepare()?
     };
+    resolve(&spec, &prepared)
+}
+
+fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
     let mut settings = native::Environment::from([
         ("K8S_ISSUANCE_NATIVE_ENABLED".into(), "true".into()),
         (
@@ -822,4 +831,116 @@ fn prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored
     artifact.close().unwrap();
     assert!(!path.try_exists().unwrap());
     artifact.close().unwrap();
+}
+
+#[test]
+fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy() {
+    if !cfg!(target_os = "linux") {
+        eprintln!("Kubernetes renderer qualification is Linux-only");
+        return;
+    }
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Kubernetes renewal configuration requires the configured Linux Canvas gate");
+        return;
+    }
+    // Render the real envsubst baseline once; this is not a deployed process.
+    let prepared = Prepared::prepare().expect("bounded real Kubernetes envsubst baseline");
+    let directory = tempfile::tempdir().expect("owned synthetic policy directory");
+    let ca = directory.path().join("ca.pem");
+    let policy = directory.path().join("didcomm-encryption-policy.json");
+    fs::write(&ca, b"synthetic CA fixture").unwrap();
+    fs::write(&policy, b"{}").unwrap();
+    let ca_path = ca.to_str().unwrap();
+    let policy_path = policy.to_str().unwrap();
+    let mut input = json!({
+        "inputs": {
+            "ISSUANCE_API_KEY": API_KEY,
+            "GRPC_SERVICE_TOKEN": TOKEN,
+            "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING_KEY,
+            "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
+            "INTEGRATION_SECRET_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            "PUBLIC_API_URL": "https://issuer.example",
+            "UI_BASE_URL": "http://localhost:3000",
+            "ISSUANCE_OFFER_TTL_MINUTES": "10080",
+            "TOKEN_RATE_LIMIT": "30",
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
+            "CANVAS_PILOT_ORGANIZATION_IDS": ""
+        },
+        "http_port": 18005,
+        "grpc_port": 19005,
+        "gateway_port": 18000,
+        "database_url": "postgresql://oracle:synthetic-local-only@127.0.0.1:15432/canvas_published_schema_test",
+        "redis_url": "redis://127.0.0.1:16379",
+        "peer_origin": "http://127.0.0.1:18001",
+        "legacy_origin": "http://127.0.0.1:18002",
+        "ca_file": ca_path,
+        "policy_directory": directory.path(),
+        "authcrypt": false,
+        "allow_private_ips": false
+    });
+    let mut seen = BTreeSet::new();
+    for (authenticated, allow_private_ips) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        assert!(seen.insert((authenticated, allow_private_ips)));
+        input["authcrypt"] = json!(authenticated);
+        input["allow_private_ips"] = json!(allow_private_ips);
+        let spec = checked_spec(&input).expect("same closed renewal test specification");
+        let resolved = resolve(&spec, &prepared).expect("actual composed Kubernetes model");
+        let native = &resolved.native_environment;
+        let gateway = &resolved.gateway_environment;
+        assert!(matches!(resolved.isolation, Isolation::Kubernetes));
+        assert_eq!(
+            native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
+            if allow_private_ips {
+                Some("true")
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            native
+                .get("DIDCOMM_ENCRYPTION_POLICY_FILE")
+                .map(String::as_str),
+            if authenticated {
+                Some(policy_path)
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
+            Some(ca_path)
+        );
+        assert_eq!(
+            native
+                .get("DIDCOMM_DID_WEB_INTERNAL_BASE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:18001")
+        );
+        assert_eq!(
+            native.get("ISSUANCE_SERVICE_PORT").map(String::as_str),
+            Some("18005")
+        );
+        assert_eq!(
+            native.get("ISSUANCE_GRPC_PORT").map(String::as_str),
+            Some("19005")
+        );
+        assert_eq!(
+            gateway.get("ISSUANCE_SERVICE_URL").map(String::as_str),
+            Some("http://127.0.0.1:18002")
+        );
+        assert_eq!(
+            gateway
+                .get("ISSUANCE_NATIVE_SERVICE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:18005")
+        );
+        assert_eq!(
+            gateway.get("REDIS_URL").map(String::as_str),
+            Some("redis://127.0.0.1:16379")
+        );
+    }
+    assert_eq!(seen.len(), 4);
+    println!("\nRESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1");
 }
