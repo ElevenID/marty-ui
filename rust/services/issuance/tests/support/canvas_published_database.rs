@@ -529,16 +529,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_provider_configuration() -> Result<Self, String> {
-        Self::start_probe(Some((
-            "provider_configuration",
-            "provider-configuration",
-            "provider_configuration",
-            "MARTY_CANVAS_PROVIDER_CONFIGURATION_ORACLE=1",
-        )))
-        .await
-    }
-
     pub async fn start_with_utf7_consumer() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((
@@ -1715,4 +1705,213 @@ impl Drop for PublishedDatabase {
             eprintln!("Owned published-schema cleanup requires inspection: {error}");
         }
     }
+}
+
+const PROVIDER_ORACLE_SCRIPT: &str =
+    "/verification/scripts/run_canvas_provider_configuration_oracle.py";
+const PROVIDER_ORACLE_SCENARIOS: &str =
+    "/verification/contracts/canvas-provider-configuration-scenarios.json";
+pub(super) const PROVIDER_ORACLE_COMMAND: &str = r#"import json,runpy; print(json.dumps(runpy.run_path('/verification/scripts/run_canvas_provider_configuration_oracle.py')['run'](), sort_keys=True))"#;
+
+// This helper owns only the pinned published-image probe. The Python oracle
+// executes selected published source and fresh full-module imports; neither
+// needs a database or network. Keep its lifecycle separate from migrations.
+pub(super) struct PublishedImageOracle {
+    scope: String,
+    image: String,
+    id: Option<String>,
+    creation_attempted: bool,
+}
+
+impl PublishedImageOracle {
+    #[cfg(test)]
+    pub(super) fn synthetic(scope: &str, image: &str) -> Self {
+        Self {
+            scope: scope.to_owned(),
+            image: image.to_owned(),
+            id: None,
+            creation_attempted: false,
+        }
+    }
+
+    pub(super) fn checked(&self, info: &Value, id: &str) -> Result<(), String> {
+        PublishedDatabase::accept_id(id)?;
+        if info["Id"] != id
+            || info["Config"]["Labels"][LABEL] != self.scope
+            || info["Config"]["Image"] != self.image
+            || info["Config"]["Entrypoint"] != serde_json::json!(["python"])
+            || info["Config"]["Cmd"] != serde_json::json!(["-c", PROVIDER_ORACLE_COMMAND])
+            || info["HostConfig"]["NetworkMode"] != "none"
+            || info["HostConfig"]["ReadonlyRootfs"] != true
+            || info["HostConfig"]["CapDrop"] != serde_json::json!(["ALL"])
+            || info["HostConfig"]["SecurityOpt"] != serde_json::json!(["no-new-privileges"])
+            || info["HostConfig"]["PortBindings"]
+                .as_object()
+                .is_none_or(|ports| !ports.is_empty())
+            || info["NetworkSettings"]["Ports"]
+                .as_object()
+                .is_none_or(|ports| !ports.is_empty())
+        {
+            return Err(
+                "Refusing published image oracle access or cleanup: identity/isolation mismatch"
+                    .into(),
+            );
+        }
+        let mounts = info["Mounts"]
+            .as_array()
+            .ok_or("Missing published image oracle mounts")?;
+        let actual: std::collections::BTreeSet<_> = mounts
+            .iter()
+            .map(|mount| {
+                if mount["Type"] != "bind" || mount["RW"] != false {
+                    return Err("Published image oracle mount is not read-only bind");
+                }
+                mount["Destination"]
+                    .as_str()
+                    .ok_or("Invalid published image oracle mount")
+            })
+            .collect::<Result<_, _>>()?;
+        if mounts.len() != 2
+            || actual
+                != std::collections::BTreeSet::from([
+                    PROVIDER_ORACLE_SCRIPT,
+                    PROVIDER_ORACLE_SCENARIOS,
+                ])
+        {
+            return Err("Published image oracle mount allowlist differs".into());
+        }
+        let environment = info["Config"]["Env"]
+            .as_array()
+            .ok_or("Missing published image oracle environment")?;
+        for expected in [
+            "PYTHONDONTWRITEBYTECODE=1",
+            "TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key",
+        ] {
+            let name = expected.split_once('=').unwrap().0;
+            let prefix = format!("{name}=");
+            if environment
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|value| value.starts_with(&prefix))
+                .collect::<Vec<_>>()
+                != [expected]
+            {
+                return Err("Published image oracle environment differs".into());
+            }
+        }
+        Ok(())
+    }
+
+    fn cleanup(&mut self) -> Result<(), String> {
+        if !self.creation_attempted {
+            return Ok(());
+        }
+        let filter = format!("label={LABEL}={}", self.scope);
+        let found = docker(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &filter])?;
+        let ids: Vec<_> = found.lines().collect();
+        if ids.len() > 1 || self.id.as_ref().is_some_and(|id| ids != [id.as_str()]) {
+            return Err("Published image oracle resource identity is ambiguous".into());
+        }
+        for id in ids {
+            self.checked(&inspect(id)?, id)?;
+            docker(&["rm", "--force", id])?;
+            let exact = format!("id={id}");
+            if !docker(&["ps", "--all", "--quiet", "--no-trunc", "--filter", &exact])?.is_empty() {
+                return Err("Owned published image oracle remained after cleanup".into());
+            }
+        }
+        self.id = None;
+        self.creation_attempted = false;
+        Ok(())
+    }
+
+    fn close(mut self) -> Result<(), String> {
+        self.cleanup()
+    }
+}
+
+impl Drop for PublishedImageOracle {
+    fn drop(&mut self) {
+        if let Err(error) = self.cleanup() {
+            eprintln!("Owned published image oracle cleanup requires inspection: {error}");
+        }
+    }
+}
+
+pub(super) async fn provider_configuration_image_oracle() -> Result<Value, String> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+    ))
+    .map_err(|_| "Invalid pinned published-image fixture")?;
+    let image = fixture["observed_image"]
+        .as_str()
+        .ok_or("Missing pinned published image")?;
+    let root = repository_root();
+    let script_mount = format!(
+        "type=bind,source={},target={PROVIDER_ORACLE_SCRIPT},readonly",
+        root.join("scripts/run_canvas_provider_configuration_oracle.py")
+            .display()
+    );
+    let scenarios_mount = format!(
+        "type=bind,source={},target={PROVIDER_ORACLE_SCENARIOS},readonly",
+        root.join("contracts/canvas-provider-configuration-scenarios.json")
+            .display()
+    );
+    let mut owner = PublishedImageOracle {
+        scope: Uuid::new_v4().to_string(),
+        image: image.to_owned(),
+        id: None,
+        creation_attempted: false,
+    };
+    let label = format!("{LABEL}={}", owner.scope);
+    owner.creation_attempted = true;
+    let id = docker(&[
+        "create",
+        "--pull=never",
+        "--label",
+        &label,
+        "--network",
+        "none",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--env",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "--env",
+        "TOKEN_HMAC_KEY=synthetic-schema-only-hmac-key",
+        "--mount",
+        &script_mount,
+        "--mount",
+        &scenarios_mount,
+        "--entrypoint",
+        "python",
+        image,
+        "-c",
+        PROVIDER_ORACLE_COMMAND,
+    ])?;
+    PublishedDatabase::accept_id(&id)?;
+    owner.id = Some(id.clone());
+    owner.checked(&inspect(&id)?, &id)?;
+    docker(&["start", &id])?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(120);
+    loop {
+        let state = inspect(&id)?;
+        owner.checked(&state, &id)?;
+        if state["State"]["Running"] == false {
+            if state["State"]["ExitCode"] != 0 {
+                return Err("Published image oracle exited unsuccessfully".into());
+            }
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("Published image oracle exceeded deadline".into());
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    let report: Value = serde_json::from_str(&docker(&["logs", &id])?)
+        .map_err(|_| "Invalid published image oracle report")?;
+    owner.close()?;
+    Ok(report)
 }
