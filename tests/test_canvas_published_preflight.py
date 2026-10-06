@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import runpy
 import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -341,8 +341,7 @@ fi
         composition = [
             line
             for line in lines
-            if line.startswith("heartbeat_readiness_")
-            or line.startswith("json_consumer_diagnostic_")
+            if line.startswith(("heartbeat_readiness_", "json_consumer_diagnostic_"))
         ]
         worker = [line for line in lines if line not in composition]
         if duplicate_across_targets:
@@ -416,6 +415,7 @@ source "$CONTRACT_SOURCE" "$@"
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
         calls = [
             line.split("|") for line in log.read_text(encoding="utf-8").splitlines()
