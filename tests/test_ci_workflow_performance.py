@@ -212,13 +212,36 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
     )
     assert chain_test_name in managed_chain
     assert (
-        "test_name='runtime::tests::"
-        "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'"
+        "test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'"
         in managed_chain
     )
+    assert managed_chain.count(
+        "-p marty-service-acceptance --test gateway_signing_acceptance"
+    ) == 4
+    for case in (
+        "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
+        "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
+        "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
+    ):
+        assert case in managed_chain
     assert '-- --list | grep -Fx "$test_name: test"' in managed_chain
     assert '"$test_name" -- --ignored --exact' in managed_chain
     assert "-- --ignored --exact" in managed_chain
+    signing_routes = next(
+        step["run"]
+        for step in rust["steps"]
+        if step.get("name") == "Exercise authenticated Signing Keys Gateway to Rust routes"
+    )
+    assert signing_routes.count(
+        "-p marty-service-acceptance --test gateway_signing_acceptance"
+    ) == 3
+    for case in (
+        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
+        "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
+        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
+    ):
+        assert case in signing_routes
+    assert signing_routes.count("-- --ignored --exact") == 3
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )

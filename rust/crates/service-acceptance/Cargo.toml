@@ -15,6 +15,7 @@ axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
+der.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
@@ -54,6 +55,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
+x509-cert.workspace = true
 zip.workspace = true
 
 [[test]]
@@ -63,6 +65,10 @@ path = "tests/passport_managed_kms_chain.rs"
 [[test]]
 name = "passport_gateway_postgres"
 path = "tests/passport_gateway_postgres.rs"
+
+[[test]]
+name = "gateway_signing_acceptance"
+path = "tests/gateway_signing_acceptance.rs"
 
 [[test]]
 name = "canvas_published_worker_contract"
