@@ -345,6 +345,15 @@ def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> Non
 
 
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
+    # Published matrix IDs are checked-in case identities, not probe output,
+    # environment values, SQL, URLs, or arbitrary text from the child log.
+    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 75
+    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 15
+    for name in GROUPS.PUBLISHED_MATRIX_PROBE_NAMES:
+        marker = json.dumps(
+            {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for phase, name in (
         ("migration_seed", "published_probe"),
         ("migration_seed", "json_consumer"),
@@ -362,7 +371,14 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
-    for name in ("case_from_scenario", "json_depth_extra", "worker_validation_other"):
+    for name in (
+        "case_from_scenario",
+        "json_depth_extra",
+        "worker_validation_other",
+        "validation.not_a_frozen_case",
+        "retry-after.http_date_future.extra",
+        "retry-after.secret\nvalue",
+    ):
         marker = json.dumps(
             {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
         )
@@ -385,6 +401,12 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
     assert (
         worker.count("PublishedDatabase::start_for_worker_validation_template()") == 1
     )
+    assert support.count("worker_matrix_timing_name(scenario, case)?") == 1
+    assert support.index(
+        'return Err("unsupported owned worker matrix case".into());'
+    ) < (support.index("worker_matrix_timing_name(scenario, case)?"))
+    assert "Self::start_probe_with_migration_named(" in support
+    assert 'strip_prefix("worker-")' in support
 
 
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:

@@ -3,6 +3,19 @@ mod diagnostic_tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn worker_matrix_timing_ids_are_bounded_and_contain_only_case_identity() {
+        assert_eq!(
+            worker_matrix_timing_name("worker-retry-after", "http_date_future").unwrap(),
+            "retry-after.http_date_future"
+        );
+        for case in ["", "secret\nvalue", "quoted\"value", "path/value"] {
+            assert!(worker_matrix_timing_name("worker-retry-after", case).is_err());
+        }
+        assert!(worker_matrix_timing_name("worker-retry-after", &"a".repeat(96)).is_err());
+        assert!(worker_matrix_timing_name("retry-after", "http_date_future").is_err());
+    }
+
     fn recovery_rows() -> (Uuid, Vec<(String, Value)>) {
         let (mut database, id, scope) = borrow_fixture();
         database["HostConfig"]["Privileged"] = json!(false);

@@ -14,16 +14,16 @@ const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
 struct PhaseTimer {
     phase: &'static str,
-    name: &'static str,
+    name: String,
     started: Instant,
     succeeded: bool,
 }
 
 impl PhaseTimer {
-    fn start(phase: &'static str, name: &'static str) -> Self {
+    fn start(phase: &'static str, name: impl Into<String>) -> Self {
         Self {
             phase,
-            name,
+            name: name.into(),
             started: Instant::now(),
             succeeded: false,
         }
@@ -32,6 +32,26 @@ impl PhaseTimer {
     fn success(mut self) {
         self.succeeded = true;
     }
+}
+
+// Matrix names come only from checked-in scenario fixtures after membership
+// validation. Keep them safe to print as one JSON string without ever using a
+// Docker ID, URL, SQL, case payload, or environment value as a timing label.
+fn worker_matrix_timing_name(scenario: &str, case: &str) -> Result<String, String> {
+    let kind = scenario
+        .strip_prefix("worker-")
+        .ok_or("Invalid owned worker matrix timing kind")?;
+    let name = format!("{kind}.{case}");
+    if kind.is_empty()
+        || case.is_empty()
+        || name.len() > 96
+        || !name.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
+        })
+    {
+        return Err("Invalid owned worker matrix timing name".into());
+    }
+    Ok(name)
 }
 
 impl Drop for PhaseTimer {
@@ -942,10 +962,13 @@ impl PublishedDatabase {
         {
             return Err("unsupported owned worker matrix case".into());
         }
+        let timing_name = worker_matrix_timing_name(scenario, case)?;
         let flag = format!("{flag_name}={case}");
-        Self::start_probe_with_extra(
+        Self::start_probe_with_migration_named(
             Some((script, scenario, script, &flag)),
             Some("canvas-issued-review-scenarios.json"),
+            false,
+            Some(timing_name),
         )
         .await
     }
@@ -1138,13 +1161,25 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
     ) -> Result<Self, String> {
+        Self::start_probe_with_migration_named(oracle, extra_fixture, recovery_schema, None).await
+    }
+
+    async fn start_probe_with_migration_named(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+        matrix_timing_name: Option<String>,
+    ) -> Result<Self, String> {
         // These are fixed constructor origins, not text from a scenario or probe.
-        let timing_name = match oracle.map(|(script, _, _, _)| script) {
-            Some("json_consumer") => "json_consumer",
-            Some("json_depth") => "json_depth",
-            Some("timeout_consumer") => "timeout_consumer",
-            _ => "published_probe",
-        };
+        let timing_name = matrix_timing_name.unwrap_or_else(|| {
+            match oracle.map(|(script, _, _, _)| script) {
+                Some("json_consumer") => "json_consumer",
+                Some("json_depth") => "json_depth",
+                Some("timeout_consumer") => "timeout_consumer",
+                _ => "published_probe",
+            }
+            .to_owned()
+        });
         Self::start_probe_with_scope(
             oracle,
             extra_fixture,
@@ -1160,7 +1195,7 @@ impl PublishedDatabase {
         extra_fixture: Option<&'static str>,
         recovery_schema: bool,
         scope: Uuid,
-        timing_name: &'static str,
+        timing_name: impl Into<String>,
     ) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"

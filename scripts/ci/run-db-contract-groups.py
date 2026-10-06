@@ -43,6 +43,38 @@ REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
 MATRIX_SCENARIOS = frozenset(
     {"retry-after", "validation", "roster-failure", "resources-unavailable"}
 )
+# The published-process matrix has more case families than the native HTTPS
+# scenario timer. These are the only checked-in case IDs allowed to leave the
+# Rust probe as migration/seed timing labels.
+PUBLISHED_MATRIX_SCENARIOS = frozenset(
+    {
+        "retry-after",
+        "validation",
+        "roster-failure",
+        "resources-unavailable",
+        "resource-race",
+        "oauth-revocation",
+        "oauth-revocation-fence",
+        "oauth-revocation-patch",
+        "oauth-revocation-retry-after",
+        "oauth-revocation-backoff",
+        "oauth-revocation-queue",
+        "oauth-revocation-lease",
+        "oauth-revocation-selection",
+        "oauth-revocation-counters",
+        "oauth-revocation-secrets",
+    }
+)
+PUBLISHED_MATRIX_PROBE_NAMES = frozenset(
+    f"{scenario}.{case['name']}"
+    for scenario in PUBLISHED_MATRIX_SCENARIOS
+    for case in json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / f"contracts/canvas-worker-{scenario}-scenarios.json"
+        ).read_text(encoding="utf-8")
+    )["cases"]
+)
 SCENARIO_NAMES = REST_SCENARIOS | frozenset(
     f"{scenario}.{case['name']}"
     for scenario in MATRIX_SCENARIOS
@@ -90,7 +122,8 @@ CONTRACT_NAMES = frozenset(
 TIMING_NAMES = {
     "container_startup": frozenset({"postgres_create"}),
     "database_readiness": frozenset({"postgres_ready"}),
-    "migration_seed": frozenset(
+    "migration_seed": PUBLISHED_MATRIX_PROBE_NAMES
+    | frozenset(
         {
             "published_probe",
             "json_consumer",
