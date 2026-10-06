@@ -177,9 +177,15 @@ async fn principal_authenticated_fallback_cannot_supply_workload_oid4vp_transpor
         .await
         .unwrap()
         .into_inner();
+    service
+        .activate_policy(authenticated(PolicyIdRequest {
+            policy_id: policy.id.clone(),
+        }))
+        .await
+        .unwrap();
     let error = service
         .evaluate_presentation(authenticated(EvaluatePresentationMessage {
-            policy_id: policy.id,
+            policy_id: policy.id.clone(),
             vp_token: "header.payload.signature".into(),
             nonce: "nonce-1".into(),
             audience: "verifier-1".into(),
@@ -189,6 +195,19 @@ async fn principal_authenticated_fallback_cannot_supply_workload_oid4vp_transpor
         .await
         .unwrap_err();
     assert_eq!(error.code(), Code::PermissionDenied);
+    let legacy = service
+        .evaluate_presentation(authenticated(EvaluatePresentationMessage {
+            policy_id: policy.id,
+            vp_token: "header.payload.signature".into(),
+            nonce: "nonce-1".into(),
+            audience: "verifier-1".into(),
+            ..EvaluatePresentationMessage::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(legacy.decision, "allow");
+    assert_eq!(legacy.nonce, "nonce-1");
 }
 
 #[tokio::test]

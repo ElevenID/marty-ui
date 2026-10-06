@@ -78,6 +78,10 @@ impl FlowGrpcChannelFactories {
             issuance,
         ))
     }
+
+    pub(crate) fn presentation_policy_workload_transport(&self) -> bool {
+        self.presentation_policy.config().security == GrpcTransportSecurity::MutualTls
+    }
 }
 
 fn ordinary_factory(target: &str) -> Result<GrpcChannelFactory, PlatformError> {
@@ -152,16 +156,25 @@ impl FlowGrpcClients {
         self,
         service_token: Option<&str>,
     ) -> Result<FlowGrpcProviders, FlowProviderError> {
+        // Preserve the public direct-client API's previous forwarding behavior.
+        self.providers_with_channel_security(service_token, true)
+    }
+
+    pub(crate) fn providers_with_channel_security(
+        self,
+        service_token: Option<&str>,
+        presentation_policy_mtls: bool,
+    ) -> Result<FlowGrpcProviders, FlowProviderError> {
+        let mut presentation_policy =
+            GrpcPresentationPolicyProvider::new(self.presentation_policy, service_token)?;
+        presentation_policy.workload_mtls = presentation_policy_mtls;
         Ok(FlowGrpcProviders {
             tenant_membership: GrpcTenantMembershipProvider::new(self.organization, service_token)?,
             credential_template: GrpcCredentialTemplateProvider::new(
                 self.credential_template,
                 service_token,
             )?,
-            presentation_policy: GrpcPresentationPolicyProvider::new(
-                self.presentation_policy,
-                service_token,
-            )?,
+            presentation_policy,
             issuance: GrpcIssuanceProvider::new(self.issuance, service_token)?,
         })
     }
@@ -387,6 +400,7 @@ impl CredentialTemplateProvider for GrpcCredentialTemplateProvider {
 pub struct GrpcPresentationPolicyProvider {
     client: PresentationPolicyServiceClient<Channel>,
     auth: GrpcAuthentication,
+    workload_mtls: bool,
 }
 
 impl GrpcPresentationPolicyProvider {
@@ -397,6 +411,9 @@ impl GrpcPresentationPolicyProvider {
         Ok(Self {
             client,
             auth: GrpcAuthentication::new(token)?,
+            // Preserve direct-constructor behavior; configured Flow providers
+            // receive the inspected channel capability from their factory.
+            workload_mtls: true,
         })
     }
 }
@@ -457,11 +474,10 @@ impl PresentationPolicyProvider for GrpcPresentationPolicyProvider {
                                 "evaluation context is not serializable",
                             )
                         })?,
-                        oid4vp_transport: request
-                            .oid4vp_transport
-                            .as_ref()
-                            .map(encode_oid4vp_transport)
-                            .transpose()?,
+                        oid4vp_transport: encode_oid4vp_transport_for_channel(
+                            request.oid4vp_transport.as_ref(),
+                            self.workload_mtls,
+                        )?,
                     },
                     &request.principal_id,
                 )?,
@@ -654,6 +670,18 @@ fn encode_oid4vp_transport(
     )
 }
 
+fn encode_oid4vp_transport_for_channel(
+    transport: Option<&marty_oid4vp_contract::Oid4vpEvaluationTransportV1>,
+    workload_mtls: bool,
+) -> Result<Option<crate::presentation_policy_proto::Oid4vpEvaluationTransport>, FlowProviderError>
+{
+    // Keep validation unchanged, but do not offer workload-only metadata over
+    // the pre-existing principal-authenticated plaintext route. The policy
+    // service still authorizes the actual peer independently of this flag.
+    let encoded = transport.map(encode_oid4vp_transport).transpose()?;
+    Ok(if workload_mtls { encoded } else { None })
+}
+
 fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
@@ -692,9 +720,37 @@ mod tests {
         assert_eq!(wire.vp_token_raw, metadata.vp_token_raw);
         assert_eq!(wire.verifier_client_id, metadata.verifier_client_id);
         assert_eq!(wire.request_nonce, metadata.request_nonce);
+        assert_eq!(
+            encode_oid4vp_transport_for_channel(Some(&metadata), true).unwrap(),
+            Some(wire)
+        );
+        assert!(encode_oid4vp_transport_for_channel(Some(&metadata), false)
+            .unwrap()
+            .is_none());
         let mut invalid = metadata;
         invalid.query_digest = "0".repeat(64);
         assert!(encode_oid4vp_transport(&invalid).is_err());
+        assert!(encode_oid4vp_transport_for_channel(Some(&invalid), false).is_err());
+    }
+
+    #[tokio::test]
+    async fn configured_plaintext_policy_channel_reaches_provider_without_workload_transport() {
+        let factory = || ordinary_factory("http://127.0.0.1:9009").unwrap();
+        let factories = FlowGrpcChannelFactories {
+            organization: factory(),
+            credential_template: factory(),
+            presentation_policy: factory(),
+            issuance: factory(),
+        };
+        assert!(!factories.presentation_policy_workload_transport());
+        let clients = factories.connect_lazy().unwrap();
+        let providers = clients
+            .providers_with_channel_security(
+                None,
+                factories.presentation_policy_workload_transport(),
+            )
+            .unwrap();
+        assert!(!providers.presentation_policy.workload_mtls);
     }
 
     #[test]

@@ -97,14 +97,17 @@ async fn connect_providers(
     config: &FlowServiceConfig,
     runtime: &FlowRuntime,
 ) -> Result<FlowProviderRegistry, FlowConnectionError> {
-    let clients = FlowGrpcChannelFactories::from_config(config)?
-        .connect()
-        .await?;
+    let factories = FlowGrpcChannelFactories::from_config(config)?;
+    let presentation_policy_mtls = factories.presentation_policy_workload_transport();
+    let clients = factories.connect().await?;
     runtime.mark_healthy(FlowDependency::Organization)?;
     runtime.mark_healthy(FlowDependency::CredentialTemplate)?;
     runtime.mark_healthy(FlowDependency::PresentationPolicy)?;
     runtime.mark_healthy(FlowDependency::IssuanceGrpc)?;
-    let grpc = clients.providers(config.service_token.as_deref())?;
+    let grpc = clients.providers_with_channel_security(
+        config.service_token.as_deref(),
+        presentation_policy_mtls,
+    )?;
 
     let signing = Arc::new(HttpSigningProvider::new(
         &config.signing_keys_url,
