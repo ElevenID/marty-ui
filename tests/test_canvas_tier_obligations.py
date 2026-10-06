@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 from copy import deepcopy
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 from scripts.ci.check_canvas_tier_obligations import (
     listed_test_names,
     validate,
+    validate_fast_owner_execution,
     validate_selection,
 )
 
@@ -165,3 +168,77 @@ def test_unregistered_selected_case_fails_closed() -> None:
         validate_selection(
             INVENTORY, original, original | {"new_unknown"}, "full", "0", serial
         )
+
+
+FAST_ROWS = {
+    "contracts": "canvas_sync_worker::retry_handoff_tests::terminal_validation_errors_reach_actual_worker_dead_letter_port",
+    "canvas": "worker_validation_repository_matches_frozen_errors",
+}
+
+
+@pytest.mark.parametrize("lane,owner", FAST_ROWS.items())
+def test_exact_fast_owner_success_row_is_required(lane: str, owner: str) -> None:
+    validate_fast_owner_execution(INVENTORY, lane, f"test {owner} ... ok\n")
+
+
+@pytest.mark.parametrize("lane,owner", FAST_ROWS.items())
+@pytest.mark.parametrize(
+    "mutation", ["missing", "duplicate", "ignored", "failed", "substituted"]
+)
+def test_fast_owner_execution_rows_fail_closed(
+    lane: str, owner: str, mutation: str
+) -> None:
+    row = f"test {owner} ... ok\n"
+    changed = {
+        "missing": "",
+        "duplicate": row * 2,
+        "ignored": f"test {owner} ... ignored\n",
+        "failed": f"test {owner} ... FAILED\n",
+        "substituted": f"test other::{owner} ... ok\n",
+    }[mutation]
+    with pytest.raises(ValueError, match="did not execute exactly once"):
+        validate_fast_owner_execution(INVENTORY, lane, changed)
+
+
+@pytest.mark.parametrize("lane", ["canvas", "contracts"])
+def test_fast_owner_manifest_identity_cannot_change(lane: str) -> None:
+    inventory = deepcopy(INVENTORY)
+    inventory["native_validation"]["full_only"][0]["fast_owners"][0] = "new_owner"
+    with pytest.raises(ValueError, match="fast-owner identity"):
+        validate_fast_owner_execution(
+            inventory, lane, f"test {FAST_ROWS[lane]} ... ok\n"
+        )
+
+
+def test_contracts_fast_owner_cli_reads_actual_log(tmp_path: Path) -> None:
+    log = tmp_path / "rust-workspace.log"
+    command = [
+        sys.executable,
+        str(ROOT / "scripts/ci/check_canvas_tier_obligations.py"),
+        "--require-execution",
+        "contracts",
+        str(log),
+    ]
+    missing = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert missing.returncode != 0
+    log.write_text(f"test {FAST_ROWS['contracts']} ... ok\n", encoding="utf-8")
+    passed = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert passed.returncode == 0, passed.stderr
+    log.write_text(f"test {FAST_ROWS['contracts']} ... ignored\n", encoding="utf-8")
+    ignored = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert ignored.returncode != 0
+
+
+def test_fast_owner_guards_run_before_lane_success() -> None:
+    runner = RUNNER.read_text(encoding="utf-8")
+    assert runner.index('--require-execution canvas "$worker_log"') > runner.index(
+        "(( composition_status == 0 && worker_status == 0 ))"
+    )
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert workflow.index(
+        "Require terminal validation worker fast-owner execution"
+    ) > workflow.index("Run safe Rust contract groups concurrently")
+    assert (
+        'python3 scripts/ci/check_canvas_tier_obligations.py --require-execution contracts "$RUNNER_TEMP/rust-workspace.log"'
+        in workflow
+    )

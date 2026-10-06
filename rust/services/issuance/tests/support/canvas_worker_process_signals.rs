@@ -13,7 +13,7 @@ use sqlx::PgPool;
 
 pub(super) struct OwnedWorker(pub(super) Child);
 
-fn worker_executable() -> PathBuf {
+pub(super) fn worker_executable() -> PathBuf {
     worker_executable_from(
         std::env::var_os("MARTY_CANVAS_WORKER_TEST_BINARY"),
         option_env!("CARGO_BIN_EXE_marty-canvas-sync-worker"),

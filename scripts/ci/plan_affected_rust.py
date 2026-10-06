@@ -138,6 +138,26 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "binding": "NOTIFICATION_SERVICE_URL",
         },
     ],
+    "marty-event-stream": [
+        {
+            "package": "marty-gateway",
+            "evidence": "rust/services/gateway/src/config.rs",
+            "binding": '"ES_GRPC_TARGET", "event-stream:9015"',
+            "runtime_evidence": "rust/services/gateway/src/main.rs",
+            "runtime_marker": "grpc_channel(&config, &config.event_stream_grpc_target)?",
+            "request_evidence": "rust/services/gateway/src/providers.rs",
+            "request_marker": ".subscribe(request)",
+            "callsite_evidence": "rust/services/gateway/src/runtime.rs",
+            "route_marker": 'request.uri().path() == "/v1/notifications/events/push"',
+            "callsite_marker": "provider.subscribe(subscription).await",
+            "provider_evidence": "rust/services/event-stream/src/grpc.rs",
+            "provider_marker": "async fn subscribe(",
+            "server_evidence": "rust/services/event-stream/src/main.rs",
+            "server_marker": "EventStreamServiceServer::new(grpc_service)",
+            "condition_evidence": "rust/services/event-stream/src/config.rs",
+            "condition_marker": 'parse_bool("EVENT_STREAM_GRPC_ENABLED", true)?',
+        },
+    ],
     "marty-trust-profile": [
         {
             "package": "marty-presentation-policy",

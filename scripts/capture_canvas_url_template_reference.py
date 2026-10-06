@@ -288,12 +288,18 @@ def bounded_child(command, source_input, *, timeout=15, cap=CAP):
     environment.update(
         PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONDONTWRITEBYTECODE="1"
     )
-    with (
-        tempfile.TemporaryDirectory(
+    with ExitStack() as stack:
+        temporary = tempfile.TemporaryDirectory(
             prefix="canvas-url-reference-", dir=ROOT
-        ) as directory,
-        ExitStack() as stack,
-    ):
+        )
+        directory = temporary.name
+        # Close every owned stream and reap the child before trying to remove
+        # its files. Windows may briefly keep a just-closed output file busy.
+        stack.push(
+            lambda kind, error, trace: _cleanup_owned_directory_on_exit(
+                temporary, error, trace
+            )
+        )
         input_file = stack.enter_context(tempfile.TemporaryFile(dir=directory))
         input_file.write(source_input)
         input_file.seek(0)
@@ -330,9 +336,43 @@ def bounded_child(command, source_input, *, timeout=15, cap=CAP):
             validate_result(result)
             return result
         finally:
-            if child.poll() is None:
-                child.kill()
-            child.wait(timeout=5)
+            try:
+                if child.poll() is None:
+                    child.kill()
+                child.wait(timeout=5)
+            finally:
+                for stream in (
+                    stdout_reader,
+                    stderr_reader,
+                    stdout,
+                    stderr,
+                    input_file,
+                ):
+                    stream.close()
+
+
+def _cleanup_owned_directory(temporary, *, timeout=1):
+    """Retry only transient Windows file-busy cleanup; never ignore failure."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            temporary.cleanup()
+            return
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
+
+
+def _cleanup_owned_directory_on_exit(temporary, error, trace):
+    try:
+        _cleanup_owned_directory(temporary)
+    except OSError as cleanup_error:
+        if error is not None:
+            # Retain the child failure as the terminal result while exposing
+            # an unrecoverable cleanup failure as its explicit cause.
+            raise error.with_traceback(trace) from cleanup_error
+        raise
 
 
 def main():

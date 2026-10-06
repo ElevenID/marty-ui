@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -14,7 +13,7 @@ def test_generated_application_image_gate_is_mandatory_and_additive():
     )
     job = workflow["jobs"]["test-rust-service-images"]
     assert job["needs"] == "changes"
-    assert job["if"] == "needs.changes.outputs.rust == 'true'"
+    assert job["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert job["runs-on"] == "ubuntu-latest"
     assert not job.get("continue-on-error", False)
     steps = job["steps"]

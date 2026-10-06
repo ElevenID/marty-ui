@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import ast
-from contextlib import nullcontext
-
 import json
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
-import tomllib
+import sys
+from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import tomllib
 import yaml
-
 
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
@@ -323,6 +322,8 @@ def _classify_changed_paths(
     *,
     combined: bool = False,
     event: str = "pull_request",
+    include_rust_plan: bool = False,
+    proof_failure: bool = False,
 ) -> list[dict[str, str]]:
     """Exercise the real Bash classifier against synthetic diffs."""
     _, document = _workflow(CI_PATH)
@@ -348,6 +349,7 @@ git() {
     *) return 99 ;;
   esac
 }
+python3() { "$SYNTHETIC_PYTHON" "$@"; }
 export BASE_SHA=synthetic-base
 index=0
 while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
@@ -359,13 +361,20 @@ while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
   index=$((index + 1))
 done < "$SYNTHETIC_PATHS_FILE"
 """
+    if proof_failure:
+        prelude = prelude.replace(
+            'python3() { "$SYNTHETIC_PYTHON" "$@"; }',
+            "python3() { return 43; }",
+        )
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
         # obligation, not just the last matching case arm.
         diff_file = tmp_path / "synthetic-combined-diff"
         diff_file.write_bytes(
-            b"\0".join(path.encode("utf-8") for path in changed_paths) + b"\0"
+            (b"\0".join(path.encode("utf-8") for path in changed_paths) + b"\0")
+            if changed_paths
+            else b""
         )
         prelude = prelude.replace(
             "printf '%s\\0' \"$SYNTHETIC_CHANGED_PATH\"",
@@ -386,6 +395,7 @@ done < "$SYNTHETIC_PATHS_FILE"
     environment.pop("BASH_ENV", None)
     environment.pop("ENV", None)
     environment["RUNNER_TEMP"] = tmp_path.as_posix()
+    environment["SYNTHETIC_PYTHON"] = Path(sys.executable).as_posix()
     if combined:
         environment["SYNTHETIC_DIFF_FILE"] = diff_file.as_posix()
     path_file = tmp_path / "synthetic-changed-paths"
@@ -399,13 +409,22 @@ done < "$SYNTHETIC_PATHS_FILE"
         text=True,
         capture_output=True,
         check=False,
-        timeout=10,
+        # This executes the complete tracked-source ownership proof, not just
+        # a string classifier. Bound hangs without treating runner load as
+        # failure evidence; no ownership or full-plan fallback is relaxed.
+        timeout=30,
         env=environment,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     return [
-        dict(line.split("=", 1) for line in output.read_text().splitlines())
+        {
+            key: value
+            for key, value in (
+                line.split("=", 1) for line in output.read_text().splitlines()
+            )
+            if include_rust_plan or key not in {"rust_runtime", "rust_matrix"}
+        }
         for output in (
             tmp_path / f"synthetic-actions-output-{index}"
             for index in range(len(paths_to_run))
@@ -415,6 +434,102 @@ done < "$SYNTHETIC_PATHS_FILE"
 
 def _classify_changed_path(changed_path: str, tmp_path: Path) -> dict[str, str]:
     return _classify_changed_paths([changed_path], tmp_path)[0]
+
+
+def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
+    tmp_path: Path,
+) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-leaves",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 10
+    leaves = [value.decode("utf-8") for value in verified[:-1]]
+    for leaf in leaves:
+        selected = _classify_changed_paths([leaf], tmp_path, include_rust_plan=True)[0]
+        assert selected == {
+            "all": "false",
+            "ui": "false",
+            "python": "false",
+            "rust": "true",
+            "rust_runtime": "false",
+            "rust_matrix": '["contracts"]',
+            "release": "false",
+            "verification": "false",
+            "security": "false",
+        }
+    assert (
+        _classify_changed_paths(
+            leaves, tmp_path, combined=True, include_rust_plan=True
+        )[0]["rust_matrix"]
+        == '["contracts"]'
+    )
+
+    mixed = _classify_changed_paths(
+        [leaves[0], "rust/services/issuance/src/lib.rs"],
+        tmp_path,
+        combined=True,
+        include_rust_plan=True,
+    )[0]
+    assert mixed["rust_runtime"] == "true"
+    assert mixed["rust_matrix"] == '["canvas","contracts"]'
+    for paths in (
+        ["rust/services/issuance/src/unreviewed_tests.rs"],
+        [leaves[0], "docs/renamed-test-source.md"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts"]'
+    # A deleted leaf cannot pass the source-ownership proof in the checkout.
+    deleted = _classify_changed_paths(
+        [leaves[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert deleted["rust_runtime"] == "true"
+    assert deleted["rust_matrix"] == '["canvas","contracts"]'
+    empty = _classify_changed_paths(
+        [], tmp_path, combined=True, include_rust_plan=True
+    )[0]
+    assert empty["rust"] == empty["rust_runtime"] == "false"
+    assert empty["rust_matrix"] == '["canvas","contracts"]'
+    queued = _classify_changed_paths(
+        [leaves[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
+
+
+def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
+    tmp_path: Path,
+) -> None:
+    # The generated-image check is owned by the runtime/image job. None of
+    # its production, Compose, helper, or workflow inputs may take leaf-only CI.
+    for path in (
+        "rust/services/issuance/src/lib.rs",
+        "docker-compose.beta.yml",
+        "scripts/beta-application-image-plan.ps1",
+        "scripts/test_beta_application_image_compose.py",
+        ".github/workflows/ci.yml",
+    ):
+        assert (ROOT / path).is_file(), path
+        selected = _classify_changed_paths([path], tmp_path, include_rust_plan=True)[0]
+        assert selected["rust"] == selected["rust_runtime"] == "true", path
+        assert selected["rust_matrix"] == '["canvas","contracts"]', path
+    queued = _classify_changed_paths(
+        ["rust/services/issuance/src/lib.rs"],
+        tmp_path,
+        event="merge_group",
+        include_rust_plan=True,
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
 
 
 @pytest.mark.parametrize(
@@ -477,6 +592,8 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "ui",
         "python",
         "rust",
+        "rust_runtime",
+        "rust_matrix",
         "release",
         "verification",
         "security",
@@ -540,13 +657,15 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         },
         "python": {"test-services"},
         "rust": {
+            "test-rust-services",
+            "rust-lint-policy",
+            "rust-supply-chain",
+        },
+        "rust_runtime": {
             "test-passport-fence-postgres",
             "test-rust-feature-probe",
             "test-rust-passport-image",
-            "test-rust-services",
-            "rust-lint-policy",
             "test-rust-service-images",
-            "rust-supply-chain",
         },
         "security": {"security"},
     }
@@ -575,12 +694,14 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "UI_SELECTED": "ui",
         "PYTHON_SELECTED": "python",
         "RUST_SELECTED": "rust",
+        "RUST_RUNTIME_SELECTED": "rust_runtime",
         "RELEASE_SELECTED": "release",
         "VERIFICATION_SELECTED": "verification",
         "SECURITY_SELECTED": "security",
     }
     for key, flag in selections.items():
         assert gate["env"][key] == f"${{{{ needs.changes.outputs.{flag} }}}}"
+    assert gate["env"]["RUST_MATRIX"] == "${{ needs.changes.outputs.rust_matrix }}"
     bash = "bash"
     if os.name == "nt":
         git = shutil.which("git")
@@ -593,8 +714,11 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         event="pull_request",
         result_count=None,
         selection_overrides=None,
+        leaf_only=False,
     ):
         selected = set(flags)
+        if "rust" in selected and not leaf_only:
+            selected.add("rust_runtime")
         active = {"changes", "lint"}
         for flag, names in groups.items():
             if flag in selected:
@@ -613,6 +737,10 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
                 key: "true" if flag in selected else "false"
                 for key, flag in selections.items()
             }
+        )
+        environment.update(selection_overrides or {})
+        environment["RUST_MATRIX"] = (
+            '["contracts"]' if leaf_only else '["canvas","contracts"]'
         )
         environment.update(selection_overrides or {})
         environment.update({key: results[name] for name, key in result_env.items()})
@@ -640,12 +768,40 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         result = exercise(flags)
         assert result.returncode == 0, (flags, result.stdout, result.stderr)
     assert exercise(("rust",), {"test-rust-services": "skipped"}).returncode != 0
+    assert exercise(("rust",), leaf_only=True).returncode == 0
+    assert (
+        exercise(
+            ("rust",),
+            leaf_only=True,
+            selection_overrides={"RUST_MATRIX": '["canvas","contracts"]'},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), leaf_only=True, overrides={"test-rust-service-images": "success"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), selection_overrides={"RUST_MATRIX": '["contracts"]'}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), selection_overrides={"RUST_MATRIX": '["contracts","canvas"]'}
+        ).returncode
+        != 0
+    )
     assert exercise((), {"test-rust-services": "success"}).returncode != 0
     assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
     assert exercise((), {"changes": "failure"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=17).returncode != 0
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
+    assert exercise(("rust",), event="merge_group", leaf_only=True).returncode != 0
     assert (
         exercise(
             tuple(selections.values()), {"security": "skipped"}, event="merge_group"
@@ -689,7 +845,10 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     probe = jobs["test-rust-feature-probe"]
     passport = jobs["test-rust-passport-image"]
     assert probe["needs"] == passport["needs"] == "changes"
-    assert probe["if"] == passport["if"] == jobs["test-rust-services"]["if"]
+    assert (
+        probe["if"] == passport["if"] == "needs.changes.outputs.rust_runtime == 'true'"
+    )
+    assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
     assert {"test-rust-feature-probe", "test-rust-passport-image"} <= set(
         jobs["ci-gate"]["needs"]
     )
@@ -716,7 +875,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     job = document["jobs"]["test-rust-services"]
     assert job["strategy"] == {
         "fail-fast": False,
-        "matrix": {"lane": ["canvas", "contracts"]},
+        "matrix": {"lane": "${{ fromJSON(needs.changes.outputs.rust_matrix) }}"},
     }
     steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
     canvas = {
@@ -867,7 +1026,9 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "canvas-worker-tier-obligations.json": {
             ".github/workflows/ci.yml",
             "scripts/ci/check_canvas_tier_obligations.py",
+            "scripts/test_canvas_worker_rest_https.py",
             "tests/test_canvas_tier_obligations.py",
+            "tests/test_canvas_worker_validation_tier.py",
             "tests/test_ci_workflow_performance.py",
         },
         "python-value-fast-obligations.json": {
@@ -1732,7 +1893,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
     )
     assert (
         published.splitlines().count(
@@ -1742,7 +1905,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -1809,7 +1972,9 @@ def _assert_gateway_operations_registration(
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
     )
     assert (
         published.splitlines().count(
@@ -1819,7 +1984,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -1917,8 +2082,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" "$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" unrelated_filter --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(

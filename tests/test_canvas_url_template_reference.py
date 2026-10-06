@@ -187,6 +187,90 @@ def test_bounded_child_rejects_infrastructure_failures_even_with_valid_artifact(
             )
 
 
+@pytest.mark.parametrize("mode", ["stdout-flood", "hang"])
+def test_bounded_child_reaps_and_closes_output_before_directory_cleanup(
+    monkeypatch, mode
+):
+    children = []
+    streams = []
+    real_spawn = capture.subprocess.Popen
+    real_streams = capture.owned_log_streams
+    real_cleanup = capture._cleanup_owned_directory
+
+    def spawn(*args, **kwargs):
+        child = real_spawn(*args, **kwargs)
+        children.append(child)
+        return child
+
+    def owned_streams(*args):
+        pair = real_streams(*args)
+        streams.extend(pair)
+        return pair
+
+    def cleanup(temporary):
+        assert len(children) == 1 and children[0].poll() is not None
+        assert len(streams) == 4 and all(stream.closed for stream in streams)
+        real_cleanup(temporary)
+
+    monkeypatch.setattr(capture.subprocess, "Popen", spawn)
+    monkeypatch.setattr(capture, "owned_log_streams", owned_streams)
+    monkeypatch.setattr(capture, "_cleanup_owned_directory", cleanup)
+    script = (
+        "import sys,time\n"
+        + (
+            "sys.stdout.buffer.write(b'x'*300000);sys.stdout.flush()\n"
+            if mode == "stdout-flood"
+            else ""
+        )
+        + "time.sleep(10)\n"
+    )
+    with pytest.raises(RuntimeError, match="limit|deadline"):
+        capture.bounded_child(
+            [sys.executable, "-I", "-c", script],
+            b"",
+            timeout=0.5 if mode == "hang" else 2,
+            cap=262144,
+        )
+    assert children[0].poll() is not None
+
+
+def test_owned_directory_cleanup_retries_busy_file_without_suppressing_exhaustion():
+    class BusyOnce:
+        calls = 0
+
+        def cleanup(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise PermissionError("file busy")
+
+    owner = BusyOnce()
+    capture._cleanup_owned_directory(owner, timeout=0.2)
+    assert owner.calls == 2
+
+    class AlwaysBusy:
+        def cleanup(self):
+            raise PermissionError("still busy")
+
+    with pytest.raises(PermissionError, match="still busy"):
+        capture._cleanup_owned_directory(AlwaysBusy(), timeout=0)
+
+
+def test_cleanup_failure_cannot_mask_output_limit(monkeypatch):
+    real_cleanup = capture._cleanup_owned_directory
+
+    def fail_after_actual_cleanup(temporary):
+        real_cleanup(temporary)
+        raise PermissionError("synthetic cleanup failure")
+
+    monkeypatch.setattr(capture, "_cleanup_owned_directory", fail_after_actual_cleanup)
+    script = "import sys;sys.stdout.buffer.write(b'x'*300000);sys.stdout.flush()"
+    with pytest.raises(RuntimeError, match="output exceeded limit") as failure:
+        capture.bounded_child(
+            [sys.executable, "-I", "-c", script], b"", timeout=2, cap=262144
+        )
+    assert isinstance(failure.value.__cause__, PermissionError)
+
+
 def test_reference_import_does_not_require_retired_runtime_dependencies():
     code = f"""
 import importlib.abc,sys

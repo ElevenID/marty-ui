@@ -1440,16 +1440,54 @@ async fn worker_validation_repository_matches_frozen_errors() {
         .filter(|case| case["boundary"] != "processor_dispatch")
         .collect::<Vec<_>>();
     assert_eq!(repository_cases.len(), 13);
+    // The published migration probe leaves a pristine, disconnected database.
+    // Clone it into a separate database for each case, so we keep independent
+    // schemas and frozen observations without starting thirteen PostgreSQL
+    // servers or re-running the same published migrations thirteen times.
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let mut admin_url = url::Url::parse(&owned.url).unwrap();
+    assert_eq!(admin_url.path(), "/canvas_published_schema_test");
+    admin_url.set_path("/postgres");
+    let admin = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(admin_url.as_str())
+        .await
+        .unwrap();
     for case in repository_cases {
         let name = case["name"].as_str().unwrap();
-        let owned = canvas_published_database::PublishedDatabase::start()
-            .await
-            .unwrap();
+        // This identifier is generated locally, never from scenario content.
+        // PostgreSQL forbids cloning while the template has another client,
+        // so the admin pool connects to `postgres` instead.
+        let database_name = format!("canvas_validation_{}", uuid::Uuid::new_v4().simple());
+        assert!(
+            database_name.len() < 63
+                && database_name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+        );
+        // SQL identifiers cannot be bind parameters; the generated identifier
+        // is checked above before the explicit SQL-safety assertion.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE \"{database_name}\" TEMPLATE \"canvas_published_schema_test\""
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
+        let mut case_url = url::Url::parse(&owned.url).unwrap();
+        case_url.set_path(&format!("/{database_name}"));
         let pool = PgPoolOptions::new()
             .max_connections(4)
-            .connect(&owned.url)
+            .connect(case_url.as_str())
             .await
             .unwrap();
+        let unseeded_jobs: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(unseeded_jobs, 0, "{name}: clone was not pristine");
         let fixture =
             canvas_worker_rest_replay::prepare(&pool, "https://127.0.0.1:1", "rest").await;
         let case = canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
@@ -1548,8 +1586,18 @@ async fn worker_validation_repository_matches_frozen_errors() {
         assert_eq!(facts, reference[name]["observations"][0]["facts"], "{name}");
         fixture.assert_preserved(&pool).await;
         pool.close().await;
-        owned.close().unwrap();
+        // Dropping without FORCE catches a leaked test connection rather than
+        // silently terminating it; the owned tmpfs container is still the
+        // final cleanup boundary if an assertion fails.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "DROP DATABASE \"{database_name}\""
+        )))
+        .execute(&admin)
+        .await
+        .unwrap();
     }
+    admin.close().await;
+    owned.close_verified().unwrap();
 }
 
 #[tokio::test]
@@ -1818,6 +1866,8 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
         oracle, expected,
         "published startup reference must regenerate unchanged"
     );
+    let worker_binary = canvas_worker_process_signals::worker_executable();
+    let worker_binary_before = canvas_startup_attestation::file_sha(&worker_binary);
     let pool = PgPoolOptions::new()
         .max_connections(3)
         .connect(&owned.url)
@@ -1829,6 +1879,8 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
     canvas_startup_attestation::emit_after_startup_pass(
         &canvas_published_database::repository_root(),
         &oracle,
+        &worker_binary,
+        &worker_binary_before,
     );
 }
 

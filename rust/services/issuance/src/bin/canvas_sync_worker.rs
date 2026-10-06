@@ -12,7 +12,7 @@ use marty_issuance_service::{
     canvas_sync_processor::{CanvasRosterBounds, NativeCanvasSyncProcessor},
     canvas_sync_processor_postgres::PostgresCanvasSyncProcessorRepository,
     canvas_sync_provider_http::HttpCanvasAuthoritativeProvider,
-    canvas_sync_worker::{CanvasSyncWorker, CanvasSyncWorkerConfig},
+    canvas_sync_worker::{CanvasSyncProcessingError, CanvasSyncWorker, CanvasSyncWorkerConfig},
     canvas_sync_worker_lifecycle::{
         finish_on_shutdown, spawn_with_postgres_cleanup, worker_connect_options,
         worker_pool_options, WorkerShutdown,
@@ -173,14 +173,7 @@ async fn run_initialized_worker(
         Arc::new(PostgresCanvasSyncProcessorRepository::new(pool.clone())),
         authoritative_provider,
         config.clone(),
-        CanvasRosterBounds::from_values(
-            env::var("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE")
-                .ok()
-                .as_deref(),
-            env::var("CANVAS_BACKGROUND_ROSTER_MAX_SIZE")
-                .ok()
-                .as_deref(),
-        ),
+        roster_configuration_from_environment(|name| env::var(name).ok()),
     ));
     let worker = CanvasSyncWorker::new(
         worker_repository,
@@ -193,6 +186,16 @@ async fn run_initialized_worker(
     info!(worker = ?worker, "starting standalone Rust Canvas sync worker candidate");
     worker.run_loop(stop).await?;
     Ok(())
+}
+
+// Keep environment lookup testable without mutating process-global variables.
+// Parsing and deferred-error semantics remain owned by CanvasRosterBounds.
+fn roster_configuration_from_environment(
+    mut lookup: impl FnMut(&str) -> Option<String>,
+) -> Result<CanvasRosterBounds, CanvasSyncProcessingError> {
+    let batch = lookup("CANVAS_BACKGROUND_ROSTER_BATCH_SIZE");
+    let limit = lookup("CANVAS_BACKGROUND_ROSTER_MAX_SIZE");
+    CanvasRosterBounds::from_values(batch.as_deref(), limit.as_deref())
 }
 
 fn optional_secret(name: &str) -> Result<Option<String>, Box<dyn Error + Send + Sync>> {
@@ -333,6 +336,55 @@ fn comma_values(name: &str) -> Vec<String> {
 mod tests {
     use super::{completion_result, first_present_or_else, ExitCode};
     use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
+
+    #[test]
+    fn roster_environment_reads_exact_keys_and_preserves_field_order() {
+        let mut reads = Vec::new();
+        let bounds = super::roster_configuration_from_environment(|name| {
+            reads.push(name.to_owned());
+            match name {
+                "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE" => Some("123".to_owned()),
+                "CANVAS_BACKGROUND_ROSTER_MAX_SIZE" => Some("789".to_owned()),
+                other => panic!("unexpected environment key: {other}"),
+            }
+        })
+        .unwrap();
+        assert_eq!(
+            reads,
+            [
+                "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+                "CANVAS_BACKGROUND_ROSTER_MAX_SIZE"
+            ]
+        );
+        assert_eq!(
+            format!("{bounds:?}"),
+            "CanvasRosterBounds { batch_size: 123, limit: 789 }"
+        );
+    }
+
+    #[test]
+    fn roster_environment_preserves_absence_and_deferred_invalid_values() {
+        let bounds = super::roster_configuration_from_environment(|_| None).unwrap();
+        assert_eq!(
+            format!("{bounds:?}"),
+            "CanvasRosterBounds { batch_size: 500, limit: 5000 }"
+        );
+        for invalid_key in [
+            "CANVAS_BACKGROUND_ROSTER_BATCH_SIZE",
+            "CANVAS_BACKGROUND_ROSTER_MAX_SIZE",
+        ] {
+            let mut reads = Vec::new();
+            let error = super::roster_configuration_from_environment(|name| {
+                reads.push(name.to_owned());
+                (name == invalid_key).then(|| "synthetic-invalid-bound".to_owned())
+            })
+            .unwrap_err();
+            assert_eq!(reads.len(), 2, "read both inputs before parsing");
+            assert_eq!(error.code, "canvas_roster_configuration_invalid");
+            assert_eq!(error.summary, "Canvas roster bounds are invalid");
+            assert!(!format!("{error:?}").contains("synthetic-invalid-bound"));
+        }
+    }
 
     #[test]
     fn deployed_log_level_matches_frozen_published_thresholds() {

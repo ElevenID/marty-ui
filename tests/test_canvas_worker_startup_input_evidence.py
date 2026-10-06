@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
 EVIDENCE = ROOT / "contracts/canvas-worker-startup-current-inputs.json"
@@ -134,16 +133,26 @@ def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> 
     assert upload["with"]["retention-days"] == 14
     assert "${{ github.run_id }}-${{ github.run_attempt }}" in upload["with"]["name"]
     source = (
-        ROOT
-        / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     startup_test = source.split(
         "async fn worker_startup_matches_published_process_and_idle_heartbeat()", 1
     )[1].split("\n}\n", 1)[0]
+    assert "canvas_worker_process_signals::worker_executable()" in startup_test
+    assert startup_test.index("worker_binary_before") < startup_test.index("::replay(")
     assert startup_test.index("assert_eq!(") < startup_test.index("::replay(")
     assert startup_test.index("::replay(") < startup_test.index(
         "owned.close().unwrap();"
     )
     assert startup_test.index("owned.close().unwrap();") < startup_test.index(
         "emit_after_startup_pass("
+    )
+    attester = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs"
+    ).read_text(encoding="utf-8")
+    assert '"worker_binary_sha256": worker_binary_sha' in attester
+    assert (
+        "verified_worker_binary_sha(worker_binary, worker_binary_before, &resolved)"
+        in attester
     )
