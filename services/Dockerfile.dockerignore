@@ -26,6 +26,8 @@ services/common/
 !scripts/ci/run-public-rust-build.sh
 rust/services/*/tests
 rust/crates/*/tests
+rust/crates/oid4vp-contract/tests/contract_vectors.rs
+rust/crates/oid4vp-contract/tests/transport_metadata.rs
 rust/**/target
 rust/**/.git
 rust/**/*.log

@@ -34,6 +34,12 @@ TEST_LEAVES = {
     "signing_http_response_tests.rs": "signing_http_response.rs",
     "token_rate_limit_http_tests.rs": "http.rs",
 }
+OID4VP_TEST_TARGETS = (
+    "contract_vectors.rs",
+    "transport_metadata.rs",
+)
+OID4VP_TEST_ROOT = "rust/crates/oid4vp-contract/tests/"
+OID4VP_CORPUS = "contracts/oid4vp-authenticated-contract-v1.json"
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -255,6 +261,52 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         "services/common/grpc_event_bus.py",
     ):
         assert _is_ignored(path, public_lines), path
+
+
+def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None:
+    # These are Cargo auto-discovered integration targets, not cfg(test)
+    # modules. Keep their ownership proof separate from TEST_LEAVES.
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/oid4vp-contract/Cargo.toml").read_text(encoding="utf-8")
+    )
+    assert manifest["package"]["name"] == "marty-oid4vp-contract"
+    assert manifest["package"].get("autotests", True) is True
+    assert "build" not in manifest["package"]
+    assert not (ROOT / "rust/crates/oid4vp-contract/build.rs").exists()
+    assert not any(kind in manifest for kind in ("test", "bin", "example", "bench"))
+    assert _tracked_paths(ROOT, OID4VP_TEST_ROOT + "*.rs") == [
+        OID4VP_TEST_ROOT + name for name in OID4VP_TEST_TARGETS
+    ]
+    assert not _ownership_sources(ROOT, OID4VP_TEST_TARGETS), (
+        "Review new Rust source consumer of the auto-discovered test targets"
+    )
+
+    vectors = (ROOT / (OID4VP_TEST_ROOT + "contract_vectors.rs")).read_text(
+        encoding="utf-8"
+    )
+    transport = (ROOT / (OID4VP_TEST_ROOT + "transport_metadata.rs")).read_text(
+        encoding="utf-8"
+    )
+    expected_corpus_include = 'include_str!(\n        "../../../../contracts/oid4vp-authenticated-contract-v1.json"\n    )'
+    assert vectors.count(expected_corpus_include) == 1
+    assert vectors.count("include_str!") == 1
+    for source in (vectors, transport):
+        assert not re.search(r"#\[path\s*=|\binclude(?:_bytes)?!", source)
+    assert "include_str!" not in transport
+
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for name in OID4VP_TEST_TARGETS:
+            path = OID4VP_TEST_ROOT + name
+            assert _is_ignored(path, lines), (
+                f"Docker COPY still includes {ignore_path}: {path}"
+            )
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1, f"Root exclusion must be exact: {path}"
+        assert not _is_ignored(OID4VP_CORPUS, lines)
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(OID4VP_TEST_ROOT + "unreviewed.rs", root_lines)
 
 
 def test_public_context_rejects_reincluded_python_event_adapter() -> None:
