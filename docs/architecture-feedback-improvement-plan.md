@@ -7,7 +7,8 @@ merged, including UI #1124 at `e9f140e00`. UI #1126 is open at `ce70c40bd`; norm
 and full hosted CI passed, and protected merge-queue validation remains pending.
 The combined unit/renewal/typed-transport follow-up is unpublished; the separate
 roster component draft is deferred for lifecycle/qualification reasons. Core #352
-merged its authenticated presentation-proof API, but UI migration and nightly
+merged its authenticated presentation-proof API and #353 its narrow digest crate,
+but UI migration and nightly
 release qualification remain incomplete. Earlier failed main evidence remains
 ineligible for release/reuse. No whole-pipeline speedup is attributed from these
 partial milestones. The detailed historical checkpoints below are not current
@@ -748,18 +749,28 @@ fail-closed correction is not described as universally behavior-neutral.
 Review cycles corrected workload authorization, verification-service consumers
 and generated schema coherence. Python and Envoy outputs include the additive
 policy field and current credential-template schema, with a parity guard.
-Component review/test results are not assembly qualification: combined review
-and targeted checks remain required before publication, followed by hosted CI
-and protected merge. No nightly release qualification is claimed.
+Component review/test results are not assembly qualification. The assembled
+reviews and targeted checks recorded below are local evidence; hosted CI and
+protected merge remain required. No nightly release qualification is claimed.
 
-Core [#353](https://github.com/ElevenID/marty-core/pull/353), source
-`fc7d029883d25a13c216756ff3e0056f2739c662`, extracts the existing canonical
-JSON digest into a narrow crate while retaining verification's public delegating
-API and exact serialization/error semantics. All required PR checks passed and
-it entered the protected merge queue; it has not merged at this checkpoint.
-UI has not adopted the new crate or changed its Core pins. Compile-surface
-savings require a reviewed consumer migration; no timing saving is inferred
-from creating the boundary alone.
+Core [#353](https://github.com/ElevenID/marty-core/pull/353) merged at 12:48:16 UTC
+as `a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7` after protected run
+`37463564302` passed. It extracts the existing canonical JSON digest into a narrow
+crate while retaining verification's public delegating API and exact
+serialization/error semantics. The merged crate/manifests/governance code are
+identical to reviewed source `fc7d029883d25a13c216756ff3e0056f2739c662`.
+
+The unpublished UI assembly `0a64af54ae2144d2359736fefc2f1cce66dceafb` adopts
+that verified main revision only for `marty-oid4vp-contract`'s digest dependency.
+Existing Core pins, frozen digest profile identifiers, domain envelopes and error
+mapping are unchanged. Package-scoped vectors (17 tests and one compile-fail
+doctest), direct-dependency guards and strict four-consumer Clippy passed.
+The reviewed consumer's distinct normal package graph entries fell from 456 to
+56 (`cargo tree --edges normal`, duplicate display references removed). This is
+a normal-dependency inventory, not a measured compile or CI timing saving.
+Flow and policy still use heavyweight verification directly, and the additional
+Core Git revision can incur fetch overhead. UI main has not adopted this batch;
+hosted qualification and protected merge remain required.
 
 ## Assembled inventory and provenance checkpoint (2026-10-06)
 
