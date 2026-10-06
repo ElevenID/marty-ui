@@ -1173,6 +1173,148 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn frozen_validation_processor_cases_fail_before_provider_reads_or_writes() {
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-validation-scenarios.json"
+        ))
+        .unwrap();
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-validation-oracle.json"
+        ))
+        .unwrap();
+        // These seven are processor dispatch, not the thirteen repository
+        // validation cases. The template-removal race remains native; this
+        // isolated seam proves only its processor error after resources vanish.
+        let expected = [
+            (
+                "invalid_roster_batch",
+                "canvas_roster_configuration_invalid",
+            ),
+            (
+                "invalid_roster_limit",
+                "canvas_roster_configuration_invalid",
+            ),
+            (
+                "invalid_roster_bounds_do_not_preempt_application",
+                "canvas_lti_identity_missing",
+            ),
+            (
+                "invalid_evidence_requirements",
+                "canvas_requirements_invalid",
+            ),
+            ("missing_lti_subject", "canvas_lti_identity_missing"),
+            (
+                "unsupported_award_candidate",
+                "canvas_sync_target_type_unsupported",
+            ),
+            (
+                "template_removed_after_application_read",
+                "canvas_application_template_unavailable",
+            ),
+        ];
+        let discovered = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["boundary"] == "processor_dispatch")
+            .map(|case| case["name"].as_str().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            discovered,
+            expected
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<std::collections::BTreeSet<_>>()
+        );
+        assert_eq!(scenarios["cases"].as_array().unwrap().len(), 20);
+
+        for (name, expected_code) in expected {
+            let mut resources = simulator_resources(vec![requirement(
+                "assignment",
+                "canvas_rest",
+                "canvas.assignment_score",
+                json!({"course_id":"1","activity_id":"2"}),
+                json!({"min_score_percent":70}),
+            )]);
+            let mut kind = CanvasSyncTargetType::LearnerApplication;
+            let mut roster_batch = None;
+            let mut roster_limit = None;
+            match name {
+                "invalid_roster_batch" => {
+                    kind = CanvasSyncTargetType::BackgroundRoster;
+                    roster_batch = Some("synthetic-invalid-bound");
+                }
+                "invalid_roster_limit" => {
+                    kind = CanvasSyncTargetType::BackgroundRoster;
+                    roster_limit = Some("synthetic-invalid-bound");
+                }
+                "invalid_roster_bounds_do_not_preempt_application" => {
+                    roster_batch = Some("synthetic-invalid-bound");
+                    roster_limit = Some("synthetic-invalid-bound");
+                    resources
+                        .application
+                        .as_mut()
+                        .unwrap()
+                        .application
+                        .integration_context = json!({"canvas":{}});
+                }
+                "invalid_evidence_requirements" => {
+                    resources.binding.insert(
+                        "evidence_requirements".into(),
+                        json!([{
+                            "requirement_id":"broken", "source":"canvas_rest",
+                            "fact_type":"not-a-canvas-fact", "scope":{},
+                            "pass_rule":{}, "required":true
+                        }]),
+                    );
+                }
+                "missing_lti_subject" => {
+                    resources
+                        .application
+                        .as_mut()
+                        .unwrap()
+                        .application
+                        .integration_context = json!({"canvas":{}});
+                }
+                "unsupported_award_candidate" => kind = CanvasSyncTargetType::AwardCandidate,
+                "template_removed_after_application_read" => {
+                    resources.application_template = None;
+                }
+                _ => unreachable!(),
+            }
+            let repository = Arc::new(SimulatorRepository {
+                resources,
+                facts: Mutex::new(Vec::new()),
+                identities: Mutex::new(None),
+                candidates: Mutex::new(BTreeMap::new()),
+                observations: Mutex::new(BTreeMap::new()),
+                observation_payloads: Mutex::new(BTreeMap::new()),
+                cursor: Mutex::new(None),
+                disabled: Mutex::new(false),
+            });
+            let provider = Arc::new(RunCountingProvider::default());
+            let processor = NativeCanvasSyncProcessor::new_with_roster_configuration(
+                repository.clone(),
+                provider.clone(),
+                enabled_config(),
+                CanvasRosterBounds::from_values(roster_batch, roster_limit),
+            );
+            let error = run_simulated(&processor, target(kind)).await.unwrap_err();
+            let frozen = &oracle[name]["observations"][0]["jobs"][0];
+            assert_eq!(error.code, expected_code, "{name}");
+            assert_eq!(error.code, frozen["last_error_code"], "{name}");
+            assert_eq!(error.summary, frozen["last_error_summary"], "{name}");
+            assert!(!error.retryable, "{name}");
+            assert_eq!(error.retry_after_seconds, None, "{name}");
+            assert!(repository.facts.lock().unwrap().is_empty(), "{name}");
+            assert!(repository.candidates.lock().unwrap().is_empty(), "{name}");
+            assert_eq!(*repository.cursor.lock().unwrap(), None, "{name}");
+            assert!(!*repository.disabled.lock().unwrap(), "{name}");
+            assert!(provider.calls.lock().unwrap().is_empty(), "{name}");
+        }
+    }
+
     #[test]
     fn candidate_ags_projection_preserves_full_learner_and_rest_observations() {
         let record = json!({"id":"result-7","resultScore":90,"resultMaximum":100,"resultStatus":"FullyGraded"});
