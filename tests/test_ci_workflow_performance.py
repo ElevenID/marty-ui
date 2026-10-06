@@ -232,7 +232,11 @@ def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
 
 
 def _classify_changed_paths(
-    changed_paths: list[str], tmp_path: Path, *, combined: bool = False
+    changed_paths: list[str],
+    tmp_path: Path,
+    *,
+    combined: bool = False,
+    event: str = "pull_request",
 ) -> list[dict[str, str]]:
     """Exercise the real Bash classifier against synthetic diffs."""
     _, document = _workflow(CI_PATH)
@@ -241,7 +245,8 @@ def _classify_changed_paths(
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    script = classifier["run"].replace("${{ github.event_name }}", "pull_request")
+    assert event in {"pull_request", "merge_group"}
+    script = classifier["run"].replace("${{ github.event_name }}", event)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
     # Git is a shell-local synthetic owner, so neither fetch nor diff touches a
@@ -1035,6 +1040,83 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         tmp_path,
         combined=True,
     )[0]["all"] == "true"
+
+
+def test_frozen_reference_test_sources_select_only_release_on_prs(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    )
+    paths = (
+        "tests/test_signing_response_reference.py",
+        "tests/test_token_rate_reference.py",
+        "tests/test_canvas_url_template_reference.py",
+    )
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    ci_source = CI_PATH.read_text(encoding="utf-8")
+    for path in paths:
+        assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
+        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        for other_workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert path not in other_workflow.read_text(encoding="utf-8")
+        assert _classify_changed_path(path, tmp_path) == selected
+
+    # This selector is for exact test sources, not reference artifacts or
+    # capture implementations. Their existing Rust/full owners must remain.
+    for path in (
+        "contracts/signing-response-python-reference.json",
+        "contracts/token-rate-python-reference.json",
+        "contracts/canvas-url-template-python-reference.json",
+    ):
+        assert _classify_changed_path(path, tmp_path)["rust"] == "true"
+    for path in (
+        "scripts/capture_signing_response_reference.py",
+        "scripts/capture_token_rate_reference.py",
+        "scripts/capture_canvas_url_template_reference.py",
+        "tests/test_signing_response_reference_helpers.py",
+        "unknown-new-input.txt",
+    ):
+        assert _classify_changed_path(path, tmp_path)["all"] == "true"
+
+    service = _classify_changed_paths(
+        [paths[0], "services/entrypoint.sh"], tmp_path, combined=True
+    )[0]
+    assert service == {
+        **selected,
+        "python": "true",
+        "rust": "true",
+        "security": "true",
+    }
+    assert _classify_changed_paths(
+        [paths[1], "unknown-new-input.txt"], tmp_path, combined=True
+    )[0] == dict.fromkeys(selected, "true")
+    assert _classify_changed_paths([paths[2]], tmp_path, event="merge_group")[
+        0
+    ] == dict.fromkeys(selected, "true")
+
+    # The security lane audits dependency graphs and reports on services/
+    # and packages/, not root tests/. Any scanner-scope change requires a
+    # selector re-audit; these assertions document the current scope only.
+    security_source = CI_PATH.read_text(encoding="utf-8")
+    assert "pip-audit -r requirements-services.txt" in security_source
+    assert "npm audit --package-lock-only --audit-level=low" in security_source
+    assert "bandit -r services/ packages/" in security_source
+    assert (
+        "semgrep scan --config=auto --json --output semgrep-report.json services/ packages/"
+        in security_source
+    )
 
 
 def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
