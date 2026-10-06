@@ -51,6 +51,21 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_marker": "&config.organization_grpc_target",
         },
     ],
+    "marty-credential-template": [
+        {
+            "package": "marty-flow",
+            "evidence": "rust/services/flow/src/config.rs",
+            "binding": "CT_GRPC_TARGET",
+            "runtime_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "runtime_marker": "&config.credential_template_grpc_target",
+            "request_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "request_marker": ".get_template(self.auth.request(GetTemplateRequest {",
+            "callsite_evidence": "rust/services/flow/src/reference_validation.rs",
+            "callsite_marker": "templates.get_template(template_id).await?",
+            "provider_evidence": "rust/services/credential-template/src/grpc_service.rs",
+            "provider_marker": ".get_template_for_internal_service(&request.get_ref().template_id)",
+        },
+    ],
     "marty-applicant": [
         {
             "package": "marty-auth",

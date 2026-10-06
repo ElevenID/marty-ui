@@ -200,6 +200,41 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-trust-profile"]["dependencies"]},
         )
 
+    def test_credential_template_flow_runtime_edge_is_observed_without_narrowing(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/credential-template/src/lib.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-credential-template"
+            and edge["package"] == "marty-flow"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        for marker, source in (
+            ("binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("callsite_marker", "callsite_evidence"),
+            ("provider_marker", "provider_evidence"),
+        ):
+            self.assertIn(
+                edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+            )
+        self.assertNotIn(
+            "marty-credential-template",
+            {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
+        )
+
     def test_trust_profile_presentation_policy_runtime_edge_is_observed(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
