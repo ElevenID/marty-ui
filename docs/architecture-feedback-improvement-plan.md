@@ -449,6 +449,16 @@ not proof that every selected case executed or complete historical provenance.
 
 ## Latest validation checkpoint
 
+### 2026-10-06 assembled follow-up review and Python milestone
+
+UI #1124 final source `5448ad90d` passed both normal `37437829353` and full `37437847991` workflows. Protected queue run `37444430694`, synthetic head `e9f140e00ab5a3b2c6e54a901e7360f817e2475e`, remains live; no merge or release qualification is claimed yet.
+
+The unpublished follow-up now combines reviewed worker-binary provenance, the guarded ten-routine/twenty-full native-validation pilot, and exact-once passing harness-row checks for its PostgreSQL and unit replacement owners. Ignored, failed, missing, duplicate or substituted owner results fail closed. All twenty native cases remain in full qualification; historical qualification is unchanged. The processor's fifteen unit tests moved into a same-directory cfg(test) source leaf, preserving namespace, all fifty helper/test function names, 536 quoted literals and seven fixture paths. Production text outside the module replacement is unchanged. All fifteen moved tests and 43 relevant producer/closure/context policy checks passed; the leaf is excluded from all three release Docker contexts.
+
+A separately reviewed PR-only classifier can narrow feedback only for a nonempty set of the nine exact proven test leaves. Contracts execution, Rust lint/supply-chain, CodeQL and public/release checks remain; mixed/unknown inputs, proof failure and protected merge groups retain the full plan. CI Gate validates the runtime/matrix tuple, not merely aggregate matrix success. This has no measured hosted speed benefit yet and must not be described as selective service validation.
+
+The assembled full-mode local Python milestone with the digest-verified CI `marty_common` wheel finished with 5,779 passes, 29 existing platform/opt-in skips, 32 subtests, and four failures in 593.12s. Three failures are old policy assumptions about the former static matrix/runtime selector; their corrections must retain explicit affected-input and mandatory-owner checks. The fourth exposed an existing Windows child-output cleanup race: the intended output-limit rejection was masked by an open-file cleanup error. Fixes and review are in progress; this milestone is not a passing qualification. Do not publish this batch until those findings are resolved and the parent is merged.
+
 ### 2026-10-06 next local maintenance batch (unpublished)
 
 The reviewed #1124 final source is `5448ad90d744bce86df62bbc7a775e82954be3bb`; normal run `37437829353` and full run `37437847991` target that same source. Earlier failed candidate runs are obsolete, not qualification evidence. Keep this next batch unpublished until the parent is merged and rebase onto then-current main before opening its maintenance PR.
