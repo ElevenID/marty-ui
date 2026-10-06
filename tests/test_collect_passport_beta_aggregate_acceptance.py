@@ -96,6 +96,7 @@ def fixture(tmp_path: Path, monkeypatch):
         "production_snapshot_sha256": "f" * 64,
         "production_attachments_sha256": "6" * 64,
         "target_services": sorted(ALL_APPS),
+        "old_container_ids_by_service": {"openbao": "7" * 64},
         "expected_networks_by_service": {
             name: [NETWORK] for name in (*sorted(ALL_APPS), "postgres")},
         "recreate_applications": sorted(ALL_APPS - INGRESS),
@@ -150,6 +151,44 @@ def fixture(tmp_path: Path, monkeypatch):
                   "StartedAt": ui_identity["started_at"]},
         "NetworkSettings": {"Networks": {NETWORK: {}}},
     }
+    ceremony_intent_path = tmp_path / "aggregate-deployment.json.issuer-ceremony-intent.json"
+    ceremony_intent = {
+        "schema": "marty.passport-beta-aggregate-ceremony-intent/v1",
+        "source_commit": COMMIT,
+        "gateway_container_id": identities["gateway"]["container_id"],
+        "application_file_sha256": "1" * 64,
+        "issuer_chain_file_sha256": "2" * 64,
+        "ceremony_file_sha256": "5" * 64,
+    }
+    write(ceremony_intent_path, ceremony_intent)
+    ceremony_path = tmp_path / "aggregate-deployment.json.issuer-ceremony.json"
+    ceremony = {
+        **ceremony_intent,
+        "schema": "marty.passport-beta-aggregate-ceremony/v1",
+        "verified": True,
+        "intent_file_sha256": digest(ceremony_intent_path),
+        "csca_certificate_sha256": "3" * 64,
+        "dsc_certificate_sha256": "4" * 64,
+        "gateway_request_traces_verified": True,
+        "profile_creation_verified": True,
+        "certificate_chain_verified": True,
+    }
+    write(ceremony_path, ceremony)
+    kms_path = tmp_path / "aggregate-deployment.json.kms-pretransition.json"
+    kms = {
+        "schema": "marty.passport-beta-aggregate-kms-pretransition/v1",
+        "verified": True, "source_commit": COMMIT,
+        "application_file_sha256": "1" * 64,
+        "issuer_chain_file_sha256": "2" * 64,
+        "signing_keys_container_id": identities["signing-keys"]["container_id"],
+        "openbao_container_id": plan["old_container_ids_by_service"]["openbao"],
+        "csca_certificate_sha256": "3" * 64,
+        "dsc_certificate_sha256": "4" * 64,
+        "key_versions": {"csca": 1, "dsc": 2},
+        "managed_kms_custody_verified": True, "chain_verified": True,
+        "private_key_exported": False,
+    }
+    write(kms_path, kms)
     receipt = {
         "schema": "marty.passport-beta-aggregate-deployment/v1",
         "beta_origin": "https://beta.elevenidllc.com",
@@ -158,6 +197,10 @@ def fixture(tmp_path: Path, monkeypatch):
         "production_snapshot_sha256": plan["production_snapshot_sha256"],
         "beta_services": sorted(identities), "beta_runtime": identities,
         "ui_container_id": ui_id, "ui_runtime": ui_identity,
+        "issuer_ceremony_receipt_sha256": digest(ceremony_path),
+        "issuer_ceremony": ceremony,
+        "kms_pretransition_receipt_sha256": digest(kms_path),
+        "kms_pretransition": kms,
         "acceptance_pending": True,
     }
     write(tmp_path / "aggregate-deployment.json", receipt)
@@ -192,6 +235,55 @@ def test_collects_exact_aggregate_generation_without_old_manifests(tmp_path, mon
     assert set(report["runtime_images"]) == set(SERVICES)
     assert "SECRET_TOKEN" not in json.dumps(report)
     assert seen == [(tmp_path / "stack-manifest.json", COMMIT, True)]
+
+
+@pytest.mark.parametrize("change", ["missing", "exported", "rotated"])
+def test_rejects_missing_or_changed_pretransition_kms_proof(tmp_path, monkeypatch, change):
+    _, receipt, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    kms_path = tmp_path / "aggregate-deployment.json.kms-pretransition.json"
+    if change == "missing":
+        kms_path.unlink()
+    elif change == "exported":
+        kms = json.loads(kms_path.read_text(encoding="utf-8"))
+        kms["private_key_exported"] = True
+        write(kms_path, kms)
+        receipt["kms_pretransition_receipt_sha256"] = digest(kms_path)
+        receipt["kms_pretransition"] = kms
+        write(tmp_path / "aggregate-deployment.json", receipt)
+    else:
+        kms = json.loads(kms_path.read_text(encoding="utf-8"))
+        kms["key_versions"]["dsc"] = 3
+        write(kms_path, kms)
+    with pytest.raises(EvidenceError, match="managed issuer|Invalid evidence file"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+@pytest.mark.parametrize("change", ["missing", "changed_chain", "changed_intent"])
+def test_rejects_missing_or_changed_gateway_ceremony(tmp_path, monkeypatch, change):
+    _, receipt, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    ceremony_path = tmp_path / "aggregate-deployment.json.issuer-ceremony.json"
+    intent_path = tmp_path / "aggregate-deployment.json.issuer-ceremony-intent.json"
+    if change == "missing":
+        ceremony_path.unlink()
+    elif change == "changed_chain":
+        ceremony = json.loads(ceremony_path.read_text(encoding="utf-8"))
+        ceremony["dsc_certificate_sha256"] = "6" * 64
+        write(ceremony_path, ceremony)
+        receipt["issuer_ceremony_receipt_sha256"] = digest(ceremony_path)
+        receipt["issuer_ceremony"] = ceremony
+        write(tmp_path / "aggregate-deployment.json", receipt)
+    else:
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        intent["gateway_container_id"] = "9" * 64
+        write(intent_path, intent)
+    with pytest.raises(EvidenceError, match="governed issuer|managed issuer|Invalid evidence file"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
 
 
 def test_rejects_recreated_service_after_aggregate_receipt(tmp_path, monkeypatch):
