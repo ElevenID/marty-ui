@@ -859,7 +859,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/service-acceptance/tests/support/canvas_startup_attestation.rs",
+            "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
         },
     }
     for manifest, expected in inventory_consumers.items():
