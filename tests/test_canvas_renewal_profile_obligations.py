@@ -41,6 +41,7 @@ REFUSAL = (
 KUBERNETES = (
     ROOT / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
 )
+BASE_RENDERER = ROOT / "scripts/render_base_native_runtime_fixture.py"
 REFUSAL_AND_ALLOW = (
     "anoncrypt:private-refused",
     "authcrypt:private-refused",
@@ -132,6 +133,7 @@ def _inputs() -> dict[str, str]:
         "composed": COMPOSED.read_text(encoding="utf-8"),
         "refusal": REFUSAL.read_text(encoding="utf-8"),
         "kubernetes": KUBERNETES.read_text(encoding="utf-8"),
+        "base_renderer": BASE_RENDERER.read_text(encoding="utf-8"),
     }
 
 
@@ -278,6 +280,7 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
             "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1",
             {
                 "scripts/render_base_native_runtime_fixture.py",
+                "scripts/test_base_native_issuance_compose.py",
                 "docker-compose.base.yml",
                 "docker-compose.profile.issuance-native.yml",
                 "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs",
@@ -326,6 +329,10 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
         assert f"--skip {test}" not in inputs["runner"]
     _validate_rendered_config_owner(
         inputs["source"], RENDERED_CONFIG.read_text(encoding="utf-8"), inputs["runner"]
+    )
+    assert (
+        'GATE = runpy.run_path(str(ROOT / "scripts/test_base_native_issuance_compose.py"))'
+        in inputs["base_renderer"]
     )
     kubernetes = _without_rust_comments(inputs["kubernetes"])
     assert (
@@ -413,6 +420,7 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
         "missing_completion",
         "missing_source_wiring",
         "missing_support_wiring",
+        "missing_base_helper_wiring",
         "missing_refusal_assertion",
         "missing_kubernetes_wiring",
         "missing_kubernetes_input",
@@ -443,6 +451,11 @@ def test_component_owner_inventory_rejects_drift(fault: str) -> None:
     elif fault == "missing_support_wiring":
         inputs["composed"] = inputs["composed"].replace(
             "mod renewal;", "mod absent_renewal;"
+        )
+    elif fault == "missing_base_helper_wiring":
+        inputs["base_renderer"] = inputs["base_renderer"].replace(
+            "scripts/test_base_native_issuance_compose.py",
+            "scripts/other_base_compose.py",
         )
     elif fault == "missing_refusal_assertion":
         inputs["refusal"] = inputs["refusal"].replace(

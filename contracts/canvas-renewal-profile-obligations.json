@@ -19,7 +19,7 @@
       "source": "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs",
       "runner_completion_marker": "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1",
       "assertions": ["Four exact authcrypt/anoncrypt × private-address allow/refuse rendered combinations", "Native DIDComm private-IP, TLS CA, encryption policy and DID-web peer fields; Gateway issuance and Redis endpoints"],
-      "direct_inputs": ["scripts/render_base_native_runtime_fixture.py", "docker-compose.base.yml", "docker-compose.profile.issuance-native.yml", "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs"],
+      "direct_inputs": ["scripts/render_base_native_runtime_fixture.py", "scripts/test_base_native_issuance_compose.py", "docker-compose.base.yml", "docker-compose.profile.issuance-native.yml", "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs"],
       "runtime_prerequisites": ["Linux test target", "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1", "Python fixture renderer and configured Compose binary"],
       "does_not_prove": "Rendered configuration is not real TLS, DIDComm encryption, PostgreSQL, ingress, wallet delivery, packaged-process or container cleanup evidence."
     },
