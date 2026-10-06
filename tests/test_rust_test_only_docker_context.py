@@ -34,6 +34,12 @@ TEST_LEAVES = {
     "signing_http_response_tests.rs": "signing_http_response.rs",
     "token_rate_limit_http_tests.rs": "http.rs",
 }
+OID4VP_TEST_TARGETS = (
+    "contract_vectors.rs",
+    "transport_metadata.rs",
+)
+OID4VP_TEST_ROOT = "rust/crates/oid4vp-contract/tests/"
+OID4VP_CORPUS = "contracts/oid4vp-authenticated-contract-v1.json"
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -97,6 +103,15 @@ def _is_ignored(path: str, lines: list[str]) -> bool:
             matches = path.startswith(pattern)
         elif pattern == "**":
             matches = True
+        elif pattern in {"rust/services/*/tests", "rust/crates/*/tests"}:
+            # These owned directory rules exclude their descendants. Keep
+            # this bounded to the two actual Dockerignore patterns; a later
+            # negation still wins under the ordered rule loop below.
+            prefix = pattern.split("/*/", 1)[0] + "/"
+            parts = (
+                path.removeprefix(prefix).split("/") if path.startswith(prefix) else []
+            )
+            matches = len(parts) >= 2 and bool(parts[0]) and parts[1] == "tests"
         elif "*" not in pattern:
             matches = path == pattern or path.startswith(pattern + "/")
         else:
@@ -249,6 +264,91 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         .splitlines()
     )
     assert not _is_ignored("services/auth/assets/credential-login.js", public_lines)
+    for path in (
+        "services/common/__init__.py",
+        "services/common/events.py",
+        "services/common/grpc_event_bus.py",
+    ):
+        assert _is_ignored(path, public_lines), path
+
+
+def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None:
+    # These are Cargo auto-discovered integration targets, not cfg(test)
+    # modules. Keep their ownership proof separate from TEST_LEAVES.
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/oid4vp-contract/Cargo.toml").read_text(encoding="utf-8")
+    )
+    assert manifest["package"]["name"] == "marty-oid4vp-contract"
+    assert manifest["package"].get("autotests", True) is True
+    assert "build" not in manifest["package"]
+    assert not (ROOT / "rust/crates/oid4vp-contract/build.rs").exists()
+    assert not any(kind in manifest for kind in ("test", "bin", "example", "bench"))
+    assert _tracked_paths(ROOT, OID4VP_TEST_ROOT + "*.rs") == [
+        OID4VP_TEST_ROOT + name for name in OID4VP_TEST_TARGETS
+    ]
+    assert not _ownership_sources(ROOT, OID4VP_TEST_TARGETS), (
+        "Review new Rust source consumer of the auto-discovered test targets"
+    )
+
+    vectors = (ROOT / (OID4VP_TEST_ROOT + "contract_vectors.rs")).read_text(
+        encoding="utf-8"
+    )
+    transport = (ROOT / (OID4VP_TEST_ROOT + "transport_metadata.rs")).read_text(
+        encoding="utf-8"
+    )
+    expected_corpus_include = 'include_str!(\n        "../../../../contracts/oid4vp-authenticated-contract-v1.json"\n    )'
+    assert vectors.count(expected_corpus_include) == 1
+    assert vectors.count("include_str!") == 1
+    for source in (vectors, transport):
+        assert not re.search(r"#\[path\s*=|\binclude(?:_bytes)?!", source)
+    assert "include_str!" not in transport
+
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for name in OID4VP_TEST_TARGETS:
+            path = OID4VP_TEST_ROOT + name
+            assert _is_ignored(path, lines), (
+                f"Docker COPY still includes {ignore_path}: {path}"
+            )
+            assert not _is_ignored(path, [*lines, f"!{path}"])
+            assert not _is_ignored(path, [*lines, "!**"])
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1, f"Root exclusion must be exact: {path}"
+        assert not _is_ignored(OID4VP_CORPUS, lines)
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(OID4VP_TEST_ROOT + "unreviewed.rs", root_lines)
+
+
+def test_oid4vp_verified_path_proof_rejects_new_rust_consumer(
+    monkeypatch,
+) -> None:
+    import pytest
+
+    original = _ownership_sources
+
+    def with_production_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
+        result = original(root, names)
+        result["rust/services/issuance/src/lib.rs"] = 'include!("contract_vectors.rs");'
+        return result
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_ownership_sources", with_production_consumer
+    )
+    with pytest.raises(AssertionError, match="new Rust source consumer"):
+        test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts()
+
+
+def test_public_context_rejects_reincluded_python_event_adapter() -> None:
+    lines = (
+        (ROOT / "services/Dockerfile.dockerignore")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    path = "services/common/grpc_event_bus.py"
+    assert _is_ignored(path, lines)
+    assert not _is_ignored(path, [*lines, "!**"])
+    assert not _is_ignored(path, [*lines, "!services/common/**"])
 
 
 def test_ownership_snapshot_reads_and_lexes_shared_source_once(monkeypatch) -> None:
@@ -364,8 +464,11 @@ if __name__ == "__main__":
         raise SystemExit(
             "Usage: test_rust_test_only_docker_context.py --emit-verified-leaves"
         )
-    # CI may narrow only when the exact owner, target and image-context proof
-    # still holds. The release pytest lane runs the same assertion separately.
+    # CI may narrow only when both exact module and auto-target ownership,
+    # corpus and image-context proofs still hold. Release pytest repeats them.
     test_exact_test_only_leaves_do_not_invalidate_release_docker_copy()
+    test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts()
     for leaf in TEST_LEAVES:
         sys.stdout.buffer.write((ISSUANCE_SRC + leaf).encode("utf-8") + b"\0")
+    for name in OID4VP_TEST_TARGETS:
+        sys.stdout.buffer.write((OID4VP_TEST_ROOT + name).encode("utf-8") + b"\0")

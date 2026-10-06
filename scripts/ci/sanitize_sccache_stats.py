@@ -4,7 +4,6 @@ import json
 import re
 import sys
 
-
 FIELDS = {
     "Compile requests": "compile_requests",
     "Compile requests executed": "compile_requests_executed",
@@ -31,4 +30,16 @@ def sanitize(lines: list[str]) -> dict[str, int]:
 
 
 if __name__ == "__main__":
-    print(json.dumps({"schema_version": 1, "counters": sanitize(sys.stdin.readlines())}, sort_keys=True))
+    counters = sanitize(sys.stdin.readlines())
+    if not counters:
+        raise SystemExit("No allowlisted sccache counters available")
+    print(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "capture_point": "after_reusable_host_compile_step",
+                "counters": counters,
+            },
+            sort_keys=True,
+        )
+    )

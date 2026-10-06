@@ -332,7 +332,7 @@ def _classify_changed_paths(
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    assert event in {"pull_request", "merge_group"}
+    assert event in {"pull_request", "merge_group", "push"}
     script = classifier["run"].replace("${{ github.event_name }}", event)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
@@ -449,8 +449,12 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 11
+    assert verified[-1] == b"" and len(verified) == 13
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    assert leaves[-2:] == [
+        "rust/crates/oid4vp-contract/tests/contract_vectors.rs",
+        "rust/crates/oid4vp-contract/tests/transport_metadata.rs",
+    ]
     nested = (
         "rust/services/issuance/src/initiation_didcomm/tests/"
         "initiation_didcomm_renewal_tests.rs"
@@ -486,7 +490,13 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert mixed["rust_matrix"] == '["canvas","contracts"]'
     for paths in (
         ["rust/services/issuance/src/unreviewed_tests.rs"],
+        ["rust/crates/oid4vp-contract/tests/unreviewed.rs"],
+        ["rust/crates/oid4vp-contract/tests/contract_vectors.rs\nother"],
+        ["rust/crates/oid4vp-contract/src/lib.rs"],
+        ["contracts/oid4vp-authenticated-contract-v1.json"],
         [leaves[0], "docs/renamed-test-source.md"],
+        [leaves[-1], "rust/crates/oid4vp-contract/src/lib.rs"],
+        [leaves[-1], "rust/crates/oid4vp-contract/tests/renamed_metadata.rs"],
     ):
         selected = _classify_changed_paths(
             paths, tmp_path, combined=True, include_rust_plan=True
@@ -504,6 +514,16 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert nested_without_proof["rust_runtime"] == "true"
     assert nested_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    oid_without_proof = _classify_changed_paths(
+        [leaves[-1]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert oid_without_proof["rust_runtime"] == "true"
+    assert oid_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    oid_deleted = _classify_changed_paths(
+        [leaves[-2]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert oid_deleted["rust_runtime"] == "true"
+    assert oid_deleted["rust_matrix"] == '["canvas","contracts"]'
     empty = _classify_changed_paths(
         [], tmp_path, combined=True, include_rust_plan=True
     )[0]
@@ -514,6 +534,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
     assert queued["rust_matrix"] == '["canvas","contracts"]'
+    on_main = _classify_changed_paths(
+        [leaves[-1]], tmp_path, event="push", include_rust_plan=True
+    )[0]
+    assert on_main["rust_runtime"] == "true"
+    assert on_main["rust_matrix"] == '["canvas","contracts"]'
 
 
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
@@ -891,6 +916,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     canvas = {
         "Prepare isolated Canvas worker harness dependencies",
         "Require Kubernetes deployment contract executables",
+        "Fail fast on image-free Canvas renewal configuration",
         "Compile Bookworm-compatible base runtime acceptance",
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
@@ -928,6 +954,25 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]
     assert "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s" in renderer["run"]
     names = [step.get("name") for step in job["steps"]]
+    early = steps["Fail fast on image-free Canvas renewal configuration"]["run"]
+    assert early.count("bash scripts/ci/install-compose-renderer.sh") == 1
+    assert "run-canvas-config-proofs.py run" in early
+    assert "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1" in early
+    assert "MARTY_DIDCOMM_TEST_PYTHON" in early
+    assert "docker " not in early and "cargo " not in early
+    assert (
+        "install-compose-renderer.sh"
+        not in steps["Prepare required rendered base executable acceptance"]["run"]
+    )
+    late = steps["Prepare required rendered base executable acceptance"]["run"]
+    assert "docker pull redis:7-alpine" in late
+    assert "docker build --tag marty-envoy:native-contract config/envoy" in late
+    assert (
+        names.index("Compile reusable Rust test executables")
+        < names.index("Fail fast on image-free Canvas renewal configuration")
+        < names.index("Compile Bookworm-compatible base runtime acceptance")
+        < names.index("Build public selfhost image")
+    )
     assert (
         names.index("Compile reusable Rust test executables")
         < names.index("Prepare pinned standalone Compose renderer for Rust contracts")
@@ -1599,13 +1644,28 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
 
 
 def _assert_required_canvas_target_completion(published: str) -> None:
+    assert "(( composition_status == 0 && worker_status == 0 ))" in published
+    assert published.index(
+        "(( composition_status == 0 && worker_status == 0 ))"
+    ) < published.index("if (( expected_skipped_config_tests == 0 )); then")
+    assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
+    assert (
+        published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2
+    )
+    assert (
+        published.count("grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1'")
+        == 2
+    )
+    assert (
+        published.count("grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1'")
+        == 1
+    )
+    assert (
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
+        in published
+    )
+    assert '"${config_skips[@]}" --nocapture --test-threads=4' in published
     assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "
-        '\"$composition_log\" | wc -l) == 1 ]] || {\n'
-        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
-        "  exit 1\n"
-        "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
     )
@@ -1924,7 +1984,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -1946,7 +2006,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
         in published
     )
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
@@ -1999,7 +2059,7 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -2108,8 +2168,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")
@@ -2792,14 +2852,27 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
     jobs = ci["jobs"]
     scripts = {}
     for job_name in ("test-rust-services", "rust-lint-policy"):
+        step_name = (
+            "Capture host compiler cache counters after compile"
+            if job_name == "test-rust-services"
+            else "Report compiler cache effectiveness"
+        )
         step = next(
-            step
-            for step in jobs[job_name]["steps"]
-            if step.get("name") == "Report compiler cache effectiveness"
+            step for step in jobs[job_name]["steps"] if step.get("name") == step_name
         )
         assert step["if"] == "always()"
         assert not step.get("continue-on-error", False)
         scripts[job_name] = step["run"]
+    service_steps = jobs["test-rust-services"]["steps"]
+    service_names = [step.get("name") for step in service_steps]
+    assert service_names.index(
+        "Capture host compiler cache counters after compile"
+    ) == (service_names.index("Compile reusable Rust test executables") + 1)
+    late_report = service_steps[
+        service_names.index("Report compiler cache effectiveness")
+    ]["run"]
+    assert "sccache --show-stats" not in late_report
+    assert "cp rust/target/cargo-timings/cargo-timing.html" in late_report
 
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
@@ -2823,7 +2896,9 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
     for exit_code in ("0", "17"):
         for job_name, script in scripts.items():
             stats_file.unlink(missing_ok=True)
-            environment = dict(os.environ, TEST_SCCACHE_EXIT=exit_code)
+            environment = dict(
+                os.environ, TEST_SCCACHE_EXIT=exit_code, RUSTC_WRAPPER="sccache"
+            )
             environment.pop("BASH_ENV", None)
             environment.pop("ENV", None)
             result = subprocess.run(
@@ -2843,6 +2918,35 @@ def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
             )
             if exit_code == "17":
                 assert "Optional compiler cache stats unavailable" in result.stdout
+
+    # The late report may copy Cargo timings, but cannot replace the early
+    # snapshot with idle-daemon zero counters or an unavailable-cache result.
+    stats_file.write_text('{"early":true}\n', encoding="utf-8")
+    environment = dict(os.environ, TEST_SCCACHE_EXIT="17", RUSTC_WRAPPER="sccache")
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input='export RUNNER_TEMP="$PWD/runner-temp"\n' + late_report,
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert stats_file.read_text(encoding="utf-8") == '{"early":true}\n'
+    stats_file.unlink()
+    environment["RUSTC_WRAPPER"] = ""
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"],
+        input='export RUNNER_TEMP="$PWD/runner-temp"\n' + scripts["test-rust-services"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0 and not stats_file.exists()
+    assert "Optional compiler cache unavailable" in result.stdout
 
 
 def test_release_cache_probe_is_main_only_and_cannot_invalidate_builder() -> None:

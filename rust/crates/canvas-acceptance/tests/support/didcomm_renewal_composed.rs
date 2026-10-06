@@ -41,20 +41,23 @@ impl Scenario {
 }
 
 /// An explicitly historical active source, never a fabricated successor or send.
-async fn seed_source(pool: &PgPool, graph: &DeliveryGraph, id: &str, scenario: Scenario) -> String {
+async fn seed_source(
+    pool: &PgPool,
+    repository: &PostgresCredentialRepository,
+    id: &str,
+    scenario: Scenario,
+    holder_did: Option<&str>,
+) -> String {
     let source_id = format!("source-{id}");
     let mut source = transaction(&format!("source-tx-{id}"));
     source.status = CredentialTransactionStatus::Issued;
     source.renewable = true;
     source.application_id = Some(format!("application-{id}"));
-    source.subject_did = (scenario != Scenario::MissingHolder).then(|| HOLDER.into());
+    source.subject_did =
+        (scenario != Scenario::MissingHolder).then(|| holder_did.unwrap_or(HOLDER).to_owned());
     source.reserved_credential_id = Some(source_id.clone());
     source.expires_at = source.created_at + chrono::Duration::days(1);
-    let reserved = graph
-        .repository
-        .reserve_idempotently(&source)
-        .await
-        .unwrap();
+    let reserved = repository.reserve_idempotently(&source).await.unwrap();
     assert!(reserved.created);
     assert_eq!(reserved.transaction, source);
     sqlx::query(
@@ -264,7 +267,7 @@ async fn run_case(pool: &PgPool, authenticated: bool, scenario: Scenario, gatewa
         true,
     )
     .await;
-    let source = seed_source(pool, &graph, &id, scenario).await;
+    let source = seed_source(pool, &graph.repository, &id, scenario, None).await;
     let source_before = snapshot(pool, &format!("source-tx-{id}")).await;
     assert_eq!(
         snapshot(pool, &id).await,
@@ -554,5 +557,177 @@ pub(super) async fn run(pool: &PgPool, gateway: bool) {
         ] {
             run_case(pool, authenticated, scenario, gateway).await;
         }
+    }
+}
+
+#[derive(Default)]
+struct NoPrivateAddressSend {
+    attempts: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl marty_issuance_service::initiation_didcomm::DidcommTransportPort for NoPrivateAddressSend {
+    async fn deliver(
+        &self,
+        _: &marty_issuance_service::initiation_didcomm::ValidatedDidcommEndpoint,
+        _: String,
+    ) -> marty_issuance_service::initiation_didcomm::DidcommTransportOutcome {
+        self.attempts.fetch_add(1, Ordering::SeqCst);
+        panic!("private-IP refusal must precede wallet transport")
+    }
+}
+
+/// A published-SQL refusal handoff without an application process, peer server,
+/// wallet listener, or HTTP send. Authcrypt/anoncrypt are configured variants;
+/// endpoint refusal intentionally precedes either encryption branch.
+pub(super) async fn run_private_ip_refusal(pool: &PgPool) {
+    use marty_issuance_service::initiation_didcomm::{
+        InitiationDidcommRepository, InitiationDidcommTransportClaimOutcome, NativeDidcommError,
+        NativeInitiationDidcommDeliveryError,
+    };
+
+    let repository = Arc::new(PostgresCredentialRepository::new(
+        pool.clone(),
+        b"synthetic-renewal-private-ip-hmac",
+    ));
+    for authenticated in [false, true] {
+        let mode = if authenticated {
+            "authcrypt"
+        } else {
+            "anoncrypt"
+        };
+        let id = format!("renewal-private-ip-pg-{mode}");
+        let endpoint = "https://127.0.0.1:18443/didcomm";
+        let service = json!({
+            "id": "#didcomm-1",
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": endpoint,
+        });
+        let holder_did = format!(
+            "did:peer:2.E{}.S{}",
+            super::super::didcomm_test_fixtures::SYNTHETIC_RECIPIENT_MULTIBASE,
+            URL_SAFE_NO_PAD.encode(service.to_string())
+        );
+        let source = seed_source(
+            pool,
+            &repository,
+            &id,
+            Scenario::Automatic,
+            Some(&holder_did),
+        )
+        .await;
+        let source_before = snapshot(pool, &format!("source-tx-{id}")).await;
+        assert_eq!(
+            snapshot(pool, &id).await,
+            json!({"transaction":null,"credentials":[],"deliveries":[],"events":[]})
+        );
+
+        let policy_dir = tempfile::tempdir().unwrap();
+        let policy = policy_dir.path().join("didcomm-policy.json");
+        let (_, sender_secret, _, _) =
+            super::super::didcomm_test_fixtures::authcrypt_parties_with_ids(ISSUER, HOLDER);
+        let mode_policy = if authenticated {
+            json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(sender_secret)})
+        } else {
+            json!({"mode":"anoncrypt"})
+        };
+        std::fs::write(
+            &policy,
+            json!({"version":1,"issuers":{(ISSUER):mode_policy}}).to_string(),
+        )
+        .unwrap();
+        let builder = Arc::new(ControlledBuilder {
+            calls: AtomicUsize::new(0),
+            allocations: Arc::new(Mutex::new(Vec::new())),
+            gate: None,
+        });
+        let transport = Arc::new(NoPrivateAddressSend::default());
+        let lifecycle = PostgresCredentialLifecycle::new(
+            pool.clone(),
+            url::Url::parse("http://127.0.0.1:9").unwrap(),
+            Some(SERVICE_TOKEN),
+            Duration::from_secs(5),
+            CanvasGuardConfig {
+                enabled: false,
+                pilot_organizations: BTreeSet::new(),
+                evidence_max_age: Duration::from_secs(900),
+                readiness_max_age: Duration::from_secs(900),
+            },
+        )
+        .unwrap();
+        let issuer = Arc::new(ControlledIssuer);
+        let delivery = Arc::new(
+            NativeInitiationDidcommDelivery::new(
+                NativeInitiationDidcommPorts {
+                    repository: repository.clone(),
+                    issuer_resolver: issuer.clone(),
+                    builder: builder.clone(),
+                    lifecycle: Arc::new(lifecycle),
+                    envelope: Arc::new(NativeDidcommEnvelope::new(
+                        None,
+                        None,
+                        Some(policy.to_str().unwrap()),
+                    )),
+                    endpoints: Arc::new(DidcommEndpointValidator::new(false)),
+                    transport: transport.clone(),
+                },
+                "https://issuer.example",
+            )
+            .unwrap(),
+        );
+        let (service, projector, admission) = fresh_initiation::services(
+            repository.clone(),
+            delivery.clone(),
+            issuer,
+            &id,
+            FreshScenario::SubjectOnly,
+        );
+        let router = credential_renewal::router(CredentialRenewalService::new(
+            repository.clone(),
+            InitiationHttpService::new(service, projector, Some(API_KEY)),
+            Some(API_KEY),
+            admission.clone(),
+        ));
+        let (status, response) = renewal_response(&router, &source).await;
+        assert_eq!(status, StatusCode::OK, "{mode}: {response}");
+        assert_eq!(response["source_credential_id"], source);
+        assert_eq!(response["transaction_id"], id);
+        assert_eq!(
+            response["credential_offer_uris"]["didcomm"],
+            format!("didcomm://pending?transaction_id={id}")
+        );
+        assert_eq!(admission.seeds.load(Ordering::SeqCst), 1);
+        let state = snapshot(pool, &id).await;
+        assert_prelinks(&state, &id, &source);
+        assert_eq!(state["transaction"]["status"], "pending");
+        assert!(state["transaction"]["reserved_credential_id"].is_null());
+        for rows in ["credentials", "deliveries", "events"] {
+            assert_eq!(state[rows], json!([]), "{mode}: {rows}");
+        }
+        assert_eq!(
+            snapshot(pool, &format!("source-tx-{id}")).await,
+            source_before
+        );
+        assert!(matches!(
+            repository
+                .claim_transport(ORGANIZATION, &id, &holder_did)
+                .await
+                .unwrap(),
+            InitiationDidcommTransportClaimOutcome::Absent
+        ));
+        // Independently exercise the same native delivery port on the persisted
+        // successor. The renewal route's pending offer is not itself a typed
+        // endpoint-error response, so do not infer the reason from status 200.
+        assert!(matches!(
+            delivery
+                .deliver_for_organization(ORGANIZATION, &id, &holder_did)
+                .await,
+            Err(NativeInitiationDidcommDeliveryError::Prerequisite(
+                NativeDidcommError::EndpointNotPublic
+            ))
+        ));
+        assert_eq!(builder.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(transport.attempts.load(Ordering::SeqCst), 0);
+        assert_eq!(snapshot(pool, &id).await, state);
     }
 }

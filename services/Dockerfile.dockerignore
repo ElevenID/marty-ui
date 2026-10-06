@@ -18,6 +18,7 @@ contracts/canvas-renewal-profile-obligations.json
 !services/auth/
 !services/auth/assets/
 !services/auth/assets/**
+services/common/
 !scripts/
 !scripts/build-rust-service-binaries.sh
 !scripts/load-secrets-env.sh

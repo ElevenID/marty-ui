@@ -210,6 +210,39 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "identity_marker": "returned_id != profile_id || returned_organization != organization_id",
         },
     ],
+    "marty-signing-keys": [
+        # Flow's request-object signer and HAIP response-key envelope use the
+        # same authenticated Signing Keys HTTP provider. This is source-backed
+        # reachability, not proof that all service obligations are mapped.
+        {
+            "package": "marty-flow",
+            "evidence": "rust/services/flow/src/config.rs",
+            "binding": '"SIGNING_KEYS_INTERNAL_URL"',
+            "runtime_evidence": "rust/services/flow/src/connections.rs",
+            "runtime_marker": "HttpSigningProvider::new(",
+            "startup_marker": "signing.health_check().await?;",
+            "signing_registration_marker": "signing_identity: Some(signing.clone()),",
+            "envelope_registration_marker": "flow_key_envelope: Some(signing),",
+            "request_evidence": "rust/services/flow/src/http_providers.rs",
+            "request_marker": '"resolve-issuer-did",',
+            "sign_marker": '"issuer-dids/sign",',
+            "response_marker": "result.validate_binding(request)?;",
+            "wrap_marker": '"flow-key-envelopes/wrap",',
+            "unwrap_marker": '"flow-key-envelopes/unwrap",',
+            "callsite_evidence": "rust/services/flow/src/request_object.rs",
+            "callsite_marker": "let compact_jwt = sign_payload(",
+            "envelope_callsite_marker": "response_encryption_key(providers, &instance).await?",
+            "callback_evidence": "rust/services/flow/src/verification_submission.rs",
+            "callback_marker": ".unwrap(&FlowKeyEnvelope {",
+            "provider_evidence": "rust/services/signing-keys/src/http.rs",
+            "provider_marker": '"/internal/compat/issuer-dids/sign"',
+            "provider_handler_marker": "async fn issuer_did_sign(",
+            "provider_wrap_marker": '"/internal/flow-key-envelopes/wrap"',
+            "provider_wrap_handler_marker": "async fn wrap_flow_key(",
+            "provider_unwrap_marker": '"/internal/flow-key-envelopes/unwrap"',
+            "provider_unwrap_handler_marker": "async fn unwrap_flow_key(",
+        },
+    ],
     "marty-presentation-policy": [
         {
             "package": "marty-flow",

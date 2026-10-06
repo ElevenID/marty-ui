@@ -164,12 +164,8 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
 
 
 def test_native_launch_has_no_post_render_smoke_overrides():
-    renderer = (
-        ACCEPTANCE_SUPPORT / "rendered_base_process.rs"
-    ).read_text()
-    text = (
-        ACCEPTANCE_SUPPORT / "resolved_runtime.rs"
-    ).read_text()
+    renderer = (ACCEPTANCE_SUPPORT / "rendered_base_process.rs").read_text()
+    text = (ACCEPTANCE_SUPPORT / "resolved_runtime.rs").read_text()
     assert re.search(r"\.env_clear\(\)\s*\.envs\(environment\)", text)
     assert "isolated_smoke_command" not in text + renderer
     assert "MARTY_BASE_COMPOSE_BINARY" in renderer
@@ -249,6 +245,27 @@ def runtime_ci(workflow):
     job = workflow["jobs"]["test-rust-services"]
     assert job["runs-on"] == "ubuntu-latest"
     assert not job.get("continue-on-error", False)
+    names = [item.get("name") for item in job["steps"]]
+    renderer_name = "Fail fast on image-free Canvas renewal configuration"
+    assert names.count(renderer_name) == 1
+    renderer_index = names.index(renderer_name)
+    renderer = job["steps"][renderer_index]
+    assert renderer["if"] == "matrix.lane == 'canvas'"
+    assert renderer["shell"] == "bash"
+    assert not renderer.get("continue-on-error", False)
+    renderer_lines = renderer["run"].splitlines()
+    assert renderer_lines == [
+        "set -euo pipefail",
+        "bash scripts/ci/install-compose-renderer.sh",
+        'export MARTY_BASE_COMPOSE_BINARY="$RUNNER_TEMP/compose-render-v5.4.0"',
+        'MARTY_DIDCOMM_TEST_PYTHON="$(command -v python3)"',
+        "export MARTY_DIDCOMM_TEST_PYTHON",
+        "export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1",
+        'printf \'MARTY_BASE_COMPOSE_BINARY=%s\\n\' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"',
+        'printf \'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\\n\' "$MARTY_BASE_COMPOSE_BINARY" >> "$GITHUB_ENV"',
+        'printf \'MARTY_DIDCOMM_TEST_PYTHON=%s\\n\' "$MARTY_DIDCOMM_TEST_PYTHON" >> "$GITHUB_ENV"',
+        'python3 scripts/ci/run-canvas-config-proofs.py run "$RUNNER_TEMP/rust-test-artifacts.json"',
+    ]
     name = "Prepare required rendered base executable acceptance"
     matches = [
         (i, item) for i, item in enumerate(job["steps"]) if item.get("name") == name
@@ -261,7 +278,7 @@ def runtime_ci(workflow):
     lines = step["run"].splitlines()
     assert lines == [
         "set -euo pipefail",
-        "bash scripts/ci/install-compose-renderer.sh",
+        'test -x "$MARTY_BASE_COMPOSE_BINARY"',
         "test -x rust/target/debug/marty-issuance-service",
         "test -x rust/target/debug/marty-gateway",
         "test -x rust/target/debug/marty-flow",
@@ -271,12 +288,14 @@ def runtime_ci(workflow):
         "docker build --tag marty-envoy:native-contract config/envoy",
         "envoy_image_id=\"$(docker image inspect --format '{{.Id}}' marty-envoy:native-contract)\"",
         'printf \'MARTY_ENVOY_TEST_IMAGE=%s\\n\' "$envoy_image_id" >> "$GITHUB_ENV"',
-        'printf \'MARTY_BASE_COMPOSE_BINARY=%s\\n\' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"',
-        'printf \'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\\n\' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"',
-        'printf \'MARTY_DIDCOMM_TEST_PYTHON=%s\\n\' "$(command -v python3)" >> "$GITHUB_ENV"',
+        'test -x "$MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"',
+        'test -x "$MARTY_DIDCOMM_TEST_PYTHON"',
     ]
-    names = [item.get("name") for item in job["steps"]]
-    assert names.index("Compile reusable Rust test executables") < index
+    assert names.index("Compile reusable Rust test executables") < renderer_index
+    assert renderer_index < names.index(
+        "Compile Bookworm-compatible base runtime acceptance"
+    )
+    assert renderer_index < index
     assert index < names.index("Run safe Rust contract groups concurrently")
 
 
@@ -325,9 +344,7 @@ def compatibility_ci(workflow):
     names = [step.get("name") for step in job["steps"]]
     assert names.index("Compile reusable Rust test executables") < index
     assert index < names.index("Prepare required rendered base executable acceptance")
-    source = (
-        ACCEPTANCE_SUPPORT / "base_runtime_container.rs"
-    ).read_text()
+    source = (ACCEPTANCE_SUPPORT / "base_runtime_container.rs").read_text()
     assert (
         "const COMPAT_TEST_EXECUTABLE: &str = "
         '"MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";' in source
@@ -424,7 +441,13 @@ def test_runtime_ci_requires_renderer_and_exact_executable_artifacts(fault):
     elif fault == "conditional":
         step["if"] = "false"
     elif fault == "renderer":
-        step["run"] = step["run"].replace(
+        renderer = next(
+            item
+            for item in steps
+            if item.get("name")
+            == "Fail fast on image-free Canvas renewal configuration"
+        )
+        renderer["run"] = renderer["run"].replace(
             "bash scripts/ci/install-compose-renderer.sh", "echo skipped"
         )
     elif fault == "gateway":
@@ -604,9 +627,9 @@ def test_renewal_fixtures_compare_post_migration_state_and_unique_notifications(
 
 
 def test_ordinary_token_snapshot_proves_bounded_expiry_without_ignoring_state():
-    ordinary = (
-        ACCEPTANCE_SUPPORT / "base_runtime_ordinary.rs"
-    ).read_text(encoding="utf-8")
+    ordinary = (ACCEPTANCE_SUPPORT / "base_runtime_ordinary.rs").read_text(
+        encoding="utf-8"
+    )
 
     def check(source):
         before = "let token_expiry_not_before = database_clock(pool).await;"

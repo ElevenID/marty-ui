@@ -6,7 +6,9 @@ acceptance ownership, narrow compatibility code and further fast test layers hav
 merged, including UI #1124 at `e9f140e00` and #1126 at `8d42d1bdc`. #1126's
 normal/full PR CI and protected merge-queue validation passed; it merged at
 13:11:46 UTC on 2026-10-06.
-The combined unit/renewal/typed-transport follow-up is unpublished; the separate
+The combined unit/renewal/typed-transport follow-up is published as
+[UI #1127](https://github.com/ElevenID/marty-ui/pull/1127). Its source CI
+passed; protected queue CI remains in progress at the 15:50 UTC checkpoint. The separate
 roster component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest crate,
 but UI migration and nightly
@@ -655,6 +657,16 @@ raw-credential routes distinct from signed-VP handling and reject unverified
 context flags as proof. Only then qualify the same-key wallet happy journey and
 nightly release tier on real Flow/policy/issuance results. This audit changed no
 pins, authentication behavior or release authority.
+An integration-repository review of the five candidate nightly smoke cases
+found issuance coverage but no successful verifier verdict. Its recorded
+signed-presentation replay reached policy evaluation and was denied; the
+observed outer-presentation forwarding needs investigation before any
+qualification claim. The next narrow implementation is one serial, no-skip
+disposable-stack happy journey with a real authorized principal, exact policy
+and trust fixture, same-key signed presentation, and an actual `allow` verdict
+against pinned artifacts. Only after that passes should a separate Linux
+nightly transaction bind the case result to an immutable prerelease tag and
+image digests. Existing stable release E2E and recording gates remain required.
 
 ## A6 container-input audit disposition (2026-10-06)
 
@@ -690,6 +702,13 @@ workloads, not a before/after speed comparison. Both workflows succeeded.
 This fresh evidence retains A7's deferred disposition: moving preflight work
 to another job is not yet shown to reduce the critical path, and no security,
 feature, benchmark or platform qualification is removed on that assumption.
+The newer successful [PR run 37460823351](https://github.com/ElevenID/marty-core/actions/runs/37460823351)
+had a 12m30s preflight and 18m30s affected Rust tests; protected
+[merge run 37463564302](https://github.com/ElevenID/marty-core/actions/runs/37463564302)
+had a 12m43s preflight and 18m26s Windows lane. The jobs already run in
+parallel and feed the same CI gate. A new preflight job would add runner and
+cache startup without shortening either observed critical path, so A7 remains
+deferred pending evidence that its position on the critical path changes.
 
 ## Next renewal decomposition: bounded obligations (unpublished)
 
@@ -854,6 +873,153 @@ real-render assertions, with prefix/interleaving-safe counting. Local Windows
 compilation and synthetic controls do not prove real Linux Compose execution.
 Exact-head hosted CI must supply that proof before merge; no test-tier cut or
 nightly release qualification is authorized by local readiness.
+
+## Refusal and public-context follow-up checkpoint (2026-10-06)
+
+The next unpublished batch includes independently reviewed source commits
+`de0a8ec9a69bea23abc8a5673bbc708c74e04ffc` and
+`504eb03b99ae3e9bd3855c62b48692c648faead0`, assembled as `bc50231e6` on
+#1127 source `aaae1631482e002d063e23248be2a7bb041104c4`. It is not merged or
+hosted-qualified; do not treat its local evidence as a test-tier authorization.
+
+The renewal refusal case reuses existing Rust seed/admission/delivery fixtures
+and a real owned PostgreSQL database without launching application processes.
+It checks the persisted pending successor, unchanged issued source, absent
+transport fence and issuance/delivery/event rows, typed `EndpointNotPublic`, and
+zero builder/send calls. Both encryption modes are configured, but endpoint
+refusal precedes encryption: this is not an encryption interoperability proof.
+The local opted-in case passed and owned resources were verified removed.
+The author passed 185 runner-policy tests with one skip; independent review
+cleared its source and execution guards. All existing native cases remain.
+On the assembled successor, the complete runner-policy/context sweep passed
+192 tests with one skip in 331.21s; the shared service-image policies passed
+another ten tests. Touched Python Ruff checks, shell syntax and diff checks passed.
+
+The public Dockerfile's `!services/` rule admitted Python event modules into the
+build context even though runtime `COPY` instructions do not use them. A tiny
+BuildKit probe with the exact ignore rules confirmed baseline `COPY` success
+for `services/common/events.py`, followed by missing-input failure with a later
+explicit `services/common/` exclusion. Required entrypoint/auth-asset copies
+still succeeded. The correction keeps the original matching helper and adds
+guards against later wildcard or adapter-specific re-inclusion. Seventeen
+focused policies and independent review passed. This proves a smaller input
+surface, not a measured transfer/build-time saving or complete consumer graph.
+
+A read-only follow-up found 332 files (3,936,267 bytes) under `scripts/`, but
+the public Dockerfile copies only its three named scripts (about 5 KB total).
+Those scripts do not source further scripts, and unrelated scripts cannot enter
+their `COPY` layers. Although `!scripts/` can admit extra context inputs, no
+transfer/cache critical-path cost was measured and BuildKit can request only
+referenced inputs. Do not add another rule-maintenance layer for this unproven
+saving; revisit only with actual transfer evidence.
+
+#1127's CI found two test-maintenance defects: schema-parity collection imported
+unavailable generated-module dependencies, and the complete Envoy descriptor
+fingerprint still referred to the prior bundle. The parity test now decodes the
+literal descriptor without executing generated imports. Inspection found only
+the reviewed Presentation Policy/Credential Template additions changed in the
+14-file bundle; the other twelve descriptors were identical. The fingerprint
+was updated while retaining independent initiation RPC/type/route assertions.
+Both fixes passed scoped checks and independent review. Exact-head normal CI
+`37477668436` and CodeQL `37477668755` were live at this checkpoint; the Linux
+rendered-config completion proof and protected merge are still required.
+The contracts lane subsequently passed: its Linux log records both roster fast
+owners, the real-policy/crypto renewal matrix and the independent descriptor
+test as `ok` at 14:28:35 UTC. This is execution proof on #1127's exact source,
+not qualification of the unpublished PostgreSQL refusal addition or main.
+
+The same unpublished follow-up now includes independently reviewed
+`23797c3624d8731c2baa659d2b2c055225cc45de`, assembled as `cfc74604d`.
+It maps the real Signing Keys-to-Flow HTTP signer/key-envelope dependency through
+configuration, authenticated provider startup, request-object signing and
+encrypted-response callbacks to server handlers. Source-marker guards and the
+hypothetical observed reverse chain are lexical inventory, not execution or a
+complete consumer graph. Service changes still select the full workspace.
+The assembled planner suite passed 20 tests and 63 subtests in 1.68s.
+
+Reviewed Kubernetes source `24a51eb8f634c4a3414d9ff216a454cf14a4c851` is now
+assembled as `93a779169`. It factors existing closed-spec validation and model
+resolution without changing the native renderer's parent/child behavior. One
+bounded real envsubst preparation supports four independently asserted literal
+configuration outcomes, with opt-in discovery and a unique completion marker.
+The author passed 189 preflight policies with one skip; the assembled four
+Kubernetes marker controls passed. Windows compilation/discovery checks the
+body but deliberately returns before rendering, so exact-head Linux execution
+is still required. The six profiles and all eighteen native cases remain.
+
+The current #1127 Canvas job recorded 10m10s of host test compilation and 9m20s
+for the separate Bookworm compatibility compilation. Public release binaries
+cannot replace that compatibility test executable. A single hermetic compile
+could be investigated, but requires proving linker, flags, native dependencies,
+cache access, artifact paths and execution on both Ubuntu and Bookworm. Keep the
+two current guarantees until a bounded compatibility prototype supports reuse;
+sharing a target directory alone is not proof or a measured saving.
+
+The three renewal component owners are inventoried in reviewed source
+`bc4f6fd92` plus correction `7d8448972`, assembled as `a5a9a9e6e`. Review caught
+and corrected an omitted unconditional Compose helper input. Exact owner,
+source/runner wiring and missing/duplicate/substitution controls passed; the
+assembled ownership/planner/context/image sweep passed 72 tests and 63 subtests
+in 17.91s. This inventory is lexical evidence, not execution or complete
+transitive input closure, and does not authorize dropping any native case.
+
+The reviewed OID4VP context proof (`5eb3a075`, assembled `11bb015e1`) adds
+only two exact test-file exclusions to the root ignore policy. Existing scoped
+test-directory exclusions remain unchanged; the bounded matcher recognizes
+their directory ancestors and later negations. A tiny network-disabled BuildKit
+probe with the three SHA-identical actual ignore files confirmed the production
+contract corpus was copyable (3/3), both test files were excluded (6/6), and a
+later explicit negation restored only its named file while retaining the other
+exclusion and corpus. The owned scratch fixture was removed. This establishes
+context behavior, not measured time savings or CI-selection authority.
+The assembled policy sweep passed 73 tests and 63 subtests in 13.99s;
+package-scoped frozen/offline Rust validation passed 16 contract vectors, the
+transport matrix and the compile-fail evidence-construction doctest.
+
+## #1127 qualification and next selection checkpoint (2026-10-06)
+
+Exact PR source `aaae1631482e002d063e23248be2a7bb041104c4` passed normal
+CI `37477668436` and all required checks. The Canvas log recorded exactly one
+rendered-base completion marker and the real Linux owner as `ok` at 15:07:38
+UTC; composition completed 143 tests with no failures. This does not qualify
+the unpublished PostgreSQL/Kubernetes additions or a nightly release.
+#1127 entered the normal protected queue at 15:12:45 UTC. Queue commit
+`e2d8b37a4bfb5f913183581b1b1a0e03055cfff5` is being validated by CI
+`37485559081`; no admin bypass or gate alteration was used.
+
+The latest routine run took 51m22s, rather than #1126's 31m43s. Its Canvas lane
+took 49m45s: host compile 10m10s, Bookworm compile 9m20s, public image 13m36s,
+and database acceptance 12m53s. Different assembled code, build/cache state and
+runner conditions make these observations unsuitable for attributing a steady
+41% gain. Retain both observations and investigate rather than extrapolate.
+The host cache health check succeeded, but counters were collected more than
+38 minutes after compilation. With sccache's default 600-second daemon idle
+shutdown, late zeros do not prove a cache bypass or describe Docker cache hits.
+Capture sanitized host counters immediately after compilation before drawing
+cache conclusions.
+
+Reviewed selector source `17bd14bb3`, assembled as `ee0d2afa3`, admits only
+the two exact OID4VP integration-test paths to the existing PR contracts lane,
+and only after the verified-path CLI executes their ownership/context/corpus
+proof. Contracts still run the workspace tests excluding Canvas acceptance;
+existing lint, supply-chain and public/release policies are unchanged. Generic
+Rust PR security selection remains governed by its existing policy, not a new
+waiver. Unknown/mixed/deleted/renamed inputs or failed proof remain broad;
+push/main, protected merge groups and full qualification retain full validation.
+This batch itself changes workflow/runtime inputs and must run full CI.
+The assembled compile-scope suite passed 32 tests. The three stale
+completion-suffix assertions were corrected in the reviewed fail-fast source
+before assembly. The later assembled sweep found three more stale renewal
+ownership assertions: they assumed both configuration cases always ran in the
+late composition group. Commit `560599673` updated those assertions to accept
+the verified early execution followed by exactly two late skips; the
+PostgreSQL refusal case still runs in the late group. All 35 renewal ownership
+tests and the 200-test published preflight suite passed locally (1 preflight
+skip). The combined policy sweep passed 216 tests, and an independent reviewer
+cleared assembled source `e8d9f59e9` after 54 focused proof/owner/telemetry
+tests and 11 shell fallback cases. Hosted Linux evidence for the early
+base/Kubernetes proofs and the PostgreSQL completion marker remains required
+before merge. No native process case has been removed.
 
 ## Design references
 

@@ -44,13 +44,16 @@ def assert_dependency_setup(steps):
     assert steps[setup]["if"] == "matrix.lane == 'canvas'"
     assert "continue-on-error" not in steps[setup]
     assert setup < names.index("Compile reusable Rust test executables")
+    early = names.index("Fail fast on image-free Canvas renewal configuration")
     rendered = names.index("Prepare required rendered base executable acceptance")
     assert (
         setup
+        < early
         < rendered
         < names.index("Run isolated database contract suites concurrently")
     )
-    assert '"$(command -v python3)"' in steps[rendered]["run"]
+    assert '"$(command -v python3)"' in steps[early]["run"]
+    assert 'test -x "$MARTY_DIDCOMM_TEST_PYTHON"' in steps[rendered]["run"]
     source = steps[setup]["run"]
     install = '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install'
     smoke = '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE"'
@@ -74,8 +77,10 @@ def assert_dependency_setup(steps):
         or "run-published-canvas-contracts.sh" in step.get("run", "")
     ]
     assert preflight_steps == [preflight]
-    assert setup < preflight < names.index(
-        "Run isolated database contract suites concurrently"
+    assert (
+        setup
+        < preflight
+        < names.index("Run isolated database contract suites concurrently")
     )
     assert steps[preflight]["run"] == (
         "python3 ../scripts/ci/run-db-contract-groups.py preflights"
