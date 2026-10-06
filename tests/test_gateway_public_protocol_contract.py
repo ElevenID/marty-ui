@@ -8,11 +8,11 @@ from scripts.check_gateway_public_protocol_contract import (
     DTO_SHAPES,
     VECTOR_TEST_OWNERS,
     VectorTestOwner,
+    _assert_full_workspace_ci_owner,
     _assert_issued_credential_extension_contract,
     _assert_protocol_version,
     _assert_rust_behavior_vector_test_owners,
 )
-
 
 CANONICAL_PROTOCOL_COMMIT = "76c37dc229b328afe002b911a26624543f814a64"
 
@@ -62,8 +62,9 @@ def _vector_owner_fixture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Pa
     workflow = tmp_path / ".github" / "workflows"
     workflow.mkdir(parents=True)
     (workflow / "ci.yml").write_text(
-        "test-rust-services:\n  lane: [canvas, contracts]\n"
-        "  run: cargo test --locked --workspace\n",
+        (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr(protocol_contract, "REPO_ROOT", tmp_path)
@@ -181,6 +182,38 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
     workflow.write_text("test-rust-services:\n", encoding="utf-8")
     with pytest.raises(AssertionError, match="workspace test owner"):
         _assert_rust_behavior_vector_test_owners()
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        (
+            "lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}",
+            "lane: [canvas]",
+        ),
+        ('rust_matrix=\'["canvas","contracts"]\'', "rust_matrix='[\"canvas\"]'"),
+        ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
+        (
+            "cargo test --locked --workspace --exclude marty-canvas-acceptance",
+            "cargo test --locked -p marty-canvas-acceptance",
+        ),
+        ('\'true:true:["canvas","contracts"]\'', "'true:true:[\"contracts\"]'"),
+        (
+            '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]',
+            '"$RUST_MATRIX" == \'["contracts"]\' ]]',
+        ),
+    ],
+)
+def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
+    old: str, new: str
+) -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    ).read_text(encoding="utf-8")
+    _assert_full_workspace_ci_owner(workflow)
+    assert workflow.count(old) >= 1
+    with pytest.raises(AssertionError, match="workspace test owner"):
+        _assert_full_workspace_ci_owner(workflow.replace(old, new))
 
 
 def test_vector_owner_guard_rejects_uncalled_loader_and_production_only_reference(

@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import json
-from pathlib import Path
 import re
-import tomllib
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+import tomllib
 
 try:
     from scripts.check_generated_protocol_bindings import (
@@ -500,6 +501,48 @@ def _loads_vector(source: str, vector_name: str) -> bool:
     return False
 
 
+def _assert_full_workspace_ci_owner(workflow: str) -> None:
+    """Require both workspace execution and the protected full matrix plan."""
+
+    def job(name: str) -> str:
+        match = re.search(
+            rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)",
+            workflow,
+        )
+        if match is None:
+            raise AssertionError(
+                "the full Rust workspace test owner is not registered in CI"
+            )
+        return match.group(1)
+
+    changes = job("changes")
+    service = job("test-rust-services")
+    gate = job("ci-gate")
+    required = (
+        'rust_matrix=\'["canvas","contracts"]\'' in changes
+        and "rust_matrix='[\"contracts\"]'" in changes
+        and 'if [[ "${{ github.event_name }}" == merge_group ]]' in changes
+        and "needs: changes" in service
+        and "if: needs.changes.outputs.rust == 'true'" in service
+        and "lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}" in service
+        and "cargo test --locked --workspace --no-run" in service
+        and "cargo test --locked --workspace --exclude marty-canvas-acceptance"
+        in service
+        and "RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}" in gate
+        and 'case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in' in gate
+        and '\'true:true:["canvas","contracts"]\'' in gate
+        and "'true:false:[\"contracts\"]'" in gate
+        and '[[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&' in gate
+        and '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate
+        and 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
+        in gate
+    )
+    if not required:
+        raise AssertionError(
+            "the full Rust workspace test owner is not registered in CI"
+        )
+
+
 def _assert_rust_behavior_vector_test_owners() -> None:
     """Check static owner/reference prerequisites for the workspace test lane.
 
@@ -522,17 +565,7 @@ def _assert_rust_behavior_vector_test_owners() -> None:
         raise AssertionError(f"public vectors are missing: {sorted(missing_vectors)}")
 
     workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    if not all(
-        marker in workflow
-        for marker in (
-            "test-rust-services:",
-            "lane: [canvas, contracts]",
-            "cargo test --locked --workspace",
-        )
-    ):
-        raise AssertionError(
-            "the full Rust workspace test owner is not registered in CI"
-        )
+    _assert_full_workspace_ci_owner(workflow)
 
     for vector_name, owner in sorted(VECTOR_TEST_OWNERS.items()):
         source_path = REPO_ROOT / owner.source

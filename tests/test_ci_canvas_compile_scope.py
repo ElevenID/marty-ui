@@ -126,7 +126,16 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     )
     job = workflow["jobs"]["test-rust-services"]
     assert job["if"] == "needs.changes.outputs.rust == 'true'"
-    assert job["strategy"]["matrix"] == {"lane": ["canvas", "contracts"]}
+    assert job["strategy"]["matrix"] == {
+        "lane": "${{ fromJSON(needs.changes.outputs.rust_matrix) }}"
+    }
+    changes = workflow["jobs"]["changes"]
+    assert (
+        changes["outputs"]["rust_matrix"] == "${{ steps.classify.outputs.rust_matrix }}"
+    )
+    classifier = next(step for step in changes["steps"] if step.get("id") == "classify")
+    assert 'rust_matrix=\'["canvas","contracts"]\'' in classifier["run"]
+    assert "rust_matrix='[\"contracts\"]'" in classifier["run"]
     steps = {step.get("name"): step for step in job["steps"]}
     compile_run = steps["Compile reusable Rust test executables"]["run"]
     assert "cargo test --locked --workspace --no-run" in compile_run
@@ -149,6 +158,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         in step.get("run", "")
         for step in gate["steps"]
     )
+    gate_script = gate["steps"][0]["run"]
+    assert '\'true:true:["canvas","contracts"]\'' in gate_script
+    assert "'true:false:[\"contracts\"]'" in gate_script
+    assert '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate_script
 
     package = ROOT / "rust/crates/canvas-acceptance"
     manifest = tomllib.loads((package / "Cargo.toml").read_text(encoding="utf-8"))
