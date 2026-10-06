@@ -46,6 +46,14 @@ MANDATORY_REGISTRATION_COUNT = 165
 MANDATORY_REGISTRATION_SHA256 = (
     "8161a364b2f639c8eb3b0603487a4931ed639307ff0f5132711dcc8f7d2a792f"
 )
+RENDERED_CONFIG = (
+    "rendered_base_process::"
+    "rendered_base_renewal_config_crosses_encryption_and_private_address_policy"
+)
+CURRENT_REGISTRATION_COUNT = 166
+CURRENT_REGISTRATION_SHA256 = (
+    "74d9216c5c22c8f6446c79b397a2e6024b7f78741b19476e8555f6823a60d9d9"
+)
 
 
 def required_registrations():
@@ -59,9 +67,15 @@ def required_registrations():
 
 def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     names = required_registrations()
-    assert len(names) == MANDATORY_REGISTRATION_COUNT
+    assert len(names) == CURRENT_REGISTRATION_COUNT
     assert len(names) == len(set(names))
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        CURRENT_REGISTRATION_SHA256
+    )
+    assert names.count(RENDERED_CONFIG) == 1
+    historical = [name for name in names if name != RENDERED_CONFIG]
+    assert len(historical) == MANDATORY_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(historical).encode()).hexdigest() == (
         MANDATORY_REGISTRATION_SHA256
     )
 
@@ -99,6 +113,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
     assert script.rstrip().endswith(
         "(( composition_status == 0 && worker_status == 0 ))\n"
+        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l) == 1 ]] || {\n"
+        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
+        "  exit 1\n"
+        "}\n"
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
     )
@@ -309,6 +327,13 @@ else
         failed) printf 'test worker_validation_repository_matches_frozen_errors ... FAILED\n' ;;
         substituted) printf 'test wrong_worker_validation_repository_matches_frozen_errors ... ok\n' ;;
       esac
+    elif [[ "$name" == contract ]]; then
+      case "$TEST_RENDERED_CONFIG_MARKER" in
+        ok) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'rendered-base-config' ;;
+        missing) ;;
+        duplicate) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+      esac
     fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
@@ -357,6 +382,7 @@ fi
         run_id="12345",
         qualification=False,
         fast_owner_row="ok",
+        config_marker="ok",
     ):
         lines = (
             registrations
@@ -366,7 +392,9 @@ fi
         composition = [
             line
             for line in lines
-            if line.startswith(("heartbeat_readiness_", "json_consumer_diagnostic_"))
+            if line.startswith(
+                ("heartbeat_readiness_", "json_consumer_diagnostic_", RENDERED_CONFIG)
+            )
         ]
         worker = [line for line in lines if line not in composition]
         if duplicate_across_targets:
@@ -415,6 +443,7 @@ fi
             {
                 "TEST_FAILURE": failure,
                 "TEST_FAST_OWNER_ROW": fast_owner_row,
+                "TEST_RENDERED_CONFIG_MARKER": config_marker,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
@@ -508,6 +537,34 @@ def test_canvas_fast_owner_must_actually_pass_once(shell_case, row):
     assert result.returncode != 0
     assert any(call[0] == "child" and call[1] == "worker-contract" for call in calls)
     assert "fast owner did not execute exactly once and pass" in result.stderr
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_rendered_config_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], config_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "configuration proof did not execute and complete exactly once" in result.stderr
+    )
+
+
+def test_rendered_config_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], config_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+def test_worker_preflight_does_not_claim_rendered_config_completion(shell_case):
+    result, calls = shell_case(["timeout-preflight"], config_marker="missing")
+    assert result.returncode == 0, result.stderr
+    assert not any("--test-threads=4" in call for call in calls)
 
 
 @pytest.mark.parametrize("arguments", [[], ["full"]])
@@ -790,10 +847,13 @@ def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
 def test_preflight_requires_only_exact_target_and_forces_configured_serial_execution(
     shell_case, mode, target
 ):
-    result, calls = shell_case([mode], registrations=[f"{target}: test"])
+    result, calls = shell_case(
+        [mode], registrations=[f"{RENDERED_CONFIG}: test", f"{target}: test"]
+    )
     assert result.returncode == 0, result.stderr
     assert [call for call in calls if call[:2] == ["grep", "-Fx"]] == [
-        ["grep", "-Fx", f"{target}: test"]
+        ["grep", "-Fx", f"{RENDERED_CONFIG}: test"],
+        ["grep", "-Fx", f"{target}: test"],
     ]
     assert [call for call in calls if call[0] == "child"] == [
         ["child", "contract", "1", "--list"],
@@ -807,6 +867,17 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
             "--nocapture",
             "--test-threads=1",
         ],
+    ]
+
+
+def test_preflight_rejects_missing_compiled_config_owner(shell_case):
+    result, calls = shell_case(
+        ["timeout-preflight"], registrations=[f"{TIMEOUT_TARGET}: test"]
+    )
+    assert result.returncode != 0
+    assert [call for call in calls if call[0] == "child"] == [
+        ["child", "contract", "1", "--list"],
+        ["child", "worker-contract", "1", "--list"],
     ]
 
 
@@ -857,7 +928,9 @@ def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
         "suffix": f"{target}_suffix: test",
         "other-preflight": f"{TIMEOUT_TARGET if target == TARGET else TARGET}: test",
     }[shape]
-    result, calls = shell_case([mode], registrations=[registration])
+    result, calls = shell_case(
+        [mode], registrations=[f"{RENDERED_CONFIG}: test", registration]
+    )
     assert result.returncode != 0
     assert [call for call in calls if call[0] == "child"] == [
         ["child", "contract", "1", "--list"],
@@ -923,6 +996,7 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         "worker_body_timeout_native_child",
         "worker_provider_recovery_first_native_child",
         "operations_gateway_candidate_preserves_review_lifecycle",
+        RENDERED_CONFIG,
     ],
 )
 def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, missing):
