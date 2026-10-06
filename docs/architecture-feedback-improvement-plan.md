@@ -3,8 +3,9 @@
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
 Status: active implementation (2026-10-06 refreshed checkpoint). Gateway and Canvas
 acceptance ownership, narrow compatibility code and further fast test layers have
-merged, including UI #1124 at `e9f140e00`. UI #1126 is open at `ce70c40bd`; normal
-and full hosted CI passed, and protected merge-queue validation remains pending.
+merged, including UI #1124 at `e9f140e00` and #1126 at `8d42d1bdc`. #1126's
+normal/full PR CI and protected merge-queue validation passed; it merged at
+13:11:46 UTC on 2026-10-06.
 The combined unit/renewal/typed-transport follow-up is unpublished; the separate
 roster component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest crate,

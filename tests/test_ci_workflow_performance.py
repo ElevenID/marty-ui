@@ -1598,6 +1598,19 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
     }
 
 
+def _assert_required_canvas_target_completion(published: str) -> None:
+    assert published.rstrip().endswith(
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        "[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "
+        '\"$composition_log\" | wc -l) == 1 ]] || {\n'
+        "  echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2\n"
+        "  exit 1\n"
+        "}\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
+    )
+
+
 def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _, document = _workflow(CI_PATH)
     steps = document["jobs"]["test-rust-services"]["steps"]
@@ -1908,11 +1921,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'"
         in published
     )
-    assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
-        '--require-execution canvas "$worker_log"'
-    )
+    _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
             '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
@@ -1987,11 +1996,7 @@ def _assert_gateway_operations_registration(
     inventory = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
-    assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))\n"
-        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
-        '--require-execution canvas "$worker_log"'
-    )
+    _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
             '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
