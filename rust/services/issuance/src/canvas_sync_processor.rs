@@ -2309,6 +2309,131 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct RateLimitedSimulatorProvider {
+        retry_after_seconds: u64,
+    }
+
+    #[async_trait]
+    impl CanvasAuthoritativeProvider for RateLimitedSimulatorProvider {
+        fn for_run(
+            self: Arc<Self>,
+            _scope: CanvasProviderRunScope,
+        ) -> Arc<dyn CanvasAuthoritativeProvider> {
+            self
+        }
+
+        async fn read_requirement(
+            &self,
+            _: &CanvasSyncResources,
+            _: &Value,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<CanvasAuthoritativeObservation, CanvasProviderReadError> {
+            Err(CanvasProviderReadError::RateLimited {
+                retry_after_seconds: self.retry_after_seconds,
+            })
+        }
+
+        async fn roster(
+            &self,
+            _: &CanvasSyncTarget,
+            _: &CanvasSyncResources,
+            _: &[Value],
+            _: usize,
+        ) -> Result<CanvasRosterSnapshot, CanvasProviderReadError> {
+            panic!("application rate-limit test must not request a roster")
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_after_matrix_keeps_parser_delay_and_processor_category_without_io() {
+        let matrix: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
+        .unwrap();
+        let now: DateTime<Utc> = "2026-09-02T00:00:00Z".parse().unwrap();
+        let mut seen = std::collections::BTreeSet::new();
+        for case in matrix["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            assert!(seen.insert(name), "duplicate retry-after case: {name}");
+            let raw = if let Some(offset) = case["retry_after_offset_seconds"].as_i64() {
+                let epoch_seconds = now
+                    .timestamp()
+                    .checked_add(offset)
+                    .and_then(|seconds| u64::try_from(seconds).ok())
+                    .expect("bounded retry-after date");
+                let when = std::time::UNIX_EPOCH + std::time::Duration::from_secs(epoch_seconds);
+                httpdate::fmt_http_date(when)
+            } else {
+                case["headers"]["Retry-After"].as_str().unwrap().to_owned()
+            };
+            let expected_hint = match name {
+                "http_date_future" => Some(60),
+                "http_date_past" | "negative" | "zero" => Some(0),
+                "malformed" => None,
+                "clamped" | "huge_integer" => Some(86_400),
+                _ => panic!("unclassified retry-after case: {name}"),
+            };
+            let hint = crate::canvas_sync_worker::retry_after_seconds(&raw, now);
+            assert_eq!(hint, expected_hint, "{name}");
+            let (minimum, maximum) = if name == "http_date_future" {
+                assert!(case.get("delay_bounds").is_none());
+                (60, 60)
+            } else {
+                (
+                    case["delay_bounds"][0].as_u64().unwrap(),
+                    case["delay_bounds"][1].as_u64().unwrap(),
+                )
+            };
+            for jitter in [0, 5, u64::MAX] {
+                let delay = crate::canvas_sync_worker::job_retry_delay_seconds(1, hint, jitter);
+                assert!((minimum..=maximum).contains(&delay), "{name}: {delay}");
+            }
+
+            let repository = Arc::new(SimulatorRepository {
+                resources: simulator_resources(vec![requirement(
+                    "assignment",
+                    "canvas_rest",
+                    "canvas.assignment_score",
+                    json!({"course_id":"1","activity_id":"2"}),
+                    json!({"min_score_percent":70}),
+                )]),
+                facts: Mutex::new(Vec::new()),
+                identities: Mutex::new(None),
+                candidates: Mutex::new(BTreeMap::new()),
+                observations: Mutex::new(BTreeMap::new()),
+                observation_payloads: Mutex::new(BTreeMap::new()),
+                cursor: Mutex::new(None),
+                disabled: Mutex::new(false),
+            });
+            let processor = NativeCanvasSyncProcessor::new(
+                repository.clone(),
+                Arc::new(RateLimitedSimulatorProvider {
+                    retry_after_seconds: hint.unwrap_or(0),
+                }),
+                enabled_config(),
+                500,
+                5000,
+            );
+            let error = run_simulated(&processor, target(CanvasSyncTargetType::LearnerApplication))
+                .await
+                .unwrap_err();
+            assert_eq!(error.code, "canvas_rate_limited", "{name}");
+            assert_eq!(
+                error.summary, "Canvas rate limited one or more authoritative evidence reads",
+                "{name}"
+            );
+            assert!(error.retryable, "{name}");
+            assert_eq!(error.retry_after_seconds, Some(hint.unwrap_or(0)), "{name}");
+            assert!(repository.facts.lock().unwrap().is_empty(), "{name}");
+            assert!(repository.candidates.lock().unwrap().is_empty(), "{name}");
+            assert_eq!(*repository.cursor.lock().unwrap(), None, "{name}");
+            assert!(!*repository.disabled.lock().unwrap(), "{name}");
+        }
+        assert_eq!(seen.len(), 7);
+    }
+
     #[test]
     fn roster_provider_failures_keep_the_frozen_retry_categories() {
         for (provider, code, retryable) in [
