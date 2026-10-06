@@ -6,7 +6,9 @@ acceptance ownership, narrow compatibility code and further fast test layers hav
 merged, including UI #1124 at `e9f140e00` and #1126 at `8d42d1bdc`. #1126's
 normal/full PR CI and protected merge-queue validation passed; it merged at
 13:11:46 UTC on 2026-10-06.
-The combined unit/renewal/typed-transport follow-up is unpublished; the separate
+The combined unit/renewal/typed-transport follow-up is published as
+[UI #1127](https://github.com/ElevenID/marty-ui/pull/1127), with exact-head CI
+still running at the 14:30 UTC checkpoint; the separate
 roster component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest crate,
 but UI migration and nightly
@@ -854,6 +856,53 @@ real-render assertions, with prefix/interleaving-safe counting. Local Windows
 compilation and synthetic controls do not prove real Linux Compose execution.
 Exact-head hosted CI must supply that proof before merge; no test-tier cut or
 nightly release qualification is authorized by local readiness.
+
+## Refusal and public-context follow-up checkpoint (2026-10-06)
+
+The next unpublished batch includes independently reviewed source commits
+`de0a8ec9a69bea23abc8a5673bbc708c74e04ffc` and
+`504eb03b99ae3e9bd3855c62b48692c648faead0`, assembled as `bc50231e6` on
+#1127 source `aaae1631482e002d063e23248be2a7bb041104c4`. It is not merged or
+hosted-qualified; do not treat its local evidence as a test-tier authorization.
+
+The renewal refusal case reuses existing Rust seed/admission/delivery fixtures
+and a real owned PostgreSQL database without launching application processes.
+It checks the persisted pending successor, unchanged issued source, absent
+transport fence and issuance/delivery/event rows, typed `EndpointNotPublic`, and
+zero builder/send calls. Both encryption modes are configured, but endpoint
+refusal precedes encryption: this is not an encryption interoperability proof.
+The local opted-in case passed and owned resources were verified removed.
+The author passed 185 runner-policy tests with one skip; independent review
+cleared its source and execution guards. All existing native cases remain.
+
+The public Dockerfile's `!services/` rule admitted Python event modules into the
+build context even though runtime `COPY` instructions do not use them. A tiny
+BuildKit probe with the exact ignore rules confirmed baseline `COPY` success
+for `services/common/events.py`, followed by missing-input failure with a later
+explicit `services/common/` exclusion. Required entrypoint/auth-asset copies
+still succeeded. The correction keeps the original matching helper and adds
+guards against later wildcard or adapter-specific re-inclusion. Seventeen
+focused policies and independent review passed. This proves a smaller input
+surface, not a measured transfer/build-time saving or complete consumer graph.
+
+A read-only follow-up found 332 files (3,936,267 bytes) under `scripts/`, but
+the public Dockerfile copies only its three named scripts (about 5 KB total).
+Those scripts do not source further scripts, and unrelated scripts cannot enter
+their `COPY` layers. Although `!scripts/` can admit extra context inputs, no
+transfer/cache critical-path cost was measured and BuildKit can request only
+referenced inputs. Do not add another rule-maintenance layer for this unproven
+saving; revisit only with actual transfer evidence.
+
+#1127's CI found two test-maintenance defects: schema-parity collection imported
+unavailable generated-module dependencies, and the complete Envoy descriptor
+fingerprint still referred to the prior bundle. The parity test now decodes the
+literal descriptor without executing generated imports. Inspection found only
+the reviewed Presentation Policy/Credential Template additions changed in the
+14-file bundle; the other twelve descriptors were identical. The fingerprint
+was updated while retaining independent initiation RPC/type/route assertions.
+Both fixes passed scoped checks and independent review. Exact-head normal CI
+`37477668436` and CodeQL `37477668755` were live at this checkpoint; the Linux
+rendered-config completion proof and protected merge are still required.
 
 ## Design references
 
