@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import re
 import sys
 from concurrent.futures import Future
 from contextlib import nullcontext
@@ -241,11 +242,35 @@ def test_progress_keeps_commands_environment_and_raw_output_in_separate_logs(
     }
     progress = capsys.readouterr().out
     lines = progress.splitlines()
-    assert lines[:2] == [
-        "[db-contracts] starting group=first",
-        "[db-contracts] starting group=second",
-    ]
-    assert len(lines) == 4
+    assert len(lines) == 6
+    for name in ("first", "second"):
+        start = f"[db-contracts] starting group={name}"
+        assert lines.count(start) == 1
+        start_index = lines.index(start)
+        assert (
+            sum(
+                re.fullmatch(
+                    rf"\[db-timing\] group={name} phase=contract name=group_total duration_ms=\d+ status=ok",
+                    line,
+                )
+                is not None
+                and start_index < index
+                for index, line in enumerate(lines)
+            )
+            == 1
+        )
+        assert (
+            sum(
+                re.fullmatch(
+                    rf"\[db-contracts\] completed group={name} exit=0 elapsed=\d+s",
+                    line,
+                )
+                is not None
+                and start_index < index
+                for index, line in enumerate(lines)
+            )
+            == 1
+        )
     assert "synthetic-command-value" not in progress
     assert "synthetic-environment-value" not in progress
     assert sys.executable not in progress
@@ -266,6 +291,7 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
         "import sys; "
         'print(\'MARTY_CI_PHASE_V1 {"phase":"database_readiness","name":"postgres_ready","duration_ms":12,"status":"ok"}\', flush=True); '
         'print(\'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"bad/path","duration_ms":10,"status":"ok"}\', flush=True); '
+        'print(\'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"secret123","duration_ms":10,"status":"ok"}\', flush=True); '
         f"print({private!r}, flush=True); sys.exit(7)"
     )
     assert GROUPS.run_groups({"rust-db": [sys.executable, "-c", script]}, tmp_path) == {
@@ -275,6 +301,7 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
     assert "postgres_ready" in progress
     assert "group_total" in progress
     assert "bad/path" not in progress
+    assert "secret123" not in progress
     assert private not in progress
     evidence = [
         json.loads(line)
@@ -314,6 +341,20 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
     ],
 )
 def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> None:
+    assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+
+
+def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
+    for phase, name in (
+        ("scenario", "retry-after.http_date_future"),
+        ("cleanup", "published_database_removal"),
+        ("contract", "canvas_sync_worker_postgres_contract"),
+    ):
+        marker = json.dumps(
+            {"phase": phase, "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+    marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
 
 

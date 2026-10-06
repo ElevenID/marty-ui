@@ -1041,7 +1041,7 @@ def test_explicit_database_close_cannot_emit_second_cleanup_timing():
     cleanup = source.split("    fn cleanup(&mut self) -> Result<(), String> {", 1)[1]
     cleanup = cleanup.split("    pub fn close(mut self)", 1)[0]
     assert cleanup.index("if self.probe.is_none() && self.postgres.is_none()") < (
-        cleanup.index('PhaseTimer::start("cleanup", "published_database")')
+        cleanup.index('PhaseTimer::start("cleanup", "published_database_removal")')
     )
     assert "self.probe = None;" in cleanup
     assert "self.postgres = None;" in cleanup

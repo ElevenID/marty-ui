@@ -28,9 +28,13 @@ REST worker harness separately times each corpus-owned `scenario`, plus its
 own HTTPS `fixture_seed` and `cleanup`; that `fixture_seed` is the TLS fixture,
 not PostgreSQL seeding. A case's scenario duration includes its nested setup,
 worker run, assertions, and cleanup, so these durations must not be added.
-Explicit verified close and the following Rust destructor produce one cleanup
-phase when the first close succeeds; a failed partial cleanup can be timed
-again if the destructor retries remaining owned resources.
+The PostgreSQL cleanup duration measures resource removal, not the subsequent
+exact-absence verification; a successful removal can still fail that verification
+and fail the test. Explicit close and the following Rust destructor produce one
+removal phase when the first close succeeds; a failed partial removal can be
+timed again if the destructor retries remaining owned resources. The HTTPS
+cleanup duration measures server/thread shutdown, not deletion of the temporary
+certificate directory; a deletion failure still fails the test.
 
 This is instrumentation, not a speedup or evidence to remove tests. All
 existing cases, image/source pins, connection limits, qualification tiers,

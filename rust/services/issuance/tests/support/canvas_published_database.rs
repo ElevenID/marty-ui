@@ -1686,7 +1686,7 @@ impl PublishedDatabase {
         if self.probe.is_none() && self.postgres.is_none() {
             return Ok(());
         }
-        let cleanup_timing = PhaseTimer::start("cleanup", "published_database");
+        let cleanup_timing = PhaseTimer::start("cleanup", "published_database_removal");
         if let Some(probe) = &self.probe {
             let info = inspect(probe)?;
             let network = format!(

@@ -38,6 +38,74 @@ TIMING_PHASES = {
     "image_pull",
 }
 TIMING_STATUSES = {"ok", "failed"}
+REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
+MATRIX_SCENARIOS = frozenset(
+    {"retry-after", "validation", "roster-failure", "resources-unavailable"}
+)
+SCENARIO_NAMES = REST_SCENARIOS | frozenset(
+    f"{scenario}.{case['name']}"
+    for scenario in MATRIX_SCENARIOS
+    for case in json.loads(
+        (
+            Path(__file__).resolve().parents[2]
+            / f"contracts/canvas-worker-{scenario}-scenarios.json"
+        ).read_text(encoding="utf-8")
+    )["cases"]
+)
+FIXTURE_NAMES = SCENARIO_NAMES
+CONTRACT_NAMES = frozenset(
+    {
+        "general_contracts",
+        "signing_registry",
+        "signing_document",
+        "issuer_profile",
+        "credential_template",
+        "presentation_policy",
+        "issuance_oid4vci_migration",
+        "issuance_transaction",
+        "issuance_credential",
+        "retention",
+        "passport",
+        "application_template",
+        "internal_application",
+        "credential_template_migration",
+        "trust_profile_migration",
+        "organization_migration",
+        "organization_application",
+        "organization_repository",
+        "canvas_sync_worker_postgres_contract",
+        "canvas_oauth_postgres_contract",
+        "canvas_mirror_postgres_contract",
+        "canvas_management_postgres_contract",
+        "canvas_lti_sync_enqueue_postgres_contract",
+        "canvas_lti_login_postgres_contract",
+        "canvas_lti_evidence_postgres_contract",
+        "canvas_lti_deep_linking_postgres_contract",
+        "canvas_event_status_postgres_contract",
+        "canvas_award_candidate_postgres_contract",
+        "proof_nonce_postgres_contract",
+    }
+)
+TIMING_NAMES = {
+    "container_startup": frozenset({"postgres_create"}),
+    "database_readiness": frozenset({"postgres_ready"}),
+    "migration_seed": frozenset({"published_probe"}),
+    "fixture_seed": FIXTURE_NAMES,
+    "scenario": SCENARIO_NAMES,
+    "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
+    "contract": CONTRACT_NAMES,
+    "canvas_serial": frozenset(
+        {
+            "sql_logging",
+            "json_consumer",
+            *PREFLIGHT_MODES,
+            "mixed-roster-preflight",
+            "body-timeout-preflight",
+        }
+    ),
+    "canvas_target": frozenset({"composition", "worker"}),
+    "image_pull": frozenset({"postgres", "published_probe"}),
+}
 
 
 def _timing_path() -> Path | None:
@@ -68,6 +136,7 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
         not isinstance(phase, str)
         or phase not in TIMING_PHASES
         or not isinstance(name, str)
+        or name not in TIMING_NAMES[phase]
         or not 1 <= len(name) <= 96
         or not all(
             character.isascii() and (character.isalnum() or character in "_-.")
