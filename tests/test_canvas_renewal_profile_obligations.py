@@ -323,7 +323,9 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
         assert all((ROOT / path).is_file() for path in direct_inputs)
         assert owner["assertions"] and owner["runtime_prerequisites"]
         assert owner["does_not_prove"].strip()
-        expected_marker_checks = 1 if owner["owner"] == "published-sql-private-ip-refusal" else 2
+        expected_marker_checks = (
+            1 if owner["owner"] == "published-sql-private-ip-refusal" else 2
+        )
         assert inputs["runner"].count(f"grep -Fo '{marker}'") == expected_marker_checks
         assert inputs["runner"].count(f"grep -Fx '{test}: test'") == 1
         if owner["owner"] == "published-sql-private-ip-refusal":
