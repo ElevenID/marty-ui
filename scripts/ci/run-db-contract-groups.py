@@ -33,6 +33,7 @@ TIMING_PHASES = {
     "scenario",
     "cleanup",
     "contract",
+    "contract_phase",
     "canvas_serial",
     "canvas_target",
     "image_pull",
@@ -94,6 +95,25 @@ TIMING_NAMES = {
     "scenario": SCENARIO_NAMES,
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
     "contract": CONTRACT_NAMES,
+    "contract_phase": frozenset(
+        {
+            "composite_total",
+            "initial_schema",
+            "schedule_recovery_completion",
+            "hinted_retry",
+            "privacy",
+            "signing_guard",
+            "projection_cycles",
+            "consumer_ranges",
+            "owned_lifecycle",
+            "pool_disposal",
+            "process_signals",
+            "renewal_generation",
+            "renewal_write_failures",
+            "renewal_job_outcomes",
+            "pool_close",
+        }
+    ),
     "canvas_serial": frozenset(
         {
             "sql_logging",

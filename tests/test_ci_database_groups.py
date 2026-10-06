@@ -349,6 +349,7 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         ("scenario", "retry-after.http_date_future"),
         ("cleanup", "published_database_removal"),
         ("contract", "canvas_sync_worker_postgres_contract"),
+        ("contract_phase", "renewal_job_outcomes"),
     ):
         marker = json.dumps(
             {"phase": phase, "name": name, "duration_ms": 1, "status": "ok"}
@@ -356,6 +357,28 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+
+
+def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:
+    source = (
+        ROOT / "rust/services/issuance/tests/canvas_sync_worker_postgres_contract.rs"
+    ).read_text(encoding="utf-8")
+    emitted = re.findall(
+        r'(?:CompositePhaseTimer::start|timed_phase)\(\s*"([a-z_]+)"', source
+    )
+    assert len(emitted) == 15
+    assert len(set(emitted)) == len(emitted)
+    assert set(emitted) == GROUPS.TIMING_NAMES["contract_phase"]
+    assert emitted[0] == "composite_total"
+    assert emitted[-1] == "pool_close"
+    assert '"\\nMARTY_CI_PHASE_V1 ' in source
+    for name in emitted:
+        marker = json.dumps(
+            {"phase": "contract_phase", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "rust-db")
+    unknown = '{"phase":"contract_phase","name":"private_value","duration_ms":1,"status":"ok"}'
+    assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + unknown, "rust-db") is None
 
 
 def test_unavailable_optional_timing_file_does_not_change_contract_result(

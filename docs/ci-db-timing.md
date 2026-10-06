@@ -39,6 +39,19 @@ timed again if the destructor retries remaining owned resources. The HTTPS
 cleanup duration measures server/thread shutdown, not deletion of the temporary
 certificate directory; a deletion failure still fails the test.
 
+The ordinary `canvas_sync_worker_postgres_contract` executable also emits
+fixed `contract_phase` durations from its stateful composite test. The outer
+`composite_total` includes connection, schema setup, all subphases, and pool
+close; do not add it to its nested phases or to the executable's `contract`
+duration. `initial_schema` is separate from the scheduler/recovery/completion
+block. `hinted_retry`, privacy, signing, projections, and consumer ranges each
+include their existing destructive schema reset. Lifecycle, actual owned
+process signals, renewal generation/write-failure boundaries, and the 60-case
+renewal outcome matrix retain their existing order and real deadlines. A
+failed assertion marks its active phase failed during unwind; later phases
+are absent, and the contract's exit status remains the gate. These timings
+are diagnostic only, not proof that any phase can safely overlap another.
+
 This is instrumentation, not a speedup or evidence to remove tests. All
 existing cases, image/source pins, connection limits, qualification tiers,
 deadlines, and success gates remain authoritative. Compare hosted runs only

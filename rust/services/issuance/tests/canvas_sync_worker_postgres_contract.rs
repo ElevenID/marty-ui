@@ -7,6 +7,46 @@ use marty_issuance_service::{
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
 use sqlx::{postgres::PgPoolOptions, Row};
+use std::{future::Future, time::Instant};
+
+// Test-only, fixed-name phase markers are filtered again by the CI evidence
+// collector. No SQL, URL, worker output or exception text enters the artifact.
+struct CompositePhaseTimer {
+    name: &'static str,
+    started: Instant,
+    succeeded: bool,
+}
+
+impl CompositePhaseTimer {
+    fn start(name: &'static str) -> Self {
+        Self {
+            name,
+            started: Instant::now(),
+            succeeded: false,
+        }
+    }
+
+    fn success(mut self) {
+        self.succeeded = true;
+    }
+}
+
+impl Drop for CompositePhaseTimer {
+    fn drop(&mut self) {
+        eprintln!(
+            "\nMARTY_CI_PHASE_V1 {{\"phase\":\"contract_phase\",\"name\":\"{}\",\"duration_ms\":{},\"status\":\"{}\"}}",
+            self.name,
+            self.started.elapsed().as_millis(),
+            if self.succeeded { "ok" } else { "failed" },
+        );
+    }
+}
+
+async fn timed_phase(name: &'static str, action: impl Future<Output = ()>) {
+    let timer = CompositePhaseTimer::start(name);
+    action.await;
+    timer.success();
+}
 
 #[path = "support/canvas_worker_range_oracle.rs"]
 mod canvas_worker_range_oracle;
@@ -140,12 +180,14 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             .ends_with("_test"),
         "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL must name a dedicated *_test database"
     );
+    let composite_timing = CompositePhaseTimer::start("composite_total");
     let pool = PgPoolOptions::new()
         .max_connections(6)
         .connect(&database_url)
         .await
         .expect("Canvas worker contract database must connect");
-    setup_schema(&pool).await;
+    timed_phase("initial_schema", setup_schema(&pool)).await;
+    let schedule_timing = CompositePhaseTimer::start("schedule_recovery_completion");
     let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
 
     seed_target(&pool, "target-new", 15).await;
@@ -475,27 +517,68 @@ async fn scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors(
             .unwrap(),
         Some(CanvasSyncJobStatus::DeadLetter),
     );
+    schedule_timing.success();
     // The retry matrix shares this serial, dedicated _test database fixture.
     // A second test would race this test's destructive schema resets.
-    setup_schema(&pool).await;
-    assert_hinted_retry_persistence(&pool).await;
+    timed_phase("hinted_retry", async {
+        setup_schema(&pool).await;
+        assert_hinted_retry_persistence(&pool).await;
+    })
+    .await;
     // Reset only this test's disposable schema after all existing stateful
     // recovery/fencing assertions. Range observations require empty queues.
-    setup_worker_schema(&pool).await;
-    canvas_worker_privacy_replay::assert_worker_failure_privacy(&pool).await;
-    setup_worker_schema(&pool).await;
-    canvas_worker_signing_guard::assert_signing_guard(&pool).await;
-    setup_worker_schema(&pool).await;
-    canvas_worker_projection_cycles::assert_projection_cycles(&pool).await;
-    setup_worker_schema(&pool).await;
-    canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
-    canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool).await;
-    canvas_worker_lifecycle_oracle::assert_initialized_pool_disposal(&pool).await;
-    canvas_worker_process_signals::assert_process_signals(&pool, &database_url).await;
-    canvas_worker_renewal_oracle::assert_generation_change_preserves_process_liveness(&pool).await;
-    canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool).await;
-    canvas_worker_renewal_job_outcomes::assert_renewal_job_outcomes(&pool).await;
-    pool.close().await;
+    timed_phase("privacy", async {
+        setup_worker_schema(&pool).await;
+        canvas_worker_privacy_replay::assert_worker_failure_privacy(&pool).await;
+    })
+    .await;
+    timed_phase("signing_guard", async {
+        setup_worker_schema(&pool).await;
+        canvas_worker_signing_guard::assert_signing_guard(&pool).await;
+    })
+    .await;
+    timed_phase("projection_cycles", async {
+        setup_worker_schema(&pool).await;
+        canvas_worker_projection_cycles::assert_projection_cycles(&pool).await;
+    })
+    .await;
+    timed_phase("consumer_ranges", async {
+        setup_worker_schema(&pool).await;
+        canvas_worker_range_oracle::assert_consumer_ranges(&pool).await;
+    })
+    .await;
+    timed_phase(
+        "owned_lifecycle",
+        canvas_worker_lifecycle_oracle::assert_owned_cycle_lifecycle(&pool),
+    )
+    .await;
+    timed_phase(
+        "pool_disposal",
+        canvas_worker_lifecycle_oracle::assert_initialized_pool_disposal(&pool),
+    )
+    .await;
+    timed_phase(
+        "process_signals",
+        canvas_worker_process_signals::assert_process_signals(&pool, &database_url),
+    )
+    .await;
+    timed_phase(
+        "renewal_generation",
+        canvas_worker_renewal_oracle::assert_generation_change_preserves_process_liveness(&pool),
+    )
+    .await;
+    timed_phase(
+        "renewal_write_failures",
+        canvas_worker_renewal_oracle::assert_renewal_write_failure_boundaries(&pool),
+    )
+    .await;
+    timed_phase(
+        "renewal_job_outcomes",
+        canvas_worker_renewal_job_outcomes::assert_renewal_job_outcomes(&pool),
+    )
+    .await;
+    timed_phase("pool_close", pool.close()).await;
+    composite_timing.success();
 }
 
 async fn assert_hinted_retry_persistence(pool: &sqlx::PgPool) {
