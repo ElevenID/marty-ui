@@ -27,6 +27,7 @@ marty-gateway = { path = "../../services/gateway" }
 marty-crypto.workspace = true
 marty-issuance-service = { path = "../../services/issuance" }
 marty-oid4vci = { workspace = true, features = ["lti"] }
+marty-passport-auth = { path = "../passport-auth" }
 marty-release-evidence = { path = "../release-evidence" }
 marty-selfhost-bundle = { path = "../selfhost-bundle" }
 marty-signing-keys = { path = "../../services/signing-keys" }
@@ -58,6 +59,10 @@ zip.workspace = true
 [[test]]
 name = "passport_managed_kms_chain"
 path = "tests/passport_managed_kms_chain.rs"
+
+[[test]]
+name = "passport_gateway_postgres"
+path = "tests/passport_gateway_postgres.rs"
 
 [[test]]
 name = "canvas_published_worker_contract"

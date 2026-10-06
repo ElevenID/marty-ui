@@ -1308,9 +1308,9 @@ jobs:
           MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
         run: |
           set -euo pipefail
-          test_name='runtime::tests::passport_gateway_postgres::native_passport_gateway_signed_webhook_updates_durable_tenant_job'
-          cargo test --locked -p marty-gateway --lib -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-gateway --lib "$test_name" -- --exact
+          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
