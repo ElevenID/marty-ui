@@ -2,6 +2,7 @@
 
 import json
 import runpy
+import shlex
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,76 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
         if kind != "lib":
             assert target in canvas_branch
     assert "verify-canvas-test-artifacts.py" in canvas_branch
+    # Test packages resolve together. Real binaries keep their independently
+    # resolved features; preserve every exact target/profile/artifact flag.
+    commands = [
+        shlex.split(line.strip())
+        for line in canvas_branch.replace("\\\n", " ").splitlines()
+        if line.strip().startswith("cargo ")
+    ]
+    assert commands == [
+        [
+            "cargo",
+            "test",
+            "--locked",
+            "-p",
+            "marty-canvas-acceptance",
+            "-p",
+            "marty-issuance-service",
+            "--lib",
+            "--test",
+            "canvas_published_worker_contract",
+            "--test",
+            "canvas_published_schema_contract",
+            "--test",
+            "canvas_oauth_behavior",
+            "--test",
+            "issuance-behavior",
+            "--no-run",
+            "--timings",
+            "--message-format=json",
+            ">>",
+            "$artifacts",
+        ],
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "marty-issuance-service",
+            "--bin",
+            "marty-issuance-service",
+            "--bin",
+            "marty-canvas-sync-worker",
+            "--message-format=json",
+            ">>",
+            "$artifacts",
+        ],
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "marty-gateway",
+            "--bin",
+            "marty-gateway",
+            "--message-format=json",
+            ">>",
+            "$artifacts",
+        ],
+        [
+            "cargo",
+            "build",
+            "--locked",
+            "-p",
+            "marty-flow",
+            "--bin",
+            "marty-flow",
+            "--message-format=json",
+            ">>",
+            "$artifacts",
+        ],
+    ]
     assert by_name["Prepare database contract executables"]["if"] == (
         "matrix.lane == 'contracts'"
     )

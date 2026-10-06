@@ -715,13 +715,15 @@ jobs:
             cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
           else
             : > "$artifacts"
-            cargo test --locked -p marty-canvas-acceptance \
+            # Resolve shared test features once; the Canvas library is an empty
+            # ownership marker, guarded separately from its two real targets.
+            cargo test --locked -p marty-canvas-acceptance -p marty-issuance-service \
+              --lib \
               --test canvas_published_worker_contract \
               --test canvas_published_schema_contract \
+              --test canvas_oauth_behavior --test issuance-behavior \
               --no-run --timings --message-format=json >> "$artifacts"
-            cargo test --locked -p marty-issuance-service \
-              --lib --test canvas_oauth_behavior --test issuance-behavior \
-              --no-run --timings --message-format=json >> "$artifacts"
+            # Keep each real binary's package-specific feature resolution.
             cargo build --locked -p marty-issuance-service \
               --bin marty-issuance-service --bin marty-canvas-sync-worker \
               --message-format=json >> "$artifacts"
