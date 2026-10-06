@@ -166,7 +166,7 @@ message EvaluatePresentationRequest {
   Oid4vpEvaluationTransport oid4vp_transport = 7; // optional, unverified metadata
 }
 
-// Producer-owned query plus lossless untrusted wallet submission. Presence and
+// Producer-owned query plus structure-preserving untrusted wallet submission. Presence and
 // structural validity do not grant presentation, credential, or holder proof.
 message Oid4vpEvaluationTransport {
   string query_kind = 1; // "dcql" or "presentation_exchange"

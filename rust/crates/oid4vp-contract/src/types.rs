@@ -206,7 +206,7 @@ pub enum QueryKind {
 }
 
 /// Additive internal transport, not authenticated verification evidence.
-/// The wallet submission stays lossless because legacy inputs are less strict
+/// The parsed wallet submission retains unknown fields because legacy inputs are less strict
 /// than [`PresentationSubmission`]. A signed-VP consumer must require and
 /// validate the compatible typed form before using descriptor mappings.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]

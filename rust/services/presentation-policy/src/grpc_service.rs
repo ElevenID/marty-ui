@@ -275,6 +275,7 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
         &self,
         request: Request<EvaluatePresentationMessage>,
     ) -> Result<Response<PolicyEvaluationResponse>, Status> {
+        let workload_authenticated = self.workload_security.is_some();
         let policy_id = parse_uuid(&request.get_ref().policy_id)?;
         let policy = if self.workload_security.is_some() {
             self.authenticate_workload(&request, EVALUATE_PRESENTATION_METHOD)?;
@@ -288,6 +289,11 @@ impl PresentationPolicyService for PresentationPolicyGrpcService {
         }
         .map_err(application_status)?;
         let input = request.into_inner();
+        if input.oid4vp_transport.is_some() && !workload_authenticated {
+            return Err(Status::permission_denied(
+                "OID4VP transport requires an authenticated workload",
+            ));
+        }
         let context = if input.context_json.trim().is_empty() {
             Map::new()
         } else {
@@ -514,7 +520,7 @@ mod oid4vp_transport_tests {
     use super::*;
 
     #[test]
-    fn bounded_transport_accepts_lossless_legacy_and_rejects_mutations() {
+    fn bounded_transport_preserves_legacy_structure_and_rejects_mutations() {
         let query = json!({"credentials": [{"id": "member"}]});
         let wire = crate::presentation_policy_proto::Oid4vpEvaluationTransport {
             query_kind: "dcql".into(),

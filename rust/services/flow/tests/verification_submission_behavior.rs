@@ -186,7 +186,7 @@ fn input(token: &str) -> VerificationSubmissionInput {
 }
 
 #[tokio::test]
-async fn emitted_query_and_lossless_submission_reach_policy_without_new_verdict() {
+async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict() {
     let query = json!({"id": "definition-1", "input_descriptors": [{"id": "member"}]});
     let instance = with_emitted_query(instance(false), "presentation_definition", query.clone());
     let mut wallet = input("header.payload.signature");
@@ -313,15 +313,14 @@ async fn oversized_legacy_submission_keeps_existing_verdict_without_transport_cl
 
 #[tokio::test]
 async fn malformed_recorded_query_cannot_be_promoted_to_transport_metadata() {
-    let mut instance =
-        with_emitted_query(instance(false), "dcql_query", json!({"credentials": []}));
-    instance.context["mip_messages"]["presentation_request"]["payload"]["client_id"] =
+    let mut stored = with_emitted_query(instance(false), "dcql_query", json!({"credentials": []}));
+    stored.context["mip_messages"]["presentation_request"]["payload"]["client_id"] =
         json!("attacker-client");
     let (providers, seen) = providers(Ok(allowed()));
     assert!(matches!(
         prepare_verification_submission(
             &providers,
-            instance,
+            stored,
             input("header.payload.signature"),
             &options(None),
             now()
@@ -329,6 +328,30 @@ async fn malformed_recorded_query_cannot_be_promoted_to_transport_metadata() {
         .await,
         Err(FlowVerificationSubmissionError::InvalidContext(
             "presentation_request_binding"
+        ))
+    ));
+    assert!(seen.lock().unwrap().is_empty());
+
+    // Unlike an absent historical request, a contradictory persisted request
+    // is a producer-state error and now fails before legacy evaluation.
+    let mut ambiguous = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    ambiguous.context["mip_messages"]["presentation_request"]["payload"]
+        ["presentation_definition"] = json!({"id": "definition-1", "input_descriptors": []});
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            ambiguous,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_query"
         ))
     ));
     assert!(seen.lock().unwrap().is_empty());

@@ -35,8 +35,8 @@ pub struct EvaluatePresentationRequest {
     /// Parsed only from workload-authenticated gRPC; still unverified metadata.
     #[serde(skip)]
     pub oid4vp_transport: Option<marty_oid4vp_contract::Oid4vpEvaluationTransportV1>,
-    /// Set only by the workload-authenticated gRPC adapter. HTTP JSON cannot
-    /// assert that verifier context was produced by the internal OID4VP flow.
+    /// Set by the internal gRPC adapter (which is workload-authenticated in
+    /// deployed configuration). HTTP JSON cannot assert this marker.
     #[serde(skip)]
     pub trusted_internal_context: bool,
 }
