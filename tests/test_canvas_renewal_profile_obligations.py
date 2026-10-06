@@ -16,6 +16,9 @@ SOURCE = (
     ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
 )
 FIXTURE = ROOT / "rust/crates/canvas-acceptance/tests/support/renewal_fresh_main.rs"
+RENDERED_CONFIG = (
+    ROOT / "rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs"
+)
 FAST = (
     ROOT
     / "rust/services/issuance/src/initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs"
@@ -245,6 +248,81 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
 
 def test_six_renewal_profiles_retain_distinct_runtime_obligations() -> None:
     _validate(json.loads(MANIFEST.read_text(encoding="utf-8")), _inputs())
+
+
+def _validate_rendered_config_owner(source: str, config: str, runner: str) -> None:
+    assert (
+        source.count(
+            '#[path = "support/rendered_base_process.rs"]\nmod rendered_base_process;'
+        )
+        == 1
+    )
+    name = "rendered_base_renewal_config_crosses_encryption_and_private_address_policy"
+    bodies = re.findall(
+        rf'(?ms)^#\[cfg\(target_os = "linux"\)\]\s*#\[test\]\s*fn {name}\(\) \{{(.*?)^\}}',
+        _without_rust_comments(config),
+    )
+    assert len(bodies) == 1
+    body = _compact(bodies[0])
+    for case in (
+        '(false,false,"false")',
+        '(true,false,"false")',
+        '(false,true,"true")',
+        '(true,true,"true")',
+    ):
+        assert case in body
+    assert "RenderedBase::render(&spec)" in body
+    for field in (
+        "DIDCOMM_ALLOW_PRIVATE_IPS",
+        "DIDCOMM_TLS_CA_FILE",
+        "DIDCOMM_ENCRYPTION_POLICY_FILE",
+        "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+        "ISSUANCE_SERVICE_URL",
+        "ISSUANCE_NATIVE_SERVICE_URL",
+    ):
+        assert field in body
+    expected_row = f"rendered_base_process::{name}: test"
+    assert (
+        runner.count(
+            f"printf '%s\\n' \"$composition_tests\" | grep -Fx '{expected_row}'"
+        )
+        == 1
+    )
+    assert '"$composition_executable" --skip "$serial_composition_test"' in runner
+    assert f"--skip {name}" not in runner
+    assert f"--skip rendered_base_process::{name}" not in runner
+
+
+def test_rendered_config_matrix_has_one_registered_composition_owner() -> None:
+    _validate_rendered_config_owner(
+        SOURCE.read_text(encoding="utf-8"),
+        RENDERED_CONFIG.read_text(encoding="utf-8"),
+        RUNNER.read_text(encoding="utf-8"),
+    )
+
+
+@pytest.mark.parametrize("fault", ["missing", "case", "renderer", "runner", "platform"])
+def test_rendered_config_owner_rejects_drift(fault: str) -> None:
+    source = SOURCE.read_text(encoding="utf-8")
+    config = RENDERED_CONFIG.read_text(encoding="utf-8")
+    runner = RUNNER.read_text(encoding="utf-8")
+    if fault == "missing":
+        source = source.replace("mod rendered_base_process;", "mod absent_renderer;")
+    elif fault == "case":
+        config = config.replace('(true, false, "false")', '(true, true, "true")')
+    elif fault == "renderer":
+        config = config.replace("RenderedBase::render(&spec)", "fixture_stub(&spec)")
+    elif fault == "platform":
+        config = config.replace(
+            '#[cfg(target_os = "linux")]', '#[cfg(target_os = "windows")]'
+        )
+    else:
+        runner += (
+            "\n--skip rendered_base_renewal_config_crosses_encryption_"
+            "and_private_address_policy\n"
+        )
+    with pytest.raises(AssertionError):
+        _validate_rendered_config_owner(source, config, runner)
 
 
 @pytest.mark.parametrize(

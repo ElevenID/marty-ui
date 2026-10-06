@@ -733,6 +733,20 @@ This inventory authorizes no skips or trigger narrowing. Its value is to expose
 which crypto/policy cases have a fast owner and which real ingress, persistence
 and cleanup obligations would still need proof before future decomposition.
 
+An additive rendered-base configuration component test in the existing
+`canvas_published_schema_contract` target exercises the actual bounded Compose
+renderer for all four authcrypt/anoncrypt and private-address allow/refuse
+combinations. It checks literal native private-IP, CA, policy-file, DID-web and
+port settings plus Gateway legacy/native routes. The base renderer is shared
+by the Gateway, Envoy and rendered-direct acceptance paths, but this one test
+does not validate the Envoy sidecar, Kubernetes renderer, packaged-direct
+defaults, a running service, real PostgreSQL/Redis, wallet I/O, or container
+cleanup. It uses synthetic files and local addresses and needs the Compose CLI;
+it is not an I/O-free unit test. The same composition target is executed by the
+existing Canvas runner, with no case, tier or trigger changes. Local Windows
+execution is not qualification for its Linux renderer; hosted exact-head
+execution remains required before this proof can support a tier decision.
+
 ## Combined transport and dependency-boundary checkpoint (2026-10-06)
 
 The unpublished UI assembly at `4b3433dcadf538f9ba9cc44ff2d3b8c119adb715`

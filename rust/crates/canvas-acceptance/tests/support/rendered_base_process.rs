@@ -142,3 +142,98 @@ impl RenderedBase {
         }
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() {
+    use serde_json::json;
+
+    // This is a renderer/component proof, not a substitute for the owned
+    // database, ingress, process, wallet, and cleanup acceptance cases.
+    let directory = tempfile::tempdir().expect("owned synthetic policy directory");
+    let ca = directory.path().join("ca.pem");
+    let policy = directory.path().join("didcomm-encryption-policy.json");
+    std::fs::write(&ca, b"synthetic CA fixture").unwrap();
+    std::fs::write(&policy, b"{}").unwrap();
+    let ca = ca.to_str().unwrap();
+    let policy = policy.to_str().unwrap();
+
+    for (authenticated, allow_private_ips, expected_private_ips) in [
+        (false, false, "false"),
+        (true, false, "false"),
+        (false, true, "true"),
+        (true, true, "true"),
+    ] {
+        let spec = json!({
+            "inputs": {
+                "ISSUANCE_API_KEY": super::issuance_named_peers::API_KEY,
+                "GRPC_SERVICE_TOKEN": super::issuance_named_peers::TOKEN,
+                "SIGNING_KEYS_INTERNAL_API_KEY": super::issuance_named_peers::SIGNING_KEY,
+                "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
+                "INTEGRATION_SECRET_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+                "PUBLIC_API_URL": "https://issuer.example",
+                "UI_BASE_URL": "http://localhost:3000",
+                "ISSUANCE_OFFER_TTL_MINUTES": "10080",
+                "TOKEN_RATE_LIMIT": "30",
+                "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
+                "CANVAS_PILOT_ORGANIZATION_IDS": ""
+            },
+            "http_port": 18005,
+            "grpc_port": 19005,
+            "gateway_port": 18000,
+            "database_url": "postgresql://oracle:synthetic-local-only@127.0.0.1:15432/canvas_published_schema_test",
+            "redis_url": "redis://127.0.0.1:16379",
+            "peer_origin": "http://127.0.0.1:18001",
+            "legacy_origin": "http://127.0.0.1:18002",
+            "ca_file": ca,
+            "policy_directory": directory.path(),
+            "authcrypt": authenticated,
+            "allow_private_ips": allow_private_ips
+        });
+        let rendered = RenderedBase::render(&spec);
+        let native = &rendered.native_environment;
+        let gateway = &rendered.gateway_environment;
+        assert_eq!(
+            native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
+            Some(expected_private_ips)
+        );
+        assert_eq!(
+            native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
+            Some(ca)
+        );
+        assert_eq!(
+            native
+                .get("DIDCOMM_ENCRYPTION_POLICY_FILE")
+                .map(String::as_str),
+            if authenticated { Some(policy) } else { None }
+        );
+        assert_eq!(
+            native
+                .get("DIDCOMM_DID_WEB_INTERNAL_BASE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:18001")
+        );
+        assert_eq!(
+            native.get("ISSUANCE_SERVICE_PORT").map(String::as_str),
+            Some("18005")
+        );
+        assert_eq!(
+            native.get("ISSUANCE_GRPC_PORT").map(String::as_str),
+            Some("19005")
+        );
+        assert_eq!(
+            gateway.get("ISSUANCE_SERVICE_URL").map(String::as_str),
+            Some("http://127.0.0.1:18002")
+        );
+        assert_eq!(
+            gateway
+                .get("ISSUANCE_NATIVE_SERVICE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:18005")
+        );
+        assert_eq!(
+            gateway.get("REDIS_URL").map(String::as_str),
+            Some("redis://127.0.0.1:16379")
+        );
+    }
+}
