@@ -347,8 +347,8 @@ def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> Non
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
     # Published matrix IDs are checked-in case identities, not probe output,
     # environment values, SQL, URLs, or arbitrary text from the child log.
-    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 75
-    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 15
+    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 95
+    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 21
     for name in GROUPS.PUBLISHED_MATRIX_PROBE_NAMES:
         marker = json.dumps(
             {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
@@ -407,6 +407,15 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
     ) < (support.index("worker_matrix_timing_name(scenario, case)?"))
     assert "Self::start_probe_with_migration_named(" in support
     assert 'strip_prefix("worker-")' in support
+    # Every Rust wrapper that reaches the shared case constructor must have
+    # an exact checked-in scenario family in the timing collector. This also
+    # catches a newly added wrapper whose labels would otherwise disappear.
+    wrapper_families = re.findall(
+        r'Self::start_with_worker_case\(\s*case,\s*include_str!\(\s*"\.\./\.\./\.\./\.\./\.\./contracts/canvas-worker-([a-z-]+)-scenarios\.json"\s*\)',
+        support,
+    )
+    assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 21
+    assert set(wrapper_families) == GROUPS.PUBLISHED_MATRIX_SCENARIOS
 
 
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:

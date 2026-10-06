@@ -31,7 +31,7 @@ historical producer executes its migrations and fixture seed internally, and
 changing it would invalidate the source/oracle pin. The native
 fixture labels three fixed constructor origins (`json_consumer`, `json_depth`,
 `timeout_consumer`) and the worker-validation repository's single shared
-template (`worker_validation_template`). Its 15 published worker matrix
+template (`worker_validation_template`). Its 21 published worker matrix
 families use bounded `kind.case` labels from the checked-in scenario corpus,
 after case-membership validation; the collector accepts only those exact
 identities. Other probes retain `published_probe`. These labels identify the
