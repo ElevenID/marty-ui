@@ -595,6 +595,39 @@ in the reviewed unit/renewal batch or use it as demotion evidence. Revisit this
 slice only with a reviewed lifecycle design and real hosted Linux qualification;
 no component speedup is attributed to the failed or mocked experiments.
 
+## A8 current API-boundary audit (2026-10-06, read-only)
+
+Core main `d949f65362b63157e4e4ecee23ea4610a6411089` is workspace 0.2;
+UI's six shared Core declarations still use 0.1.62 / `bdbd1510`; issuance also
+declares `marty-emrtd-issuance` 0.2 at separate revision `83cdaeb5`. This is
+already a mixed-generation graph, not six declarations covering every Core
+dependency. A pin-only update would remove callable APIs and an existing opt-in
+capability:
+
+- Gateway `runtime.rs` calls `proof::create_proof_jwt`, now Core test-only.
+  Adopt a legitimate production wallet/delegated signer API without changing
+  authenticated caller authorization or using a test helper as a production API.
+- Flow `request_object.rs` and `verification_submission.rs` generate, seal,
+  persist and later unwrap private HAIP response JWKs. Core's production
+  `HaipResponseDecryptionSession` is opaque and one-shot; it is not a durable
+  serialization replacement. Preserve restart/session custody through a supported
+  boundary, not copied cryptography or an export of Core's test helpers.
+- `marty-crypto/ecdsa` becomes `ecdsa-verification`; verifier
+  `authority-issuance` is removed. Preserve `passport-self-signed-test` and
+  independent CSCA interoperability fixtures with a suitable test-support owner.
+  This opt-in test-image capability is not the ordinary production signer.
+
+After those prerequisites, align Core versions/features and carry verifier-owned
+definitions plus wallet submissions through Flow to policy evaluation. Core's
+authenticated VP proof verifies the signed payload/key and session claims, not
+the embedded VC's issuer, trust or status. Verify those independently. Holder-key
+comparison remains conditional on the existing profile policy; do not silently
+convert `OpenBadgeLogin`'s bearer default to mandatory holder binding. Keep existing
+raw-credential routes distinct from signed-VP handling and reject unverified
+context flags as proof. Only then qualify the same-key wallet happy journey and
+nightly release tier on real Flow/policy/issuance results. This audit changed no
+pins, authentication behavior or release authority.
+
 ## A6 container-input audit disposition (2026-10-06)
 
 The dedicated event-stream and revocation-profile Dockerfiles still cook the
