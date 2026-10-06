@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-worker-startup-current-inputs/v1",
-  "purpose": "Current repository source-input inventory only. These hashes do not attest the historical startup corpus, qualify a release, or authorize skipping a live oracle.",
+  "purpose": "Current repository source-input inventory only. The single-cycle child is a conditional potential input, not executed by the eight current startup scenarios. These hashes do not attest the historical startup corpus, qualify a release, or authorize skipping a live oracle.",
   "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
   "sha256": {
     "contracts/canvas-worker-startup-scenarios.json": "7459f28b9e878ed8a228375af54fc958e82b597ef4b152f0efd129089133d8f6",
