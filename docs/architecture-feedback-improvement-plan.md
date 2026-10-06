@@ -404,7 +404,14 @@ A1 dependency-surface inventory (2026-10-06): locked offline `cargo tree -p mart
 The follow-up to the separate Canvas acceptance package narrows only the Canvas
 lane's host compilation: two Canvas acceptance targets, the issuance library and
 two HTTPS test targets, and real issuance, Canvas worker, Gateway, and Flow
-binaries. The contracts lane retains full workspace compilation and execution.
+binaries. The contracts lane retains full workspace compilation, but excludes
+`marty-canvas-acceptance` from its workspace test execution: the mandatory Canvas
+matrix leg is the sole execution owner for both of that package's test targets.
+The package has no additional library, example, binary, or benchmark tests. This
+avoids duplicated support assertions and environment-guarded no-op passes; the
+33 historical cases already did not execute their process assertions in contracts
+and retain their unchanged full-qualification owner. Both matrix legs share the
+same selection and are required by the aggregate CI gate.
 Bookworm compatibility, public Docker builds, published-process preflights, and
 all Canvas test execution remain unchanged. A fail-closed artifact guard checks
 package, target, kind, explicit boolean test profile, unique executable, expected
@@ -416,7 +423,8 @@ This is a reviewed local candidate, not a merged or measured speed improvement.
 Targeted policy tests and a synthetic Cargo artifact-selection experiment support
 the selectors; hosted Canvas validation is still required to prove package-scoped
 feature unification and all runtime consumers. The complete contracts lane remains
-the full-workspace qualification authority.
+the non-Canvas workspace execution authority; the two mandatory matrix legs
+together retain the complete declared qualification coverage.
 
 ## Goal completion criteria
 

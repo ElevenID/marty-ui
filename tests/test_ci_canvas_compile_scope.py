@@ -3,6 +3,7 @@
 import json
 from pathlib import Path
 import runpy
+import tomllib
 
 import pytest
 import yaml
@@ -47,6 +48,63 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
         "cargo test --locked --workspace"
         in by_name["Run safe Rust contract groups concurrently"]["run"]
     )
+
+
+def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["test-rust-services"]
+    assert job["if"] == "needs.changes.outputs.rust == 'true'"
+    assert job["strategy"]["matrix"] == {"lane": ["canvas", "contracts"]}
+    steps = {step.get("name"): step for step in job["steps"]}
+    compile_run = steps["Compile reusable Rust test executables"]["run"]
+    assert "cargo test --locked --workspace --no-run" in compile_run
+    assert "--exclude" not in compile_run
+    execution = steps["Run safe Rust contract groups concurrently"]
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    assert (
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance "
+        in execution["run"]
+    )
+    assert execution["run"].count("--exclude") == 1
+
+    gate = workflow["jobs"]["ci-gate"]
+    assert "test-rust-services" in gate["needs"]
+    assert gate["env"]["RUST_SERVICES_RESULT"] == (
+        "${{ needs.test-rust-services.result }}"
+    )
+    assert any(
+        'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
+        in step.get("run", "")
+        for step in gate["steps"]
+    )
+
+    package = ROOT / "rust/crates/canvas-acceptance"
+    manifest = tomllib.loads((package / "Cargo.toml").read_text(encoding="utf-8"))
+    assert manifest["package"]["autotests"] is False
+    targets = {entry["name"] for entry in manifest["test"]}
+    assert targets == {
+        "canvas_published_worker_contract",
+        "canvas_published_schema_contract",
+    }
+    assert not any(key in manifest for key in ("bin", "example", "bench"))
+    assert not (package / "src/bin").exists()
+    assert not (package / "src/main.rs").exists()
+    assert not (package / "examples").exists()
+    assert not (package / "benches").exists()
+    # The library is an ownership marker only. New library tests need an explicit
+    # execution owner before this package can remain excluded from contracts.
+    assert (package / "src/lib.rs").read_text(encoding="utf-8").strip() == (
+        "//! Ownership boundary for published Canvas worker and composition acceptance."
+    )
+    runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    for target in targets:
+        assert target in runner
+    assert '"$composition_executable" --skip' in runner
+    assert '"$worker_executable" --skip' in runner
 
 
 def _records(tmp_path: Path) -> tuple[Path, Path, list[dict]]:
