@@ -18,6 +18,9 @@ Parallel target completion is observed by a timing-only log relay at 100 ms
 polling resolution. The runner still waits and cancels the actual Rust child
 PIDs; if a relay cannot drain, its optional target duration is omitted rather
 than estimated from the other target's completion time.
+The final target-log replay prefixes already-relayed timing lines with
+`[raw-log]`, retaining their diagnostic text without recording them a second
+time in the JSONL evidence.
 
 Canvas's exact-owned PostgreSQL fixture emits `container_startup`,
 `database_readiness`, `migration_seed`, and `cleanup`, including failed phase

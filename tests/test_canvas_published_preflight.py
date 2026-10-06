@@ -1032,6 +1032,28 @@ def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
     live = result.stdout.split("Canvas composition target exit:", 1)[0]
     assert live.count('"name":"contract"') == 1
     assert live.count('"name":"worker-contract"') == 1
+    assert (
+        result.stdout.count('MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"')
+        == 2
+    )
+    assert (
+        result.stdout.count(
+            'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"worker-contract"'
+        )
+        == 2
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"'
+        )
+        == 1
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"worker-contract"'
+        )
+        == 1
+    )
 
 
 def test_explicit_database_close_cannot_emit_second_cleanup_timing():

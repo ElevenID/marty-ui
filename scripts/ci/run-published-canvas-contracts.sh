@@ -418,9 +418,11 @@ drain_target_relays() {
 }
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"
-  cat "$composition_log"
+  # Phase records were relayed live. Keep the complete diagnostic text in the
+  # final replay without presenting those same lines as fresh timing events.
+  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$composition_log"
   printf 'Canvas worker target exit: %s\n' "$2"
-  cat "$worker_log"
+  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
 }
 stop_targets() {
   local composition_stopped=0 worker_stopped=0
