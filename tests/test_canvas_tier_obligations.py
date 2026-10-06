@@ -21,6 +21,28 @@ INVENTORY = json.loads(
 RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 
 
+@pytest.mark.parametrize(
+    "ignore_file",
+    [
+        ".dockerignore",
+        "services/Dockerfile.dockerignore",
+        "rust/services/Dockerfile.ci.dockerignore",
+    ],
+)
+def test_ci_inventory_is_not_copied_into_service_images(ignore_file: str) -> None:
+    lines = (ROOT / ignore_file).read_text(encoding="utf-8").splitlines()
+    assert "contracts/canvas-worker-tier-obligations.json" in lines
+
+
+def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
+    # A new runtime consumer requires revisiting the CI-only image exclusions.
+    for directory in (ROOT / "rust/services", ROOT / "rust/crates"):
+        for source in directory.rglob("*.rs"):
+            assert "canvas-worker-tier-obligations.json" not in source.read_text(
+                encoding="utf-8"
+            ), source.relative_to(ROOT)
+
+
 def discovered() -> set[str]:
     return {
         entry["test"] for entry in INVENTORY["historical"] + INVENTORY["preflights"]

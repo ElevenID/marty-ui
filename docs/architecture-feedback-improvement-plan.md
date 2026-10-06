@@ -430,6 +430,14 @@ feature unification and all runtime consumers. The complete contracts lane remai
 the non-Canvas workspace execution authority; the two mandatory matrix legs
 together retain the complete declared qualification coverage.
 
+Combined-head validation detected that the new compiled-test inventory guard
+also consumes the producer manifest. Producer metadata and the new tier inventory
+therefore select both Rust and release validation, with exact consumer regression
+checks; they cannot retain a release-only shortcut. The tier inventory is CI-only
+and excluded from all three service-image contexts, preventing an unnecessary
+container payload/cache input. The guard records discovery and exact selection,
+not proof that every selected case executed or complete historical provenance.
+
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.

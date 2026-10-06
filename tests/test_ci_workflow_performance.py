@@ -844,12 +844,15 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     inventory_consumers = {
         "canvas-worker-oracle-producers.json": {
             ".github/workflows/ci.yml",
+            "contracts/canvas-worker-tier-obligations.json",
+            "scripts/ci/check_canvas_tier_obligations.py",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_producer_inventory.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
         },
         "canvas-worker-oracle-script-imports.json": {
             ".github/workflows/ci.yml",
+            "contracts/canvas-worker-tier-obligations.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
@@ -860,6 +863,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
             "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
+        },
+        "canvas-worker-tier-obligations.json": {
+            ".github/workflows/ci.yml",
+            "scripts/ci/check_canvas_tier_obligations.py",
+            "tests/test_canvas_tier_obligations.py",
+            "tests/test_ci_workflow_performance.py",
         },
     }
     for manifest, expected in inventory_consumers.items():
@@ -914,6 +923,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
+        "contracts/canvas-worker-tier-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
     ):
@@ -922,9 +932,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "all": "false",
             "ui": "false",
             "python": "false",
-            "rust": str(
-                path == "contracts/canvas-worker-oracle-script-imports.json"
-            ).lower(),
+            "rust": str(path.startswith("contracts/")).lower(),
             "release": "true",
             "verification": "false",
             "security": "false",

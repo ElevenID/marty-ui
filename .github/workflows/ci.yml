@@ -98,16 +98,16 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json)
-                  # Startup attestation reads these inputs in the Rust lane;
-                  # release tests also validate their ownership and hashes.
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json)
+                  # Rust-lane startup evidence or compiled-test discovery
+                  # consumes these inputs; release tests validate ownership.
                   rust=true
                   release=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
-                  # Only the release-collected inventory tests consume these
-                  # manifests; service image contexts exclude them. Other
-                  # corpora and unknown test paths retain broad selection.
+                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
+                  # These exact test-only sources run in release pytest. Their
+                  # manifest inputs retain the Rust discovery/evidence owner;
+                  # unknown siblings and corpora remain conservatively broad.
                   release=true
                   ;;
                 rust/*|proto/*|contracts/*)
