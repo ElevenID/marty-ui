@@ -92,6 +92,8 @@ Canvas worker A0 inventory (2026-10-03, #1058 target): `canvas_published_worker_
 
 ### A1: acceptance ownership
 
+Canvas package candidate (2026-10-06): the two Canvas targets and thirty shared support modules move into sibling `marty-canvas-acceptance`; the three Passport/Gateway targets remain in `marty-service-acceptance`. The source move preserves assertions and test names, while workspace/lock entries, exact artifact and Bookworm selectors, repository-root guards, and ownership policies follow the new package. Locked metadata confirms two Canvas and three remaining targets with unique owners. Normalized package-scoped Cargo-tree entries fall from 723 in the broad acceptance package to 692 for Canvas, removing Signing Keys and its AWS KMS/Smithy dependency branch. Full workspace CI still validates both packages. This is a compile-boundary improvement, not a measured CI time saving; hosted compilation and the opt-in published-process/database suites remain required before merge.
+
 Keep service behavior and adapter tests with their service. Move tests that compose several implementations into an acceptance package that depends on them. Remove service-to-service development edges only when their consumers have moved and standalone package validation confirms the boundary.
 
 Share exact-owned fixture and process-management Rust helpers. Preserve resource isolation, bounded cleanup, child-process protocols, provenance checks, and preflight coverage accounting. Investigate `CARGO_BIN_EXE_*`, `CARGO_MANIFEST_DIR`, relative fixtures, and artifact-discovery assumptions before moving tests: an acceptance package does not automatically receive dependency binary paths.
