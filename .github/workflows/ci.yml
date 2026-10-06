@@ -708,9 +708,30 @@ jobs:
       - name: Compile reusable Rust test executables
         working-directory: rust
         shell: bash
-        run: >-
-          cargo test --locked --workspace --no-run --timings --message-format=json
-          > "$RUNNER_TEMP/rust-test-artifacts.json"
+        run: |
+          set -euo pipefail
+          artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
+          if [[ "${{ matrix.lane }}" == contracts ]]; then
+            cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
+          else
+            : > "$artifacts"
+            cargo test --locked -p marty-canvas-acceptance \
+              --test canvas_published_worker_contract \
+              --test canvas_published_schema_contract \
+              --no-run --timings --message-format=json >> "$artifacts"
+            cargo test --locked -p marty-issuance-service \
+              --lib --test canvas_oauth_behavior --test issuance-behavior \
+              --no-run --timings --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-issuance-service \
+              --bin marty-issuance-service --bin marty-canvas-sync-worker \
+              --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-gateway --bin marty-gateway \
+              --message-format=json >> "$artifacts"
+            cargo build --locked -p marty-flow --bin marty-flow \
+              --message-format=json >> "$artifacts"
+            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              "$artifacts" target
+          fi
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts'
         shell: bash
@@ -891,6 +912,7 @@ jobs:
           fi
           grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
       - name: Prepare database contract executables
+        if: matrix.lane == 'contracts'
         working-directory: rust
         shell: bash
         run: |
@@ -1115,9 +1137,6 @@ jobs:
           cp "$verification_postgres_executable" target/debug/verification-postgres-contract
           cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
-          # The Canvas PostgreSQL contract launches this actual binary and sends
-          # POSIX signals. A test-harness executable is not a substitute.
-          test -x target/debug/marty-canvas-sync-worker
       - name: Preflight published worker parity in two isolated groups
         if: matrix.lane == 'canvas'
         working-directory: rust

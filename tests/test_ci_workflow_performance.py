@@ -737,6 +737,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     contracts = {
         "Prepare pinned standalone Compose renderer for Rust contracts",
         "Verify feature-regression observer isolation",
+        "Prepare database contract executables",
         "Create isolated Rust contract databases",
         "Run safe Rust contract groups concurrently",
         "Exercise authenticated Signing Keys Gateway to Rust routes",
@@ -765,7 +766,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     )
     for name in (
         "Compile reusable Rust test executables",
-        "Prepare database contract executables",
         "Run isolated database contract suites concurrently",
     ):
         assert "if" not in steps[name]
