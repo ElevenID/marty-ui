@@ -36,6 +36,8 @@ jobs:
       ui: ${{ steps.classify.outputs.ui }}
       python: ${{ steps.classify.outputs.python }}
       rust: ${{ steps.classify.outputs.rust }}
+      rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
+      rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
       release: ${{ steps.classify.outputs.release }}
       verification: ${{ steps.classify.outputs.verification }}
       security: ${{ steps.classify.outputs.security }}
@@ -57,6 +59,8 @@ jobs:
           ui=false
           python=false
           rust=false
+          rust_runtime=false
+          rust_matrix='["canvas","contracts"]'
           release=false
           verification=false
           security=false
@@ -73,6 +77,40 @@ jobs:
             changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
             git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
             mapfile -d '' -t changed_files < "$changed_paths_file"
+            # A nonempty PR consisting solely of proven cfg(test) leaves has
+            # no production Rust or image input. Keep every actual test owner.
+            leaf_only=false
+            leaf_candidate=true
+            if (( ${#changed_files[@]} == 0 )); then
+              leaf_candidate=false
+            fi
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                rust/services/issuance/src/*_tests.rs) ;;
+                *) leaf_candidate=false; break ;;
+              esac
+            done
+            if [[ "$leaf_candidate" == true ]]; then
+              verified_leaves_file="$RUNNER_TEMP/ci-verified-test-leaves"
+              if python3 tests/test_rust_test_only_docker_context.py \
+                --emit-verified-leaves > "$verified_leaves_file"; then
+                mapfile -d '' -t owned_leaves < "$verified_leaves_file"
+                leaf_only=true
+                for path in "${changed_files[@]}"; do
+                  owned=false
+                  for leaf in "${owned_leaves[@]}"; do
+                    if [[ "$path" == "$leaf" ]]; then
+                      owned=true
+                      break
+                    fi
+                  done
+                  if [[ "$owned" != true ]]; then
+                    leaf_only=false
+                    break
+                  fi
+                done
+              fi
+            fi
             for path in "${changed_files[@]}"; do
               case "$path" in
                 rust/services/issuance/src/canvas_sync_processor_contract.md)
@@ -172,11 +210,22 @@ jobs:
             security=true
           fi
 
+          if [[ "$rust" == true ]]; then
+            rust_runtime=true
+            if [[ "${leaf_only:-false}" == true && "$all" == false &&
+                  "${{ github.event_name }}" == pull_request ]]; then
+              rust_runtime=false
+              rust_matrix='["contracts"]'
+            fi
+          fi
+
           {
             printf 'all=%s\n' "$all"
             printf 'ui=%s\n' "$ui"
             printf 'python=%s\n' "$python"
             printf 'rust=%s\n' "$rust"
+            printf 'rust_runtime=%s\n' "$rust_runtime"
+            printf 'rust_matrix=%s\n' "$rust_matrix"
             printf 'release=%s\n' "$release"
             printf 'verification=%s\n' "$verification"
             printf 'security=%s\n' "$security"
@@ -482,7 +531,7 @@ jobs:
   test-passport-fence-postgres:
     name: Passport Fence PostgreSQL
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -502,7 +551,7 @@ jobs:
   test-rust-feature-probe:
     name: Rust Feature Regression Probe
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -537,7 +586,7 @@ jobs:
   test-rust-passport-image:
     name: Rust Passport Test-mode Image
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -599,7 +648,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        lane: [canvas, contracts]
+        lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}
     permissions:
       actions: read
       contents: read
@@ -1601,7 +1650,7 @@ jobs:
   test-rust-service-images:
     name: Rust Service Images
     needs: changes
-    if: needs.changes.outputs.rust == 'true'
+    if: needs.changes.outputs.rust_runtime == 'true'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -2412,6 +2461,8 @@ jobs:
       UI_SELECTED: ${{ needs.changes.outputs.ui }}
       PYTHON_SELECTED: ${{ needs.changes.outputs.python }}
       RUST_SELECTED: ${{ needs.changes.outputs.rust }}
+      RUST_RUNTIME_SELECTED: ${{ needs.changes.outputs.rust_runtime }}
+      RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}
       RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
       VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
       SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
@@ -2457,10 +2508,18 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
-          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
+          # The aggregate matrix result alone cannot prove both lanes ran.
+          # Accept only these exact plans and require the full plan in queue.
+          case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
+            'true:true:["canvas","contracts"]'|'true:false:["contracts"]'|'false:false:["canvas","contracts"]') ;;
+            *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
+          esac
           if [[ "${{ github.event_name }}" == merge_group ]]; then
+            [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
+               "$RUST_MATRIX" == '["canvas","contracts"]' ]]
             for result in "${results[@]}"; do
               [[ "$result" == success ]]
             done
@@ -2473,12 +2532,12 @@ jobs:
             require_selected test-ui "$UI_RESULT" "$UI_SELECTED"
             require_selected test-credential-lifecycle-browser "$LIFECYCLE_BROWSER_RESULT" "$UI_SELECTED"
             require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"
-            require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_SELECTED"
-            require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_SELECTED"
-            require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_SELECTED"
+            require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_RUNTIME_SELECTED"
+            require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
+            require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
             require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
-            require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_SELECTED"
+            require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"
             public_selected=false
             if [[ "$UI_SELECTED" == true || "$PYTHON_SELECTED" == true || "$RUST_SELECTED" == true || "$RELEASE_SELECTED" == true ]]; then

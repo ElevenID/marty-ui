@@ -231,3 +231,15 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
     candidate.write_text("FROM rust:1\nCOPY rust /build/rust\n", encoding="utf-8")
     assert _copying_rust_contexts(tmp_path, ["new/Dockerfile"]) == {"new/Dockerfile"}
     assert "new/Dockerfile" not in DOCKER_CONTEXTS
+
+
+if __name__ == "__main__":
+    if sys.argv != [sys.argv[0], "--emit-verified-leaves"]:
+        raise SystemExit(
+            "Usage: test_rust_test_only_docker_context.py --emit-verified-leaves"
+        )
+    # CI may narrow only when the exact owner, target and image-context proof
+    # still holds. The release pytest lane runs the same assertion separately.
+    test_exact_test_only_leaves_do_not_invalidate_release_docker_copy()
+    for leaf in TEST_LEAVES:
+        sys.stdout.buffer.write((ISSUANCE_SRC + leaf).encode("utf-8") + b"\0")
