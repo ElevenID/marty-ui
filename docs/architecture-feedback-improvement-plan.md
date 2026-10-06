@@ -746,9 +746,9 @@ it is not an I/O-free unit test. The same composition target is executed by the
 existing Canvas runner, with no case, tier or trigger changes. Local Windows
 execution is not qualification for its Linux renderer: ordinary local tests
 without the published-schema gate do not invoke Compose. The Linux runner
-requires the compiled test name and exactly one successful test row plus the
-marker emitted only after all four cases. Hosted exact-head execution remains
-required before this proof can support a tier decision.
+requires the compiled test name, successful composition executable exit and
+exactly one marker emitted only after all four cases. Hosted exact-head
+execution remains required before this proof can support a tier decision.
 
 ## Combined transport and dependency-boundary checkpoint (2026-10-06)
 

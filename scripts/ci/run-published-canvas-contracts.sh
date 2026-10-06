@@ -372,8 +372,7 @@ wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
-[[ $(grep -Fxc 'test rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy ... ok' "$composition_log") == 1 &&
-  $(grep -Fxc 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log") == 1 ]] || {
+[[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
   echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
   exit 1
 }

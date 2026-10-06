@@ -304,16 +304,13 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
     assert f"--skip rendered_base_process::{name}" not in runner
     assert (
         runner.count(
-            f"grep -Fxc 'test {expected_row.removesuffix(': test')} ... ok' \"$composition_log\""
+            "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\" | wc -l"
         )
         == 1
     )
-    assert (
-        runner.count(
-            "grep -Fxc 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
-        )
-        == 1
-    )
+    assert runner.index(
+        "(( composition_status == 0 && worker_status == 0 ))"
+    ) < runner.index("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'")
 
 
 def test_rendered_config_matrix_has_one_registered_composition_owner() -> None:
@@ -353,8 +350,8 @@ def test_rendered_config_owner_rejects_drift(fault: str) -> None:
         )
     elif fault == "proof":
         runner = runner.replace(
-            "grep -Fxc 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'",
-            "grep -Fxc 'NOOP_SUCCESS'",
+            "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'",
+            "grep -Fo 'NOOP_SUCCESS'",
         )
     else:
         runner += (
@@ -365,7 +362,7 @@ def test_rendered_config_owner_rejects_drift(fault: str) -> None:
         _validate_rendered_config_owner(source, config, runner)
 
 
-def test_rendered_config_execution_guard_rejects_early_return_and_duplicate_rows(
+def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_markers(
     tmp_path: Path,
 ) -> None:
     bash = shutil.which("bash")
@@ -376,30 +373,26 @@ def test_rendered_config_execution_guard_rejects_early_return_and_duplicate_rows
     assert bash is not None
     runner = RUNNER.read_text(encoding="utf-8")
     guard = re.search(
-        r"(?ms)^\[\[ \$\(grep -Fxc 'test rendered_base_process::rendered_base_renewal_config.*?^\}",
+        r"(?ms)^\(\( composition_status == 0 && worker_status == 0 \)\).*?^\}",
         runner,
     )
     assert guard is not None
-    test_row = (
-        "test rendered_base_process::"
-        "rendered_base_renewal_config_crosses_encryption_and_private_address_policy ... ok"
-    )
     marker = "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1"
     log = tmp_path / "composition.log"
-    for lines, expected in (
-        ([test_row, marker], 0),
-        ([test_row], 1),
-        ([marker], 1),
-        ([test_row.replace("ok", "ignored"), marker], 1),
-        ([test_row, marker, marker], 1),
-        ([test_row, test_row, marker], 1),
+    for lines, composition_status, expected in (
+        ([f"test case ... {marker}", "ok"], 0, 0),
+        (["test case ...", marker, "ok"], 0, 0),
+        (["test case ... ok"], 0, 1),
+        ([f"test case ... {marker}"], 1, 1),
+        ([marker, marker], 0, 1),
+        ([marker + marker], 0, 1),
     ):
         log.write_text("\n".join(lines) + "\n", encoding="utf-8")
         result = subprocess.run(
             [
                 bash,
                 "-c",
-                f'composition_log="$1"\n{guard.group()}',
+                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nworker_status=0\n{guard.group()}',
                 "_",
                 log.as_posix(),
             ],
