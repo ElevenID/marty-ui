@@ -168,12 +168,15 @@ fn normalized_origin(url: &Url) -> Option<String> {
 
 #[must_use]
 pub fn canvas_retry_after_seconds(response: &Response) -> Option<u64> {
-    let raw = response
-        .headers()
-        .get(reqwest::header::RETRY_AFTER)?
-        .to_str()
-        .ok()?;
-    parse_canvas_retry_after(raw, Utc::now())
+    canvas_retry_after_header_seconds(response.headers(), Utc::now())
+}
+
+pub(crate) fn canvas_retry_after_header_seconds(
+    headers: &reqwest::header::HeaderMap,
+    now: DateTime<Utc>,
+) -> Option<u64> {
+    let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    parse_canvas_retry_after(raw, now)
 }
 
 /// Shared provider/worker deadline parsing. Apply the published domain bounds
