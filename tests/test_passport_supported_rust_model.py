@@ -274,7 +274,7 @@ def safe_model(root: Path) -> dict:
         }
     services["credential-template"]["environment"].update({
         "CT_GRPC_PORT": "9003", "RP_GRPC_TARGET": "revocation-profile:9013",
-        "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+        "SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
         "PUBLIC_API_URL": "https://localhost:29876",
