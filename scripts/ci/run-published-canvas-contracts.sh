@@ -80,6 +80,9 @@ export MARTY_ISSUANCE_TEST_BINARY="$issuance_binary"
 composition_tests=$("$composition_executable" --list)
 worker_tests=$("$worker_executable" --list)
 all_test_names=$(printf '%s\n%s\n' "$composition_tests" "$worker_tests" | grep ': test$')
+if [[ -z "$preflight_target" ]]; then
+  printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
+fi
 [[ -z $(printf '%s\n' "$all_test_names" | sort | uniq -d) ]] || {
   echo 'Duplicate Canvas test names across executables' >&2
   exit 1
@@ -306,7 +309,9 @@ serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
 printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
 composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" | grep -c ': test$')
-worker_parallel_tests=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}" | grep -c ': test$')
+worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
+worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
+printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]
 "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1

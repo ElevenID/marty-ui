@@ -11,6 +11,7 @@ import re
 import runpy
 import shutil
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 
@@ -186,6 +187,7 @@ def shell_case(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     doubles = {
+        "python3": f'#!/usr/bin/env bash\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
         "docker": r"""#!/usr/bin/env bash
 set -euo pipefail
 record=docker
@@ -372,7 +374,10 @@ fi
                         {
                             "reason": "compiler-artifact",
                             "package_id": "path+file:///checkout/rust/services/issuance#marty-issuance-service@0.1.0",
-                            "target": {"name": "marty-issuance-service", "kind": ["bin"]},
+                            "target": {
+                                "name": "marty-issuance-service",
+                                "kind": ["bin"],
+                            },
                             "profile": {"test": False},
                             "executable": "__ISSUANCE_BINARY__",
                         },
