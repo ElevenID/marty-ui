@@ -16,6 +16,7 @@ import pytest
 from scripts.probe_passport_beta_batch import _job_commit
 from scripts.probe_passport_beta_native_batch import (
     NativeBatchProbeError,
+    _first_dispatch_failure,
     ensure_private_state_available,
     exercise,
     request_private_batch,
@@ -47,7 +48,7 @@ DOCUMENT = {"country_code": "USA", "document_type": "TD3",
 
 
 def model(private_state_path: Path, *, proof_status: str = "verified", wrong_receipt: bool = False,
-          ambiguous_first: bool = False):
+          ambiguous_first: bool = False, conflict_first: bool = False):
     calls = []
     companion_flow = "passport-native-batch-" + str(COMPANION_FLOW_UUID)
 
@@ -85,6 +86,8 @@ def model(private_state_path: Path, *, proof_status: str = "verified", wrong_rec
         assert (container, org, key, token) == (NATIVE, ORG, SERVICE, TOKEN)
         if ambiguous_first and len([call for call in calls if call[0] == "private"]) == 1:
             raise NativeBatchProbeError("synthetic transport timeout")
+        if conflict_first and len([call for call in calls if call[0] == "private"]) == 1:
+            return 409, {"wire_evidence_status": "unavailable"}
         return 200, {"batch_id": batch_id, "wire_evidence_status": proof_status,
                      "http_status": 202, "batch_status": "QUEUED",
                      "wire_commitments": {"request_commitment": "1" * 64,
@@ -175,7 +178,7 @@ def test_native_selected_pair_uses_stable_key_and_verifies_both_receipts(tmp_pat
 def test_unavailable_wire_proof_halts_before_receipt_or_flow_resume(tmp_path: Path) -> None:
     private_state_path = tmp_path / "private" / "pending.json"
     calls, run = model(private_state_path, proof_status="unavailable")
-    with pytest.raises(NativeBatchProbeError, match="first-dispatch proof"):
+    with pytest.raises(NativeBatchProbeError, match="wire=unavailable"):
         run()
     assert not any(call[0] == "receipt" for call in calls)
     assert private_state_path.exists()
@@ -191,6 +194,43 @@ def test_ambiguous_first_send_reuses_uuid_and_key_but_cannot_qualify_proof(tmp_p
     assert len(private) == 2 and private[0] == private[1]
     assert ("sleep", 131) in calls
     assert not any(call[0] == "receipt" for call in calls)
+
+
+def test_conflict_retry_diagnostic_counts_actual_private_requests(tmp_path: Path) -> None:
+    calls, run = model(tmp_path / "private" / "pending.json", proof_status="unavailable",
+                       conflict_first=True)
+    with pytest.raises(NativeBatchProbeError, match=r"attempt=2, http=200"):
+        run()
+    assert len([call for call in calls if call[0] == "private"]) == 2
+    assert ("sleep", 131) in calls
+
+
+@pytest.mark.parametrize(
+    ("code", "response", "expected"),
+    [
+        (409, {"wire_evidence_status": "unavailable"}, "http=409"),
+        (200, {"wire_evidence_status": "unavailable", "http_status": 202,
+               "batch_status": "QUEUED"}, "wire=unavailable"),
+        (200, {"wire_evidence_status": "private-value", "jobs": [1, 2, 3, 4],
+               "wire_commitments": {"request_commitment": "private-value"}},
+         "wire=other"),
+    ],
+)
+def test_first_dispatch_failure_reports_bounded_shape_only(
+    code: int, response: dict, expected: str,
+) -> None:
+    response = {**response, "batch_id": "private-batch-id",
+                "private_field": "private-value"}
+    message = _first_dispatch_failure(1, code, response, "expected-private-batch-id")
+    assert "first-dispatch proof" in message and expected in message
+    assert "batch_id_match=False" in message
+    assert "private-value" not in message
+    assert "private-batch-id" not in message
+    assert "expected-private-batch-id" not in message
+    if len(response.get("jobs", [])) == 4:
+        assert "jobs=4+" in message
+    else:
+        assert "jobs=invalid" in message
 
 
 def test_wrong_first_accepted_receipt_halts_native_batch(tmp_path: Path) -> None:

@@ -39,6 +39,27 @@ def _require(condition: bool, message: str) -> None:
         raise NativeBatchProbeError(message)
 
 
+def _first_dispatch_failure(attempt: int, code: Any, result: dict[str, Any],
+                            batch_id: str) -> str:
+    """Report only bounded proof shape, never response values or identifiers."""
+    proof = result.get("wire_commitments")
+    jobs = result.get("jobs")
+    wire = result.get("wire_evidence_status")
+    if wire not in ("verified", "unavailable"):
+        wire = "missing" if wire is None else "other"
+    http = str(code) if type(code) is int and 100 <= code <= 599 else "invalid"
+    job_count = (str(len(jobs)) if len(jobs) <= 3 else "4+") if isinstance(jobs, list) else "invalid"
+    shape = lambda field: (isinstance(proof, dict)
+                           and isinstance(proof.get(field), str)
+                           and SHA256.fullmatch(proof[field]) is not None)
+    return ("Native batch did not return verified first-dispatch proof "
+            f"(attempt={attempt}, http={http}, batch_id_match={result.get('batch_id') == batch_id}, "
+            f"wire={wire}, wire_http_202={result.get('http_status') == 202}, "
+            f"batch_queued={result.get('batch_status') == 'QUEUED'}, "
+            f"request_commitment_shape={shape('request_commitment')}, "
+            f"response_commitment_shape={shape('response_commitment')}, jobs={job_count})")
+
+
 def _canonical_uuid(value: Any) -> str:
     try:
         parsed = str(UUID(value))
@@ -326,6 +347,7 @@ def exercise(
             "companion_application_id": companion_app}
     mapping = None
     commitments = None
+    request_attempt = 1
     try:
         code, result = private_request(native_container_id, batch_id, body, org,
                                        service_token, operator_token, wire_key)
@@ -333,28 +355,33 @@ def exercise(
         # A lost response is ambiguous. The native lease permits one exact
         # retry; it will still withhold first-dispatch proof if that was lost.
         sleep(131)
+        request_attempt += 1
         code, result = private_request(native_container_id, batch_id, body, org,
                                        service_token, operator_token, wire_key)
     else:
         if code in (409, 502, 503, 504):
             sleep(131)
+            request_attempt += 1
             code, result = private_request(native_container_id, batch_id, body, org,
                                            service_token, operator_token, wire_key)
     for attempt in range(2):
         if attempt:
+            request_attempt += 1
             code, result = private_request(native_container_id, batch_id, body, org,
                                            service_token, operator_token, wire_key)
         jobs = result.get("jobs")
         proof = result.get("wire_commitments")
-        _require(code == 200 and result.get("batch_id") == batch_id
-                 and result.get("wire_evidence_status") == "verified"
-                 and result.get("http_status") == 202
-                 and result.get("batch_status") == "QUEUED"
-                 and isinstance(proof, dict)
-                 and all(isinstance(proof.get(field), str) and SHA256.fullmatch(proof[field])
-                         for field in ("request_commitment", "response_commitment"))
-                 and isinstance(jobs, list) and len(jobs) == 2,
-                 "Native batch did not return verified first-dispatch proof")
+        proof_ok = (code == 200 and result.get("batch_id") == batch_id
+                    and result.get("wire_evidence_status") == "verified"
+                    and result.get("http_status") == 202
+                    and result.get("batch_status") == "QUEUED"
+                    and isinstance(proof, dict)
+                    and all(isinstance(proof.get(field), str) and SHA256.fullmatch(proof[field])
+                            for field in ("request_commitment", "response_commitment"))
+                    and isinstance(jobs, list) and len(jobs) == 2)
+        if not proof_ok:
+            raise NativeBatchProbeError(_first_dispatch_failure(request_attempt, code, result,
+                                                                  batch_id))
         observed = {}
         for job in jobs:
             _require(isinstance(job, dict) and job.get("organization_id") == org
