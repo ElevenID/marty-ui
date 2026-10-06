@@ -371,3 +371,4 @@ wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
+python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"

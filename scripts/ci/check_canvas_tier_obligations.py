@@ -8,6 +8,7 @@ The existing runner still owns every invocation, skip and run-bound proof.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -184,9 +185,55 @@ def validate_selection(
     )
 
 
+def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
+    """Require one real successful harness row for each lane's fast owner."""
+    owners = {
+        "contracts": "canvas_sync_worker::retry_handoff_tests::terminal_validation_errors_reach_actual_worker_dead_letter_port",
+        "canvas": "worker_validation_repository_matches_frozen_errors",
+    }
+    require(lane in owners, "Unknown Canvas fast-owner execution lane")
+    native = inventory.get("native_validation", {})
+    require(
+        native.get("test") == "worker_validation_matches_frozen_published_process"
+        and native.get("historical_test")
+        == "worker_validation_reference_matches_published_process",
+        "Wrong native validation test owner",
+    )
+    full_only = native.get("full_only", [])
+    require(
+        len(full_only) == 10
+        and len({entry.get("case") for entry in full_only}) == 10
+        and all(
+            entry.get("fast_owners")
+            == [
+                "worker_validation_repository_matches_frozen_errors",
+                "terminal_validation_errors_reach_actual_worker_dead_letter_port",
+            ]
+            for entry in full_only
+        ),
+        "Wrong native validation fast-owner identity",
+    )
+    rows = [
+        match
+        for line in log.splitlines()
+        if (match := re.fullmatch(r"test (\S+) \.\.\. (\S+)", line.strip()))
+        and match.group(1) == owners[lane]
+    ]
+    require(
+        len(rows) == 1 and rows[0].group(2) == "ok",
+        f"Canvas {lane} fast owner did not execute exactly once and pass: {owners[lane]}",
+    )
+
+
 def main() -> int:
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
-    if len(sys.argv) == 1:
+    if len(sys.argv) == 4 and sys.argv[1] == "--require-execution":
+        lane = sys.argv[2]
+        path = Path(sys.argv[3])
+        require(path.is_file(), "Missing Canvas fast-owner execution log")
+        validate_fast_owner_execution(inventory, lane, path.read_text(encoding="utf-8"))
+        print(f"Canvas {lane} fast owner executed exactly once and passed")
+    elif len(sys.argv) == 1:
         validate(inventory, listed_test_names(sys.stdin.read()))
         print(
             "Canvas tier inventory: 33 historical references and 4 native cases discovered"

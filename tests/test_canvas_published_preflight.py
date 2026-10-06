@@ -98,7 +98,9 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
     assert script.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
     )
     assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "4"]
 
@@ -298,6 +300,16 @@ else
   if [[ "$*" == *--test-threads=4* ]]; then
     printf 'full target %s\n' "$name"
     [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
+    if [[ "$name" == worker-contract ]]; then
+      case "$TEST_FAST_OWNER_ROW" in
+        ok) printf 'test worker_validation_repository_matches_frozen_errors ... ok\n' ;;
+        missing) ;;
+        duplicate) printf 'test worker_validation_repository_matches_frozen_errors ... ok\ntest worker_validation_repository_matches_frozen_errors ... ok\n' ;;
+        ignored) printf 'test worker_validation_repository_matches_frozen_errors ... ignored\n' ;;
+        failed) printf 'test worker_validation_repository_matches_frozen_errors ... FAILED\n' ;;
+        substituted) printf 'test wrong_worker_validation_repository_matches_frozen_errors ... ok\n' ;;
+      esac
+    fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
       other=contract
@@ -344,6 +356,7 @@ fi
         pins=PINS,
         run_id="12345",
         qualification=False,
+        fast_owner_row="ok",
     ):
         lines = (
             registrations
@@ -401,6 +414,7 @@ fi
         environment.update(
             {
                 "TEST_FAILURE": failure,
+                "TEST_FAST_OWNER_ROW": fast_owner_row,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
@@ -484,6 +498,16 @@ def test_caller_cannot_override_native_validation_tier(
     assert result.returncode == 2
     assert "tier is owned by this runner" in result.stderr
     assert not any(call[0] in {"docker", "child"} for call in calls)
+
+
+@pytest.mark.parametrize(
+    "row", ["missing", "duplicate", "ignored", "failed", "substituted"]
+)
+def test_canvas_fast_owner_must_actually_pass_once(shell_case, row):
+    result, calls = shell_case(["full"], fast_owner_row=row)
+    assert result.returncode != 0
+    assert any(call[0] == "child" and call[1] == "worker-contract" for call in calls)
+    assert "fast owner did not execute exactly once and pass" in result.stderr
 
 
 @pytest.mark.parametrize("arguments", [[], ["full"]])

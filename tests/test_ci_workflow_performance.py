@@ -1734,7 +1734,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
     )
     assert (
         published.splitlines().count(
@@ -1811,7 +1813,9 @@ def _assert_gateway_operations_registration(
     assert published.splitlines().count(inventory) == 1
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in published
     assert published.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        "(( composition_status == 0 && worker_status == 0 ))\n"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
     )
     assert (
         published.splitlines().count(

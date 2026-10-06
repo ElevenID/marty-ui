@@ -1205,6 +1205,10 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Require terminal validation worker fast-owner execution
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: python3 scripts/ci/check_canvas_tier_obligations.py --require-execution contracts "$RUNNER_TEMP/rust-workspace.log"
       - name: Require all Gateway Signing acceptance cases
         if: matrix.lane == 'contracts'
         working-directory: rust
