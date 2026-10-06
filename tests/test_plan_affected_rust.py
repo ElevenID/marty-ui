@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "ci"))
-import plan_affected_rust as planner
+import plan_affected_rust as planner  # noqa: E402 - sys.path selects the repo-owned CI script
 
 
 class AffectedRustPlannerTests(unittest.TestCase):
@@ -183,6 +183,100 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "marty-event-stream",
             {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
         )
+
+    def test_event_stream_auth_and_organization_publishers_are_observed_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/event-stream/src/grpc.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        observed = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-event-stream"
+        ]
+        edges = {edge["package"]: edge for edge in observed}
+        self.assertEqual(len(observed), 3)
+        self.assertEqual(
+            set(edges), {"marty-auth", "marty-organization", "marty-gateway"}
+        )
+        self.assertEqual(
+            {
+                package
+                for package, item in packages.items()
+                if any(
+                    dependency["name"] == "marty-event-stream"
+                    for dependency in item["dependencies"]
+                )
+            },
+            {"marty-applicant"},
+        )
+        self.assertEqual(
+            set(edges) | {"marty-applicant", "marty-event-stream"},
+            {
+                "marty-auth",
+                "marty-organization",
+                "marty-gateway",
+                "marty-applicant",
+                "marty-event-stream",
+            },
+        )
+        for consumer in ("marty-auth", "marty-organization"):
+            edge = edges[consumer]
+            self.assertNotIn(
+                "marty-event-stream",
+                {
+                    dependency["name"]
+                    for dependency in packages[consumer]["dependencies"]
+                },
+            )
+            markers = (
+                ("binding", "evidence"),
+                ("runtime_marker", "runtime_evidence"),
+                ("connection_marker", "runtime_evidence"),
+                ("startup_marker", "startup_evidence"),
+                ("request_marker", "request_evidence"),
+                ("response_marker", "request_evidence"),
+                ("provider_marker", "provider_evidence"),
+                ("server_marker", "server_evidence"),
+                ("condition_marker", "condition_evidence"),
+            )
+            sources = {
+                path: (ROOT / path).read_text(encoding="utf-8")
+                for path in {edge[source_field] for _, source_field in markers}
+            }
+
+            def assert_markers() -> None:
+                for marker_field, source_field in markers:
+                    self.assertIn(edge[marker_field], sources[edge[source_field]])
+
+            assert_markers()
+            for marker_field, source_field in (
+                ("runtime_marker", "runtime_evidence"),
+                ("request_marker", "request_evidence"),
+                ("provider_marker", "provider_evidence"),
+            ):
+                path = edge[source_field]
+                original = sources[path]
+                for replacement in ("", "health_check(HealthCheckRequest {})"):
+                    with self.subTest(
+                        consumer=consumer,
+                        marker=marker_field,
+                        replacement=replacement,
+                    ):
+                        sources[path] = original.replace(
+                            edge[marker_field], replacement
+                        )
+                        with self.assertRaises(AssertionError):
+                            assert_markers()
+                sources[path] = original
+            assert_markers()
 
     def test_flow_gateway_route_is_observed_without_narrowing(self) -> None:
         metadata = planner.cargo_metadata()
