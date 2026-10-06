@@ -140,6 +140,50 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
         self.assertEqual(len(result["packages"]), len(metadata["workspace_members"]))
 
+    def test_event_stream_gateway_grpc_subscription_is_runtime_not_test_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/event-stream/src/grpc.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-event-stream"
+            and edge["package"] == "marty-gateway"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        for marker, source in (
+            ("binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("route_marker", "callsite_evidence"),
+            ("callsite_marker", "callsite_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("server_marker", "server_evidence"),
+            ("condition_marker", "condition_evidence"),
+        ):
+            self.assertIn(
+                edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+            )
+        runtime = (ROOT / edge["callsite_evidence"]).read_text(encoding="utf-8")
+        self.assertIn("return sse_events_handler(state, request).await", runtime)
+        self.assertIn("let provider = Arc::clone(&state.event_streams);", runtime)
+        main = (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8")
+        self.assertIn("GrpcEventStreamProvider::new(", main)
+        self.assertIn("event_streams,", main)
+        self.assertNotIn(
+            "marty-event-stream",
+            {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
+        )
+
     def test_flow_gateway_route_is_observed_without_narrowing(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
