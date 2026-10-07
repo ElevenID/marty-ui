@@ -1,11 +1,15 @@
 """Bind current startup capture inputs, without claiming historical qualification."""
 
-import hashlib
 import json
 from pathlib import Path
 
 import pytest
 import yaml
+
+from scripts.ci.canvas_oracle_current_inputs import (
+    assert_current_inputs,
+    normalized_sha256,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 GRAPH = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
@@ -13,53 +17,16 @@ EVIDENCE = ROOT / "contracts/canvas-worker-startup-current-inputs.json"
 STARTUP = "run_canvas_worker_startup_oracle.py"
 
 
-def _startup_inputs(graph: dict) -> set[str]:
-    """Expand the bounded #1121 source graph from the startup capture entrypoint."""
-    pending = [STARTUP]
-    scripts = set()
-    while pending:
-        script = pending.pop()
-        if script in scripts:
-            continue
-        assert script in graph["direct_imports"], f"Unreviewed startup script: {script}"
-        scripts.add(script)
-        pending.extend(graph["direct_imports"][script])
-        pending.extend(graph["launched_scripts"].get(script, []))
-    scenarios = {
-        scenario
-        for script in scripts
-        for scenario in graph["scenario_literals"].get(script, [])
-    }
-    assert not any(script in graph["scenario_templates"] for script in scripts), (
-        "Review dynamic startup scenario paths"
-    )
-    return {f"scripts/{script}" for script in scripts} | {
-        f"contracts/{scenario}" for scenario in scenarios
-    }
-
-
-def _normalized_sha256(path: Path) -> str:
-    normalized = (
-        path.read_text(encoding="utf-8").replace("\r\n", "\n").replace("\r", "\n")
-    )
-    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-
-
 def _assert_current_inputs(evidence: dict, graph: dict, root: Path) -> None:
-    assert evidence["schema"] == "marty.canvas-worker-startup-current-inputs/v1"
-    assert set(evidence) == {"schema", "purpose", "normalization", "sha256"}
-    assert "not attest the historical startup corpus" in evidence["purpose"]
-    assert evidence["normalization"] == (
-        "UTF-8 text with CRLF and CR converted to LF before SHA-256"
+    assert_current_inputs(
+        evidence,
+        graph,
+        root,
+        entrypoint=STARTUP,
+        schema="marty.canvas-worker-startup-current-inputs/v1",
+        label="Startup",
+        disclaimer="not attest the historical startup corpus",
     )
-    expected = _startup_inputs(graph)
-    assert set(evidence["sha256"]) == expected, (
-        "Startup script, local imports, children, and scenarios need input review"
-    )
-    for name, pinned in evidence["sha256"].items():
-        assert Path(name).as_posix() == name and ".." not in Path(name).parts
-        assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
-        assert _normalized_sha256(root / name) == pinned, f"Startup input drift: {name}"
 
 
 def test_current_startup_capture_inputs_match_explicit_hashes() -> None:
@@ -106,11 +73,11 @@ def test_new_direct_helper_requires_input_evidence() -> None:
 def test_text_hash_is_independent_of_checkout_line_endings(tmp_path: Path) -> None:
     path = tmp_path / "line-endings.txt"
     path.write_bytes(b"first\nsecond\n")
-    expected = _normalized_sha256(path)
+    expected = normalized_sha256(path)
     path.write_bytes(b"first\r\nsecond\r\n")
-    assert _normalized_sha256(path) == expected
+    assert normalized_sha256(path) == expected
     path.write_bytes(b"first\rsecond\r")
-    assert _normalized_sha256(path) == expected
+    assert normalized_sha256(path) == expected
 
 
 def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> None:

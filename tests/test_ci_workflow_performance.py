@@ -1086,8 +1086,14 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "contracts/canvas-worker-tier-obligations.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
             "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
+        },
+        "canvas-worker-rest-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_worker_rest_input_evidence.py",
         },
         "canvas-worker-startup-current-inputs.json": {
             ".github/workflows/ci.yml",
@@ -1172,6 +1178,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-renewal-profile-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
+        "tests/test_canvas_worker_rest_input_evidence.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
         "tests/test_canvas_worker_validation_tier.py",
         "tests/test_python_value_fast_obligations.py",
@@ -1199,6 +1206,17 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         )["release"]
         == "true"
     )
+    assert _classify_changed_path(
+        "contracts/canvas-worker-rest-current-inputs.json", tmp_path
+    ) == {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
     # A new sibling test or changed corpus is not covered by this narrow rule.
     assert (
         _classify_changed_path(
@@ -1462,6 +1480,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "tests/test_gateway_public_protocol_contract.py",
         "tests/test_public_vector_execution.py",
         "tests/test_ci_database_groups.py",
+        "tests/test_canvas_published_preflight.py",
         "tests/test_rust_ownership.py",
         "tests/test_ci_workflow_performance.py",
     )
@@ -1491,6 +1510,18 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         == "true"
     )
     assert (
+        _classify_changed_path(
+            "tests/test_canvas_published_preflight_helpers.py", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "scripts/ci/run-published-canvas-contracts.sh", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
         _classify_changed_path("scripts/ci/check_public_vector_execution.py", tmp_path)[
             "all"
         ]
@@ -1506,6 +1537,25 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
             combined=True,
         )[0]["rust"]
         == "true"
+    )
+    assert (
+        _classify_changed_paths(
+            [
+                "tests/test_canvas_published_preflight.py",
+                "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
+            ],
+            tmp_path,
+            combined=True,
+        )[0]["rust"]
+        == "true"
+    )
+    assert all(
+        value == "true"
+        for value in _classify_changed_paths(
+            ["tests/test_canvas_published_preflight.py"],
+            tmp_path,
+            event="merge_group",
+        )[0].values()
     )
     assert (
         _classify_changed_paths(

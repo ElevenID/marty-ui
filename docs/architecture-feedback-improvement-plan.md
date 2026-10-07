@@ -1,14 +1,16 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 07:30 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-07 09:15 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
 Canvas job changed from 51m36s before #1131 to 31m57s on its merge candidate;
 only the removed duplicate compilation is clearly attributable to that
 refactor. UI #1132–#1139 added shadow-only dependency observations and bounded
-PR feedback selection; full protected checks remain. The separate roster
+PR feedback selection; #1141 added public-vector execution proof and #1142
+added exact protocol-test source ownership. Full protected checks remain.
+The separate roster
 component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
 crate, but UI migration and nightly release qualification remain incomplete.
@@ -167,6 +169,20 @@ The same local handoff branch now has runner commit `05a57f90e`: `run-published-
 
 Acceptance-owner candidate `d249a7944` is stacked locally after the two handoff commits. It registers the worker contract once under `marty-service-acceptance`, removes its issuance test registration, and keeps 22 shared fixture modules in one issuance support location rather than copying them. Both artifact selectors now require the acceptance owner, while the real worker binary still must come from the issuance compiler artifact. Locked offline metadata confirms a single worker target; the moved executable discovers 134 tests and its local default run passes 132 with the same two explicit capture-only ignores. The composition target still compiles and discovers 143 tests. Strict Clippy, formatting, Bash syntax, Ruff, and 156 focused Python tests passed before a new stale-issuance-artifact rejection test was added; that new test also passes. An independent reviewer cleared the final diff and found no coverage/gate break. Hosted opt-in Canvas execution and full protected CI remain necessary. The current workspace still compiles both targets, and acceptance dev-depends on issuance and shared support, so this is boundary ownership groundwork, not a measured speedup or a reason to narrow gates yet. Publish it as a separate maintenance PR after #1058 and its handoff predecessor merge.
 
+Current A1 composition disposition (2026-10-07): the separate
+`marty-canvas-acceptance` package and worker target have merged, but a further
+three-way deployment/renewal-DIDComm/Canvas split is deferred pending a
+coherent fixture boundary. The roughly 1,900-line composition target interleaves
+those scenarios; self-host children use `canvas_published_database`, and
+renewal/DIDComm helpers call base-runtime, gateway, Envoy, and Canvas support.
+Additional test targets in the same package would retain its shared Cargo
+dependency closure, while extracting packages would require owned shared
+fixtures, not copies. The Bookworm artifact and runner bind named evidence to
+the existing composition executable. An independent source review found no
+supported compile saving or safe minimal move. Retain full Canvas execution;
+revisit only with a target-specific dependency/timing experiment and a
+non-overlapping fixture owner.
+
 ### A2: one narrow Rust extraction
 
 Choose the smallest coherent candidate after dependency inspection: response text/JSON compatibility or a Canvas domain/projection group. Reuse the existing code and corpus. Keep HTTP, SQLx, runtime composition, and passport cryptography out of the new package when they are not intrinsic to its responsibility.
@@ -219,12 +235,33 @@ Canvas LTI login pilot (2026-10-05): issuer and client-ID mismatch decisions are
 
 The first response-compat extraction already relocates 16 pure parser/owner tests. Inspection of nearby Canvas JSON tests shows the apparently similar cases have different obligations: `json_consumer_diagnostic_matches_published_boundaries` and `json_depth_diagnostic_matches_published_boundaries` run the pinned published application/database and compare frozen observations; `status_provider_matches_json_consumer_reference` and the status-runtime JSON cases exercise native provider and real route persistence. These are not duplicates of in-memory parser tests and should remain until a narrower real adapter proof replaces each named obligation. No A4 integration test has been removed yet.
 
-2026-10-06 local A4 Retry-After proof candidate (not merged): existing parser and backoff tests check their functions separately, while the seven frozen worker cases combine header parsing, first-attempt delay bounds, and processor rate-limit classification. A new fast unit test covers that composition with deterministic jitter and the existing provider/repository simulator ports, including no fact or candidate writes. It does not prove the durable PostgreSQL retry, lease clearing, ciphertext preservation, HTTPS transport, or whole-process behavior. All seven native and historical published-process cases remain unchanged; no tier, gate, or measured speedup changes in this slice.
+The next four Retry-After paragraphs record historical local checkpoints;
+their candidate status is superseded by the merged outcome immediately below.
+
+2026-10-06 local A4 Retry-After proof candidate (not merged at that checkpoint): existing parser and backoff tests check their functions separately, while the seven frozen worker cases combine header parsing, first-attempt delay bounds, and processor rate-limit classification. A new fast unit test covers that composition with deterministic jitter and the existing provider/repository simulator ports, including no fact or candidate writes. It does not prove the durable PostgreSQL retry, lease clearing, ciphertext preservation, HTTPS transport, or whole-process behavior. All seven native and historical published-process cases remain unchanged; no tier, gate, or measured speedup changes in this slice.
 
 Follow-up fast-seam candidate (not merged): the production 429 converter now uses the same header-map parser with a fixed-clock test covering all seven fixture headers, and an actual `CanvasSyncWorker::run_cycle` test checks representative zero, future-date (60-second), and clamped (86,400-second) hints, error category, worker identity, target generation, and retry outcome at the existing repository port. The port spy performs no SQL; its returned `Retry` is not a durable-state assertion. The original PostgreSQL contract covered only forced terminal failures without hints; the companion adapter proof below fills that gap. The real HTTPS/worker/database cases still own transport, issued-row, ciphertext, and released-schema evidence. All seven remain in their existing tiers. No production SQL, CI tier, or gate changed here.
 The companion PostgreSQL contract candidate uses the existing dedicated `_test` fixture once for seven effective Retry-After hints, asserting repository lease/failure fencing, persisted retry deadlines, cleared leases, errors/results, and unchanged enabled targets. Its schema is synthetic and neither seeds issued-credential rows nor real encrypted OAuth secrets. It therefore does not replace the published-process HTTPS/date, issued-row, ciphertext, or released-schema evidence; no native case or gate is removed by this candidate.
 
 Local A4 nested-case tier pilot (not merged or measured): the seven frozen Retry-After observations are identical after omitting only the case name for request, job, idle heartbeat, OAuth, credential/application snapshot, and fact fields; header parsing and retry timing vary. Each native replay separately performs the same issued-row and ciphertext preservation checks. An explicit routine `full-after-preflights` run retains native `http_date_future` (live HTTP-date/UTC deadline) and `malformed` (invalid-header fallback) in separate actual HTTPS worker processes. Plain full, unmarked standalone native diagnostics, and manual/scheduled full qualification retain all seven; the 33 historical replay selections and every other REST test are unchanged. Selection validates exact seven scenario and oracle names before filtering, rejects caller-provided or unknown tiers, and rejects a routine tier whenever full qualification is set even through a direct Python call. Fast parser/processor and PostgreSQL cases cover the seven input variants, but this is only a local candidate pending exact worker-port proof for 0/60/86400 hints, independent review, protected CI, and timing evidence; it is not permission to cut release evidence.
+
+Current disposition (2026-10-07): [UI #1124](https://github.com/ElevenID/marty-ui/pull/1124)
+merged the exact seven-case selector, the two native routine cases, all-seven
+fast parser/processor and PostgreSQL proofs, and the worker-port 0/60/86400
+proof after [normal](https://github.com/ElevenID/marty-ui/actions/runs/37437829353),
+[full-qualification](https://github.com/ElevenID/marty-ui/actions/runs/37437847991),
+and [protected](https://github.com/ElevenID/marty-ui/actions/runs/37444430694)
+CI passed. A routine
+tier is runner-owned and rejected under full qualification; default,
+manual/scheduled full, and stable exact-main qualification still execute all
+seven native HTTPS/process cases. The five omitted routine replays no longer
+repeat their issued-row and ciphertext assertions in that same PR run; the
+fast and synthetic PostgreSQL proofs do not replace that process evidence.
+Keep the exact-main full qualification requirement: routine runs the live
+future-date/UTC and malformed-header checks, while past-date and negative
+cases remain in full qualification. No speedup is inferred from this
+documentation reconciliation or from the stale local worktree, which must
+not be ported onto current main.
 
 The Canvas `body_timeout_reference_rejects_invalid_scenario_closure` mutation matrix is pure, but its `body_timeout_reference_cases` helper is also used by the live historical capture in the same target. Moving only the test would duplicate validation logic; making the acceptance crate its owner would create a development cycle with issuance; a new contract crate for one small helper is not justified without further consumers. Keep this control intact for now. The DIDComm CA-rotation test uses real loopback TLS, OpenSSL process ownership, and shared service fixtures, so it is not a mock-only behavioral matrix to relocate casually.
 
@@ -277,6 +314,23 @@ At the initial audit, one concrete closure gap was that `canvas_worker_https_fix
 Merged [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050) implements that first closure repair. The two frozen corpora change only by the helper pin and updated capture-script hash; exact reverse-migration tests reconstruct both prior byte hashes and the earlier independent A/B hashes. Native replay pins and input counts were updated. A reviewer worker identified and verified fixes to those consumers and stale documentation; 479 focused local tests passed (504 in the independent review run). Protected CI, including live published-process regeneration, passed. This does not yet justify reusing or skipping historical qualification.
 
 Merged regression-prevention follow-up [UI #1055](https://github.com/ElevenID/marty-ui/pull/1055) walks every pinned Python script in both body and lease corpora and checks statically imported flat `scripts/*.py` helpers are also pinned. Relative/local-package imports and common dynamic-import calls fail closed for manual review. Synthetic tests cover direct, transitive, relative, dotted-package, and dynamic cases; 771 focused body/lease tests passed and an independent exact-head reviewer cleared the change. Full PR and protected combined-head CI passed, including live published-process qualification. This is not proof of every possible dynamic Python import mechanism or full image/environment validity; preserve live qualification until the broader closure is established.
+
+Current-input REST candidate (2026-10-07, not yet hosted-qualified): the
+shared `run_canvas_worker_rest_oracle.py` helper is directly imported by 18
+capture runners. A normalized-hash sidecar and focused drift tests pin its
+bounded static import/child graph: five scripts, the REST/startup scenario
+files, and the REST default's transitive issued-review shared seed. This
+reuses the startup input verifier and the scenario inventory's JSON-reference
+discovery instead of maintaining separate hashing or reference algorithms.
+Startup's scenario file and single-cycle child are
+conservatively included as potential graph inputs; caller-selected scenarios
+outside the REST default are not attested by this sidecar. Changes to a pinned
+byte sequence, newly imported helper, or newly discovered literal/template
+scenario require review. The sidecar is excluded from runtime image contexts
+and selects Rust plus release checks; its exact test-only source selects the
+release owner. This is current repository input evidence, not historical
+capture attestation, complete image/schema/runtime closure, a changed frozen
+observation, or permission to reduce live qualification frequency.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
@@ -1266,16 +1320,31 @@ narrow proof.
 
 ## A6 protocol-test source ownership follow-up (2026-10-07)
 
-`tests/test_gateway_public_protocol_contract.py` and the new
+`tests/test_gateway_public_protocol_contract.py` and
 `tests/test_public_vector_execution.py` are root pytest sources collected by
 the existing Release Contract Tests job. The public-protocol job executes the
-checker script, not these test files. A proposed exact-path PR selector would
-route edits to either test source to its release execution owner; edits to the
-checker, vector corpora, Rust implementations, workflow, or unknown siblings
-retain their existing broad owners. Protected merge groups remain full. The
-selector and regression proof in this follow-up must still pass independent
-review, targeted tests, full PR CI, and protected validation before a hosted
-feedback improvement can be claimed.
+checker script, not these test files. Reviewed
+[#1142](https://github.com/ElevenID/marty-ui/pull/1142) routes edits to either
+exact test source to its release execution owner; edits to the checker, vector
+corpora, Rust implementations, workflow, or unknown siblings retain their
+existing broad owners. Its 148 targeted tests passed locally, and full
+[PR](https://github.com/ElevenID/marty-ui/actions/runs/37590799370) and
+[protected](https://github.com/ElevenID/marty-ui/actions/runs/37595339340)
+CI passed. The protected Canvas job ran 144 composition and 101 worker tests
+with two capture-only ignores and 602 successful timing rows, then #1142
+merged as `7308713f0`. Protected merge groups remain full. This workflow-edit
+PR ran the full matrix; no future scoped-PR saving is measured yet.
+
+Canvas preflight test-source follow-up (2026-10-07, pending hosted validation):
+`tests/test_canvas_published_preflight.py` is a synthetic Bash/runner policy
+test collected by root release pytest; it is not the shell runner or a Rust
+acceptance executable. Its exact-path PR routing now selects the release
+owner. The actual `scripts/ci/run-published-canvas-contracts.sh`, Rust targets,
+image inputs, corpora, unknown test siblings, and mixed implementation edits
+retain their broad owners; merge groups still run the complete matrix. The
+real classifier is exercised for each boundary. This avoids an unrelated
+Canvas build on a future edit to only that test source, but this workflow-edit
+PR itself requires full PR/protected CI and has no measured scoped saving yet.
 
 ## Design references
 
