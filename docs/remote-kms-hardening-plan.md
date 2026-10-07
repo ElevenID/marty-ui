@@ -77,6 +77,19 @@ one OpenBao storage transaction, matching X25519 creation/rotation. The
 rebuilt local image passed `go test ./...` and `go vet ./...`; multi-node
 concurrency and rollback-on-storage-failure still need direct qualification.
 
+2026-10-07 CSCA test-custody checkpoint: UI commit `298023863` retires
+`CscaAuthority` and local self-signed issuer-key generation from both
+signing-keys CSCA lifecycle test targets. Public-only certificates preserve
+same-key renewal, rotated-key rejection, subject matching, outbox and Redis
+storage/HTTP assertions. The stale contract claim that Core's local
+`marty-verification::issuance` is a supported issuer surface was removed;
+signing-keys remains the managed CSCA owner. Seven lifecycle tests, 13 adjacent
+HTTP contract tests, and both ignored storage/HTTP tests against disposable
+Redis passed. Nine public PEM vectors were checked for expected public-key
+relationships and no private-key PEM. Rust formatting and diff checks passed.
+The disposable Redis container was removed. Other private-key tests and exact
+release-artifact proof remain outstanding.
+
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
 Rust, and removes Python local-X25519 authcrypt and its private-key tests.
