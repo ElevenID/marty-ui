@@ -202,6 +202,17 @@ purpose-built lifecycle endpoint if the name-squatting or cross-tenant scope
 is unacceptable. External administrator rotation remains outside the app
 lease. This is candidate working-tree code, not yet a grouped feature commit,
 PR, or release artifact; do not deploy it independently of the hardening set.
+The opt-in `scripts/probe_signing_keys_openbao_policy.py` now makes the scoped
+ACL evidence repeatable using the repository's actual bootstrap script and
+pinned disposable image. It passed locally for create, rotate, sign, and
+non-exportable/provider-generated metadata on every managed prefix; import
+and exportability configuration were denied for each. The plain token was
+denied management, and the managed token was denied imported-version,
+private export and unrelated `auth-session` rotation. The probe creates a
+random labeled dev container and removes it in `finally`; Ruff check/format
+passed. `bao version` for the pinned digest reported OpenBao 2.5.5 at revision
+`028992583c693c4de6350b8aa52ff85e30375a99`; the disposable-image
+catalog's stale 2.5.2 metadata has been corrected in the working tree.
 
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
