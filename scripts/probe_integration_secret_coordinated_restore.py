@@ -273,6 +273,7 @@ def start_signing(
             "SIGNING_KEYS_SERVICE_PORT": str(port),
             "SIGNING_KEYS_INTERNAL_API_KEY": key,
             "SIGNING_KEYS_REDIS_URL": f"redis://127.0.0.1:{redis_port}/2",
+            "ISSUER_BASE_URL": "https://issuer.example",
             "BAO_ADDR": bao_url,
             "BAO_TOKEN": token,
         }

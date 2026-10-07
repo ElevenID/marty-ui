@@ -236,6 +236,27 @@ tenant routes and managed-profile routes, then removed its labeled containers.
 This candidate source remains uncommitted with the broader Signing Keys diff;
 hosted CI and exact artifacts are not qualified.
 
+2026-10-07 cryptographic-operation custody review: the internal managed
+Transit sign adapter could be called directly without the registry inventory
+check. It now reads provider metadata immediately before signing and rejects
+keys that are imported, exportable, backup-enabled, deletion-enabled, soft
+deleted or unable to sign. The same read binds the requested algorithm to the
+provider public JWK using the inventory's shared Rust mapping. A negative
+adapter test proves an exportable P-256 key and an EdDSA request for that key
+never reach the Transit sign endpoint; the missing-key golden test now proves
+read-only failure before sign or mount creation. The unfiltered Signing Keys
+`--tests` selection passed (132 library tests passed, seven ignored),
+all-target Clippy passed with warnings denied, and the scoped OpenBao/Redis
+policy, adapter, tenant and managed-profile probe passed. The first combined
+OpenBao/PostgreSQL/Raft probe stopped after its live credential and holder
+tests because its disposable Signing Keys startup lacked `ISSUER_BASE_URL`,
+which is now required for interrupted holder-key cleanup. The probe supplies
+the synthetic issuer URL and the complete rerun passed, including four live
+credential formats, three readiness challenges, the holder proof and both
+coordinated restore phases. Labeled disposable containers and volumes were
+removed. These source changes remain in the broader uncommitted UI feature
+diff; hosted CI and exact release artifacts remain pending.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
