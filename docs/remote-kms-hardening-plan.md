@@ -34,6 +34,14 @@ issuer private-key support must not break these supported product features.
 Ordinary application secrets may need to be read by their consumer; distinguish
 that requirement from non-exportable custody of their encryption master key.
 
+User clarification on 2026-10-07: remove local issuer key generation and signing
+from service and acceptance tests as well. Relocating that code to a harness or
+`cfg(test)` is not the final solution. Use remote KMS issuance, the existing Rust
+test wallet and opaque signer agent for holder proofs, and public signed vectors
+for verification tests. Keep private-key operations only in separately justified
+wallet/product or cryptographic conformance boundaries. Preserve the acceptance
+assertions and real protocol behavior while changing how inputs are produced.
+
 ## Verified starting point
 
 The investigation refreshed origin refs and inspected source and PR history on
@@ -175,6 +183,44 @@ to live key policies, key deletion or irreversible data migration require their
 specific operational context; prepare a concrete reviewed operation first.
 
 ## Evidence and progress log
+
+### Public verifier input implementation checkpoint
+
+The in-progress positive verifier binary now accepts a bounded public JSON input
+on stdin (`presentation`, `issuer_public_jwk`) instead of generating issuer and
+holder keys. Registered private JWK members and extra input fields are rejected.
+Its canonical verifier and eight policy/check assertions remain in the shipping
+binary. The temporary test-only signing helper was removed after the user
+clarification; the probe's unit tests contain no private-key creation or signing.
+The direct P-256 dependency is removed and OID4VCI selects verifier/SD-JWT instead
+of the wallet capability. Compatibility Core adoption is still outstanding.
+
+Integration branch `security/remote-kms-acceptance-20261007`, based on integration
+main `845dd1a`, commit `99b9aff`, supplies stdin with `docker run -i`. It requires
+`MARTY_VERIFIER_POSITIVE_PUBLIC_INPUT` and rejects absent, oversized and
+private-key-bearing input. It does not generate or sign fixtures. This transport
+is incomplete until a governed producer supplies fresh KMS-issued credentials
+and wallet proofs. A file's existence is not KMS provenance or acceptance.
+
+Reuse Core's existing `marty-test-wallet` and `marty-test-signer-agent`: the wallet
+already uses public JWKs and an authenticated local IPC signer, whose policy
+bridge calls a remote KMS. Do not add a second local signing implementation.
+Next implement the producer and fresh positive/negative real-backend exercise;
+do not land or claim release clearance with only parser/mock tests.
+
+Validation so far: Rust 1.95.0 probe tests passed (2); the integration harness unit
+file passed (301 passed, 2 skipped), and Ruff checks passed. The previous
+three-test run exercised the superseded local-signing intermediate and does not
+qualify this final direction. No hosted CI or artifact acceptance has run.
+
+Self-review checkpoint: the stdin parser bounds total bytes before JSON parsing,
+rejects private/unknown key fields and keeps diagnostic errors free of input
+contents. The final focused Rust run with verifier/SD-JWT features passed both
+tests under `--locked`; rustfmt and diff checks passed. General compatibility
+remains deliberately unqualified: the harness's fresh input producer must be
+wired before the coordinated feature PRs land. Positive and tampered-signature
+acceptance will run against KMS/wallet output, replacing the removed locally
+signed positive unit fixture. No passing parser test substitutes for that gate.
 
 ### Production and acceptance inventory checkpoint
 
