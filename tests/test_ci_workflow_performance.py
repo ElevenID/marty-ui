@@ -1155,6 +1155,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-renewal-profile-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
+        "tests/test_canvas_worker_startup_input_evidence.py",
+        "tests/test_canvas_worker_validation_tier.py",
+        "tests/test_python_value_fast_obligations.py",
+        "tests/test_canvas_renewal_profile_obligations.py",
     ):
         actual = _classify_changed_path(path, tmp_path)
         assert actual == {
@@ -1210,6 +1214,74 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         combined=True,
     )[0]
     assert all(value == "true" for value in unknown.values())
+
+
+def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    )
+    paths = (
+        "tests/test_canvas_worker_startup_input_evidence.py",
+        "tests/test_canvas_worker_validation_tier.py",
+        "tests/test_python_value_fast_obligations.py",
+        "tests/test_canvas_renewal_profile_obligations.py",
+    )
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    ci_source = CI_PATH.read_text(encoding="utf-8")
+    for path in paths:
+        assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
+        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert path not in other_workflow.read_text(encoding="utf-8")
+        assert _classify_changed_path(path, tmp_path) == selected
+
+    # A test-only edit does not demote the manifest, corpus, or executable
+    # inputs that the tests inspect; mixed/unknown edits also fail closed.
+    for path in (
+        "contracts/canvas-worker-startup-current-inputs.json",
+        "contracts/canvas-worker-tier-obligations.json",
+        "contracts/python-value-fast-obligations.json",
+        "contracts/canvas-renewal-profile-obligations.json",
+    ):
+        actual = _classify_changed_path(path, tmp_path)
+        assert actual["rust"] == actual["release"] == "true"
+    assert (
+        _classify_changed_path("scripts/test_canvas_worker_rest_https.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "tests/test_canvas_worker_validation_tier_helpers.py", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_paths(
+            [paths[0], "rust/services/issuance/src/lib.rs"], tmp_path, combined=True
+        )[0]["rust"]
+        == "true"
+    )
+    assert all(
+        value == "true"
+        for value in _classify_changed_paths([paths[0]], tmp_path, event="merge_group")[
+            0
+        ].values()
+    )
 
 
 def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix(

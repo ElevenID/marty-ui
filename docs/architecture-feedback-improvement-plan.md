@@ -1049,6 +1049,27 @@ took 39m12s; the Canvas evidence retained 602 successful phase rows. This PR
 changed the workflow itself and correctly ran the full matrix. No CI time
 saving is claimed until a planner-only PR is measured under the merged rule.
 
+## A6 bounded evidence-test ownership batch (2026-10-07)
+
+Four exact root pytest sources for Canvas startup evidence, native validation
+tier selection, Python-value fast obligations, and renewal-profile obligations
+are collected by the existing Release Contract Tests job. They are test sources,
+not manifests, corpora, implementation scripts, service-image inputs, or
+security-scanner targets. Their manifest inputs continue to select Rust and
+release qualification; implementation scripts and unknown sibling tests keep
+the conservative full PR matrix. Mixed changes retain the union of their
+owners, and protected merge groups still require every CI lane to succeed.
+
+The proposed selector changes only these four exact paths and adds synthetic
+tests against the real Bash classifier for their release owner, manifest and
+script owners, unknown siblings, mixed Rust changes, and full merge-group
+behavior. The complete workflow-policy test file passed locally (123 tests),
+as did all four selected source files (90 tests) through the same
+`python -m pytest` entrypoint used in CI; Ruff and diff checks passed. An
+independent reviewer found no other required runtime, image, scanner, or
+workflow consumer. This is a reviewed local candidate, not a measured CI
+speedup or an authorization to narrow any implementation-input gate.
+
 ## 2026-10-06 protected Canvas and feedback checkpoint
 
 [UI #1127](https://github.com/ElevenID/marty-ui/pull/1127) passed protected
