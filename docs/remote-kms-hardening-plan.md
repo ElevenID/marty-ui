@@ -50,6 +50,16 @@ and public-key normalization remain covered. The three focused Rust tests
 passed. This removes one test signer, not the full K8 test graph: the readiness
 runtime and other service/acceptance fixtures still need the same custody
 review before release.
+Follow-up review found that readiness challenges generate fresh random nonces,
+so its local RSA test signer cannot be replaced by fixed signatures without
+losing the freshness assertion; move those positive tests to a disposable live
+remote signer. The mdoc builder's positive test also constructs a holder private
+JWK and uses a fixed issuer signature. At the candidate source head, its focused
+test fails before signing because no issuer public JWK is configured; adding a
+public issuer key then fails because the fixed signature does not verify. The
+test needs a public holder JWK plus a real remote issuer signer and must retain
+its certificate-injection assertion. The exploratory test edit was reverted;
+this failing test is an unresolved feature/test-custody gate, not acceptance.
 
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
