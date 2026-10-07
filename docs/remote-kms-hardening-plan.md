@@ -350,10 +350,13 @@ OpenBao 2.5.x documentation says other languages would require a nontrivial
 reimplementation of the plugin protocol. No plugin design or implementation
 has been qualified as satisfying the KMS-only custody gate yet.
 
-2026-10-07 DIDComm curve check: the [ratified v2.1 specification](https://identity.foundation/didcomm-messaging/spec/v2.1/)
+2026-10-07 DIDComm curve check: the [v2.1 editor's draft](https://identity.foundation/didcomm-messaging/spec/v2.1/)
+is marked working-group-approved and
 already permits `ECDH-1PU+A256KW` with X25519, P-384, P-256 and optional
 P-521; [v2.0](https://identity.foundation/didcomm-messaging/spec/v2.0/)
-listed the same curves, so this is not a new relaxation. Authcrypt still
+listed the same curves, so this is not a new relaxation. The v2.1 changelog
+mentions only service endpoint and empty-body changes, not cryptography.
+Authcrypt still
 requires ECDH-1PU in a JWE and A256CBC-HS512; P-256 is marked deprecated in
 favor of P-384. A P-384 KMS key would be spec-compatible only if the sender
 and each recipient DID document actually expose compatible P-384
@@ -418,6 +421,16 @@ The typed client tests passed (identity forwarding, legacy rejection and
 envelope schema checks), and the existing Canvas OAuth PostgreSQL contract
 passed against a disposable PostgreSQL 16 instance after the vault refactor.
 No production remote database round-trip is claimed.
+
+The deployment inventory also shows a legacy Python issuance service alongside
+the native Rust service, with the gateway retaining an exact legacy route
+remainder. Before a database-wide cutover, verify whether any of those routes
+can create or read `organization_integration_secrets`; stop every such writer
+for migration or retire its route. The API, Canvas worker and any remaining
+legacy owner must never run different ciphertext formats against the same
+table. The self-hosted and Kubernetes manifests currently pass the raw master
+key to more than one process, so deployment and provisioning changes belong in
+the same K4 feature PR as the migration and remote-only startup.
 
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks
