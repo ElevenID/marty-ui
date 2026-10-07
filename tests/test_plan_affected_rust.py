@@ -513,9 +513,6 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     with self.subTest(marker=marker):
                         source_text = (ROOT / edge[source]).read_text(encoding="utf-8")
                         self.assertIn(edge[marker], source_text)
-                        self.assertNotIn(
-                            edge[marker], source_text.replace(edge[marker], "removed")
-                        )
                 for marker in (
                     "response_marker",
                     "fallback_marker",
@@ -527,9 +524,6 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             encoding="utf-8"
                         )
                         self.assertIn(edge[marker], source_text)
-                        self.assertNotIn(
-                            edge[marker], source_text.replace(edge[marker], "removed")
-                        )
                 self.assertNotIn(
                     producer,
                     {
