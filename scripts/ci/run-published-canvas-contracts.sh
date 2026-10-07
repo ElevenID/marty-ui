@@ -100,6 +100,15 @@ composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
 config_skips=()
 expected_skipped_config_tests=0
+timeout_skips=()
+expected_skipped_timeout_tests=0
+# The historical HTTPX socket corpus is release evidence. Routine CI proves
+# our timeout handling below HTTP and keeps one real native TLS timeout case;
+# an exact-main full CI run is mandatory before any stable stack tag claim.
+if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 && "$mode" == full-after-preflights ]]; then
+  timeout_skips=(--skip timeout_consumer_matches_published_socket_behavior)
+  expected_skipped_timeout_tests=1
+fi
 # The early image-free proof is tied to this composition executable, not the
 # independently compiled worker preflight executable. Missing/stale proof
 # keeps the ordinary full composition run and its completion-marker checks.
@@ -353,12 +362,12 @@ printf '%s\n' "$worker_tests" | grep -Fx "$serial_test: test"
 serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
 printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
-composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" | grep -c ': test$')
+composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" | grep -c ': test$')
 worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
-[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]
+[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
 timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
@@ -392,7 +401,7 @@ relay_target_timing() {
   fi
 }
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &
 composition_relay_pid=$!
@@ -452,6 +461,11 @@ report_target_timing composition "$composition_started" "$composition_status" "$
 report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
+timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$composition_log" | wc -l || true)
+[[ "$timeout_completions" == "$((1 - expected_skipped_timeout_tests))" ]] || {
+  echo 'Published HTTPX timeout reference did not match the selected qualification tier' >&2
+  exit 1
+}
 if (( expected_skipped_config_tests == 0 )); then
   [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
     echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
