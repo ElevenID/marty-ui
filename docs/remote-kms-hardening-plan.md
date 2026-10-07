@@ -92,6 +92,25 @@ release-artifact proof remain outstanding. The complete signing-keys test
 target set also compiled under `cargo +1.95 test -p marty-signing-keys --tests
 --no-run --locked`; this is compilation evidence, not a full runtime pass.
 
+2026-10-07 CSCA internal-write boundary review: the authenticated internal
+certificate import and renewal routes previously compared a certificate to a
+caller-supplied JWK/reference without checking the managed provider. The
+working tree now requires an active tenant CSCA profile, matching issuer DID
+and exact key reference, and a fresh public key from that profile's KMS
+provider before either write. Renewal also requires the prior certificate's
+issuer DID to match; public certificate enrollment already had its own live
+provider binding check. The lifecycle rejects private JWK members in
+`expected_public_jwk` before storing the certificate. The Redis HTTP test now
+proves that unbound internal writes fail closed while direct lifecycle tests
+retain renewal/outbox behavior. The disposable OpenBao 2.5.5 + Redis passport
+chain passed with forged internal import and renewal rejected as 422 and no
+forged record persisted; the complete managed CSCA -> DSC -> SOD flow still
+passed. Seven lifecycle tests and 128 signing-keys library tests passed;
+targeted Clippy with `-D warnings`, rustfmt and diff checks passed. Both
+disposable services were removed. The internal route's successful managed
+import/renewal path and key-rotation race remain to be qualified; these edits
+are not yet committed as part of the grouped UI feature work.
+
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
 Rust, and removes Python local-X25519 authcrypt and its private-key tests.
