@@ -27,6 +27,7 @@ def fixture(tmp_path: Path):
     target = {
         "schema": "marty.passport-beta-fence-target/v1",
         "authority": "discovery_only_requires_protected_baseline",
+        "docker": {"context": "default"},
         "observation_sha256": "e" * 64,
         "production_attachments_sha256": "f" * 64,
         "beta": {
@@ -61,6 +62,14 @@ def test_prepare_binds_signed_live_target_and_deletion(tmp_path: Path) -> None:
     assert result["credentials_deletion_head"] == DELETION_HEAD
     assert result["observation_sha256"] == "e" * 64
     assert result["beta_baseline_source_commit"] == UI_HEAD
+
+
+def test_prepare_rejects_non_runner_docker_context(tmp_path: Path) -> None:
+    manifest, target, signed, deletion = fixture(tmp_path)
+    target["docker"]["context"] = "desktop-linux"
+    with pytest.raises(HostProbeError, match="protected passport runner Docker context"):
+        prepare(manifest, observer=lambda: target,
+                runner=lambda _: json.dumps(deletion), source=lambda *_: signed)
 
 
 @pytest.mark.parametrize("change", [
