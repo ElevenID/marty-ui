@@ -1,0 +1,5 @@
+# Opt-in no-Canvas composition. Keep the default production worker unchanged
+# until existing installations have a qualified pre-up migration path.
+services:
+  canvas-sync-worker:
+    profiles: ["canvas"]

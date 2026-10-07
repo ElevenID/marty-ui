@@ -15,6 +15,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BASE = "docker-compose.selfhost.prod.yml"
 BUNDLE = "docker-compose.selfhost.bundle.override.yml"
+NO_CANVAS = "docker-compose.selfhost.no-canvas.yml"
 WORKER = "canvas-sync-worker"
 NATIVE_WORKER = "/usr/local/bin/marty-canvas-sync-worker"
 NATIVE_LOADER = ". /app/load-secrets-env.sh\nexec " + NATIVE_WORKER + "\n"
@@ -150,6 +151,57 @@ def render(*files, profiles=(), project=None, compose_command=None):
         timeout=30,
     )
     return json.loads(result.stdout)
+
+
+def assert_no_canvas_overlay_activation(compose_command=None):
+    """Preserve the default worker; prove opt-in overlay activation semantics."""
+    command = ["docker", "compose"] if compose_command is None else list(compose_command)
+    environment = os.environ.copy()
+    environment.update(
+        COMPOSE_PROFILES="",
+        FLOW_CALLBACK_DESTINATIONS="https://example.invalid/callback",
+        MARTY_ISSUANCE_IMAGE=(
+            "example.invalid/marty/issuance@sha256:" + "0" * 64
+        ),
+    )
+    base = [
+        *command,
+        "--env-file",
+        ".env.selfhost.production.example",
+        "-f",
+        BASE,
+    ]
+    def check(*args, overlay=False):
+        return subprocess.run(
+            [
+                *base,
+                *(["-f", NO_CANVAS] if overlay else []),
+                *args,
+                "config",
+                "--hash",
+                WORKER,
+            ],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+
+    original = check()
+    assert original.returncode == 0 and re.fullmatch(
+        rf"{WORKER} [0-9a-f]{{64}}\s*", original.stdout
+    ), "Existing default self-host composition must keep the Canvas worker"
+    inactive = check(overlay=True)
+    assert inactive.returncode != 0 and "disabled" in inactive.stderr.lower(), (
+        "Opt-in no-Canvas overlay must disable the worker"
+    )
+    active = check("--profile", "canvas", overlay=True)
+    assert active.returncode == 0 and re.fullmatch(
+        rf"{WORKER} [0-9a-f]{{64}}\s*", active.stdout
+    ), "Selected Canvas profile must activate the worker"
 
 
 def assert_inherited_service(base, bundle, service):
@@ -296,7 +348,7 @@ def catalog_cases():
         required = WORKER in catalog.running_services_for_stack(name)
         if not required and name != "selfhost-beta-tunnel":
             continue
-        if not required:
+        if name == "selfhost-beta-tunnel":
             assert stack["operations"]["up"] == [
                 "up",
                 "-d",
@@ -436,6 +488,7 @@ def run(suite="bundle", compose_command=None):
         else partial(render, compose_command=compose_command)
     )
     if suite == "consumers":
+        assert_no_canvas_overlay_activation(compose_command)
         consumers = assert_consumer_matrix(renderer)
         print(
             f"Canvas consumer matrix preserves complete native worker definitions in {len(consumers)} conformance/catalog/beta compositions (configuration only)"
@@ -444,7 +497,10 @@ def run(suite="bundle", compose_command=None):
     # Keep the installed/older Compose bundle qualification independent from
     # the modern parser needed for no-interpolate source bind expressions.
     base, bundle = renderer(BASE), renderer(BASE, BUNDLE)
+    assert "profiles" not in base["services"][WORKER]
     assert_worker_preserved(base, bundle)
+    preview = renderer(BASE, BUNDLE, NO_CANVAS)
+    assert preview["services"][WORKER]["profiles"] == ["canvas"]
     assert_published_issuance_preserved(base, bundle)
     converted = assert_shared_rust_services(base, bundle)
     print(

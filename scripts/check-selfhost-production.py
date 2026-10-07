@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import os
 import re
 import subprocess
 import sys
@@ -716,8 +717,14 @@ def validate_selfhost_canvas_public_config(
 def validate_selfhost_canvas_configuration(
     env_values: dict[str, str], env_file: Path, compose_file: Path,
 ) -> str:
-    if env_values.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "").strip().lower() != "true":
-        return validate_selfhost_canvas_public_config(env_values)
+    effective = dict(env_values)
+    effective.update(
+        (key, value)
+        for key, value in os.environ.items()
+        if key.startswith("CANVAS_")
+    )
+    if effective.get("CANVAS_PORTABLE_INTEGRATION_ENABLED", "").strip().lower() != "true":
+        return validate_selfhost_canvas_public_config(effective)
     result = run_compose_command(env_file, compose_file, "config", "--format", "json")
     if result.returncode:
         # Compose output can contain expanded secrets; never echo it here.
@@ -729,7 +736,7 @@ def validate_selfhost_canvas_configuration(
         raise CheckError("Configured Canvas worker model is missing or invalid.") from exc
     if not isinstance(worker, dict):
         raise CheckError("Configured Canvas worker model is invalid.")
-    return validate_selfhost_canvas_public_config(env_values, worker)
+    return validate_selfhost_canvas_public_config(effective, worker)
 
 
 def validate_auth_login_redirect_hosts(env_values: dict[str, str]) -> str:
