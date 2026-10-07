@@ -1326,7 +1326,7 @@ compared with the preceding 602-row artifact, the missing row was one
 service-acceptance, and transitive input inventories are not closed by this
 narrow proof.
 
-## A0 published-probe timing attribution (2026-10-07, local candidate)
+## A0 published-probe timing attribution (2026-10-07, reviewed candidate)
 
 The protected Canvas timing artifacts for [#1144](https://github.com/ElevenID/marty-ui/actions/runs/37605210608)
 and [#1145](https://github.com/ElevenID/marty-ui/actions/runs/37614331029)
@@ -1346,6 +1346,8 @@ test, with one pure Rust test for accepted and fallback paths in the
 composition-only diagnostic owner. No case selection, Docker operation,
 oracle, or protected gate changes. This improves future diagnosis but does
 not claim faster CI or justify database cloning without finer measurements.
+The local policy file passed 26 tests; the composition-only Rust test and
+package-scoped check passed on Rust 1.95. Independent review found no issue.
 
 ## A6 protocol-test source ownership follow-up (2026-10-07)
 
@@ -1410,7 +1412,17 @@ exit statuses, signal handling, and raw-log reporting remain unchanged.
 Four focused local tests, Bash syntax, Ruff, and diff checks passed; an
 independent reviewer found no issue in the corrected two-file diff. This is
 timing-evidence reliability, not a speedup or a change in required coverage.
-The follow-up needs its own hosted PR and protected validation before merge.
+Reviewed [#1147](https://github.com/ElevenID/marty-ui/pull/1147) passed full
+[PR](https://github.com/ElevenID/marty-ui/actions/runs/37619375243) and
+[protected](https://github.com/ElevenID/marty-ui/actions/runs/37624284472)
+CI, retaining 144 composition and 101 worker passes and two expected worker
+ignores, and merged as `099422c0`. Its PR artifact had 602 successful rows;
+the protected artifact had 601, including both `canvas_target` rows, with no
+tail-open or missing-target warning. In the database-group step, all 554 raw
+target phase markers had matching live relay records. The one-row variation
+is therefore not a dropped relay line; it is one fewer emitted
+`migration_seed` marker than in #1145's protected artifact. Do not interpret
+it as a removed test or a proven speed change.
 
 ## Design references
 
