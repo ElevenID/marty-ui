@@ -75,6 +75,8 @@ try {
     $env:INTEGRATION_SECRET_MASTER_KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
     docker exec $pgName psql -U kmstest -d kmstest -v ON_ERROR_STOP=1 -c "INSERT INTO issuance_service.organization_integration_secrets VALUES ('secret-1','org-1','canvas','oauth_client_secret','$legacy')" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'fixture insert failed' }
+    docker exec $pgName pg_dump -U kmstest -d kmstest --format=custom --file=/tmp/integration-secret-precutover.dump
+    if ($LASTEXITCODE -ne 0) { throw 'pre-cutover database snapshot failed' }
     $ErrorActionPreference = 'Continue'
     & "$binRoot\marty-integration-secret-migrate.exe" audit 2>$null
     $ErrorActionPreference = 'Stop'
@@ -96,7 +98,20 @@ try {
     & "$binRoot\marty-integration-secret-migrate.exe" audit 2>$null
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -eq 0) { throw 'binding mismatch was accepted' }
-    Write-Output "PASS disposable PostgreSQL/OpenBao/signing-keys migration, remote-only audit, rotation, binding rejection"
+    docker exec $pgName createdb -U kmstest kmstest_recovery
+    if ($LASTEXITCODE -ne 0) { throw 'recovery database creation failed' }
+    docker exec $pgName pg_restore -U kmstest -d kmstest_recovery --exit-on-error /tmp/integration-secret-precutover.dump
+    if ($LASTEXITCODE -ne 0) { throw 'pre-cutover database snapshot restore failed' }
+    $recovered = docker exec $pgName psql -U kmstest -d kmstest_recovery -tAc 'SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets'
+    if ($LASTEXITCODE -ne 0 -or $recovered.Trim() -ne $legacy) { throw 'restored legacy envelope differs from pre-cutover snapshot' }
+    $env:DATABASE_URL = "postgresql://kmstest:kmstest@127.0.0.1:$pgPort/kmstest_recovery"
+    $env:INTEGRATION_SECRET_MASTER_KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
+    & "$binRoot\marty-integration-secret-migrate.exe" migrate
+    if ($LASTEXITCODE -ne 0) { throw 'restored snapshot migration failed' }
+    Remove-Item Env:INTEGRATION_SECRET_MASTER_KEY
+    & "$binRoot\marty-integration-secret-migrate.exe" audit
+    if ($LASTEXITCODE -ne 0) { throw 'restored snapshot remote-only audit failed' }
+    Write-Output "PASS disposable PostgreSQL/OpenBao/signing-keys migration, remote-only audit, rotation, binding rejection, database snapshot restore and re-migration"
 } finally {
     if ($null -ne $service -and -not $service.HasExited) { Stop-Process -Id $service.Id -Force -ErrorAction SilentlyContinue }
     foreach ($name in $created) {

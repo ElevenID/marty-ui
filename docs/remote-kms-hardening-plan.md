@@ -504,6 +504,39 @@ fixture setup evidence, not a remote process pass. Retire the remaining raw
 key assumptions in rendered deployment fixtures and qualify packaged startup,
 recovery and exact production artifacts before closing K4.
 
+2026-10-07 cutover recovery checkpoint: the disposable live migration contract
+now captures a PostgreSQL custom-format snapshot before migration, restores it
+into a separate database after the primary database has passed remote-only
+audit and Transit rotation, verifies the restored legacy envelope is exact,
+then re-migrates the restored row and passes a remote-only audit with the old
+key removed again. The script passed against PostgreSQL 16, OpenBao and the
+actual Rust migration/signing-keys binaries; all test containers were removed.
+This proves the database snapshot/re-migration procedure for the synthetic
+row. It does not yet prove OpenBao key backup/restore, packaged service restart,
+or rollback of a real deployment and its concurrent writers.
+Do not use OpenBao's [Transit key backup endpoint](https://openbao.org/docs/next/api/secret/transit/)
+for that missing proof: its documented response is a plaintext backup of all
+key versions, contrary to this custody objective. Qualify a protected storage
+snapshot and unseal recovery appropriate to the deployed OpenBao backend;
+[integrated Raft snapshots](https://openbao.org/docs/next/commands/operator/raft/)
+are one supported mechanism when Raft is the primary storage backend. The
+current self-host OpenBao configuration uses `storage "file"`, so its actual
+recovery proof requires an atomic protected copy of the persisted storage
+directory plus the corresponding unseal material and a restored-instance
+decrypt check. The disposable dev-mode test does not exercise that mechanism.
+
+2026-10-07 OpenBao recovery follow-up: the opt-in
+`scripts/test_openbao_file_recovery.ps1` passed with the deployed self-host
+file-storage configuration in disposable OpenBao containers. It initialized a
+non-exportable Transit key, encrypted synthetic plaintext, stopped the source
+instance, copied its persisted storage to a separate Docker volume, started and
+unsealed a restored instance, and decrypted the pre-snapshot ciphertext. This
+is a cold, quiesced copy and does not export Transit key material. All owned
+containers and volumes were removed. It proves a local storage restore path,
+not the production backup system, off-host retention, key-share custody,
+hot-snapshot consistency, or a coordinated PostgreSQL/OpenBao point-in-time
+restore. Those remain cutover gates.
+
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks
 the tenant-bound row, authenticates ciphertext first, and only then updates
