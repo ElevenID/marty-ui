@@ -137,6 +137,24 @@ multi-primary writers, transactional fault injection, packaged release image,
 or coordinated restore. Explicit version references remain the durable
 cryptographic contract; the unversioned current pointer is advisory.
 
+2026-10-07 transactional-storage self-review: OpenBao SDK v2.5.1's
+`StartTxStorage` returns a no-op transaction, without an error, when the
+backend does not implement `logical.TransactionalStorage`. The candidate
+self-host config used file storage, so the plugin's version-plus-current
+pointer writes were not atomic there. The Go plugin now rejects X25519 create
+and rotate and HAIP create before writing when transactional storage is absent.
+Its unit suite uses real transactional in-memory storage, exercises failed
+metadata writes and verifies rollback, and asserts the nontransactional
+storage writes nothing. A disposable file-backed OpenBao rejected both key
+creates; the disposable dev server accepted both, and the three-voter Raft
+concurrency/failover probe still passed. The candidate self-host config now
+uses single-node Raft, and bootstrap checks for a Raft leader before setting
+up the plugin. An exact clean bootstrap against the candidate config and init
+script passed, including both key types. A static test protects the Raft
+configuration. These are candidate-source and disposable deployment checks;
+the release image, hosted CI, backup/restore and operating procedure remain
+to qualify. No migration of existing file-backed self-host state is planned.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
@@ -154,8 +172,9 @@ full Rust deployment and exact release artifact remain unqualified. No fallback
 or legacy import is part of the release path.
 Follow-up commit `9eaf94a44` makes HAIP key-version and current-pointer writes
 one OpenBao storage transaction, matching X25519 creation/rotation. The
-rebuilt local image passed `go test ./...` and `go vet ./...`; multi-node
-concurrency and rollback-on-storage-failure still need direct qualification.
+rebuilt local image passed `go test ./...` and `go vet ./...`; subsequent
+disposable Raft concurrency and unit rollback-on-storage-failure checks passed
+at the candidate source head. Packaged release qualification remains pending.
 
 2026-10-07 CSCA test-custody checkpoint: UI commit `298023863` retires
 `CscaAuthority` and local self-signed issuer-key generation from both

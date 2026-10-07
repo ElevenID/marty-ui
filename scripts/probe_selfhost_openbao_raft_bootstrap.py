@@ -1,0 +1,183 @@
+"""Qualify clean self-host OpenBao Raft bootstrap with disposable Docker volumes."""
+
+from __future__ import annotations
+
+import subprocess
+import uuid
+
+from probe_didcomm_openbao_ha import (
+    IMAGE,
+    ROOT,
+    docker,
+    request,
+    require_status,
+    wait_for,
+)
+
+
+def run() -> None:
+    docker(
+        "build",
+        "-f",
+        str(ROOT / "openbao/didcomm-authcrypt/Dockerfile"),
+        "-t",
+        IMAGE,
+        str(ROOT),
+        timeout=600,
+    )
+    suffix = uuid.uuid4().hex[:12]
+    server = f"kms-selfhost-{suffix}"
+    state = f"kms-selfhost-state-{suffix}"
+    runtime = f"kms-selfhost-runtime-{suffix}"
+    volumes: list[str] = []
+    started = False
+    try:
+        for volume in (state, runtime):
+            docker(
+                "volume",
+                "create",
+                "--label",
+                "marty.disposable=kms-selfhost-probe",
+                volume,
+            )
+            volumes.append(volume)
+        docker(
+            "run",
+            "--rm",
+            "-v",
+            f"{state}:/bao/data",
+            "--entrypoint",
+            "/bin/chown",
+            IMAGE,
+            "-R",
+            "openbao:openbao",
+            "/bao/data",
+        )
+        config = ROOT / "docker/openbao-selfhost.hcl"
+        docker(
+            "run",
+            "-d",
+            "--name",
+            server,
+            "--label",
+            "marty.disposable=kms-selfhost-probe",
+            "-p",
+            "127.0.0.1::8200",
+            "-v",
+            f"{state}:/bao/data",
+            "-v",
+            f"{config}:/bao/config/openbao.hcl:ro",
+            IMAGE,
+            "server",
+            "-config=/bao/config/openbao.hcl",
+        )
+        started = True
+        try:
+            port = int(
+                docker("port", server, "8200/tcp").splitlines()[0].rsplit(":", 1)[1]
+            )
+        except (RuntimeError, IndexError, ValueError) as error:
+            logs = subprocess.run(
+                ["docker", "logs", "--tail", "20", server],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            raise RuntimeError(
+                f"Disposable Raft server exited: {(logs.stdout + logs.stderr)[-2500:]}"
+            ) from error
+        base = f"http://127.0.0.1:{port}"
+        try:
+            wait_for(
+                "self-host Raft listener",
+                lambda: request(base, "GET", "sys/health")[0] == 501,
+            )
+        except RuntimeError as error:
+            logs = subprocess.run(
+                ["docker", "logs", "--tail", "20", server],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            raise RuntimeError(
+                f"Disposable Raft server did not start: {(logs.stdout + logs.stderr)[-2500:]}"
+            ) from error
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--network",
+                f"container:{server}",
+                "-e",
+                "BAO_ADDR=http://127.0.0.1:8200",
+                "-e",
+                "DIDCOMM_KMS_PLUGIN_REQUIRED=true",
+                "-v",
+                f"{state}:/bao/data",
+                "-v",
+                f"{runtime}:/bao/runtime",
+                "-v",
+                f"{ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
+                "-v",
+                f"{ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
+                "-v",
+                f"{ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
+                "--entrypoint",
+                "/bin/sh",
+                IMAGE,
+                "/scripts/openbao-selfhost-init.sh",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError("Disposable self-host Raft bootstrap failed")
+        root = docker(
+            "run",
+            "--rm",
+            "-v",
+            f"{state}:/bao/data",
+            "--entrypoint",
+            "/bin/cat",
+            IMAGE,
+            "/bao/data/root.token",
+        )
+        if len(root) < 16:
+            raise RuntimeError("Disposable bootstrap did not retain its root token")
+        leader = require_status(base, "GET", "sys/leader", root)
+        if leader.get("is_self") is not True:
+            raise RuntimeError("Disposable self-host Raft node is not active")
+        did = "did:example:selfhost-probe"
+        require_status(
+            base,
+            "POST",
+            "didcomm/keys/tenant_a/sender",
+            root,
+            {"sender_did": did, "sender_key_id": did + "#agreement-1"},
+        )
+        require_status(base, "POST", "didcomm/haip/keys/tenant_a/flow_a", root, {})
+        print("Clean self-host Raft bootstrap and plugin key creation passed")
+    finally:
+        if started:
+            subprocess.run(
+                ["docker", "rm", "-f", server],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        for volume in reversed(volumes):
+            subprocess.run(
+                ["docker", "volume", "rm", volume],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+
+
+if __name__ == "__main__":
+    run()
