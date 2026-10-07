@@ -110,6 +110,7 @@ pub mod initiation_didcomm_http;
 pub mod initiation_http;
 pub mod initiation_response;
 pub mod integration_secret;
+pub mod integration_secret_kms;
 pub mod internal_application_approval;
 mod internal_application_diagnostics;
 #[cfg(feature = "feature-regression-observer")]

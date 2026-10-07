@@ -326,6 +326,53 @@ authcrypt release remains blocked while independent Core adoption,
 integration-secret custody and BYOK work continue. Do not use local-key fallback
 or change recipient curve/profile to make an available KMS fit.
 
+2026-10-07 existing-plugin investigation: the [first-party OpenBao plugin
+collection](https://github.com/openbao/openbao-plugins) lists its secrets and
+KMS plugins, but none claims X25519 ECDH-1PU or DIDComm authcrypt. Targeted
+searches found a [Securosys OpenBao secrets-engine
+plugin](https://github.com/securosys-com/openbao-plugin-secrets-engine)
+that routes key operations to an HSM, but its published interface advertises
+ECIES and lists encrypt, decrypt, sign, verify, wrap and unwrap operations;
+it does not document an agreement/authcrypt endpoint or an X25519 key type.
+The vendor's [v3.x
+firmware algorithm table](https://docs.securosys.com/primus-hsm/Overview/algorithms_and_functions/v3.x/)
+does list X25519 agreement outside FIPS mode, which makes hardware capability
+plausible but does not establish the plugin API or complete authcrypt. It is an
+investigation lead, not a qualifying solution. No plugin with the required full operation was
+discovered; that is not proof that none exists. Generic GCPKMS, PKCS#11,
+Transit, ECIES or HSM integration is not evidence of the required operation.
+Before building anything, recheck candidates and require a working
+recipient-decryption proof.
+If we implement a custom OpenBao secrets-engine plugin, use its [supported Go
+SDK](https://openbao.org/docs/2.5.x/plugins/plugin-development/) for the plugin;
+keep the application-facing provider contract and orchestration in Rust. The
+OpenBao 2.5.x documentation says other languages would require a nontrivial
+reimplementation of the plugin protocol. No plugin design or implementation
+has been qualified as satisfying the KMS-only custody gate yet.
+
+2026-10-07 DIDComm curve check: the [ratified v2.1 specification](https://identity.foundation/didcomm-messaging/spec/v2.1/)
+already permits `ECDH-1PU+A256KW` with X25519, P-384, P-256 and optional
+P-521; [v2.0](https://identity.foundation/didcomm-messaging/spec/v2.0/)
+listed the same curves, so this is not a new relaxation. Authcrypt still
+requires ECDH-1PU in a JWE and A256CBC-HS512; P-256 is marked deprecated in
+favor of P-384. A P-384 KMS key would be spec-compatible only if the sender
+and each recipient DID document actually expose compatible P-384
+`keyAgreement` methods and a real holder decrypts the envelope. Current Marty
+issuer publication, disposable interoperability setup and frozen authcrypt
+fixtures are X25519-specific; current Core `marty-didcomm` resolves authorized
+X25519 methods rather than providing a general P-384 packer. Multiple
+recipient key types require separate
+encryptions, so a P-384-only switch would lose the current X25519 holders.
+[AWS KMS DeriveSharedSecret](https://docs.aws.amazon.com/kms/latest/APIReference/API_DeriveSharedSecret.html)
+accepts NIST ECC key agreement, including [P-384 key
+specs](https://docs.aws.amazon.com/kms/latest/developerguide/symm-asymm-choose-key-spec.html),
+but returns the raw shared secret by default;
+it does not perform the complete DIDComm ECDH-1PU/JWE operation inside KMS.
+Thus P-384 is a legitimate additional interoperability research track, not
+proof of strict KMS-only custody or a replacement for the X25519 release gate.
+Qualify an end-to-end P-384 holder route and a cryptographic provider boundary
+before considering a separately negotiated curve/profile.
+
 ### Integration-secret custody seam
 
 `IntegrationSecretCipher` currently holds a raw AES-256 key and stores standard
@@ -357,6 +404,20 @@ rotation checks. This is an API seam only: issuance and the Canvas worker still
 use the legacy raw AES key, so K4 custody and migration remain incomplete. The
 OpenBao plugin option above is separate K2 research and has not been built or
 qualified as an X25519 solution.
+
+2026-10-07 follow-up checkpoint: issuance now has a typed Rust client for the
+versioned remote envelope and the PostgreSQL vault has an explicit remote
+storage constructor. All four identity fields flow from the database row into
+remote decrypt; remote mode rejects legacy ciphertext instead of silently
+falling back. The isolated client contract passed with a synthetic server.
+Production startup still selects the legacy constructor and reads a raw master
+key. The old key cannot be removed until a tenant-scoped legacy migration,
+recovery proof and real remote database exercise pass; the remote constructor
+alone does not establish K4 acceptance.
+The typed client tests passed (identity forwarding, legacy rejection and
+envelope schema checks), and the existing Canvas OAuth PostgreSQL contract
+passed against a disposable PostgreSQL 16 instance after the vault refactor.
+No production remote database round-trip is claimed.
 
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks
