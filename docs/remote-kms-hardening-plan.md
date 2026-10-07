@@ -196,20 +196,26 @@ The direct P-256 dependency is removed and OID4VCI selects verifier/SD-JWT inste
 of the wallet capability. Compatibility Core adoption is still outstanding.
 
 Integration branch `security/remote-kms-acceptance-20261007`, based on integration
-main `845dd1a`, commit `99b9aff`, supplies stdin with `docker run -i`. It requires
-`MARTY_VERIFIER_POSITIVE_PUBLIC_INPUT` and rejects absent, oversized and
-private-key-bearing input. It does not generate or sign fixtures. This transport
-is incomplete until a governed producer supplies fresh KMS-issued credentials
-and wallet proofs. A file's existence is not KMS provenance or acceptance.
+main `845dd1a`, commits `99b9aff` and `a3e0646`, supplies stdin with
+`docker run -i`. The harness now requires an
+absolute `marty-kms-positive-verifier-input` executable path and its exact SHA-256
+digest. It executes that producer for each run, rejects absent, oversized and
+private-key-bearing public input, then executes the verifier in the pinned image.
+Core branch `security/remote-kms-fixture-20261007` at `6d98e73` adds that
+non-publishable Rust
+producer using canonical Core remote issuance and wallet presentation APIs. It
+asks two separately scoped authenticated signer agents for the exact signing
+inputs; those agents bridge to remote KMS. Neither producer nor harness generates
+or loads issuer/holder private keys. No second local signing implementation was
+added. This is implementation and local parser/build evidence, not yet real KMS,
+wallet, image, tenant or release acceptance. Next run the producer against two
+actual remote KMS keys and the exact image, including tampered/negative cases.
 
-Reuse Core's existing `marty-test-wallet` and `marty-test-signer-agent`: the wallet
-already uses public JWKs and an authenticated local IPC signer, whose policy
-bridge calls a remote KMS. Do not add a second local signing implementation.
-Next implement the producer and fresh positive/negative real-backend exercise;
-do not land or claim release clearance with only parser/mock tests.
-
-Validation so far: Rust 1.95.0 probe tests passed (2); the integration harness unit
-file passed (301 passed, 2 skipped), and Ruff checks passed. The previous
+Validation so far: Rust 1.95.0 probe tests passed (2); the Core producer passed
+`cargo +1.95.0 check --locked -p marty-test-wallet --bin
+marty-kms-positive-verifier-input` and focused Clippy with `-D warnings`;
+the integration harness unit file passed
+(301 passed, 2 skipped), and Ruff checks passed. The previous
 three-test run exercised the superseded local-signing intermediate and does not
 qualify this final direction. No hosted CI or artifact acceptance has run.
 
