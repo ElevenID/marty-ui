@@ -19,6 +19,58 @@ import plan_affected_rust as planner  # noqa: E402 - sys.path selects the repo-o
 
 
 class AffectedRustPlannerTests(unittest.TestCase):
+    def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        producers = (
+            "marty-organization",
+            "marty-revocation-profile",
+            "marty-trust-profile",
+        )
+        for producer in producers:
+            with self.subTest(producer=producer):
+                result = planner.plan(
+                    [f"rust/services/{producer.removeprefix('marty-')}/src/lib.rs"],
+                    metadata,
+                    ROOT,
+                )
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == producer
+                    and edge["package"] == "marty-credential-template"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                for marker, source in (
+                    ("binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("startup_marker", "runtime_evidence"),
+                    ("connection_marker", "request_evidence"),
+                    ("request_marker", "request_evidence"),
+                    ("membership_marker", "request_evidence"),
+                    ("identity_marker", "request_evidence"),
+                    ("status_marker", "request_evidence"),
+                    ("response_marker", "request_evidence"),
+                    ("provider_marker", "provider_evidence"),
+                ):
+                    if marker in edge:
+                        self.assertIn(
+                            edge[marker],
+                            (ROOT / edge[source]).read_text(encoding="utf-8"),
+                        )
+                self.assertNotIn(
+                    producer,
+                    {
+                        dep["name"]
+                        for dep in packages["marty-credential-template"]["dependencies"]
+                    },
+                )
+
     def metadata(self, root: Path) -> dict:
         def package(name: str, directory: str, dependencies: list[dict]) -> dict:
             return {
