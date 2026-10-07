@@ -36,6 +36,23 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-organization": [
         {
+            # Issuance initiation validates the organization through a real
+            # gRPC client; this is observed reachability, not safe selection.
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/config.rs",
+            "binding": "ORG_GRPC_TARGET",
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+            "startup_marker": "NativeInitiationControlPlane::connect_lazy(",
+            "ports_marker": "organizations: initiation_control_plane.clone()",
+            "request_evidence": "rust/services/issuance/src/initiation_dependencies.rs",
+            "connection_marker": "OrganizationServiceClient::new(channel(organization_target, timeout)?)",
+            "request_marker": ".get_organization(self.grpc_request(GetOrganizationRequest {",
+            "response_marker": "response.get_ref().id == organization_id",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_marker": ".get_organization(organization_id)",
+        },
+        {
             "package": "marty-auth",
             "evidence": "rust/services/auth/src/config.rs",
             "binding": "ORG_GRPC_TARGET",
@@ -69,6 +86,22 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-credential-template": [
         {
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/config.rs",
+            "binding": "CT_GRPC_TARGET",
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "runtime_marker": "&config.credential_template_grpc_target",
+            "startup_marker": "NativeInitiationControlPlane::connect_lazy(",
+            "ports_marker": "templates: initiation_control_plane.clone()",
+            "request_evidence": "rust/services/issuance/src/initiation_dependencies.rs",
+            "connection_marker": "templates: CredentialTemplateServiceClient::new(channel(",
+            "request_marker": ".get_template(self.grpc_request(GetTemplateRequest {",
+            "response_marker": "template_from_grpc(template_id, response.into_inner())",
+            "fallback_marker": "self.resolve_template_http(template_id).await",
+            "provider_evidence": "rust/services/credential-template/src/grpc_service.rs",
+            "provider_marker": ".get_template_for_internal_service(&request.get_ref().template_id)",
+        },
+        {
             "package": "marty-flow",
             "evidence": "rust/services/flow/src/config.rs",
             "binding": "CT_GRPC_TARGET",
@@ -80,6 +113,24 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": "templates.get_template(template_id).await?",
             "provider_evidence": "rust/services/credential-template/src/grpc_service.rs",
             "provider_marker": ".get_template_for_internal_service(&request.get_ref().template_id)",
+        },
+    ],
+    "marty-revocation-profile": [
+        {
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/config.rs",
+            "binding": "RP_GRPC_TARGET",
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "runtime_marker": "&config.revocation_profile_grpc_target",
+            "startup_marker": "NativeInitiationControlPlane::connect_lazy(",
+            "ports_marker": "revocation_profiles: initiation_control_plane,",
+            "request_evidence": "rust/services/issuance/src/initiation_dependencies.rs",
+            "connection_marker": "revocation_profiles: RevocationProfileServiceClient::new(channel(",
+            "request_marker": ".get_revocation_profile(self.grpc_request(GetRevocationProfileRequest {",
+            "identity_marker": "profile.organization_id != organization_id",
+            "status_marker": 'profile.status.trim().eq_ignore_ascii_case("active")',
+            "provider_evidence": "rust/services/revocation-profile/src/grpc.rs",
+            "provider_marker": ".get(&request.into_inner().profile_id)",
         },
     ],
     "marty-applicant": [

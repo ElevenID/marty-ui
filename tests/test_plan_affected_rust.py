@@ -454,6 +454,103 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
         )
 
+    def test_issuance_initiation_control_plane_consumers_are_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        expected_observed_closure = {
+            "marty-organization": {
+                "marty-organization",
+                "marty-issuance-service",
+                "marty-auth",
+                "marty-trust-profile",
+                "marty-presentation-policy",
+                "marty-flow",
+                "marty-gateway",
+            },
+            "marty-credential-template": {
+                "marty-credential-template",
+                "marty-issuance-service",
+                "marty-flow",
+                "marty-auth",
+                "marty-gateway",
+            },
+            "marty-revocation-profile": {
+                "marty-revocation-profile",
+                "marty-issuance-service",
+                "marty-flow",
+                "marty-auth",
+                "marty-gateway",
+            },
+        }
+        for producer, expected in expected_observed_closure.items():
+            with self.subTest(producer=producer):
+                result = planner.plan(
+                    [f"rust/services/{producer.removeprefix('marty-')}/src/lib.rs"],
+                    metadata,
+                    ROOT,
+                )
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == producer
+                    and edge["package"] == "marty-issuance-service"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                for marker, source in (
+                    ("binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("startup_marker", "runtime_evidence"),
+                    ("ports_marker", "runtime_evidence"),
+                    ("connection_marker", "request_evidence"),
+                    ("request_marker", "request_evidence"),
+                    ("provider_marker", "provider_evidence"),
+                ):
+                    with self.subTest(marker=marker):
+                        source_text = (ROOT / edge[source]).read_text(encoding="utf-8")
+                        self.assertIn(edge[marker], source_text)
+                        self.assertNotIn(
+                            edge[marker], source_text.replace(edge[marker], "removed")
+                        )
+                for marker in (
+                    "response_marker",
+                    "fallback_marker",
+                    "identity_marker",
+                    "status_marker",
+                ):
+                    if marker in edge:
+                        source_text = (ROOT / edge["request_evidence"]).read_text(
+                            encoding="utf-8"
+                        )
+                        self.assertIn(edge[marker], source_text)
+                        self.assertNotIn(
+                            edge[marker], source_text.replace(edge[marker], "removed")
+                        )
+                self.assertNotIn(
+                    producer,
+                    {
+                        dep["name"]
+                        for dep in packages["marty-issuance-service"]["dependencies"]
+                    },
+                )
+                # Hypothetical observed non-Cargo reachability is not an
+                # active selector; every service input still selects all.
+                reachable = {producer}
+                frontier = [producer]
+                while frontier:
+                    for observed in planner.OBSERVED_NON_CARGO_CONSUMERS.get(
+                        frontier.pop(), []
+                    ):
+                        consumer = observed["package"]
+                        if consumer not in reachable:
+                            reachable.add(consumer)
+                            frontier.append(consumer)
+                self.assertEqual(reachable, expected)
+
     def test_three_flow_grpc_runtime_consumers_are_observed_without_narrowing(
         self,
     ) -> None:
