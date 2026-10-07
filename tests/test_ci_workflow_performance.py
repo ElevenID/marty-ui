@@ -612,6 +612,18 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
     )
     assert recovery_gate["shell"] == "pwsh"
     assert "test_openbao_raft_recovery.ps1" in recovery_gate["run"]
+    coordinated_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore"
+    )
+    assert (
+        coordinated_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"]
+        == "marty-openbao-didcomm:ci"
+    )
+    assert "probe_integration_secret_coordinated_restore.py" in coordinated_gate["run"]
+    assert job["timeout-minutes"] >= 30
     assert "CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet ./..." in (
         ROOT / "openbao/didcomm-authcrypt/Dockerfile"
     ).read_text(encoding="utf-8")

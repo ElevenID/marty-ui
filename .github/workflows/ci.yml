@@ -661,7 +661,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.openbao == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -690,6 +690,15 @@ jobs:
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
         run: ./scripts/test_openbao_raft_recovery.ps1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+          CARGO_INCREMENTAL: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+        run: python3 scripts/probe_integration_secret_coordinated_restore.py
 
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})

@@ -214,6 +214,10 @@ barrier to reject the original unseal key; graceful shutdown and restart passed,
 matching the standalone recovery test. This is a disposable source-head proof,
 not a published-image or hosted-CI qualification. Off-host backup handling,
 exact artifact cutover and multi-service release acceptance remain open.
+The proof and bootstrap fix were committed as UI `bb07d9c0b`. The existing
+OpenBao CI job now runs the coordinated probe with its single built candidate
+image and a pinned Rust toolchain; its workflow contract test passed locally.
+This wiring has not run in hosted CI yet.
 
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
