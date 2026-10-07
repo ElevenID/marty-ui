@@ -1,12 +1,13 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 01:20 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-07 02:38 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code and fast test layers
 have merged, including UI #1124, #1126, and #1127. Canvas configuration
 fail-fast and scoped selection (#1129), DB/Canvas timing evidence (#1130), and
 Bookworm-first reusable test compilation (#1131) and nine shadow-only control-plane
-edges (#1132) also passed protected queue validation and merged. The protected Canvas job changed from 51m36s before
+edges (#1132), plus Flow HTTP reference observations (#1133), also passed
+protected queue validation and merged. The protected Canvas job changed from 51m36s before
 #1131 to 31m57s on its merge candidate; only the removed duplicate compilation
 is clearly attributable to that refactor. The separate roster component draft
 is deferred for lifecycle/qualification reasons. Core #352 merged its
@@ -51,7 +52,7 @@ Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, 
 | A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | [UI #1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1075](https://github.com/ElevenID/marty-ui/pull/1075), [#1076](https://github.com/ElevenID/marty-ui/pull/1076), and [#1079](https://github.com/ElevenID/marty-ui/pull/1079) merged the Canvas producer, embedded-input, scenario-owner, and scenario-input safeguards. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) merged the preparer-dispatch inventory; [#1122](https://github.com/ElevenID/marty-ui/pull/1122) added public-vector source guarding, not per-vector execution proof. [#1130](https://github.com/ElevenID/marty-ui/pull/1130) and [#1131](https://github.com/ElevenID/marty-ui/pull/1131) added Canvas/ordinary-DB phase timing evidence. Remaining runtime/selector and acceptance obligations still need mapping. |
 | A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | [UI #1044](https://github.com/ElevenID/marty-ui/pull/1044), [#1058](https://github.com/ElevenID/marty-ui/pull/1058), [#1081](https://github.com/ElevenID/marty-ui/pull/1081), [#1083](https://github.com/ElevenID/marty-ui/pull/1083), and [#1086](https://github.com/ElevenID/marty-ui/pull/1086) established and parallelized the Canvas acceptance targets; [#1108](https://github.com/ElevenID/marty-ui/pull/1108) merged eleven base-runtime/self-host support moves and [#1111](https://github.com/ElevenID/marty-ui/pull/1111) merged eighteen Flow/DIDComm/renewal/Kubernetes support moves. [#1118](https://github.com/ElevenID/marty-ui/pull/1118) merged Gateway-to-Issuance PostgreSQL webhook ownership; [#1121](https://github.com/ElevenID/marty-ui/pull/1121) merged all six Gateway-to-Signing Redis/OpenBao cases with their exact gates, removing the last service-to-service development dependency in UI service manifests. [#1123](https://github.com/ElevenID/marty-ui/pull/1123) merged the separate Canvas acceptance package after protected validation. |
 | A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | [UI #1045](https://github.com/ElevenID/marty-ui/pull/1045), `7502053e9`; protected queue run passed and merged as `d9947b312` |
-| A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | Core [#348](https://github.com/ElevenID/marty-core/pull/348) and UI [#1046](https://github.com/ElevenID/marty-ui/pull/1046), [#1047](https://github.com/ElevenID/marty-ui/pull/1047), [#1051](https://github.com/ElevenID/marty-ui/pull/1051), and [#1052](https://github.com/ElevenID/marty-ui/pull/1052) established the fail-closed shadow planner. [#1109](https://github.com/ElevenID/marty-ui/pull/1109) merged nine source-backed non-Cargo service-consumer edges; [#1117](https://github.com/ElevenID/marty-ui/pull/1117) added Trust Profile-to-Presentation Policy. [#1132](https://github.com/ElevenID/marty-ui/pull/1132) merged nine further observed control-plane edges into Issuance, Credential Template, and Verification. This batch records four Flow HTTP reference routes, enriching two existing producer edges and adding Trust Profile and Deployment Profile edges; all remain shadow-only. Service changes continue to select the full Rust workspace; the complete non-Cargo graph remains unmapped. |
+| A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | Core [#348](https://github.com/ElevenID/marty-core/pull/348) and UI [#1046](https://github.com/ElevenID/marty-ui/pull/1046), [#1047](https://github.com/ElevenID/marty-ui/pull/1047), [#1051](https://github.com/ElevenID/marty-ui/pull/1051), and [#1052](https://github.com/ElevenID/marty-ui/pull/1052) established the fail-closed shadow planner. [#1109](https://github.com/ElevenID/marty-ui/pull/1109) merged nine source-backed non-Cargo service-consumer edges; [#1117](https://github.com/ElevenID/marty-ui/pull/1117) added Trust Profile-to-Presentation Policy. [#1132](https://github.com/ElevenID/marty-ui/pull/1132) merged nine further observed control-plane edges into Issuance, Credential Template, and Verification. [#1133](https://github.com/ElevenID/marty-ui/pull/1133) merged four Flow HTTP reference observations; this batch adds Organization gRPC membership consumers. All remain shadow-only. Service changes continue to select the full Rust workspace; the complete non-Cargo graph remains unmapped. |
 | A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Pure Python-value extraction [UI #1060](https://github.com/ElevenID/marty-ui/pull/1060), mixed-roster/body-reader unit coverage [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) merged. [#1112](https://github.com/ElevenID/marty-ui/pull/1112) moved pure self-host fixture controls and an Envoy scalar-value matrix to fast owners; [#1124](https://github.com/ElevenID/marty-ui/pull/1124), [#1126](https://github.com/ElevenID/marty-ui/pull/1126), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added layered worker/configuration and typed-transport owners. Real CLI, ZIP, Compose, Envoy-image/process, database, and published-process guarantees retain their acceptance owners. |
 | A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Provenance, producer, scenario, and input safeguards [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050), [#1055](https://github.com/ElevenID/marty-ui/pull/1055), [#1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1076](https://github.com/ElevenID/marty-ui/pull/1076)–[#1079](https://github.com/ElevenID/marty-ui/pull/1079), and [#1082](https://github.com/ElevenID/marty-ui/pull/1082) merged. [#1102](https://github.com/ElevenID/marty-ui/pull/1102) moved 33 pinned historical replays to weekly/manual full qualification while retaining native regression; [#1106](https://github.com/ElevenID/marty-ui/pull/1106) requires exact-main full qualification before stable tagging. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) guards preparer dispatch; [#1112](https://github.com/ElevenID/marty-ui/pull/1112) guards Canvas helper mount inputs. Neither establishes complete historical reference closure or authorizes additional qualification skips. |
 | A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | [UI #1064](https://github.com/ElevenID/marty-ui/pull/1064) retained fail-closed planned-skip and all-success merge-group gates; [#1080](https://github.com/ElevenID/marty-ui/pull/1080), [#1082](https://github.com/ElevenID/marty-ui/pull/1082), and [#1107](https://github.com/ElevenID/marty-ui/pull/1107) proved initial exact-input selection. [#1110](https://github.com/ElevenID/marty-ui/pull/1110), [#1112](https://github.com/ElevenID/marty-ui/pull/1112), [#1119](https://github.com/ElevenID/marty-ui/pull/1119), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added bounded test-only paths; [#1114](https://github.com/ElevenID/marty-ui/pull/1114) preserves failed timing-artifact upload as a failing job after one same-job retry. [#1129](https://github.com/ElevenID/marty-ui/pull/1129) moved two required Canvas configuration proofs earlier while retaining late checks. [#1131](https://github.com/ElevenID/marty-ui/pull/1131) measured a 12m20s compile-stage saving by removing duplicate compatible compilation; that is build reuse, not evidence of selective-validation savings. Unknown/mixed implementation inputs remain broad, and selection-specific time savings remain unmeasured. |
@@ -1041,9 +1042,12 @@ or service-image owner for the exact files and reproduced no-dependency Cargo
 metadata plus all planner tests with an empty Cargo home. Existing hosted
 [release-contract evidence](https://github.com/ElevenID/marty-ui/actions/runs/37550835490)
 shows the same planner tests executing on the Ubuntu release runner. The
-candidate needs exact-head PR and protected merge-queue validation before
-promotion. No CI time saving is claimed until a comparable planner-only PR is
-measured after merge.
+reviewed [#1134](https://github.com/ElevenID/marty-ui/pull/1134) passed all 23
+exact-head PR and protected merge-queue jobs, then merged as `9b7bda36d` on
+2026-10-07. Its protected [CI run](https://github.com/ElevenID/marty-ui/actions/runs/37564288453)
+took 39m12s; the Canvas evidence retained 602 successful phase rows. This PR
+changed the workflow itself and correctly ran the full matrix. No CI time
+saving is claimed until a planner-only PR is measured under the merged rule.
 
 ## 2026-10-06 protected Canvas and feedback checkpoint
 
@@ -1114,6 +1118,21 @@ relationships as source-backed observations only. The Issuance native URL can
 still resolve to the legacy HTTP owner in production; no runtime deployment
 ownership or selective gate is inferred from the route alone. The complete
 non-Cargo graph and obligation closure remain unproven.
+
+Reviewed [#1133](https://github.com/ElevenID/marty-ui/pull/1133) merged as
+`0c7f0b85f` after all 23 PR and protected CI jobs passed. Its protected
+[Canvas job](https://github.com/ElevenID/marty-ui/actions/runs/37560386014)
+took 31m29s; its timing artifact retained 602 successful phase rows. This is
+another shadow-only graph observation, not a measured speed improvement.
+
+The next A3 candidate records Organization's configured gRPC membership
+consumers in Compliance Profile, Deployment Profile, Revocation Profile,
+Presentation Policy, and Gateway. Each edge has a concrete configuration,
+client/request, and Organization server source marker; Gateway's gRPC evidence
+enriches its existing HTTP edge rather than duplicating the consumer. The
+planner still selects the whole Rust workspace for service changes. These
+observations do not close the remaining runtime, proto, rendered-deployment,
+or acceptance-test dependency graph and do not authorize a narrower gate.
 
 ## Design references
 
