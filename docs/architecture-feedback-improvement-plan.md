@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 10:34 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-07 17:45 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -10,8 +10,12 @@ only the removed duplicate compilation is clearly attributable to that
 refactor. UI #1132–#1139 added shadow-only dependency observations and bounded
 PR feedback selection; #1141 added public-vector execution proof, #1142
 added exact protocol-test source ownership, and #1144 guarded current Canvas
-REST capture inputs. Full protected checks remain.
-The separate roster
+REST capture inputs. UI #1148 added fixed Canvas probe-timing owners, and
+#1150 moved the pinned HTTPX timeout matrix to exact-main full qualification
+while routine CI keeps one TLS timeout and one certificate-rejection proof.
+The protected #1150 database step took 10m28s versus 12m30s on the preceding
+protected run; full exact-main qualification passed. Full protected checks
+remain. The separate roster
 component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
 crate, but UI migration and nightly release qualification remain incomplete.
@@ -1424,7 +1428,7 @@ is therefore not a dropped relay line; it is one fewer emitted
 `migration_seed` marker than in #1145's protected artifact. Do not interpret
 it as a removed test or a proven speed change.
 
-## A6 HTTP timeout test pyramid (2026-10-07, candidate)
+## A6 HTTP timeout test pyramid (2026-10-07, merged)
 
 Reviewed [#1148](https://github.com/ElevenID/marty-ui/pull/1148) merged as
 `77d2644e8`; its protected [CI run](https://github.com/ElevenID/marty-ui/actions/runs/37636041696)
@@ -1448,10 +1452,41 @@ error classification across the wiring seam, plus
 substitute for worker/database timeout and lease tests, which prove our own
 durable behavior and remain in their existing tiers.
 
-The candidate adds an in-memory body-stall test, explicit routine/full native
+Reviewed [#1150](https://github.com/ElevenID/marty-ui/pull/1150) merged as
+`c6503e33f` after full [PR](https://github.com/ElevenID/marty-ui/actions/runs/37644735841)
+and [protected](https://github.com/ElevenID/marty-ui/actions/runs/37648996240)
+CI passed. It added the in-memory body-stall test, explicit routine/full native
 case selection, and a fail-closed completion marker for the full historical
-probe. Focused local checks and protected CI are still required; no CI saving
-or parity conclusion is claimed until the candidate runs on hosted runners.
+probe. The protected Canvas database group took 10m28s versus 12m30s on
+#1148's protected run, an observed 2m02s improvement. Composition took 549s
+versus 688s; the concurrent worker target took 566s versus 549s. The known
+historical probe was omitted from the routine tier, but runner/workload
+variation prevents attributing the entire wall-time difference to that skip.
+The protected artifact retained 598 successful rows, 144 composition and 101
+worker passes, two expected capture-only ignores, and exactly two native TLS
+case observations.
+
+The exact-main [manual full qualification](https://github.com/ElevenID/marty-ui/actions/runs/37654158438)
+then passed all 23 jobs. It ran the pinned HTTPX probe once (353s), all 104
+native TLS observations, 145 composition and 134 worker passes, two expected
+ignores, and 1,179 successful timing rows. This is the release evidence tier,
+not the routine feedback baseline. Future edits to main need their own
+exact-SHA full run before stable tag preparation.
+
+## A6 root test-source ownership batch (2026-10-07, candidate)
+
+Eight frequently edited root Python test sources for Rust candidate,
+Kubernetes issuance, shared image, passport provisioning/Compose, native
+conformance, and Gateway cutover policies have the existing Release Contract
+Tests root pytest step as their execution owner. Local collection found 265
+tests across these exact files. No workflow or runtime-image Dockerfile
+directly names them; image build contexts copy explicit Rust/proto/contract
+inputs or isolated UI/test subdirectories. This candidate routes edits to
+only these eight test sources to release pytest. Their production scripts,
+manifests, Dockerfiles, corpora, unknown siblings, mixed inputs, and protected
+merge groups retain their existing broad selection. The workflow edit itself
+requires full PR and protected qualification; no scoped-run saving is claimed
+until a future source-only PR produces hosted evidence.
 
 ## Design references
 

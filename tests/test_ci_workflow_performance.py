@@ -1605,6 +1605,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         )["all"]
         == "true"
     )
+
+
     assert (
         _classify_changed_path(
             "scripts/ci/run-published-canvas-contracts.sh", tmp_path
@@ -1710,6 +1712,54 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
             event="merge_group",
         )[0].values()
     )
+
+
+def test_model_and_compose_policy_sources_select_only_their_release_owner(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    )
+    candidates = (
+        "tests/test_issuance_rust_candidate.py",
+        "tests/test_kubernetes_native_issuance.py",
+        "tests/test_shared_rust_service_image.py",
+        "tests/test_passport_supported_provisioning_producer.py",
+        "tests/test_issuance_passport_native_compose.py",
+        "tests/test_conformance_native.py",
+        "tests/test_passport_supported_disposable_compose.py",
+        "tests/test_gateway_rust_cutover.py",
+    )
+    ci_source = CI_PATH.read_text(encoding="utf-8")
+    for path in candidates:
+        assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
+        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert path not in other_workflow.read_text(encoding="utf-8")
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    assert _classify_changed_paths(candidates, tmp_path) == [expected] * len(candidates)
+    assert _classify_changed_path(
+        "tests/test_gateway_rust_cutover_helpers.py", tmp_path
+    )["all"] == "true"
+    mixed = _classify_changed_paths(
+        [candidates[0], "services/Dockerfile"], tmp_path, combined=True
+    )[0]
+    assert all(mixed[name] == "true" for name in ("release", "rust", "python", "security"))
+    protected = _classify_changed_paths(
+        [candidates[0]], tmp_path, event="merge_group"
+    )[0]
+    assert protected["all"] == protected["rust"] == "true"
 
 
 def test_shadow_planner_sources_use_existing_release_owner_on_prs(
