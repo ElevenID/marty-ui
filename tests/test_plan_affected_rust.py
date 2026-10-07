@@ -750,6 +750,96 @@ class AffectedRustPlannerTests(unittest.TestCase):
             },
         )
 
+    def test_flow_http_reference_consumers_are_observed_without_narrowing(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        routes = {
+            "marty-issuance-service": (
+                "ApplicationTemplate",
+                "self.application_templates",
+                "v1/application-templates/{encoded}",
+            ),
+            "marty-credential-template": (
+                "DeliveryDestination",
+                "self.delivery_destinations",
+                "v1/delivery-destinations/{encoded}",
+            ),
+            "marty-trust-profile": (
+                "TrustProfile",
+                "self.trust_profiles",
+                "v1/trust-profiles/{encoded}",
+            ),
+            "marty-deployment-profile": (
+                "DeploymentProfile",
+                "self.deployment_profiles",
+                "v1/deployment-profiles/{encoded}",
+            ),
+        }
+        resolver = (
+            (ROOT / "rust/services/flow/src/http_providers.rs")
+            .read_text(encoding="utf-8")
+            .split("let response: ReferenceResponse = match kind {", 1)[1]
+            .split("if response.id != reference_id", 1)[0]
+        )
+        flow_dependencies = {
+            dep["name"] for dep in packages["marty-flow"]["dependencies"]
+        }
+        for producer, (kind, client, route) in routes.items():
+            with self.subTest(producer=producer):
+                self.assertNotIn(producer, flow_dependencies)
+                result = planner.plan(
+                    [
+                        Path(packages[producer]["manifest_path"])
+                        .relative_to(ROOT)
+                        .as_posix()
+                    ],
+                    metadata,
+                    ROOT,
+                )
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == producer and edge["package"] == "marty-flow"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                if producer in {"marty-issuance-service", "marty-credential-template"}:
+                    marker_keys = (
+                        ("http_binding", "evidence"),
+                        ("http_startup_marker", "http_startup_evidence"),
+                        ("http_request_marker", "http_request_evidence"),
+                        ("http_response_marker", "http_request_evidence"),
+                        ("http_callsite_marker", "http_callsite_evidence"),
+                        ("http_provider_marker", "http_provider_evidence"),
+                    )
+                    request_marker = edge["http_request_marker"]
+                else:
+                    marker_keys = (
+                        ("binding", "evidence"),
+                        ("runtime_marker", "runtime_evidence"),
+                        ("request_marker", "request_evidence"),
+                        ("response_marker", "request_evidence"),
+                        ("callsite_marker", "callsite_evidence"),
+                        ("provider_marker", "provider_evidence"),
+                    )
+                    request_marker = edge["request_marker"]
+                self.assertIn(route, request_marker)
+                branch = resolver.split(f"FlowReferenceKind::{kind} => {{", 1)[1].split(
+                    "FlowReferenceKind::", 1
+                )[0]
+                self.assertIn(client, branch)
+                self.assertIn(request_marker, branch)
+                for marker, source in marker_keys:
+                    with self.subTest(producer=producer, marker=marker):
+                        self.assertIn(
+                            edge[marker],
+                            (ROOT / edge[source]).read_text(encoding="utf-8"),
+                        )
+
     def test_signing_keys_flow_signer_and_envelope_edges_are_observed_only(
         self,
     ) -> None:
