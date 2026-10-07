@@ -116,6 +116,27 @@ one Cargo job to avoid the earlier Windows compiler-memory failure. Targeted
 Clippy passed with warnings denied. Hosted CI and release qualification remain
 pending.
 
+2026-10-07 OpenBao plugin HA checkpoint: [OpenBao 2.5's documented
+model](https://openbao.org/docs/release-notes/2-5-0/) has one active writer;
+standby write requests forward to the leader, while local reads can lag. The
+repeatable `scripts/probe_didcomm_openbao_ha.py` builds the current Go plugin
+source into the pinned OpenBao 2.5.5 image and starts a disposable three-voter
+Raft cluster. It waits for plugin/key visibility on each standby before sending
+nine concurrent DIDComm rotations through all three API endpoints. Every
+returned version was unique and readable, and the current pointer selected a
+committed version. Six concurrent HAIP create calls through all endpoints
+returned the same version. After stopping the leader, a surviving voter became
+active, retained the original DIDComm and HAIP versioned public references and
+HAIP current pointer, and accepted another distinct DIDComm rotation. The
+final probe passed and removed its labeled containers and network. Earlier
+probe attempts returned 404 before standby visibility and timed out after
+stopping the leader before all peers were voters; those attempts changed the
+harness readiness checks, not plugin behavior. This is direct evidence for the
+supported active/standby Raft topology, not a claim about independent
+multi-primary writers, transactional fault injection, packaged release image,
+or coordinated restore. Explicit version references remain the durable
+cryptographic contract; the unversioned current pointer is advisory.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
@@ -127,10 +148,10 @@ Dockerfile; its mounted plugin binary SHA-256 is
 `c127dbf6ecb402b475cc641e3be77b7d9fdbfd27302441ddb27b4aa5a7a4f307`.
 `TestHaipScopedLiveOpenBao` passed against a disposable OpenBao 2.5.5 server
 using that image and scoped workload policy. This is local source and plugin
-behavior evidence, not a published or attested image. Review must still
-resolve multi-writer version-pointer behavior before claiming HA safety, and
-qualify the full Rust deployment and exact release artifact. No fallback or
-legacy import is part of the release path.
+behavior evidence, not a published or attested image. The subsequent HA
+checkpoint above qualifies the supported active/standby writer topology; the
+full Rust deployment and exact release artifact remain unqualified. No fallback
+or legacy import is part of the release path.
 Follow-up commit `9eaf94a44` makes HAIP key-version and current-pointer writes
 one OpenBao storage transaction, matching X25519 creation/rotation. The
 rebuilt local image passed `go test ./...` and `go vet ./...`; multi-node
@@ -467,7 +488,7 @@ safety provides a concrete reason, and record that reason here.
 | ID | Work and exit evidence | Status |
 | --- | --- | --- |
 | K1 | Reconcile preserved branches; map every supported production binary, image, wheel, Cargo root and release pin; enumerate current signing/encryption paths and explicit secret-class exceptions. | In progress |
-| K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof; published image and production scope remain unqualified |
+| K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned live authcrypt and rotation proof passed; full service/retry/recovery and release deployment qualification pending |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and local cold OpenBao storage restore passed; coordinated database/KMS restore, packaged image and cutover qualification remain pending |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; candidate 0.2 pins compile signing-keys, issuance and Flow; Flow's old verification edge is now removed and its package graph contains no marty-crypto 0.1.62; workspace/test matrix pending |
