@@ -312,6 +312,17 @@ canonical place to move encryption and decryption behind one async remote
 storage interface. The existing Python vector proves the legacy layout but
 does not prove deployed data or old-key availability.
 
+Owner selection: the existing signing-keys service already hosts authenticated
+internal OpenBao Transit operations for flow-key and passport-artifact envelopes.
+Add a purpose-specific integration-secret envelope there, using a distinct
+non-exportable Transit key and the existing provider transport. Issuance's
+PostgreSQL vault remains the sole database owner and calls that envelope through
+a typed async client; the Canvas worker uses the same client and policy. The
+service token authenticates issuance to signing-keys, while the issuance vault
+continues to enforce tenant-bound database selection. The envelope additionally
+binds organization, secret ID, provider and purpose on decrypt. This reuses the
+deployed remote-custody owner without duplicating OpenBao code in issuance.
+
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks
 the tenant-bound row, authenticates ciphertext first, and only then updates
