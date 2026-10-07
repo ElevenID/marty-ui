@@ -257,6 +257,22 @@ coordinated restore phases. Labeled disposable containers and volumes were
 removed. These source changes remain in the broader uncommitted UI feature
 diff; hosted CI and exact release artifacts remain pending.
 
+2026-10-07 Flow grouped-feature checkpoint: the current HAIP/DC-API request
+and submission candidate uses tenant/Flow/version-bound remote OpenBao key
+references. Source review found that the old `vault:` private-JWK unwrap path
+was removed from Flow, and both request construction and response decryption
+reject a stored legacy key envelope. Expired or cancelled encrypted responses
+are rejected before remote decryption, while terminal replay still decrypts
+to compare the submission digest. The complete `marty-flow --tests` selection
+built and passed locally with Cargo 1.95.0 and one build job; all-target Flow
+Clippy also passed with warnings denied. Environment-gated
+PostgreSQL and live OpenBao tests compile in that selection but require their
+disposable fixtures for substantive execution; this run alone is not live
+service, hosted-CI, or exact-image qualification. Keep Flow, its shared
+OID4VP contract, the Go HAIP backend, and related consumer corrections in the
+large UI feature PR; batch remaining fixes and local tests before one hosted
+qualification run.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
