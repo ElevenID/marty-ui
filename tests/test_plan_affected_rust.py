@@ -71,6 +71,57 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     },
                 )
 
+    def test_verification_runtime_consumers_are_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        for producer in (
+            "marty-organization",
+            "marty-credential-template",
+            "marty-presentation-policy",
+        ):
+            with self.subTest(producer=producer):
+                result = planner.plan(
+                    [f"rust/services/{producer.removeprefix('marty-')}/src/lib.rs"],
+                    metadata,
+                    ROOT,
+                )
+                self.assertTrue(result["all"])
+                self.assertEqual(result["packages"], sorted(packages))
+                self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == producer
+                    and edge["package"] == "marty-verification-service"
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                for marker, source in (
+                    ("binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("connection_marker", "connection_evidence"),
+                    ("registration_marker", "connection_evidence"),
+                    ("evaluation_marker", "connection_evidence"),
+                    ("identity_marker", "connection_evidence"),
+                    ("request_marker", "request_evidence"),
+                    ("provider_marker", "provider_evidence"),
+                ):
+                    if marker in edge:
+                        self.assertIn(
+                            edge[marker],
+                            (ROOT / edge[source]).read_text(encoding="utf-8"),
+                        )
+                self.assertNotIn(
+                    producer,
+                    {
+                        dep["name"]
+                        for dep in packages["marty-verification-service"][
+                            "dependencies"
+                        ]
+                    },
+                )
+
     def metadata(self, root: Path) -> dict:
         def package(name: str, directory: str, dependencies: list[dict]) -> dict:
             return {
