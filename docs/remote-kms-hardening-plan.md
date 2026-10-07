@@ -288,6 +288,24 @@ proves these candidate service paths with synthetic data; hosted CI, an
 actual wallet app, the exact release image and supported deployment cutover
 remain open.
 
+2026-10-07 Flow HAIP reissue self-review: a persisted remote key reference
+was locally well-formed but could be reused to publish another request object
+after its actual OpenBao key version disappeared. The candidate now resolves
+that exact tenant/Flow/version through a read-only Signing Keys route and
+compares the returned public JWK and reference before reissuing. Signing Keys
+uses the separate HAIP workload token and OpenBao's versioned public-key GET;
+missing, unauthorized or mismatched keys fail closed without creating a new
+key. Flow's request-object test covers successful reuse and a missing remote
+key, its HTTP adapter test covers exact scope and version, and the independent
+Go live route test covers both existing and missing versions. The final
+disposable probe passed again with the live Go holder, Flow adapter and HTTP
+paths, Issuance signing, holder proof and both coordinated restore phases.
+The unfiltered Flow `--tests` suite, Signing Keys library suite (132 passed,
+seven ignored), both packages' all-target Clippy with warnings denied,
+targeted Rust formatting and diff checks passed. This remains in the broad
+uncommitted UI feature diff; hosted CI and exact release artifacts remain
+pending.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
