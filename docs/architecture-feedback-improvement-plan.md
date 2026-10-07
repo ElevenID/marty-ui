@@ -1602,7 +1602,7 @@ The local product plan (`artifacts/consumer-audit-2026-10-07/marty-product-packa
 | Product-plan work | Existing architecture/CI work | Next implementation boundary and evidence |
 | --- | --- | --- |
 | TST01-05, CICD01 | A0, A1, A3-A6, A8 | Extend the existing test-obligation inventory to affected product/profile cases. Keep old-to-new case IDs, fixtures/assertions, required lanes, run-bound parity, and fail-closed selection; do not turn nightly discovery into a substitute for required merge/release checks. |
-| INT01, PKG01, PKG02 | A0, A3, A6 | First prove a no-Canvas self-host Compose profile and an explicitly selected Canvas profile while preserving worker launch and security validation. Then repair the release bundle against anonymously accessible, digest-bound artifacts and clean-install evidence. The released v1.1.230 audit is a hypothesis to verify on current main, not an automatic current-release failure claim. |
+| INT01, PKG01, PKG02 | A0, A3, A6 | The opt-in no-Canvas Compose preview now preserves default Canvas worker behavior. Next repair the release bundle against anonymously accessible, digest-bound artifacts and clean-install evidence. The v1.1.231 release transaction confirms the image-role gap; an anonymous pull and complete installation remain unproven. |
 | PKG03-07, INT02-04, CICD02 | A1, A2, A4, A6 | Define verification/issuance and adapter dependency closures, contracts, ownership, migrations, and small qualified product artifacts. Extract shared Rust behavior once; keep tenant/security/transaction proofs with their real boundary. A smaller image alone does not establish an independent verifier. |
 | INT05-06, PKG08-09, TST04, CICD03-04 | A0, A4-A6, A8 | Prove installed capability authorization, existing-customer migration/recovery, documented public SDK/install paths, exact-artifact journeys and digest-preserving promotion before claiming support. Keep full official-release E2E and critical negative/security evidence. |
 | BUS01-02, MKT01-02, QA01-02 | Product/commercial review alongside engineering | Inventory licenses, source/notices and demonstrable public artifact facts. Commercial/legal owners must decide pricing, license routes, hosted availability and public claims; engineering does not invent or publish these. Independent consumer handoffs must use public artifacts. |
@@ -1623,38 +1623,56 @@ The first local draft placed a profile on the default worker. Product review
 found that an existing Canvas installation with an older environment file
 would stop selecting its worker on upgrade, while the optional post-up
 preflight would not prevent interruption. That draft was not pushed or
-merged. The revised candidate leaves the base/customer-bundle worker and
+merged. The revised change leaves the base/customer-bundle worker and
 production catalog required, and adds a separate no-Canvas overlay as a
 preview. The existing bundle/consumer gates retain complete worker-definition
 checks and use real Compose `config --hash` to prove default-active,
 overlay-disabled, and explicitly re-enabled behavior without starting a
 container. The separate preflight now honors shell Canvas-setting overrides;
 it does not claim to qualify the no-Canvas product. Existing Canvas-owned
-tests and required CI remain. Full PR/protected CI and a fresh installed
-no-Canvas journey are still required; no CI speedup is claimed. The default
+tests and required CI remain. Reviewed
+[#1157](https://github.com/ElevenID/marty-ui/pull/1157) passed full PR and
+[protected merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/37703682469)
+and merged as `bd7b0ab3c`. A fresh installed no-Canvas journey is still
+required; no CI speedup is claimed. The default
 switch is deferred until pre-up migration detection, rollback, and an
-existing-customer upgrade rehearsal are proven. On the revised local candidate,
+existing-customer upgrade rehearsal are proven. Before hosted qualification,
 232 focused Python/catalog/bundle tests, both real Compose gates, and all 13
 Rust `marty-selfhost-bundle` package-contract tests passed. Two Windows
 `executable_bundle` tests fail on Docker Compose rendering identically on
 the unchanged #1155 worktree; they are not attributed to this candidate.
-Linux CI must still qualify the actual package/extracted bundle. Independent
-review found no blocker in the staged preview after the migration-safe revision.
+Linux CI subsequently passed the required packaging and Canvas lanes;
+independent review found no blocker after the migration-safe revision.
 
-Next after the profile batch: inspect the current release artifact names,
-template/secrets closure and installer paths (PKG02/PKG08), then select a
-single independent verification boundary (PKG03/PKG06) with its test ledger.
+Next: finish the release artifact/installer closure and clean-install proof
+(PKG02/PKG08), then select a single independent verification boundary
+(PKG03/PKG06) with its test ledger.
 
-PKG02 source check on UI main `a6c20b597` confirms a concrete mismatch still
-exists: `.github/workflows/cd.yml` declares release images under
+PKG02 source check and the
+[v1.1.231 release transaction](https://github.com/ElevenID/marty-ui/releases/download/v1.1.231/release-transaction.json)
+confirm a concrete mismatch: `.github/workflows/cd.yml` declares release images under
 `ghcr.io/elevenid/marty-ui-oss/{ui,services,migrations}`, while the self-host
 bundle override defaults to `ghcr.io/elevenid/marty-ui` and expects
 `services`, `db-migrate`, `cloudflared-wrapper`, and `ui-selfhost` image names.
-This is source-level evidence, not a fresh anonymous registry/install test.
+That release also has no downloadable self-host bundle. This is release-asset
+evidence, not a fresh anonymous registry/install test.
 Repairing the bundle requires a coherent image/digest and separate Python
 issuance contract, then release-bound clean-install proof; changing the
-namespace string alone would not satisfy it. PKG02 is the next first-use
-blocker after the current profile batch.
+namespace string alone would not satisfy it. PKG02 remains the first-use
+blocker for this workstream.
+
+The next reviewed PKG02 local candidate closes all 40 Compose secret-template
+references: six missing `change-me` files are added, the example environment
+declares both formerly missing required settings, and its default Flow callback
+matches the internal Auth URL and organization ID. Source-derived tests guard
+template closure, required setting declarations, and callback alignment.
+The example still requires an operator-supplied, qualified issuance image
+digest. A real Compose render with a synthetic digest, 154 focused tests,
+Ruff, and diff checks passed; independent review found no blocker after
+correcting an initial HTTPS-only instruction that conflicted with the
+internal-network HTTP callback. Hosted PR/protected qualification and the
+release image/bundle/install repair remain outstanding; this is not a CI
+speedup claim.
 
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track

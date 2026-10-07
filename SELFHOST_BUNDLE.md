@@ -13,12 +13,18 @@ This bundle is the image-based distribution for the open-source self-host stack.
 
 ## Image contract
 
-The bundle pulls the published self-host images instead of building from source.
+The bundle is an image-only packaging format. Its image roles must be published
+and qualified together before a customer installation; the packager does not
+produce them. The v1.1.231 public release publishes `ui`, `services`, and
+`migrations` OSS images, but not this bundle's `ui-selfhost`, `db-migrate`, or
+`cloudflared-wrapper` roles. Do not treat that release as a ready-to-install
+self-host bundle.
 
 - `SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui`
 - `SELFHOST_IMAGE_TAG=<released-version>`
 
-The UI service uses the published `ui-selfhost` image variant, which excludes the public marketing and blog surface from the self-host product bundle.
+The intended UI role is `ui-selfhost`, excluding the public marketing and blog
+surface. It is not among the v1.1.231 public images.
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
 
@@ -51,10 +57,21 @@ rendering and removed only from the generated bundle after flattening. The
 extracted ZIP must render without the source checkout. Operator secret files
 remain external; packaging does not load their values.
 
-## First run
+## First run (after a qualified image/bundle release)
 
 1. Copy `.env.selfhost.production.example` to `.env.selfhost.production.local`.
-2. Set `SELFHOST_IMAGE_TAG`, `PUBLIC_DOMAIN`, `PUBLIC_API_URL`, `UI_BASE_URL`, `BAO_ADDR`, `SELFHOST_STATE_DIR`, `CREDENTIAL_LOGIN_POLICY_ID`, and `MARTY_ORG_ADMIN_EMAIL` in `.env.selfhost.production.local`.
+2. Set `SELFHOST_IMAGE_TAG`, `MARTY_ISSUANCE_IMAGE` (the exact matching
+   issuance OCI digest), `PUBLIC_DOMAIN`,
+   `PUBLIC_API_URL`, `UI_BASE_URL`, `BAO_ADDR`, `SELFHOST_STATE_DIR`,
+   `CREDENTIAL_LOGIN_POLICY_ID`, and `MARTY_ORG_ADMIN_EMAIL` in
+   `.env.selfhost.production.local`. The issuance image is intentionally
+   empty; Compose rejects that value until it is set. The operator must verify
+   its URI and digest against the qualified stack manifest; Compose does not
+   authenticate that match. The example `FLOW_CALLBACK_DESTINATIONS` maps the
+   default `MARTY_ORG_ID` to Auth's internal Compose-network HTTP callback.
+   Update it whenever the organization ID or internal Auth URL changes; Flow
+   validates the callback registry at startup. External destinations require
+   HTTPS.
 	If the same stack also serves a secondary UI hostname, set `UI_ADDITIONAL_BASE_URLS` and include the same origin in `CORS_ORIGINS`; otherwise social-login callbacks from that host will fall back to `UI_BASE_URL`. Do not add a beta/staging hostname here when it has its own stack and Keycloak.
 3. Copy `docker/secrets/selfhost.example` to a directory outside the bundle and set `SELFHOST_SECRET_DIR` to that directory.
 4. Replace every required secret placeholder file.
