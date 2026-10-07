@@ -155,6 +155,22 @@ configuration. These are candidate-source and disposable deployment checks;
 the release image, hosted CI, backup/restore and operating procedure remain
 to qualify. No migration of existing file-backed self-host state is planned.
 
+2026-10-07 packaged-plugin gate and Raft recovery checkpoint: the OpenBao CI
+job now runs the file-storage rejection, exact self-host Raft bootstrap, and
+three-voter forwarding/failover probes against its one built candidate image.
+The probes take an explicit image tag in CI and avoid three repeat builds;
+local CI-equivalent runs of all three passed. The obsolete opt-in file-storage
+recovery script has been replaced by a Raft cold-copy proof using that same
+candidate image. A disposable source initialized Transit and the DIDComm/HAIP
+plugin, encrypted a synthetic value, and created both versioned key types.
+After stopping the source and copying its whole state volume, the restored
+single-node Raft instance became leader, decrypted the pre-snapshot Transit
+envelope, and returned both original versioned public keys. The renamed
+recovery proof passed locally and is now an OpenBao CI step. Hosted CI has
+not run at this head. This is a local cold OpenBao-only restore; coordinated
+PostgreSQL/KMS recovery, off-host backup handling, release image publication,
+and full deployment qualification remain open.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a

@@ -10,6 +10,7 @@ from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
     docker,
+    prepare_image,
     request,
     require_status,
     wait_for,
@@ -17,15 +18,7 @@ from probe_didcomm_openbao_ha import (
 
 
 def run() -> None:
-    docker(
-        "build",
-        "-f",
-        str(ROOT / "openbao/didcomm-authcrypt/Dockerfile"),
-        "-t",
-        IMAGE,
-        str(ROOT),
-        timeout=600,
-    )
+    prepare_image()
     name = f"kms-file-{uuid.uuid4().hex[:12]}"
     started = False
     try:

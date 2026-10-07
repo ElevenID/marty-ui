@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import re
 import subprocess
 import time
@@ -18,8 +19,22 @@ import uuid
 from pathlib import Path
 
 
-IMAGE = "marty-openbao-ha-probe:local"
+IMAGE = os.environ.get("MARTY_OPENBAO_PROBE_IMAGE", "marty-openbao-ha-probe:local")
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def prepare_image() -> None:
+    if os.environ.get("MARTY_OPENBAO_PROBE_IMAGE"):
+        return
+    docker(
+        "build",
+        "-f",
+        str(ROOT / "openbao/didcomm-authcrypt/Dockerfile"),
+        "-t",
+        IMAGE,
+        str(ROOT),
+        timeout=600,
+    )
 
 
 def docker(*args: str, timeout: int = 90) -> str:
@@ -75,15 +90,7 @@ def require_status(
 
 
 def run() -> None:
-    docker(
-        "build",
-        "-f",
-        str(ROOT / "openbao/didcomm-authcrypt/Dockerfile"),
-        "-t",
-        IMAGE,
-        str(ROOT),
-        timeout=600,
-    )
+    prepare_image()
     suffix = uuid.uuid4().hex[:12]
     network = f"kms-ha-{suffix}"
     names = [f"kms-ha-{suffix}-{index}" for index in range(3)]
