@@ -88,7 +88,9 @@ HTTP contract tests, and both ignored storage/HTTP tests against disposable
 Redis passed. Nine public PEM vectors were checked for expected public-key
 relationships and no private-key PEM. Rust formatting and diff checks passed.
 The disposable Redis container was removed. Other private-key tests and exact
-release-artifact proof remain outstanding.
+release-artifact proof remain outstanding. The complete signing-keys test
+target set also compiled under `cargo +1.95 test -p marty-signing-keys --tests
+--no-run --locked`; this is compilation evidence, not a full runtime pass.
 
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
