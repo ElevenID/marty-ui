@@ -337,7 +337,7 @@ def rust_phase(phase: str, database_url: str, signing_url: str, key: str) -> Non
         raise RuntimeError(f"Rust integration-secret {phase} phase failed")
 
 
-def live_credential_builder_phase(bao_url: str, token: str) -> None:
+def live_issuance_signing_phase(bao_url: str, token: str) -> None:
     environment = os.environ.copy()
     environment.update(
         {
@@ -346,28 +346,29 @@ def live_credential_builder_phase(bao_url: str, token: str) -> None:
             "MARTY_TEST_OPENBAO_TOKEN": token,
         }
     )
-    result = subprocess.run(
-        [
-            "cargo",
-            "+1.95.0",
-            "test",
-            "--locked",
-            "-p",
-            "marty-issuance-service",
-            "--lib",
-            "-j",
-            "1",
-            "credential_builder::tests",
-            "--",
-            "--ignored",
-        ],
-        cwd=ROOT / "rust",
-        env=environment,
-        timeout=300,
-        check=False,
-    )
-    if result.returncode:
-        raise RuntimeError("Rust credential builder live-KMS proof failed")
+    for target in ("credential_builder::tests", "canvas_readiness_runtime::tests"):
+        result = subprocess.run(
+            [
+                "cargo",
+                "+1.95.0",
+                "test",
+                "--locked",
+                "-p",
+                "marty-issuance-service",
+                "--lib",
+                "-j",
+                "1",
+                target,
+                "--",
+                "--ignored",
+            ],
+            cwd=ROOT / "rust",
+            env=environment,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"Rust {target} live-KMS proof failed")
 
 
 def run() -> None:
@@ -416,7 +417,7 @@ def run() -> None:
             root = read_volume_file(state, "root.token")
             unseal = read_volume_file(state, "unseal.key")
             token = read_volume_file(runtime, "signing_keys_openbao_token")
-            live_credential_builder_phase(bao_url, token)
+            live_issuance_signing_phase(bao_url, token)
             init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
             if unseal != init_material["unseal_keys_b64"][0]:
                 raise RuntimeError(

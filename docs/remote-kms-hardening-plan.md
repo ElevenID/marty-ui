@@ -84,6 +84,17 @@ passed in the disposable probe, then the Rust/PostgreSQL/Raft restore passed.
 The normal credential-builder selection passed five tests with four live tests
 explicitly run by the probe. Rust formatting and source diff checks passed;
 hosted CI and exact release artifacts remain unqualified.
+2026-10-07 readiness test-custody resolution: the three positive/negative
+readiness challenge tests no longer create local RSA private keys or sign in
+Rust. Their shared test fixture creates scoped, non-exportable RSA keys in the
+disposable OpenBao cluster, reads public JWKs, and signs fresh random LTI and
+DID challenges remotely. The published-key positive check, duplicate/private
+metadata rejection and missing DID assertion-method rejection all passed in
+the same live probe as the four credential formats and coordinated
+PostgreSQL/Raft restore. The ordinary readiness unit selection passed four
+tests; its three live cases are explicitly run by the probe in the OpenBao CI
+job. Rust formatting, Ruff and diff checks passed. Hosted CI and exact
+artifact qualification remain pending.
 
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
