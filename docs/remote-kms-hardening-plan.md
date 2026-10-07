@@ -109,9 +109,28 @@ passed. A follow-up live run also imported a second certificate only when its
 reference and public key matched the active OpenBao-backed CSCA profile, then
 revoked that disposable copy. Seven lifecycle tests and 128 signing-keys library tests passed;
 targeted Clippy with `-D warnings`, rustfmt and diff checks passed. Both
-disposable services were removed. The internal route's successful managed
-renewal path and key-rotation race remain to be qualified; these edits
-are not yet committed as part of the grouped UI feature work.
+disposable services were removed. A further disposable OpenBao/Redis run
+issued a second CSCA certificate through the same Transit-held key: internal
+renewal accepted it with `reuse_key=true`, rejected it with `reuse_key=false`,
+and preserved renewal lineage. After rotating the CSCA Transit key, internal
+import rejected the stale certificate/public key and persisted no record.
+This proves sequential rotation rejection, not an atomic concurrent rotation
+race across profile lookup, provider read and lifecycle save. These code
+edits are not yet committed as part of the grouped UI feature work.
+The enrollment, internal import and internal renewal routes now acquire the
+tenant rotation lease and save with the existing lifecycle CAS that verifies
+both lease ownership and the issuer-profile revision. A live disposable
+OpenBao/Redis acceptance held that lease: internal import returned 409 and
+persisted nothing; after explicit release, the same managed import succeeded.
+The first Redis route run after adding leases returned a transient 409 on the
+next sequential request because the lease `Drop` releases asynchronously.
+The routes now await explicit release on success and error; both Redis tests,
+the full live passport chain and 128 signing-keys library tests passed again.
+Targeted signing-keys and cross-service acceptance Clippy passed with
+`-D warnings`; formatting and diff checks passed. The lease prevents
+application-controlled profile rotation from interleaving a certificate
+commit; an administrator rotating an OpenBao key directly outside the service
+remains outside that lock and still needs operational restriction/qualification.
 
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
