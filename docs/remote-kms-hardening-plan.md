@@ -14,8 +14,8 @@ Complete remote key custody throughout the migrated Rust issuer and verifier
 services, their cryptographic dependencies, supported interfaces, and shipping
 artifacts. Remove production access to long-lived credential private-key
 generation, import, export, retention, and local signing. Complete remote
-DIDComm authcrypt custody and integration-secret master-key custody while
-preserving supported behavior and existing encrypted data.
+DIDComm authcrypt custody and integration-secret master-key custody. There are
+no public deployments and no old-data or backwards-compatibility requirement.
 
 The user resumed this work on 2026-10-07 and requested large feature PRs to reduce
 CI/CD cost, self-review for regressions and feature loss, security and general
@@ -42,6 +42,165 @@ for verification tests. Keep private-key operations only in separately justified
 wallet/product or cryptographic conformance boundaries. Preserve the acceptance
 assertions and real protocol behavior while changing how inputs are produced.
 
+Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
+retain a legacy private-key unwrap, local cryptography fallback, private-key
+import endpoint, compatibility adapter, or test fixture that restores those
+capabilities. The planned KMS extension is Go because OpenBao's plugin SDK is
+Go; the Rust services call it through scoped, versioned remote operations.
+Existing local beta/self-host data may be discarded at cutover. Historical
+migration experiments below document evidence only and are superseded as release
+work. Fail closed on old ciphertext/Flow rows. Do not alter running stacks while
+changing the candidate source; qualify a clean KMS-only deployment instead.
+The release plan does not include a compatibility window, data migration,
+legacy read path, or fallback switch. Remove obsolete adapters and test fixtures
+instead of retaining them behind a feature flag. A release rollback may restore
+an earlier artifact only outside the KMS-only acceptance boundary; it must not
+silently restore local private-key custody in the qualified deployment.
+
+2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
+tracked on this branch in commit `7605fdf7d`. It provides remote X25519
+DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
+corrupt stored X25519 version could pair the wrong public and private values;
+the shared version loader now derives and checks the public key before read or
+pack, and negative storage-corruption tests cover both operations. A local
+candidate image built successfully, running the Go tests and `go vet` in its
+Dockerfile; its mounted plugin binary SHA-256 is
+`c127dbf6ecb402b475cc641e3be77b7d9fdbfd27302441ddb27b4aa5a7a4f307`.
+`TestHaipScopedLiveOpenBao` passed against a disposable OpenBao 2.5.5 server
+using that image and scoped workload policy. This is local source and plugin
+behavior evidence, not a published or attested image. Review must still
+resolve multi-writer version-pointer behavior before claiming HA safety, and
+qualify the full Rust deployment and exact release artifact. No fallback or
+legacy import is part of the release path.
+Follow-up commit `9eaf94a44` makes HAIP key-version and current-pointer writes
+one OpenBao storage transaction, matching X25519 creation/rotation. The
+rebuilt local image passed `go test ./...` and `go vet ./...`; multi-node
+concurrency and rollback-on-storage-failure still need direct qualification.
+
+2026-10-07 current checkpoint: the Credentials feature branch now rejects
+the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
+Rust, and removes Python local-X25519 authcrypt and its private-key tests.
+Python integration-secret repository writes/reads now use the Rust
+signing-keys service's purpose-bound remote envelope API; old AES envelopes
+and raw master-key configuration fail closed. The self-host production compose
+candidate removes the Python issuance raw-key mount and uses the healthy
+native owner. Base compose, self-host/Kubernetes deployment catalogs,
+Kubernetes issuance secret binding and deploy script no longer distribute the
+raw key; the Kubernetes native URL now points to the native service. Focused
+Credentials boundary tests passed (80); adjacent Canvas LTI/worker/management
+tests passed (79); the self-host model check and Kubernetes tests (52) passed.
+These are source and local contract results, not an exact-image or live KMS
+acceptance. Credentials now defaults Python gRPC off and rejects explicit enablement before
+database startup. Python startup also performs a remote envelope round trip
+before opening its database engine; self-host and Kubernetes issuance call
+signing-keys directly to avoid a gateway readiness cycle (48 focused startup
+and envelope tests passed). Kubernetes deployment now refuses a
+disabled native selector and directs Flow RPC to Rust. Its Python deployment
+tests passed (238), and the Rust release-evidence suite passed 12 of 13
+tests; the remaining test requires `envsubst`, unavailable in this Windows
+environment. The Python gRPC adapter and its Python-only RPC tests are now
+removed; the generated protocol inventory remains, and the native Rust service
+implements all twelve methods. Remaining K4/K7 work includes purging obsolete
+conformance and historical fixtures; proving Python startup fails closed when
+remote custody is unavailable against the live signing route; and qualifying
+Rust and Python consumers against one clean KMS-backed database. Do not ship the
+candidate compose independently of the Credentials branch.
+Credentials committed this candidate as `ca0eede`, `a73c79d`, `aad4b48` and
+`031308e` on
+`security/remote-kms-retirement-20261007`; no PR or release artifact exists.
+The Rust gRPC listener now rejects requests when no service token is
+configured, and startup requires a non-placeholder token of at least 32
+characters whenever gRPC is enabled, including development and test modes.
+Focused Rust gRPC/config tests passed (11/40), and retained Python
+issuance-surface tests passed (78). The full Python issuance-change suite
+passed (122, with 21 skips) using the pinned Core `marty_rs` 0.2.0 Windows
+wheel; its SHA-256 matched `release/dependencies.json` exactly
+(`1fd8e4985a7d92ee14336ed98ececd597ba3aa2d275ca969b8fc358358da7967`).
+The earlier eight SD-JWT/JWT-VC signature failures came from an older local
+artifact. Building Credentials' own locked production-feature binding wheel
+also succeeded, but that binding intentionally lacks current evidence-policy
+capabilities and is only suitable for its narrower compatibility-boundary
+checks, not the full issuance service suite. Artifact directories were kept
+outside the source worktrees.
+The six focused Credentials contract suites also passed (78) against the
+pinned Core wheel. Credentials' local binding production-surface test passed
+against its freshly built local wheel; that test is specific to the local
+binding API and cannot be applied unchanged to Core 0.2.0, which has a
+different remote-preparation API.
+An exported-name inspection of the pinned Core Windows wheel found remote
+credential preparation and signature-verification functions, but no
+`generate_*_key`, local issuer-signing, or private-key import/export function.
+This is a Python export check only, not production graph or binary proof.
+The current Go DIDComm plugin Dockerfile built locally from this source head,
+running `go test ./...` and `go vet ./...` in its build stage. The local image
+was `sha256:cad95535474a601ca1ae22d86a13463536dac507666b4b31a4ee553be24085bd`
+(83,321,705 bytes), with plugin binary SHA-256
+`31c4432bfc4728a5f5cc85feb1546c9a6697488a76910eb1bf3e3905ed6b96a6`.
+An isolated OpenBao 2.5.5 dev container registered that binary and mounted
+the plugin. `cargo +1.95 test -p marty-issuance-service --test
+didcomm_remote_kms_live --locked --offline -j2 -- --ignored --nocapture`
+passed its live authcrypt test: OpenBao generated the issuer X25519 key, the
+Rust sender packed through a scoped versioned reference after key rotation,
+and the independent holder key decrypted and authenticated the sender. The
+disposable container was removed; the running beta stack was untouched. This
+proves this local source and image combination, not a published digest,
+production deployment, or all K3 retry/recovery cases.
+The native workspace `cargo +1.95 check --workspace --locked --offline -j2`
+initially exposed Trust Profile's direct access to `DidDocument`'s now-private
+`assertion_method` field. Trust Profile and Verification now use Core's
+validated `assertion_methods()` / `set_assertion_methods()` interface,
+including their test fixtures. The full workspace check passed after that
+correction. The first check on C: was interrupted by disk exhaustion; the
+successful check used a fresh non-incremental Cargo target and temp directory
+on D:. This validates source compilation, not tests or release images.
+The Trust Profile and Verification focused unit suites subsequently passed
+(3 and 4 tests). Trust Profile's old fixture attempted to construct a DID JWK
+with a private `d` member; the hardened Core type no longer exposes that
+field. The replacement negative test verifies that a DID document containing
+`d` fails deserialization, while positive fixtures use the validated public
+constructors. This retains the rejection assertion without keeping a local
+issuer private key in the test object.
+An isolated OpenBao 2.5.5 dev container then held a Transit
+`aes256-gcm96` integration-secret key with `exportable=false` and
+`allow_plaintext_backup=false`. The current Signing Keys live test
+`cargo +1.95 test -p marty-signing-keys --test
+integration_secret_envelope_live_kms --locked --offline -j2 -- --ignored
+--nocapture` passed against it. Remote encryption/decryption survived key
+rotation, wrong tenant and purpose were rejected, and altered ciphertext
+failed. The disposable container was removed. This proves the remote envelope
+primitive on the current source; it does not by itself prove mixed consumers,
+a clean database, service startup, or packaged release artifacts.
+The mixed-consumer local acceptance now uses a real Signing Keys service
+binary from this source head, disposable OpenBao 2.5.5 Transit
+(`exportable=false`, `allow_plaintext_backup=false`), Redis and PostgreSQL 16.
+The Rust PostgreSQL Canvas OAuth contract passed with an explicit opt-in URL
+for the real Signing Keys route. Credentials' Python remote transport passed
+its live startup round trip, then Python read Rust's persisted secret and wrote
+a second remote envelope into the same clean database. A new opt-in Rust
+cross-read passed: Rust's `verify_storage` startup scan accepted both rows,
+decrypted the Python-written row, and hid it from a different tenant. Python
+also confirmed its stored row contains a versioned Vault ciphertext and no
+plaintext. The normal Rust contract still uses its keyless synthetic remote
+server unless the live URL and API key are explicitly configured. The test
+service was stopped and all three disposable containers were removed; the
+running beta stack was untouched. This proves local source-level Rust/Python
+database interoperability, not packaged service images, Redis/OpenBao storage
+recovery, or release cutover.
+The existing `scripts/test_openbao_file_recovery.ps1` was rerun against this
+source head and passed. It cold-copied the self-host file-storage backend
+after stopping OpenBao, unsealed a restored instance, and decrypted a
+pre-snapshot ciphertext under a non-exportable Transit key. Its disposable
+containers and volumes were removed. This proves local OpenBao storage
+recovery; coordinated PostgreSQL/OpenBao restoration, off-host backup, and
+exact packaged-image recovery are still unqualified.
+Credentials still has issuer-private-key generation/export in the older BDD
+steps (`tests/features/steps/credential_steps.py` and
+`sd_jwt_conformance_steps.py`), and its binding CI still builds the
+`local-key-operations` opt-in wheel for legacy tests. These are explicit K7
+retirement items: replace issuer fixtures with remote KMS or public signed
+vectors, preserve their useful assertions, then remove the opt-in issuer
+surface and its CI lane. Holder/tool-key tests need separate classification.
+
 ## Verified starting point
 
 The investigation refreshed origin refs and inspected source and PR history on
@@ -53,7 +212,7 @@ The investigation refreshed origin refs and inspected source and PR history on
 | Native services | UI main `d2dcd0630` pins most Core crates to compatibility 0.1.62 at `bdbd1510`. Its ECDSA surface still exports local key generation and signing. The lockfile also contains 0.2.0 crypto through passport SOD issuance; this does not remove 0.1.62. |
 | Credential issuance | Native JWT-VC, SD-JWT, and mdoc builders already prepare, remotely sign, and assemble. Preserve and migrate these seams. |
 | DIDComm | Native issuance still parses `sender_x25519_private_key` and retains private bytes in prepared authcrypt state. `DIDCOMM-KMS-001` remains unimplemented. |
-| Integration secrets | Native `IntegrationSecretCipher` holds a raw 32-byte AES key. Credentials pins canonical marty-rs 0.2.0 but retains verification wheel 0.1.60. `INTEGRATION-SECRET-KMS-001` requires compatible data migration. |
+| Integration secrets | Native `IntegrationSecretCipher` holds a raw 32-byte AES key. Credentials pins canonical marty-rs 0.2.0 but retains verification wheel 0.1.60. The final cutover rejects old ciphertext and qualifies clean KMS-only storage. |
 | BYOK | The old adapter sends `private_key_pem`; the retained patch changes it to `key_reference`. No matching authenticated backend contract or active UI caller was established in the prior audit. Do not infer deployed exploitability or invent an endpoint. |
 | Test isolation | Native qualification code includes local-signing fixtures and old authority features. Identify production build roots and isolate fixtures before updating pins. |
 
@@ -79,8 +238,8 @@ dependencies require separate PRs; a single PR cannot span repositories.
 | Group | Scope | Landing dependency |
 | --- | --- | --- |
 | Core feature PR, if needed | Shared remote envelope/storage contracts and cryptographic boundaries, missing canonical APIs, fixture support, compile-fail enforcement, documentation and self-review corrections. | Backend feasibility and consumer contract tests demonstrated first. Preserve current consumers where safe; never restore forbidden production APIs. |
-| UI native hardening feature PR | Hardened Core adoption across service roots, DIDComm remote custody, integration-secret migration, supported BYOK wiring, test isolation, dependency/artifact guards and acceptance evidence. This tracker belongs here. | Exact reviewed Core revision and proven remote backend capabilities. |
-| Credentials compatibility retirement feature PR | Remove obsolete compatibility custody paths and pins once their native replacements and data reads are qualified; preserve required rollback behavior without private-key fallback. | Qualified native service artifacts and supported routing/cutover evidence. |
+| UI native hardening feature PR | Hardened Core adoption across service roots, DIDComm remote custody, opaque integration-secret custody, supported BYOK wiring, test isolation, dependency/artifact guards and acceptance evidence. This tracker belongs here. | Exact reviewed Core revision and proven remote backend capabilities. |
+| Credentials compatibility retirement feature PR | Remove obsolete compatibility custody paths, pins, adapters and private-key test fixtures; route supported operations to native owners. | Qualified native service artifacts and routing/cutover evidence. |
 | Integration acceptance feature PR | Migrate the production-image positive verifier probe to a qualified external fixture or separate acceptance artifact while preserving actual shipped verifier execution and assertions. | Coordinated UI packaging change; the existing caller executes the probe inside the published service image. |
 | Dependency fork PRs, only if necessary | Narrow missing cryptographic capability separation that cannot be achieved at existing owners. | Demonstrated production graph gap; ElevenID forks only. No upstream disclosure or publication is implied. |
 
@@ -98,14 +257,14 @@ safety provides a concrete reason, and record that reason here.
 | ID | Work and exit evidence | Status |
 | --- | --- | --- |
 | K1 | Reconcile preserved branches; map every supported production binary, image, wheel, Cargo root and release pin; enumerate current signing/encryption paths and explicit secret-class exceptions. | In progress |
-| K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; pinned OpenBao rejects X25519 creation |
-| K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust remote client and issuance seam compile, live route qualification pending |
-| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; synthetic migration, database recovery, native process restart/rotation and binding rejection passed; packaged image and OpenBao restore acceptance pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; candidate 0.2 pins compile signing-keys, issuance and Flow with explicit temporary compatibility edges; workspace/test matrix pending |
+| K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof; published image and production scope remain unqualified |
+| K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned live authcrypt and rotation proof passed; full service/retry/recovery and release deployment qualification pending |
+| K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and local cold OpenBao storage restore passed; coordinated database/KMS restore, packaged image and cutover qualification remain pending |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; candidate 0.2 pins compile signing-keys, issuance and Flow; Flow's old verification edge is now removed and its package graph contains no marty-crypto 0.1.62; workspace/test matrix pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
-| K7 | Reconcile Credentials compatibility retirement with native owner selection, published artifacts and encrypted-data readability; remove obsolete raw-key adapters and wheel requirements where qualified. | In progress; preserved boundary commits ported to current main in a fresh Credentials branch, production/local opt-in builds and targeted Python tests passed; published artifact and native cutover still pending |
-| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | Pending |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts and supported cutover/rollback; update durable evidence and close the goal only after acceptance below. | Pending |
+| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
+| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; the Rust lint job now checks the locked Marty Core/isomdl feature graph, while forbidden-API, binding, exact-artifact and self-review gates remain |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | Pending |
 
 ### First execution steps
 
@@ -114,8 +273,8 @@ safety provides a concrete reason, and record that reason here.
 2. Trace supported KMS provider operations and native DIDComm interfaces to
    resolve K2. Signing or wrap/unwrap APIs are not proof of non-exportable
    X25519 support. A reference that eventually exports a private key fails.
-3. Inventory integration-secret ciphertext versions and repository transactions
-   before choosing K4 migration mechanics. Use synthetic data for local testing.
+3. Remove raw integration-secret key startup and legacy read/write capabilities;
+   qualify remote-only initialization, repository transactions and clean data.
 4. Record concrete API contracts and failing regression probes, then implement
    cohesive Rust changes locally across isolated repository worktrees.
 
@@ -127,7 +286,7 @@ after material corrections. Record findings, fixes and evidence for each pass.
 - Regression and feature preservation: compare against the supported behavior
   inventory and frozen contracts. Cover credential formats, DIDComm anoncrypt
   and real authcrypt, sender authentication, recipient decryption, retries,
-  routing, certificates, sessions, wallet interactions and old ciphertext reads.
+  routing, certificates, sessions and wallet interactions on new KMS-only data.
   No silent fallback to legacy owners, anoncrypt, plaintext or local signing.
 - Security: inspect tenant and purpose authorization, key reference ownership,
   public-key/certificate binding, exact payload/signature binding, memory/config
@@ -163,8 +322,8 @@ capability where feasible and record any unresolved acceptance limitation.
 - Credential signing and long-lived DIDComm sender-key operations use remote,
   non-exportable custody; application configuration and memory contain references
   rather than those private keys. No fallback restores local custody.
-- Integration-secret master-key custody is opaque and remote; existing data is
-  readable through a qualified migration with tested rotation and recovery.
+- Integration-secret master-key custody is opaque and remote; old ciphertext is
+  rejected, with tested rotation and recovery for new remote envelopes.
 - BYOK interfaces accept public certificates and authorized remote references,
   reject private material server-side, and preserve supported onboarding.
 - TLS, ephemeral session and intentional wallet/device behavior remain supported
@@ -172,7 +331,7 @@ capability where feasible and record any unresolved acceptance limitation.
 - Regression, security and quality self-reviews have no unresolved required
   corrections; production graph/API/artifact and real backend acceptance pass.
 - Grouped feature PRs are merged through required protections, exact release
-  artifacts and supported cutover/rollback are qualified, and this tracker links
+  artifacts and clean KMS-only cutover/recovery are qualified, and this tracker links
   the evidence. Any external access or deployment prerequisite still missing is
   recorded as unfinished work, not treated as acceptance.
 
@@ -183,6 +342,79 @@ to live key policies, key deletion or irreversible data migration require their
 specific operational context; prepare a concrete reviewed operation first.
 
 ## Evidence and progress log
+
+2026-10-07 K6/K8 public-input self-review finding: the signing-key service's
+shared private-material check rejected ordinary private JWK objects and PEM
+markers, but accepted `privateKeyJwk`/`privateKeyMultibase` named values and
+JSON-encoded JWKs in metadata strings. The candidate now rejects those forms
+before registry normalization, while retaining public JWKs and opaque remote
+references. Two focused detector tests and the actual registry rejection test
+passed; the signing-key service library suite passed 127 tests (seven ignored),
+targeted Clippy passed with warnings denied, and package formatting passed.
+UI branch commit: `da0d19afc`. This closes an input rejection gap, not the
+full BYOK or artifact acceptance gate.
+The same review found `normalize_legacy_registry` in the Rust signing-key
+service and `createLegacyServiceFromConfig` in the UI still translate the old
+flat `hsm_settings` shape. These are unnecessary compatibility paths under the
+KMS-only decision. The follow-up candidate removes both translators and the
+old HSM/Vault fields from the public config document and UI normalized model.
+Requested and stored Rust registries now reject flat HSM/Vault fields rather
+than silently translating or clearing them. The modern `services` array,
+default selection and remote references remain. Focused Rust rejection passed;
+the signing-key library suite passed 128 tests (seven ignored). Four UI test
+files passed 24 tests, including current service wizard/page behavior and the
+gateway contract; targeted ESLint passed. Integration-target compile and
+Clippy with warnings denied passed, as did package formatting and the changed
+live-contract target's compilation. The changed public config HTTP contract
+passed against a fresh disposable Redis database with a verified sentinel;
+it rejected the old flat `hsm_enabled` payload without losing managed KMS
+purpose bindings. The neighboring public signing contract passed against
+fresh disposable Redis and pinned OpenBao 2.5.5: it signed through a remote
+registered key and rejected unbound selection, cross-tenant scope and private
+key input. Both containers were removed after the runs. No legacy Redis data
+is migrated, consistent with the no-public-deployment decision; exact
+artifacts are not yet qualified.
+
+The beta organization console audit still required the removed `hsm_enabled`
+response field. It now selects a service by `default_service_id` from the
+current `services` array, rejects missing/disabled selections, and records the
+selected service in its inventory. Its release-check module passed 29 tests.
+UI branch commit: `7185fa1b2`. This updates the audit source only; it does not
+claim a beta deployment of the candidate.
+
+2026-10-07 KMS-only scope correction: the maintainer confirmed there are no
+public deployments and authorized dropping fallback, old behavior and old-data
+compatibility. The HAIP read-only inventory, import, offline migrator and
+synthetic migration proofs recorded later in this log are historical research,
+not release requirements. The candidate now removes the HAIP private-JWK
+import path from the Go OpenBao plugin, UUID `kid` acceptance, Flow's private
+JWK unwrap/decrypt branch, generic Flow envelope routes and gateway forwarding,
+and the old Core verification compatibility dependency. It also removes the
+integration-secret offline migrator and feature-gated local AES cipher. The
+new invariant is KMS-generated scoped HAIP keys with remote decrypt only,
+plus remote-only integration-secret startup and rejection of old ciphertext.
+Flow request/submission tests passed (18), OID4VP contract tests passed (20),
+and the candidate Go plugin Docker build passed Go unit tests and vet. A wider
+Rust compile and route-contract review are in progress. No live service or
+database was changed.
+
+Follow-up qualification on the same candidate: `cargo check --offline` passed
+for Flow, Signing Keys, gateway and Issuance; Flow request/start/retrieval/
+submission tests passed (25, including rejection of an old envelope alone or
+alongside a remote reference). The Go plugin was rebuilt after adding a test
+that its private-JWK import route is unavailable; Go tests and vet passed.
+Signing Keys' remote HAIP unit tests passed (2), gateway's signing route
+contract and retired-route 404 tests passed, the public protocol contract
+checker passed, and CI planner/workflow tests passed (150 tests, 188 subtests).
+HAIP HTTP tests compiled and returned success but their live branches require
+disposable PostgreSQL and holder input; they do not constitute a fresh live
+remote proof for this exact source head. Remaining: remove the Python issuance
+service/raw master-key deployment path and old Credentials adapters, qualify
+the exact KMS-only image through disposable service/wallet/database flows, then
+self-review and land the grouped feature PRs.
+Credentials' DIDComm and integration-secret deferred-work notes now record this
+decision on `security/remote-kms-retirement-20261007` at `dcb34ed`; the
+runtime removal work there is still pending.
 
 ### Public verifier input implementation checkpoint
 
@@ -263,9 +495,10 @@ release/wheel ownership, standalone products, and per-root feature resolution.
 Integration-secret raw-key consumers include issuance startup, the Canvas sync
 worker and `canvas_oauth_postgres.rs`. The existing envelope is base64 of a
 12-byte nonce followed by AES-GCM ciphertext and tag, with no tenant/purpose AAD
-in the inspected implementation. Preserve reads during migration and bind new
-envelopes to repository identity and purpose. Import/rewrap compatibility is
-still unproven; never assume an OpenBao ciphertext prefix supplies that proof.
+in the inspected implementation. Bind new envelopes to repository identity
+and purpose, and reject old envelopes at cutover. Earlier import/rewrap
+experiments are historical; never assume an OpenBao ciphertext prefix supplies
+tenant or purpose binding.
 
 ### Isolated provider capability evidence
 
@@ -963,8 +1196,8 @@ compiled, and its tampered-ciphertext regression passed against a disposable
 PostgreSQL 16 container; the container was removed. This is migration preparation,
 not opaque custody yet. New ciphertext must carry an explicit version and bind
 organization, secret ID, provider and purpose; production must not retain a
-legacy raw-key read fallback. Legacy reads need an explicit qualified migration
-and recovery window before raw-key configuration is retired.
+legacy raw-key read fallback. The final KMS-only cutover rejects legacy reads;
+the earlier migration/recovery experiments here are historical only.
 
 2026-10-07 hardened Core dependency checkpoint: the Rust workspace now pins
 `marty-didcomm` 0.2.0 at Core revision `a5cb567` with `kms-only` enabled and
@@ -1603,7 +1836,7 @@ consistent; a cutover audit still requires Flow writers to be stopped so new
 rows cannot appear after its snapshot.
 
 2026-10-07 plugin artifact CI checkpoint: the checked-in OpenBao plugin
-Dockerfile now runs `go test ./...` and `go vet ./...` before compiling the
+Dockerfile now runs `CGO_ENABLED=0 go test ./...` and `go vet ./...` before compiling the
 binary. The repository CI classifies plugin source and OpenBao policy changes
 into a dedicated image-build lane, requires that lane through `ci-gate`, and
 keeps it skipped for unrelated Rust-only PRs; merge-queue/full runs include
@@ -1611,11 +1844,274 @@ it. The new lane builds the pinned Go/OpenBao image and checks that the final
 image contains an executable plugin. Local classifier/gate contract tests
 passed (124), neighboring CI contract tests passed (58), and a local Docker
 build ran the Go tests and vet successfully. The final local image was
-`sha256:277adb34c28a5fbc7d19bdda332ddaffd2ba41dd6a79fe6a5929f1091cc9b2d1`
+`sha256:b7ce87b0e8d44f51aa89a55e284f702cb0ab766dd5f2f43c296e686a1e2ce411`
 (83,328,215 bytes); its executable check passed. This local image is neither
 published nor attested and does not replace the exact release artifact,
 live KMS/wallet acceptance, or the stack release transaction. The plugin
 release/promotion route remains to be designed and qualified.
+
+2026-10-07 Credentials hardened-Core port checkpoint: the Credentials branch
+workspace dependencies and lockfile now resolve all six Core crates at reviewed
+revision `a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7` / 0.2.0 and `isomdl`
+0.3.0 at `784a5294`. Cargo metadata shows `kms-only` on crypto, OID4VCI and
+verification, with no Core default/local-key or isomdl local-signing feature.
+`cargo +1.95 check --locked --offline --no-default-features --features native`
+passed. The Python check initially exposed a missing verification-only BBS
+feature; after selecting `bbs-verification`, the Python check passed. These
+are compile checks, not wheel or runtime proof. The candidate removes the
+three local-key opt-in features and their CI builds, deletes a private-key
+SD-JWT test fixture, and moves remaining public-only binding contracts into
+the production wheel test. A new Credentials CI metadata guard pins the six
+Core crates and isomdl to reviewed revisions and rejects restored local-key
+features; the actual graph passed and four negative mutations were rejected.
+The subsequent source cleanup removed dead private-key Python and WASM
+bindings, the orphaned local eMRTD issuance module, and local-key SD-JWT,
+OID4VCI and browser issuance tests. The Python library and all-targets checks
+passed without the earlier unexpected-`cfg` warnings; Rust formatting passed.
+The deleted SD-JWT wire-format and proof-binding tests need public signed
+vectors or remote signer acceptance replacements before feature-loss review
+can close. Prefer the [RFC 9901 SD-JWT examples](https://www.rfc-editor.org/rfc/rfc9901)
+for checked-in public signed vectors; the deleted test named RFC 9449, which
+is not the finalized SD-JWT RFC. The published verification wheel is still the old 0.1.60 artifact
+and must be replaced before K7 acceptance.
+After the cleanup, `cargo +1.95 fmt --all -- --check`, both native and Python
+`cargo check --locked --offline --all-targets` feature sets, and the compiled
+PyO3 `production_module_excludes_private_key_operations` test passed on the
+Credentials branch. The binding test exercised the actual registered module
+and verified public exports remain. This does not qualify its release wheel.
+Credentials CI and warm-cache workflows now build both Core wheels from one
+reviewed Core checkout with `kms-only` selected on both; the verification
+wheel export check rejects generic secret-byte and removed local-issuance
+functions. The focused workflow contract test for these build inputs passed.
+The hardened Core verification wheel's selected `python,kms-only,iaca,csca,eudi`
+feature set passed a locked offline Cargo check in the Core worktree. A local
+Windows `marty_verification_py-0.2.0-cp311-abi3-win_amd64.whl` then built from
+that feature set. Importing the wheel confirmed `p256_public_jwk_to_pem` and
+`open_badge_ob3_verify` are callable, and `aes_gcm_encrypt`,
+`aes_gcm_decrypt`, `generate_random_bytes`, `open_badge_ob2_issue`, and
+`open_badge_ob3_issue` are absent. This is local candidate evidence, not
+published-artifact qualification or a publishable manifest hash.
+The strengthened release-dependency contract intentionally failed because
+`release/dependencies.json` still pins the old `marty-rs` and verification
+wheel commits; exact hardened wheel publishing and SHA-256 pin updates are
+required before that gate can pass.
+A local Credentials `_marty_rs` 0.1.78 Windows wheel also built from the
+candidate `python` feature set after the dead binding cleanup. Importing that
+wheel confirmed remote mDoc prepare/complete, SD-JWT verification and BBS
+verification exports remain callable, while local issuer-key generation,
+local VC/mDoc issuance and DIDComm private-key operations are absent. This
+candidate is distinct from the Core `marty-rs` wheel and does not qualify
+the published release artifact.
+Six compiled Python boundary tests passed with those two locally built wheels
+installed together. After retiring the legacy Python issuer adapter and Behave
+harness, 33 focused Credentials unit/workflow tests passed; the one release
+dependency pin contract was deliberately excluded because the published
+manifest still names the old Core artifacts. `git diff --check`, Rust
+formatting, and workflow YAML parsing passed on the candidate branches.
+The WASM target check could not complete on this Windows host because the
+`ring` build requires `clang`, which is not installed here; it remains a CI
+qualification item. The existing release-workflow contract still asserts the
+old transitional Core pin and must be updated alongside the release artifact.
+
+The dormant Python `adapters/services/issuance_service.py` generated local
+issuer JWKs and signed W3C VC, SD-JWT, mDoc and Open Badge credentials.
+Credentials now removes that adapter, `examples/local_key_usage.py`, the
+private-key-dependent Behave suite under `tests/features`, and its manual
+Makefile conformance targets. The service boundary test now asserts the
+adapter and example are absent. The removed Behave scenarios were not in the
+current GitHub CI workflow, but they covered SD-JWT disclosure encoding,
+hashes, selective presentations and tamper detection; W3C VC 2.0 structure
+and JWT tamper detection; Open Badges 3.0 structure and trust; issuance and
+verification for W3C VC, SD-JWT, mDoc and Open Badges; credential lifecycle,
+OID4VP, and ZK predicate behavior. Before K7 acceptance, map each useful
+assertion to existing Rust tests or replace it with public signed vectors and
+remote-KMS acceptance tests. Keep external-client signature verification
+coverage; its source should be public fixed vectors or an opaque test signer,
+not service-owned private keys.
+Core's current test suite is not yet clean by that standard: for example,
+`marty-verification/tests/open_badges_conformance.rs` generates Ed25519 issuer
+JWKs and issues locally. Its structural assertions are useful; port them to
+remote prepare/assemble behavior or public signed fixtures before claiming
+test-side private-key retirement. Keep client-auth and wallet tests explicitly
+classified, then replace local test signing where it merely supplies
+verification input. `marty-oid4vci` and `marty-verification` set
+`autotests = false`, but `src/lib.rs` explicitly imports many unregistered
+`tests/*.rs` files as crate-internal tests. They were active in library test
+runs, not dormant. The remaining imported local-signing BYOK, SD-JWT and Open
+Badges cases require classification and replacement.
+
+The Core branch now removes locally generated issuer `IssuerKey` use from
+`marty-oid4vci/tests/sd_jwt_structural_boundaries.rs` and
+`sd_jwt_managed_claim_boundaries.rs`, retaining validation,
+external-signer-spy and prepared-payload assertions. These files previously
+ran through `src/lib.rs` under the library's default/test feature graph. They
+are now Cargo test targets
+requiring `kms-only`, `issuer`, `sd_jwt`, and `mso_mdoc`, and Core CI invokes
+that exact feature set. All 16 tests passed locally with locked offline
+Cargo. The managed-claim test initially exposed that the remote signer path
+verifies signatures against the configured public key; its dummy spy is
+appropriate for pre-signing and negative checks, not a positive signed-token
+round trip. Positive assertions now inspect prepared claims and disclosures;
+valid remote-signer acceptance remains a separate required test. This narrows
+two test-side private-key paths; it is not evidence that all Core tests are
+cleaned up. Core branch commit: `80e97dd`; the follow-up removes their
+crate-internal inclusion to avoid running the same cases under default features.
+The next Core test-side audit found a higher-priority active path:
+`marty-oid4vci/tests/signing_payload_semantics.rs` is registered and builds a
+deterministic P-256 `SigningKey` inside a recording signer for JWT-VC and mDoc
+positive assembly checks. The crate-internal `byok_prepare_assemble.rs` also
+contained a private Ed25519 JWK and direct local-signing assertions. The active
+scalar tests prove exact signing bytes and raw signature forwarding; preserve
+those assertions using a real remote signer acceptance route before removing
+their local key. Core `jwt_vc.rs` also retains `#[cfg(test)]` `IssuerKey`
+signing code, so test-side retirement includes library unit-test paths, not
+only `tests/*.rs` files. Neither a dummy signature nor a skipped target proves
+positive issuance behavior.
+The Core candidate removes that BYOK private-key fixture and replaces it with
+an explicit KMS-only public-JWK JWT-VC preparation and bad-signature rejection
+target. Its old positive prepare/assemble equivalence is already partly covered
+by `signing_payload_semantics.rs` for ES256, but that active test still signs
+locally. The removed BYOK fixture used EdDSA; its positive remote JWT-VC
+round trip is not yet replaced, although public-only EdDSA preparation now runs
+in CI. Full feature-loss review needs positive live
+remote ES256 and EdDSA JWT-VC plus mDoc round trips.
+The removed BYOK fixture had been imported by `src/lib.rs`; that import is now
+removed, as are the two converted SD-JWT crate-internal imports. The two
+SD-JWT suites run only through their KMS-only integration targets. The default
+`marty-oid4vci --lib` suite passed after the change (317 passed, one ignored),
+and the new public-JWK JWT-VC boundary target passed its three cases. The
+default library suite still includes other local-key tests; this checkpoint
+does not qualify it as KMS-only. Core branch commit: `2aec67c`.
+
+2026-10-07 Core positive remote issuer proof: an opt-in Rust integration test
+now requires a disposable loopback OpenBao marker before it creates any key.
+It creates non-exportable ES256 and Ed25519 Transit keys, checks metadata,
+root-token export failure, cross-key ACL denial, and that a sign-scoped token
+cannot export a key, then signs JWT-VC with both
+algorithms and mDoc with ES256. Core's normal assembly verifies those remote
+signatures and the test checks the exact signed payload and signature bytes.
+The test passed locally against disposable OpenBao 2.5.5 pinned at
+`sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452`;
+the test container was removed. A CI script now provisions the same pinned
+image, marker and Transit mount before running the test, with cleanup on exit.
+Its provisioning path passed a local shell smoke; hosted CI has not run yet.
+The four focused KMS-only OID4VCI integration targets passed (21 tests), and
+the live target passed after the final cross-key and export checks. Targeted
+Clippy, Rust formatting, workflow YAML parsing, shell syntax and diff checks
+passed. The Core library suite also passed again after adding the live-test
+dependencies (317 passed, one ignored), and `cargo deny --locked --all-features
+check advisories --deny yanked` passed.
+The active `signing_payload_semantics.rs` test no longer constructs a local
+P-256 `SigningKey`; its two public-only prepared-payload borrowing assertions
+passed under `kms-only`. This closes the specific active local signer fixture
+identified above but does not clean all remaining Core `cfg(test)` signers or
+qualify production images and service routing. Core branch commit: `c2b54d7`.
+The same disposable OpenBao test now also issues SD-JWT with both ES256 and
+EdDSA, checks exact remote signing bytes and returned signature, and verifies
+selective disclosure with the public JWK. The extended test passed against the
+pinned disposable image; its container was removed. This proves a positive
+remote replacement for SD-JWT issuance. The older crate-internal Ed25519
+private-key conformance fixture still needs conversion without losing its
+protocol assertions. Hosted CI has not run for the extension yet. Core branch
+commit: `257f619`. The exact KMS-only test target compiled again after the
+final test-name change; targeted Clippy, formatting, shell syntax and diff
+checks passed.
+
+2026-10-07 Core issuer-test retirement checkpoint: the live OpenBao test now
+also rejects tampered SD-JWT signatures, a different Ed25519 public key, and
+an unbound SD-JWT presented with verifier audience/nonce. Both IETF and W3C
+SD-JWT forms issue and verify with the non-exportable ES256 and EdDSA keys.
+The former `issuer_key_algorithm_binding.rs` suite and the typed local-key
+admission test in `issuance_input.rs` were removed because they asserted
+direct signing from private JWKs, a capability outside the KMS-only target.
+New public-only `remote_jwt_vc_boundary.rs` tests retain rejection of
+algorithm, declared-algorithm, curve, key-ID, and private-member mismatches;
+they also check JWT-VC, SD-JWT and mDoc routes and a two-item batch fail
+before returning credentials when public signer metadata is contradictory.
+The KMS-only boundary target passed six tests, the live disposable OpenBao
+target passed after these negative checks, and the default OID4VCI library
+suite passed (308 passed, one ignored). Targeted Clippy, formatting and diff
+checks passed. Core branch commit: `b2ee7c4`. This removes the obsolete raw
+issuer-algorithm fixture; other crate-internal private-key tests, including
+`sd_jwt_vc_conformance.rs`, still need conversion. Hosted CI has not run at
+this head.
+
+2026-10-07 Core SD-JWT conformance retirement: `sd_jwt_vc_conformance.rs`
+no longer embeds the RFC Ed25519 private JWK or calls the test-only local
+`sign_sd_jwt` API. A KMS-only CI target now uses public `RemoteSignerMetadata`
+and `prepare_sd_jwt` to assert IETF identity, credential ID/JTI, W3C context,
+type and subject layout, disclosure shape, plaintext exclusion, salt/hash
+binding, and wrong-format rejection (six passed). Positive signed issuance and
+verification remain in the disposable OpenBao target; it now also proves zero
+and two disclosures with both ES256 and EdDSA and validates signed `jti` equals
+the returned credential ID. The final live test passed and its container was
+removed. Default OID4VCI library tests passed (289 passed, one ignored), and
+the KMS-only issuer library graph passed (270 passed, one ignored). Targeted
+Clippy, formatting, CI YAML parsing and diff checks passed. Core branch commit:
+`75dbd57`. The lower default-library test count reflects moving conformance
+coverage to its explicit KMS-only integration target and live backend test;
+it is not a claim that all private-key tests are retired. Hosted CI and exact
+release artifact qualification remain pending.
+
+2026-10-07 Core JWT-VC local-path reduction: removed the duplicated
+`cfg(test)` `sign_jwt_vc(IssuerKey, ...)` implementation, its generated private
+`did:jwk` test keys, the unused `PreparedJwtVc::from_signing_input` test-only
+reconstruction helper, and `jose::sign_compact_jwt` with its private-key
+fixture. JWT-VC unit assertions now use public-only signer metadata and the
+canonical preparation path. The remaining test-only `formats::sign_credential`
+dispatcher calls `sign_credential_with_signer`, removing its second format
+dispatch implementation; its `IssuerKey` signer and other crate-internal
+local-key tests are still a retirement task. The disposable OpenBao test now
+passes both ES256 and EdDSA JWT-VC through Core's public JOSE verifier and
+rejects a mismatched expected algorithm. Its fresh container was removed.
+Default library tests passed (288 passed, one ignored), no-default-feature
+library tests passed (113), and the KMS-only issuer feature library tests passed
+(269 passed, one ignored). Targeted live-test Clippy, formatting and diff
+checks passed. Core branch commit: `c61b113`. Hosted CI and exact release
+artifact qualification remain pending.
+
+2026-10-07 Core Open Badges verifier-fixture retirement: the
+`marty-verification/tests/open_badges_conformance.rs` suite no longer generates
+Ed25519 issuer keys or calls the test-only OB2/OB3 issuance APIs. Four signed
+OB2/OB3 vectors were minted once with disposable old test keys; only signed
+credentials and public JWKs were retained. A recursive audit of all vector
+JSON and the embedded `did:jwk` values found no private JWK members. The new
+KMS-only integration target verifies OB3 mandatory structure, proof, issuer,
+wrong-key rejection, image preservation and expiry rejection, plus OB2 hashed
+recipient privacy, correct identity and wrong-identity rejection. Its six
+tests passed. Adjacent default-library Open Badges tests passed (40), and
+targeted Clippy, formatting, CI YAML parsing and diff checks passed. Core
+branch commit: `f0b2af4`. The issuance functions in `marty-verification` are
+already `cfg(test)`; other private-key tests and test-only issuers remain and
+must still be retired. This is verifier-vector coverage, not a live KMS proof
+of linked-data proof issuance. Hosted CI and release artifacts remain pending.
+
+2026-10-07 Core Open Badges test-fixture retirement checkpoint: the remaining
+`open_badges_tests.rs` crate-internal suite has been replaced by public signed
+vectors in the KMS-only verifier conformance target. The 2018 and 2020
+Ed25519 verification-method formats retain positive verification coverage;
+missing document-store/method and unsigned legacy status-list negative cases
+retain their assertions. The two added method vectors were minted once with
+transient test keys and contain signed credentials and public verification
+methods only. No issuer key generation or local signing remains in this Open
+Badges test suite. The 12-test KMS-only target, 31 adjacent default-library
+Open Badges tests, targeted Clippy, formatting, and diff checks passed. A
+recursive audit found no private JWK members in the new vectors. Core branch
+commit: `969ddc7`. This is verifier coverage, not live remote issuance of
+linked-data proofs. Hosted CI and release artifacts remain pending.
+
+2026-10-07 Rust feature-graph CI checkpoint: the existing Rust lint job now
+resolves Cargo metadata once and applies both the MMF check and
+`scripts/ci/check_marty_core_kms_boundary.py`. The new check requires all eight
+Marty Core crates at reviewed revision `a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7`,
+requires `kms-only` on crypto, DIDComm, OID4VCI and verification, rejects Core
+`default`, `local-key-operations` and `test-fixtures`, pins `isomdl` to the
+reviewed `784a5294` revision, and rejects its `default` or
+`issuer-local-signing` features. The current locked workspace passed with
+offline Cargo metadata. Nine focused guard tests passed, including negative
+feature and dependency-pin cases. This gate catches feature resolution drift
+in the UI workspace; it does not yet inspect compiled release binaries or the
+Credentials wheel.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
