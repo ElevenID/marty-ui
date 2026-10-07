@@ -166,6 +166,43 @@ rotate outside the application lease; reserve it for an explicit operator
 ceremony and verify the service fails closed on a changed key version. This
 is an unresolved release blocker, not a compatibility or local-key fallback.
 
+2026-10-07 managed Transit ACL candidate: OpenBao 2.5.5 supports request
+parameter restrictions on a prefix policy. The working tree now provisions a
+separate `signing-keys-managed` policy limited to the six supported managed
+prefixes and each purpose's signing algorithms. It allows only the `type`
+request parameter on key paths; the signing-keys token combines that policy
+with `credential-service` and has no default policy. The shared credential
+token retains no management rights. Self-host bootstrap, the external OpenBao
+bootstrap helper, Compose, Kubernetes secret wiring, deployment catalog and
+operator examples use a distinct signing-keys token. The Rust managed-key
+reader marks a key invalid unless OpenBao reports non-exportable,
+non-imported, non-deletable signing material with plaintext backup disabled.
+Actual `docker/openbao-init.sh` installed the policy on disposable OpenBao
+2.5.5. Its scoped token created and rotated all six prefixes to version 2
+with `exportable=false`; LTI and OID4VP signing worked. The plain token
+received 403 for creation and rotation, while the managed token received 403
+for import, import-version, exportability configuration and private-key
+export. The earlier single-prefix probe denied rotation under a different
+prefix; the combined signing-keys token intentionally covers all six managed
+purposes, so cross-purpose key access within that token remains a security
+review point. A separate disposable self-host bootstrap
+minted the token, then that token created and rotated a managed key. All
+disposable containers and temporary token files were removed. The focused
+deployment tests passed (170); signing-keys library tests passed (128 active),
+the managed-custody negative test and targeted Clippy with `-D warnings`
+passed, and shell syntax, rustfmt, JSON and diff checks passed. A direct
+`docker compose config` invocation without the required self-host env values
+could not validate the full rendered model; the focused model tests did pass.
+The policy permits an empty key-create body to reserve a default AES key
+under a managed prefix, but the Rust adapter cannot accept it as an active
+signing key. It also permits an empty or `type`-only `/config` request; on
+OpenBao 2.5.5 those did not enable export or import. Requalify these parameter
+semantics against the exact pinned release image, and consider a narrower
+purpose-built lifecycle endpoint if the name-squatting or cross-tenant scope
+is unacceptable. External administrator rotation remains outside the app
+lease. This is candidate working-tree code, not yet a grouped feature commit,
+PR, or release artifact; do not deploy it independently of the hardening set.
+
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
 Rust, and removes Python local-X25519 authcrypt and its private-key tests.
