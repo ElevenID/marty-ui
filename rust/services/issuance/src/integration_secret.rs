@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use std::fmt;
 use thiserror::Error;
+use zeroize::Zeroize;
 
 const NONCE_LENGTH: usize = 12;
 const TAG_LENGTH: usize = 16;
@@ -90,6 +91,12 @@ pub struct IntegrationSecretCipher {
     key: [u8; 32],
 }
 
+impl Drop for IntegrationSecretCipher {
+    fn drop(&mut self) {
+        self.key.zeroize();
+    }
+}
+
 impl std::fmt::Debug for IntegrationSecretCipher {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -101,12 +108,16 @@ impl std::fmt::Debug for IntegrationSecretCipher {
 
 impl IntegrationSecretCipher {
     pub fn from_base64(value: &str) -> Result<Self, IntegrationSecretError> {
-        let decoded = STANDARD
+        let mut decoded = STANDARD
             .decode(value)
             .map_err(|_| IntegrationSecretError::InvalidMasterKey)?;
-        let key = decoded
-            .try_into()
-            .map_err(|_| IntegrationSecretError::InvalidMasterKey)?;
+        if decoded.len() != 32 {
+            decoded.zeroize();
+            return Err(IntegrationSecretError::InvalidMasterKey);
+        }
+        let mut key = [0_u8; 32];
+        key.copy_from_slice(&decoded);
+        decoded.zeroize();
         Ok(Self { key })
     }
 

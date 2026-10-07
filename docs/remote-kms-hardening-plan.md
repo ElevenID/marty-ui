@@ -432,6 +432,24 @@ table. The self-hosted and Kubernetes manifests currently pass the raw master
 key to more than one process, so deployment and provisioning changes belong in
 the same K4 feature PR as the migration and remote-only startup.
 
+2026-10-07 migration implementation in progress: an explicitly feature-gated
+Rust `marty-integration-secret-migrate` binary now pages through the actual
+PostgreSQL table under an advisory lock. `audit` needs only remote credentials
+and decrypts every versioned envelope, failing on any legacy row. `migrate`
+uses the old key only inside this one-shot process, authenticates each legacy
+value, asks the remote envelope owner to encrypt it with database-bound tenant,
+secret ID, provider and purpose, verifies a remote decrypt against the old
+plaintext, and performs a compare-and-swap update. A rerun verifies already
+migrated rows; a full remote audit runs after migration. The binary is absent
+from the published service-image binary list. This is not yet a qualified
+cutover: compile passed, but live PostgreSQL/OpenBao migration, active-writer
+exclusion, snapshot/recovery, runtime switch and manifest changes remain.
+Cutover sequence: stop every issuance and Canvas writer/reader; snapshot the
+database and retain the old key under offline recovery control; run migration;
+run `audit` with no legacy key in the environment; switch both native API and
+worker to remote-only startup; then remove the raw key from all runtime
+manifests and provisioning. Never run legacy and remote writers concurrently.
+
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks
 the tenant-bound row, authenticates ciphertext first, and only then updates
