@@ -105,10 +105,12 @@ proves that unbound internal writes fail closed while direct lifecycle tests
 retain renewal/outbox behavior. The disposable OpenBao 2.5.5 + Redis passport
 chain passed with forged internal import and renewal rejected as 422 and no
 forged record persisted; the complete managed CSCA -> DSC -> SOD flow still
-passed. Seven lifecycle tests and 128 signing-keys library tests passed;
+passed. A follow-up live run also imported a second certificate only when its
+reference and public key matched the active OpenBao-backed CSCA profile, then
+revoked that disposable copy. Seven lifecycle tests and 128 signing-keys library tests passed;
 targeted Clippy with `-D warnings`, rustfmt and diff checks passed. Both
 disposable services were removed. The internal route's successful managed
-import/renewal path and key-rotation race remain to be qualified; these edits
+renewal path and key-rotation race remain to be qualified; these edits
 are not yet committed as part of the grouped UI feature work.
 
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
