@@ -108,6 +108,22 @@ those opt-in live-format/readiness cases already passed in the disposable
 OpenBao probe; the remaining ignored case requires separate qualification.
 This is candidate source evidence, not hosted CI or a release artifact.
 
+2026-10-07 Issuance integration regression checkpoint: the complete integration
+test target set compiled. The first execution found that the HTTP signing
+failure contract supplied an invalid Ed25519 issuer JWK for an ES256 case, so
+native preparation rejected it before the mocked remote signer was called.
+The harness now supplies algorithm-matched, public-only Ed25519 or P-256 JWKs
+and retains the remote diagnostic, claim release and HTTP projection checks.
+All five signing-behavior tests pass. The broader `--tests` run passed the
+565-test library selection and all integration targets preceding
+`http_behavior`, then stopped with two discovery-oracle mismatches
+(`native_static_discovery_matches_the_python_oracle_contract` and
+`native_tenant_discovery_matches_the_python_oracle_contract`; 10 other tests
+in that target passed). Discovery metadata drift must be reconciled with the
+Python oracle and the intended product contract before claiming the full
+Issuance integration suite. This is a local candidate run, not hosted CI or
+artifact qualification.
+
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
 import endpoint, compatibility adapter, or test fixture that restores those
