@@ -185,6 +185,11 @@ func createHaipKey(ctx context.Context, req *logical.Request, d *framework.Field
 	if err != nil {
 		return logical.ErrorResponse("invalid HAIP key scope"), logical.ErrInvalidRequest
 	}
+	rollback, err := logical.StartTxStorage(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback()
 	key, err := loadCurrentHaipKey(ctx, req.Storage, tenant, flow)
 	if err != nil {
 		return nil, err
@@ -204,6 +209,9 @@ func createHaipKey(ctx context.Context, req *logical.Request, d *framework.Field
 		}
 	}
 	defer clear(key.PrivateKey)
+	if err := logical.EndTxStorage(ctx, req); err != nil {
+		return nil, err
+	}
 	return haipPublicResponse(key), nil
 }
 
