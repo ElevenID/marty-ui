@@ -71,8 +71,6 @@ def safe_model(root: Path) -> dict:
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
-        "INTEGRATION_SECRET_MASTER_KEY_FILE":
-            "/run/secrets/integration_secret_master_key",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "RP_GRPC_TARGET": "revocation-profile:9013",
     })
@@ -143,7 +141,6 @@ def safe_model(root: Path) -> dict:
         {"source": "flow_application_event_hmac_key"})
     services["issuance-native"]["secrets"].extend([
         {"source": "token_hmac_key"},
-        {"source": "integration_secret_master_key"},
         {"source": "passport_beta_reconciliation_operator_token"},
     ])
     services["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
@@ -422,8 +419,6 @@ def safe_model(root: Path) -> dict:
                 "csca_issue_gateway_key": {
                     "file": str(root / "secrets/csca_issue_gateway_key")},
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
-                "integration_secret_master_key": {
-                    "file": str(root / "secrets/integration_secret_master_key")},
                 "flow_application_event_hmac_key": {
                     "file": str(root / "secrets/flow_application_event_hmac_key")},
                 "passport_edge_tls_cert": {
@@ -657,8 +652,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     (lambda model, root: model["secrets"]["db"].update(
         file="/etc/marty-selfhost-prod/secrets/db"), "secret"),
     (lambda model, root: model["secrets"]["token_hmac_key"].update(
-        file=str(root / "secrets/bao_root_token")), "secret"),
-    (lambda model, root: model["secrets"]["integration_secret_master_key"].update(
         file=str(root / "secrets/bao_root_token")), "secret"),
     (lambda model, root: next(secret for secret in
         model["services"]["issuance-native"]["secrets"]

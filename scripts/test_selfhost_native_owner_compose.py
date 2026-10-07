@@ -20,6 +20,7 @@ LEGACY_ONLY = {
     "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
     "CANVAS_LTI_TOOL_ACTIVE_KID",
     "CANVAS_LTI_TOOL_PUBLIC_JWKS",
+    "INTEGRATION_SECRET_MASTER_KEY_FILE",
 }
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
@@ -80,6 +81,7 @@ LOADED_INPUTS = {
     "CANVAS_CREDENTIALS_SHARED_SECRET",
     "GRPC_SERVICE_TOKEN",
     "INTEGRATION_SECRET_MASTER_KEY",
+    "INTEGRATION_SECRET_MASTER_KEY_FILE",
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "TOKEN_HMAC_KEY",
@@ -263,6 +265,17 @@ def assert_models(
         "source": "issuance_api_key",
         "target": "/run/secrets/issuance_api_key",
     }
+    worker_after = preserved["services"]["canvas-sync-worker"]
+    worker_before = before["services"]["canvas-sync-worker"]
+    assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in worker_after["environment"]
+    assert all(
+        item["source"] != "integration_secret_master_key"
+        for item in worker_after["secrets"]
+    )
+    worker_after["environment"]["INTEGRATION_SECRET_MASTER_KEY_FILE"] = (
+        worker_before["environment"]["INTEGRATION_SECRET_MASTER_KEY_FILE"]
+    )
+    worker_after["secrets"] = worker_before["secrets"]
     assert preserved == before, "Unowned self-host model change"
     legacy = before["services"]["issuance"]
     environment = {
@@ -290,7 +303,7 @@ def assert_models(
         "secrets": [
             item
             for item in legacy["secrets"]
-            if item["source"] != "openbao_service_token"
+            if item["source"] not in {"openbao_service_token", "integration_secret_master_key"}
         ],
         "depends_on": {
             name: {"condition": condition, "required": True}

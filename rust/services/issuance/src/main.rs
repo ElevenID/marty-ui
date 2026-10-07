@@ -109,7 +109,7 @@ use marty_issuance_service::{
     initiation_didcomm_http::InitiationDidcommHttpService,
     initiation_http::InitiationHttpService,
     initiation_response::InitiationOfferProjector,
-    integration_secret::IntegrationSecretCipher,
+    integration_secret_kms::KmsIntegrationSecretCipher,
     internal_application_approval::{
         CompositeInternalApplicationApprover, CompositeInternalApplicationTransactionPreparer,
         OrdinaryInternalApplicationApprover,
@@ -262,13 +262,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(SecureProofNonceGenerator),
     );
     let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
-    let integration_secret_cipher = IntegrationSecretCipher::from_base64(
+    let integration_secret_cipher = KmsIntegrationSecretCipher::new(
+        config.signing_keys_internal_url.clone(),
         config
-            .integration_secret_master_key
+            .signing_keys_internal_api_key
             .as_deref()
-            .expect("from_env requires INTEGRATION_SECRET_MASTER_KEY"),
+            .expect("from_env requires signing-keys authentication"),
     )?;
-    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new(
+    let mut integration_secret_connection = pool.acquire().await?;
+    integration_secret_cipher
+        .verify_storage(&mut integration_secret_connection)
+        .await?;
+    drop(integration_secret_connection);
+    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
         integration_secret_cipher,
     ));

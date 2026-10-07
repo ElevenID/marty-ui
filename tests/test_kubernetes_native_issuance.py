@@ -332,6 +332,8 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "DIDCOMM_ENCRYPTION_POLICY_FILE",
         "DIDCOMM_TLS_CA_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
+        "INTEGRATION_SECRET_MASTER_KEY",
+        "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "MARTY_ISSUANCE__",
     }

@@ -100,7 +100,7 @@ safety provides a concrete reason, and record that reason here.
 | K1 | Reconcile preserved branches; map every supported production binary, image, wheel, Cargo root and release pin; enumerate current signing/encryption paths and explicit secret-class exceptions. | In progress |
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; pinned OpenBao rejects X25519 creation |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | Pending |
-| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; disposable PostgreSQL/OpenBao migration and rotation passed; runtime cutover/recovery pending |
+| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; disposable PostgreSQL/OpenBao migration and rotation passed; native entry points switched locally, process/recovery acceptance pending |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | Pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | Pending |
 | K7 | Reconcile Credentials compatibility retirement with native owner selection, published artifacts and encrypted-data readability; remove obsolete raw-key adapters and wheel requirements where qualified. | Pending |
@@ -455,6 +455,33 @@ database and retain the old key under offline recovery control; run migration;
 run `audit` with no legacy key in the environment; switch both native API and
 worker to remote-only startup; then remove the raw key from all runtime
 manifests and provisioning. Never run legacy and remote writers concurrently.
+
+2026-10-07 native startup checkpoint: the Rust issuance API and Canvas worker
+now construct only `KmsIntegrationSecretCipher` and refuse raw master-key
+configuration. A shared typed-client preflight performs a remote round-trip
+even for an empty table and authenticates every stored row against its database
+identity before either process serves or consumes work. The offline migration
+tool uses that same audit. Native Compose, self-host, beta, disposable passport
+and Oracle Kubernetes bindings no longer pass the raw key to those Rust
+processes; the legacy Python issuance service still receives it until K7
+retirement is qualified. The disposable PostgreSQL/OpenBao/signing-keys test
+passed again with empty-table KMS proof, wrong service credential rejection,
+migration, idempotent rerun, rotation and purpose mismatch. Both native Rust
+binaries and the migration binary passed `cargo check`; the typed-client tests
+(2) and issuance config tests (40) passed. Base and self-host Compose closed
+model gates passed, as did the focused Kubernetes/native-candidate tests (39).
+The broader Python fixture run had 357 passing checks but 9 unrelated
+`marty_common` import failures in this worktree; those and remaining process
+fixtures that assume a local key must be reconciled before PR review. No
+packaged process restart or snapshot recovery proof is claimed yet. The legacy
+cipher still exists in the issuance library for compatibility tests and the
+offline migration feature, so production artifact exclusion is not yet proven.
+The Rust Kubernetes release-evidence test target had 12 passing tests and one
+unrun operational path on this Windows host because `envsubst` is unavailable;
+the corresponding focused Python manifest checks passed. The missing
+`packages/marty_common` package is absent from this checkout's `HEAD`, not
+caused by the KMS edits, but the nine import failures still prevent a clean
+full suite claim.
 
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks

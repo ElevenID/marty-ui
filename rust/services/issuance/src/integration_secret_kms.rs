@@ -9,6 +9,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::{PgConnection, Row};
+use zeroize::Zeroizing;
 
 const SCHEMA: &str = "marty.integration-secret-envelope/v1";
 const MAX_SECRET_BYTES: usize = 64 * 1024;
@@ -31,6 +33,8 @@ pub enum KmsIntegrationSecretError {
     Unavailable,
     #[error("KMS integration-secret envelope is invalid")]
     InvalidEnvelope,
+    #[error("integration-secret storage is unavailable")]
+    StorageUnavailable,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -59,6 +63,68 @@ struct DecryptRequest<'a> {
 }
 
 impl KmsIntegrationSecretCipher {
+    /// Verify every stored envelope against its database-bound identity before
+    /// a remote-only process starts. A legacy row or unavailable KMS fails
+    /// startup, including when that row is disabled.
+    pub async fn verify_storage(
+        &self,
+        database: &mut PgConnection,
+    ) -> Result<u64, KmsIntegrationSecretError> {
+        // An empty table must not make an unavailable or misconfigured KMS
+        // appear healthy at process startup.
+        let proof = format!("startup-{:032x}", rand::random::<u128>());
+        let envelope = self
+            .encrypt("marty-system", &proof, "system", "startup_proof", &proof)
+            .await?;
+        let recovered = Zeroizing::new(
+            self.decrypt("marty-system", &proof, "system", "startup_proof", &envelope)
+                .await?,
+        );
+        if recovered.as_str() != proof {
+            return Err(KmsIntegrationSecretError::InvalidEnvelope);
+        }
+        let mut cursor: Option<String> = None;
+        let mut verified = 0_u64;
+        loop {
+            let rows = sqlx::query(
+                "SELECT id, organization_id, provider, purpose, encrypted_secret_value
+                 FROM issuance_service.organization_integration_secrets
+                 WHERE ($1::text IS NULL OR id > $1)
+                 ORDER BY id LIMIT 100",
+            )
+            .bind(cursor.as_deref())
+            .fetch_all(&mut *database)
+            .await
+            .map_err(|_| KmsIntegrationSecretError::StorageUnavailable)?;
+            if rows.is_empty() {
+                return Ok(verified);
+            }
+            for row in rows {
+                let id: String = row
+                    .try_get("id")
+                    .map_err(|_| KmsIntegrationSecretError::StorageUnavailable)?;
+                let organization_id: String = row
+                    .try_get("organization_id")
+                    .map_err(|_| KmsIntegrationSecretError::StorageUnavailable)?;
+                let provider: String = row
+                    .try_get("provider")
+                    .map_err(|_| KmsIntegrationSecretError::StorageUnavailable)?;
+                let purpose: String = row
+                    .try_get("purpose")
+                    .map_err(|_| KmsIntegrationSecretError::StorageUnavailable)?;
+                let stored: String = row
+                    .try_get("encrypted_secret_value")
+                    .map_err(|_| KmsIntegrationSecretError::StorageUnavailable)?;
+                let _plaintext = Zeroizing::new(
+                    self.decrypt(&organization_id, &id, &provider, &purpose, &stored)
+                        .await?,
+                );
+                cursor = Some(id);
+                verified += 1;
+            }
+        }
+    }
+
     pub fn new(base_url: Url, api_key: &str) -> Result<Self, KmsIntegrationSecretError> {
         if api_key.trim().is_empty()
             || !matches!(base_url.scheme(), "http" | "https")

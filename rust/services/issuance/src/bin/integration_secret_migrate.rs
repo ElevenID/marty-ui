@@ -87,10 +87,17 @@ async fn main() -> Result<ExitCode, MigrationError> {
     if !locked {
         return Err(MigrationError::ConcurrentMigration);
     }
+    if operation == Operation::Audit {
+        let verified = remote
+            .verify_storage(&mut database)
+            .await
+            .map_err(|_| MigrationError::RemoteEnvelope)?;
+        println!("integration-secret migration: migrated=0 verified={verified}");
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let mut cursor: Option<String> = None;
     let mut migrated = 0_u64;
-    let mut verified = 0_u64;
     loop {
         let rows = page(&mut database, cursor.as_deref()).await?;
         if rows.is_empty() {
@@ -100,7 +107,6 @@ async fn main() -> Result<ExitCode, MigrationError> {
             cursor = Some(row.id.clone());
             if is_remote_envelope(&row.ciphertext) {
                 verify(&remote, &row, &row.ciphertext).await?;
-                verified += 1;
                 continue;
             }
             let cipher = legacy.as_ref().ok_or(MigrationError::LegacyCiphertext)?;
@@ -158,9 +164,10 @@ async fn main() -> Result<ExitCode, MigrationError> {
     }
     // Audit every row again after changes, including rows already migrated by
     // a previous run. No plaintext or row identifier is written to stdout.
-    if operation == Operation::Migrate {
-        verified = audit_all(&mut database, &remote).await?;
-    }
+    let verified = remote
+        .verify_storage(&mut database)
+        .await
+        .map_err(|_| MigrationError::RemoteEnvelope)?;
     println!("integration-secret migration: migrated={migrated} verified={verified}");
     Ok(ExitCode::SUCCESS)
 }
@@ -243,27 +250,4 @@ async fn verify(
             .map_err(|_| MigrationError::RemoteEnvelope)?,
     );
     Ok(())
-}
-
-async fn audit_all(
-    database: &mut PgConnection,
-    remote: &KmsIntegrationSecretCipher,
-) -> Result<u64, MigrationError> {
-    let mut cursor: Option<String> = None;
-    let mut verified = 0_u64;
-    loop {
-        let rows = page(database, cursor.as_deref()).await?;
-        if rows.is_empty() {
-            break;
-        }
-        for row in rows {
-            cursor = Some(row.id.clone());
-            if !is_remote_envelope(&row.ciphertext) {
-                return Err(MigrationError::LegacyCiphertext);
-            }
-            verify(remote, &row, &row.ciphertext).await?;
-            verified += 1;
-        }
-    }
-    Ok(verified)
 }

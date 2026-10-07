@@ -61,7 +61,6 @@ SECRETS = {
     "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
-                        "integration_secret_master_key",
                         "passport_beta_reconciliation_operator_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
              "grpc_service_token", "flow_application_event_hmac_key"),

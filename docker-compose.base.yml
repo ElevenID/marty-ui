@@ -1036,7 +1036,6 @@ services:
       # Repository initialization verifies opaque OAuth/session material.
       # Keep this identical to issuance so the worker can process jobs.
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
-      INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys

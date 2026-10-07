@@ -18,7 +18,7 @@ use marty_issuance_service::{
         worker_pool_options, WorkerShutdown,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
-    integration_secret::IntegrationSecretCipher,
+    integration_secret_kms::KmsIntegrationSecretCipher,
 };
 use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
 use sqlx::PgPool;
@@ -44,8 +44,16 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
         "postgresql://marty:marty_dev@postgres:5432/marty_credentials".to_owned()
     });
-    let master_key = integration_master_key()?;
-    let cipher = IntegrationSecretCipher::from_base64(&master_key)?;
+    if [
+        "INTEGRATION_SECRET_MASTER_KEY",
+        "INTEGRATION_SECRET_MASTER_KEY_FILE",
+        "INTEGRATION_SECRET_MASTER_KEY_ENV",
+    ]
+    .iter()
+    .any(|name| env::var_os(name).is_some())
+    {
+        return Err("legacy integration-secret master-key configuration is forbidden".into());
+    }
     let pool = worker_pool_options()
         .min_connections(1)
         .max_connections(10)
@@ -55,7 +63,7 @@ async fn main() -> Result<ExitCode, Box<dyn Error + Send + Sync>> {
     // Register Unix handlers before worker tasks can report database readiness.
     let shutdown = shutdown_signal();
     let owner = spawn_with_postgres_cleanup(pool, move |pool| {
-        run_initialized_worker(pool, config, cipher, receiver)
+        run_initialized_worker(pool, config, receiver)
     });
     let completion = finish_on_shutdown(owner, stop, shutdown).await?;
     completion_result(completion)
@@ -96,12 +104,27 @@ fn completion_result(
 async fn run_initialized_worker(
     pool: PgPool,
     config: CanvasSyncWorkerConfig,
-    cipher: IntegrationSecretCipher,
     stop: watch::Receiver<bool>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let oauth_repository = Arc::new(PostgresCanvasOAuthRepository::new(pool.clone()));
     let worker_repository = Arc::new(PostgresCanvasSyncWorkerRepository::new(pool.clone()));
-    let vault = Arc::new(PostgresIntegrationSecretVault::new(pool.clone(), cipher));
+    let signing_url = url::Url::parse(
+        &env::var("SIGNING_KEYS_INTERNAL_URL")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "http://gateway:8000/internal/signing-keys".to_owned()),
+    )?;
+    let signing_key =
+        required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
+    let cipher = KmsIntegrationSecretCipher::new(signing_url.clone(), &signing_key)?;
+    let mut audit_connection = pool.acquire().await?;
+    cipher.verify_storage(&mut audit_connection).await?;
+    drop(audit_connection);
+    let vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
+        pool.clone(),
+        cipher,
+    ));
     let private_origins = comma_values("CANVAS_PRIVATE_ORIGIN_ALLOWLIST");
     let self_managed_origins = comma_values("CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST");
     let allow_private = env_bool("CANVAS_ALLOW_PRIVATE_BASE_URLS");
@@ -131,15 +154,6 @@ async fn run_initialized_worker(
             allow_http_localhost: allow_localhost,
         },
     )?);
-    let signing_url = url::Url::parse(
-        &env::var("SIGNING_KEYS_INTERNAL_URL")
-            .ok()
-            .map(|value| value.trim().to_owned())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "http://gateway:8000/internal/signing-keys".to_owned()),
-    )?;
-    let signing_key =
-        required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
     let signer = Arc::new(IssuerDidCanvasLtiToolJwtSigner::new(
         // Published startup does not require an LTI identity. The shared signer
         // validates it before resolving or signing, without blocking idle work.
@@ -301,25 +315,6 @@ async fn shutdown_signal() -> WorkerShutdown {
         );
     }
     WorkerShutdown::Cancel
-}
-
-fn integration_master_key() -> Result<String, Box<dyn Error + Send + Sync>> {
-    if let Ok(value) = env::var("INTEGRATION_SECRET_MASTER_KEY") {
-        if !value.trim().is_empty() {
-            return Ok(value.trim().to_owned());
-        }
-    }
-    if let Ok(path) = env::var("INTEGRATION_SECRET_MASTER_KEY_FILE") {
-        if !path.trim().is_empty() {
-            return Ok(fs::read_to_string(path.trim())?.trim().to_owned());
-        }
-    }
-    if let Ok(name) = env::var("INTEGRATION_SECRET_MASTER_KEY_ENV") {
-        if !name.trim().is_empty() {
-            return Ok(env::var(name.trim())?.trim().to_owned());
-        }
-    }
-    Err("INTEGRATION_SECRET_MASTER_KEY source is required".into())
 }
 
 fn comma_values(name: &str) -> Vec<String> {

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -182,7 +181,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
             "passport_beta_reconciliation_operator_token",
-            "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+            "bureau_database_url", "token_hmac_key",
             "flow_webhook_secret", "flow_application_event_hmac_key",
         } | TLS_FILES
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
@@ -202,10 +201,6 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         assert (secret_dir / "bureau_database_url").read_text(encoding="ascii") == (
             f"postgresql://marty:{password}@postgres:5432/marty"
         )
-        assert len(base64.b64decode(
-            (secret_dir / "integration_secret_master_key").read_text(encoding="ascii"),
-            validate=True,
-        )) == 32
         env = dict(line.split("=", 1) for line in env_file.read_text(
             encoding="ascii").splitlines())
         assert env["PASSPORT_ACCEPTANCE_PROJECT"] == project

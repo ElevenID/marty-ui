@@ -954,11 +954,6 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: TOKEN_HMAC_KEY
-            - name: INTEGRATION_SECRET_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: INTEGRATION_SECRET_MASTER_KEY
             - name: SIGNING_KEYS_INTERNAL_URL
               value: "http://gateway:8000/internal/signing-keys"
             - name: SIGNING_KEYS_INTERNAL_API_KEY

@@ -1092,7 +1092,7 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" in beta
     assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL:" in beta
-    assert "INTEGRATION_SECRET_MASTER_KEY:" in beta
+    assert "INTEGRATION_SECRET_MASTER_KEY:" not in beta
     assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
     assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
     assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta

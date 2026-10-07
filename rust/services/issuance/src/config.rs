@@ -258,7 +258,6 @@ pub struct IssuanceServiceConfig {
     pub issuer_display_name: String,
     pub cors_allowed_origins: Vec<String>,
     pub database_url: String,
-    pub integration_secret_master_key: Option<String>,
     pub token_hmac_key: Option<String>,
     pub issuance_api_key: Option<String>,
     pub passport_tenant_keys: Option<PassportTenantKeyring>,
@@ -342,10 +341,6 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("issuer_display_name", &self.issuer_display_name)
             .field("cors_allowed_origins", &self.cors_allowed_origins)
             .field("database_url_configured", &!self.database_url.is_empty())
-            .field(
-                "integration_secret_master_key_configured",
-                &self.integration_secret_master_key.is_some(),
-            )
             .field("token_hmac_key_configured", &self.token_hmac_key.is_some())
             .field(
                 "issuance_api_key_configured",
@@ -583,10 +578,10 @@ impl IssuanceServiceConfig {
                 "TOKEN_HMAC_KEY or TOKEN_HMAC_KEY_FILE is required",
             ));
         }
-        if config.integration_secret_master_key.is_none() {
+        if config.signing_keys_internal_api_key.is_none() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "INTEGRATION_SECRET_MASTER_KEY or INTEGRATION_SECRET_MASTER_KEY_FILE is required",
+                "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY is required for integration secrets",
             ));
         }
         validate_production_grpc_service_token(
@@ -754,13 +749,19 @@ impl IssuanceServiceConfig {
         let passport_native =
             PassportNativeConfig::from_values(&values, passport_tenant_keys.is_some())?;
         let token_hmac_key = secret_value(&values, "TOKEN_HMAC_KEY")?;
-        let integration_secret_key_name = values
-            .get("INTEGRATION_SECRET_MASTER_KEY_ENV")
-            .map(String::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("INTEGRATION_SECRET_MASTER_KEY");
-        let integration_secret_master_key = secret_value(&values, integration_secret_key_name)?;
+        if [
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "INTEGRATION_SECRET_MASTER_KEY_FILE",
+            "INTEGRATION_SECRET_MASTER_KEY_ENV",
+        ]
+        .iter()
+        .any(|name| values.contains_key(*name))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "legacy integration-secret master-key configuration is forbidden",
+            ));
+        }
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
         if values
@@ -987,7 +988,6 @@ impl IssuanceServiceConfig {
             issuer_display_name: settings.discovery.issuer_display_name,
             cors_allowed_origins: settings.server.cors_allowed_origins,
             database_url,
-            integration_secret_master_key,
             token_hmac_key,
             issuance_api_key,
             passport_tenant_keys,
@@ -1704,7 +1704,6 @@ mod tests {
             config.canvas_oauth_completion_redirect_url,
             "https://beta.elevenidllc.com/console/integrations/canvas"
         );
-        assert!(config.integration_secret_master_key.is_none());
         assert_eq!(
             config.canvas_lti_experience_code_ttl,
             std::time::Duration::from_secs(60)
@@ -2953,28 +2952,25 @@ mod tests {
     }
 
     #[test]
-    fn canvas_oauth_configuration_preserves_secret_indirection_and_redaction() {
-        let config = IssuanceServiceConfig::from_values(values(&[
-            (
-                "INTEGRATION_SECRET_MASTER_KEY_ENV",
-                "ROTATED_INTEGRATION_KEY",
-            ),
-            ("ROTATED_INTEGRATION_KEY", "base64-encryption-key"),
-            (
-                "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
-                "https://ui.example/console/integrations/canvas?source=oauth",
-            ),
-        ]))
+    fn canvas_oauth_configuration_rejects_legacy_master_key() {
+        let config = IssuanceServiceConfig::from_values(values(&[(
+            "CANVAS_OAUTH_COMPLETION_REDIRECT_URL",
+            "https://ui.example/console/integrations/canvas?source=oauth",
+        )]))
         .expect("Canvas OAuth configuration");
-        assert_eq!(
-            config.integration_secret_master_key.as_deref(),
-            Some("base64-encryption-key")
-        );
         assert_eq!(
             config.canvas_oauth_completion_redirect_url,
             "https://ui.example/console/integrations/canvas?source=oauth"
         );
-        assert!(!format!("{config:?}").contains("base64-encryption-key"));
+        for forbidden in [
+            "INTEGRATION_SECRET_MASTER_KEY",
+            "INTEGRATION_SECRET_MASTER_KEY_FILE",
+            "INTEGRATION_SECRET_MASTER_KEY_ENV",
+        ] {
+            assert!(
+                IssuanceServiceConfig::from_values(values(&[(forbidden, "synthetic")])).is_err()
+            );
+        }
     }
 
     #[test]

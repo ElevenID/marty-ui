@@ -917,12 +917,11 @@ def validate_model(
     )
     require(
         native.get("TOKEN_HMAC_KEY_FILE") == "/run/secrets/token_hmac_key"
-        and native.get("INTEGRATION_SECRET_MASTER_KEY_FILE")
-        == "/run/secrets/integration_secret_master_key"
         and "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN" not in native
         and "TOKEN_HMAC_KEY" not in native
         and "INTEGRATION_SECRET_MASTER_KEY" not in native
-        and {"token_hmac_key", "integration_secret_master_key",
+        and "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
+        and {"token_hmac_key",
              "passport_beta_reconciliation_operator_token"}
         <= {secret.get("source") for secret in services["issuance-native"].get("secrets", [])
             if isinstance(secret, dict)},

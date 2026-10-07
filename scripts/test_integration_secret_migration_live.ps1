@@ -60,8 +60,20 @@ try {
     $env:SIGNING_KEYS_INTERNAL_URL = "http://127.0.0.1:$servicePort/internal"
     $env:INTEGRATION_SECRET_MASTER_KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
     $legacy = 'AAECAwQFBgcICQoLJGO4baSW72joIuXuxcQODO+j4mW1no3FYXSCh604xhydFOI='
-    $schema = "CREATE SCHEMA issuance_service; CREATE TABLE issuance_service.organization_integration_secrets (id text PRIMARY KEY, organization_id text NOT NULL, provider text NOT NULL, purpose text NOT NULL, encrypted_secret_value text NOT NULL); INSERT INTO issuance_service.organization_integration_secrets VALUES ('secret-1','org-1','canvas','oauth_client_secret','$legacy');"
+    $schema = "CREATE SCHEMA issuance_service; CREATE TABLE issuance_service.organization_integration_secrets (id text PRIMARY KEY, organization_id text NOT NULL, provider text NOT NULL, purpose text NOT NULL, encrypted_secret_value text NOT NULL);"
     docker exec $pgName psql -U kmstest -d kmstest -v ON_ERROR_STOP=1 -c $schema | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'fixture schema creation failed' }
+    Remove-Item Env:INTEGRATION_SECRET_MASTER_KEY
+    & "$binRoot\marty-integration-secret-migrate.exe" audit
+    if ($LASTEXITCODE -ne 0) { throw 'empty-table remote provider proof failed' }
+    $env:SIGNING_KEYS_INTERNAL_API_KEY = 'wrong-key'
+    $ErrorActionPreference = 'Continue'
+    & "$binRoot\marty-integration-secret-migrate.exe" audit 2>$null
+    $ErrorActionPreference = 'Stop'
+    if ($LASTEXITCODE -eq 0) { throw 'empty-table audit accepted unavailable KMS authentication' }
+    $env:SIGNING_KEYS_INTERNAL_API_KEY = 'kmstest-internal-key'
+    $env:INTEGRATION_SECRET_MASTER_KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
+    docker exec $pgName psql -U kmstest -d kmstest -v ON_ERROR_STOP=1 -c "INSERT INTO issuance_service.organization_integration_secrets VALUES ('secret-1','org-1','canvas','oauth_client_secret','$legacy')" | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'fixture insert failed' }
     $ErrorActionPreference = 'Continue'
     & "$binRoot\marty-integration-secret-migrate.exe" audit 2>$null
