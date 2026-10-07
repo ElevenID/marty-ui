@@ -60,6 +60,20 @@ public issuer key then fails because the fixed signature does not verify. The
 test needs a public holder JWK plus a real remote issuer signer and must retain
 its certificate-injection assertion. The exploratory test edit was reverted;
 this failing test is an unresolved feature/test-custody gate, not acceptance.
+2026-10-07 resolution checkpoint: the credential-builder tests now share one
+test-only OpenBao Transit adapter, guarded to a disposable loopback provider.
+It creates non-exportable, non-imported P-256 issuer/DSC keys with the scoped
+token, reads only provider public keys, signs the exact payload remotely, and
+normalizes OpenBao DER signatures to the raw ES256 form required by JWT
+assembly. SD-JWT, JWT-VC and mdoc positive tests retain their exact-input,
+Open Badge, key-purpose and certificate-injection assertions; the mdoc holder
+JWK is public-only. The old SD-JWT private-holder expectation is now a separate
+fail-closed unit test that rejects `d` before signing. All three live positive
+tests passed in the disposable OpenBao probe, followed by the coordinated
+PostgreSQL/Raft restore proof. The normal credential-builder unit selection
+passed six tests with those three explicitly routed to the live probe. The
+readiness random-challenge signer remains open; hosted CI and release artifacts
+have not yet run this checkpoint.
 
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key

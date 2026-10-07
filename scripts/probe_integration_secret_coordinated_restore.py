@@ -71,6 +71,18 @@ def build_rust() -> Path:
             "--locked",
             "-p",
             "marty-issuance-service",
+            "--lib",
+            "--no-run",
+            "-j",
+            "1",
+        ],
+        [
+            "cargo",
+            "+1.95.0",
+            "test",
+            "--locked",
+            "-p",
+            "marty-issuance-service",
             "--test",
             "canvas_oauth_postgres_contract",
             "--no-run",
@@ -325,6 +337,39 @@ def rust_phase(phase: str, database_url: str, signing_url: str, key: str) -> Non
         raise RuntimeError(f"Rust integration-secret {phase} phase failed")
 
 
+def live_credential_builder_phase(bao_url: str, token: str) -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MARTY_KMS_DISPOSABLE_PROBE": "1",
+            "MARTY_TEST_OPENBAO_URL": bao_url,
+            "MARTY_TEST_OPENBAO_TOKEN": token,
+        }
+    )
+    result = subprocess.run(
+        [
+            "cargo",
+            "+1.95.0",
+            "test",
+            "--locked",
+            "-p",
+            "marty-issuance-service",
+            "--lib",
+            "-j",
+            "1",
+            "credential_builder::tests",
+            "--",
+            "--ignored",
+        ],
+        cwd=ROOT / "rust",
+        env=environment,
+        timeout=300,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Rust credential builder live-KMS proof failed")
+
+
 def run() -> None:
     prepare_image()
     binary = build_rust()
@@ -371,6 +416,7 @@ def run() -> None:
             root = read_volume_file(state, "root.token")
             unseal = read_volume_file(state, "unseal.key")
             token = read_volume_file(runtime, "signing_keys_openbao_token")
+            live_credential_builder_phase(bao_url, token)
             init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
             if unseal != init_material["unseal_keys_b64"][0]:
                 raise RuntimeError(
