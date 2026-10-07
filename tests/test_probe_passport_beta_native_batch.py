@@ -233,6 +233,25 @@ def test_first_dispatch_failure_reports_bounded_shape_only(
         assert "jobs=invalid" in message
 
 
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    [
+        ("Physical document changed concurrently; retry the operation", "concurrent_change"),
+        ("Previously signed SOD material is unavailable; regenerate SOD before submission",
+         "signed_material_unavailable"),
+        ("Document signer certificate is not trusted by an active organization CSCA",
+         "untrusted_dsc"),
+        ("private-value", "other"),
+    ],
+)
+def test_first_dispatch_failure_classifies_409_without_exposing_detail(
+    detail: str, expected: str,
+) -> None:
+    message = _first_dispatch_failure(2, 409, {"detail": detail}, "private-batch-id")
+    assert f"conflict={expected}" in message
+    assert detail not in message
+
+
 def test_wrong_first_accepted_receipt_halts_native_batch(tmp_path: Path) -> None:
     _, run = model(tmp_path / "private" / "pending.json", wrong_receipt=True)
     with pytest.raises(NativeBatchProbeError, match="receipt is unverified"):
