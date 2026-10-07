@@ -100,7 +100,7 @@ safety provides a concrete reason, and record that reason here.
 | K1 | Reconcile preserved branches; map every supported production binary, image, wheel, Cargo root and release pin; enumerate current signing/encryption paths and explicit secret-class exceptions. | In progress |
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; pinned OpenBao rejects X25519 creation |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | Pending |
-| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; isolated Transit storage baseline verified |
+| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; disposable PostgreSQL/OpenBao migration and rotation passed; runtime cutover/recovery pending |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | Pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | Pending |
 | K7 | Reconcile Credentials compatibility retirement with native owner selection, published artifacts and encrypted-data readability; remove obsolete raw-key adapters and wheel requirements where qualified. | Pending |
@@ -441,9 +441,15 @@ value, asks the remote envelope owner to encrypt it with database-bound tenant,
 secret ID, provider and purpose, verifies a remote decrypt against the old
 plaintext, and performs a compare-and-swap update. A rerun verifies already
 migrated rows; a full remote audit runs after migration. The binary is absent
-from the published service-image binary list. This is not yet a qualified
-cutover: compile passed, but live PostgreSQL/OpenBao migration, active-writer
-exclusion, snapshot/recovery, runtime switch and manifest changes remain.
+from the published service-image binary list. The opt-in
+`scripts/test_integration_secret_migration_live.ps1` now exercised the built
+Rust migration binary and signing-keys service against disposable PostgreSQL
+16, Redis and OpenBao 2.5.2. It proved pre-migration audit failure, one-row
+migration, idempotent rerun, remote-only audit with the old key removed from
+the test environment, audit after Transit key rotation, and rejection after
+changing the database-bound purpose. All disposable containers were removed.
+This is not yet a qualified production cutover: active-writer exclusion,
+snapshot/recovery, runtime switch and manifest changes remain.
 Cutover sequence: stop every issuance and Canvas writer/reader; snapshot the
 database and retain the old key under offline recovery control; run migration;
 run `audit` with no legacy key in the environment; switch both native API and
