@@ -132,6 +132,28 @@ application-controlled profile rotation from interleaving a certificate
 commit; an administrator rotating an OpenBao key directly outside the service
 remains outside that lock and still needs operational restriction/qualification.
 
+2026-10-07 deployment ACL review: the self-host bootstrap gives the shared
+`credential-service` token read access to `transit/keys/cred-*`, but no key
+creation or `transit/keys/*/rotate` capability. The Rust signing-keys managed
+creation and rotation adapters call those endpoints, so tests using a root
+token can pass while the production service token fails. The same token is
+mounted into several other self-host workloads; adding management capability
+to it would broaden all of them. Before release, issue a separate signing-keys
+token combining the existing runtime policy with narrowly scoped managed-key
+create/read/rotate rights, wire only the signing-keys service to that token,
+and require the analogous scoped token in Kubernetes. Cover all currently
+supported managed-key prefixes (`cred-issuer-`, `cred-dsc-`, `cred-holder-`,
+`cred-presenter-`, `lti-tool-`, `oid4vp-verifier-`) without granting export,
+delete, or arbitrary key configuration. The current runtime policy grants
+sign/read only for two fixed `lti-tool-` and `oid4vp-verifier-` keys; the
+signing-keys token also needs sign/verify/read on tenant-scoped managed keys
+under those prefixes. Exercise create/sign/rotate with the
+scoped token against disposable OpenBao and assert a plain credential-service
+token is denied create/rotate. The OpenBao administrator/root credential can
+rotate outside the application lease; reserve it for an explicit operator
+ceremony and verify the service fails closed on a changed key version. This
+is an unresolved release blocker, not a compatibility or local-key fallback.
+
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
 Rust, and removes Python local-X25519 authcrypt and its private-key tests.
