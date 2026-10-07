@@ -57,6 +57,34 @@ instead of retaining them behind a feature flag. A release rollback may restore
 an earlier artifact only outside the KMS-only acceptance boundary; it must not
 silently restore local private-key custody in the qualified deployment.
 
+2026-10-07 managed-signing tenant-boundary review: an adversarial Redis-backed
+route test put tenant A's managed key into tenant B's active profile. Before the
+fix, tenant B's explicit signing request returned 200 and reached the signer;
+this was a real cross-tenant authorization flaw, not merely stale metadata.
+The candidate Rust fix derives profile-owned managed references from the
+profile's tenant, DID, purpose, format, and algorithm (or checks the tenant's
+namespaced key), then uses that single rule in HTTP authorization and registry
+inventory. Registry bindings without a tenant-owned name or validated active
+profile no longer enter managed inventory. The compatibility signing layer also
+requires the chosen reference and algorithm to appear in that tenant's live
+managed inventory, covering internal calls and requests that omit the
+reference. Managed-profile enrichment and public-key lookup also reject a
+foreign reference before reading the provider. A regression now rejects
+explicit and implicit foreign selection without reaching the signer. The
+signing-keys library suite passed 130 tests (seven opt-in tests ignored), and
+targeted Clippy passed with warnings denied.
+An opt-in policy probe now starts separately labeled disposable pinned OpenBao
+and Redis containers, applies the shipped policy, runs the Rust managed-key
+adapter and Redis-backed cross-tenant route test, and removes both containers.
+The provider-backed probe passed; it proves the scoped OpenBao operations and
+the route boundary in the same disposable run. The mock signer counts calls,
+and a separate real-provider test creates tenant A's key with the scoped token,
+signs for tenant A, and rejects explicit and implicit use by tenant B's forged
+profile. Next: review remaining profile resolution and internal signing paths,
+run broader signing-keys tests, then include this with the large UI feature PR.
+The UI source remains uncommitted for that grouped review; no deployment or
+release artifact is qualified by this checkpoint.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
