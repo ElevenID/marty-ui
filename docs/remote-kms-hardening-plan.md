@@ -1602,6 +1602,21 @@ the container was removed. The feature-gated migrator check and scoped
 consistent; a cutover audit still requires Flow writers to be stopped so new
 rows cannot appear after its snapshot.
 
+2026-10-07 plugin artifact CI checkpoint: the checked-in OpenBao plugin
+Dockerfile now runs `go test ./...` and `go vet ./...` before compiling the
+binary. The repository CI classifies plugin source and OpenBao policy changes
+into a dedicated image-build lane, requires that lane through `ci-gate`, and
+keeps it skipped for unrelated Rust-only PRs; merge-queue/full runs include
+it. The new lane builds the pinned Go/OpenBao image and checks that the final
+image contains an executable plugin. Local classifier/gate contract tests
+passed (124), neighboring CI contract tests passed (58), and a local Docker
+build ran the Go tests and vet successfully. The final local image was
+`sha256:277adb34c28a5fbc7d19bdda332ddaffd2ba41dd6a79fe6a5929f1091cc9b2d1`
+(83,328,215 bytes); its executable check passed. This local image is neither
+published nor attested and does not replace the exact release artifact,
+live KMS/wallet acceptance, or the stack release transaction. The plugin
+release/promotion route remains to be designed and qualified.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
