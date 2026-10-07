@@ -13,6 +13,7 @@ $containers = @()
 $volumes = @()
 $config = (Resolve-Path (Join-Path $PSScriptRoot '..\docker\openbao-selfhost.hcl')).Path
 $image = if ($env:MARTY_OPENBAO_PROBE_IMAGE) { $env:MARTY_OPENBAO_PROBE_IMAGE } else { 'marty-openbao-ha-probe:local' }
+$python = if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { 'python' } else { 'python3' }
 $hostTemp = Join-Path ([System.IO.Path]::GetTempPath()) "kms-raft-export-$suffix"
 
 function Wait-InitializedApi([string]$BaseUrl) {
@@ -114,7 +115,7 @@ try {
     [System.IO.File]::WriteAllText((Join-Path $hostState 'selfhost-init.json'), ($initialized | ConvertTo-Json -Depth 12))
     [System.IO.File]::WriteAllText((Join-Path $hostState 'root.token'), $rootToken)
     [System.IO.File]::WriteAllText((Join-Path $hostState 'unseal.key'), $unsealKey)
-    python (Join-Path $PSScriptRoot 'export-selfhost-openbao.py') `
+    & $python (Join-Path $PSScriptRoot 'export-selfhost-openbao.py') `
         --state-dir $hostState --export-dir $hostExports --config-file $config --bao-url $sourceUrl | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'live Raft snapshot exporter failed' }
     $archives = @(Get-ChildItem -LiteralPath $hostExports -Filter '*.zip')
