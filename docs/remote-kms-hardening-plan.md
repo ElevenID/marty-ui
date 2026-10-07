@@ -209,6 +209,16 @@ routing, ephemeral deletion and stale-key reaping. The probe removed its
 disposable containers and volumes. Rust formatting, Ruff and diff checks
 passed. Hosted CI and exact release artifacts remain pending.
 
+2026-10-07 Signing Keys follow-up quality review: all-target Clippy passed with
+warnings denied after the live holder-proof correction. Startup previously
+silently skipped stale-key reconciliation when its OpenBao/issuer configuration
+was invalid, leaving interrupted ephemeral keys without automatic cleanup.
+When OpenBao is configured, Signing Keys now requires the holder-proof provider
+to initialize before serving requests; the reviewed base, self-host and
+Kubernetes Signing Keys manifests all supply `ISSUER_BASE_URL`. Targeted binary
+Clippy and formatting passed. This startup correction remains in the broader
+uncommitted Signing Keys feature diff for grouped review.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
