@@ -1369,6 +1369,11 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         step.get("run") == "python -m pytest tests -v --tb=short"
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
+    assert any(
+        step.get("run")
+        == "python -m pytest --collect-only -q tests/test_ci_workflow_performance.py"
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    )
     selected = {
         "all": "false",
         "ui": "false",
@@ -1384,11 +1389,15 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "tests/test_public_protocol_documentation.py",
         "tests/test_ci_database_groups.py",
         "tests/test_rust_ownership.py",
+        "tests/test_ci_workflow_performance.py",
     )
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
-        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        expected_refs = 2 if path == "tests/test_ci_workflow_performance.py" else 1
+        assert ci_source.count(path) == expected_refs, (
+            f"other direct CI consumer: {path}"
+        )
         for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
             if other_workflow == CI_PATH:
                 continue
@@ -1416,6 +1425,29 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
             combined=True,
         )[0]["all"]
         == "true"
+    )
+    assert (
+        _classify_changed_paths(
+            [
+                "tests/test_ci_workflow_performance.py",
+                "rust/services/issuance/src/lib.rs",
+            ],
+            tmp_path,
+            combined=True,
+        )[0]["rust"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("tests/test_ci_workflow_performance.py", tmp_path)["all"]
+        == "false"
+    )
+    assert all(
+        value == "true"
+        for value in _classify_changed_paths(
+            ["tests/test_ci_workflow_performance.py"],
+            tmp_path,
+            event="merge_group",
+        )[0].values()
     )
 
 

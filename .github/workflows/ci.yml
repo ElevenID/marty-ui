@@ -168,7 +168,7 @@ jobs:
                   # also run in the required release lane, not service images.
                   release=true
                   ;;
-                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py)
+                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
                   # These test-only policy and fixture guards are collected by
                   # the root release pytest step, with no other CI/image owner.
                   # Their implementation inputs still retain their own lanes.
@@ -2281,6 +2281,8 @@ jobs:
           python scripts/capture_canvas_mirror_reference.py \
             .reference/marty-credentials-v0.1.76 \
             --release-image --publication-boundary-reference --check
+      - name: Require workflow policy test collection
+        run: python -m pytest --collect-only -q tests/test_ci_workflow_performance.py
       - name: Run repository release checks
         run: python -m pytest tests -v --tb=short
       - name: Report affected Rust packages in shadow mode
