@@ -1177,6 +1177,31 @@ dependence. The planner records these three source-backed consumers but keeps
 full-workspace service selection. No runtime implementation, release tier,
 test execution, or CI gate changes in this candidate.
 
+## A0 public-vector execution proof candidate (2026-10-07)
+
+The existing public-protocol guard inventories 23 Rust tests that load the
+gateway behavior vectors and verifies their source/test registration, but that
+static check alone cannot prove a current Cargo invocation executed each test.
+The authenticated log of the completed
+[contracts job for PR #1138 (CI run #2891)](https://github.com/ElevenID/marty-ui/actions/runs/37574211476/job/112639403441)
+contained an exact successful libtest line for all 23 declared owners. This is
+execution evidence for that run, not proof of each vector's dynamic assertion
+coverage or of a future run.
+
+This candidate adds a fail-closed post-workspace check in the existing Rust
+contracts job. It reads the already-produced `rust-workspace.log`, derives
+qualified test names from the same 23-owner inventory, and requires an exact
+`ok` line for every owner. Ignored, failed, missing, and merely similar names
+do not satisfy it. The existing static owner guard also requires the checker
+to remain a contracts-lane step after the workspace run. No Cargo command,
+test selection, security check, or protected merge-group gate is removed or
+repeated. The checker passed against the completed hosted log after stripping
+GitHub's display timestamps; 25 focused local tests and 123 workflow-policy
+tests passed. Independent review caught a step-placement/lane guard weakness,
+which was corrected and covered with negative mutations before PR validation.
+The remaining Canvas, service-acceptance, and transitive input inventories
+are not closed by this narrow proof.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

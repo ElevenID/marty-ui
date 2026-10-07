@@ -518,6 +518,14 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
     changes = job("changes")
     service = job("test-rust-services")
     gate = job("ci-gate")
+    workspace_step = "      - name: Run safe Rust contract groups concurrently\n"
+    vector_step = (
+        "      - name: Require public protocol vector test execution\n"
+        "        if: matrix.lane == 'contracts'\n"
+        "        shell: bash\n"
+        "        run: python3 -m scripts.ci.check_public_vector_execution "
+        '"$RUNNER_TEMP/rust-workspace.log"\n'
+    )
     required = (
         'rust_matrix=\'["canvas","contracts"]\'' in changes
         and "rust_matrix='[\"contracts\"]'" in changes
@@ -528,6 +536,9 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and "cargo test --locked --workspace --no-run" in service
         and "cargo test --locked --workspace --exclude marty-canvas-acceptance"
         in service
+        and service.count(workspace_step) == 1
+        and service.count(vector_step) == 1
+        and service.index(workspace_step) < service.index(vector_step)
         and "RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}" in gate
         and 'case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in' in gate
         and '\'true:true:["canvas","contracts"]\'' in gate
