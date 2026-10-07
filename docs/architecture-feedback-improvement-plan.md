@@ -1326,6 +1326,27 @@ compared with the preceding 602-row artifact, the missing row was one
 service-acceptance, and transitive input inventories are not closed by this
 narrow proof.
 
+## A0 published-probe timing attribution (2026-10-07, local candidate)
+
+The protected Canvas timing artifacts for [#1144](https://github.com/ElevenID/marty-ui/actions/runs/37605210608)
+and [#1145](https://github.com/ElevenID/marty-ui/actions/runs/37614331029)
+each contain 602 phase rows and 125 published-canvas `migration_seed` rows.
+Of those 125, 121 share the name `published_probe`, hiding which fixed
+constructor produced the event. This phase wraps the whole pinned probe,
+including migration, seed, and oracle work; summed phase durations overlap
+concurrent targets and are not wall-time savings or SQL-only costs. The
+later run was slower across readiness, probe, and scenario phases, not just
+one named fixture.
+
+The next A0 slice labels only the 25 reviewed, fixed constructor script
+origins; unknown scripts retain `published_probe`, and checked-in worker
+matrix case labels keep their existing separate validation. Rust and Python
+allowlists are compared against all current constructor origins by a policy
+test, with one pure Rust test for accepted and fallback paths in the
+composition-only diagnostic owner. No case selection, Docker operation,
+oracle, or protected gate changes. This improves future diagnosis but does
+not claim faster CI or justify database cloning without finer measurements.
+
 ## A6 protocol-test source ownership follow-up (2026-10-07)
 
 `tests/test_gateway_public_protocol_contract.py` and
