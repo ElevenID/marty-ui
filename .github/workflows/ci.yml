@@ -136,13 +136,13 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-rest-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
                   # Retain Rust qualification for contract metadata and also
                   # run release-collected evidence/obligation ownership checks.
                   rust=true
                   release=true
                   ;;
-                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
+                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_rest_input_evidence.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
                   # These exact test-only sources run in release pytest. Their
                   # manifest inputs retain the Rust discovery/evidence owner;
                   # implementation scripts, unknown siblings, and corpora
@@ -169,7 +169,7 @@ jobs:
                   # also run in the required release lane, not service images.
                   release=true
                   ;;
-                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
+                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_canvas_published_preflight.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
                   # These test-only policy and fixture guards are collected by
                   # the root release pytest step, with no other CI/image owner.
                   # Their implementation inputs still retain their own lanes.
