@@ -51,7 +51,7 @@ fn published_probe_timing_name(script: Option<&str>) -> String {
 
 // Only fixed phase labels and elapsed time leave the fixture. Never emit its
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
-struct PhaseTimer {
+pub(super) struct PhaseTimer {
     phase: &'static str,
     name: String,
     started: Instant,
@@ -68,9 +68,27 @@ impl PhaseTimer {
         }
     }
 
-    fn success(mut self) {
+    pub(super) fn success(mut self) {
         self.succeeded = true;
     }
+}
+
+// These are exact test-owned identities, never an oracle value or payload.
+// Time the whole repository matrix, including its template and owned cleanup,
+// so the CI artifact can distinguish it from the surrounding worker target.
+pub(super) enum RepositoryMatrix {
+    RosterMetadata,
+    ResourceRace,
+    Validation,
+}
+
+pub(super) fn repository_matrix_timer(matrix: RepositoryMatrix) -> PhaseTimer {
+    let name = match matrix {
+        RepositoryMatrix::RosterMetadata => "repository_roster_metadata",
+        RepositoryMatrix::ResourceRace => "repository_resource_race",
+        RepositoryMatrix::Validation => "repository_validation",
+    };
+    PhaseTimer::start("scenario", name)
 }
 
 // Matrix names come only from checked-in scenario fixtures after membership

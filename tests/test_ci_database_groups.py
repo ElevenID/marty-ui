@@ -363,6 +363,9 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         ("migration_seed", "published_probe"),
         ("migration_seed", "worker_validation_template"),
         ("scenario", "retry-after.http_date_future"),
+        ("scenario", "repository_roster_metadata"),
+        ("scenario", "repository_resource_race"),
+        ("scenario", "repository_validation"),
         ("cleanup", "published_database_removal"),
         ("contract", "canvas_sync_worker_postgres_contract"),
         ("contract_phase", "renewal_job_outcomes"),
@@ -373,6 +376,16 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+    for phase in ("fixture_seed", "cleanup"):
+        marker = json.dumps(
+            {
+                "phase": phase,
+                "name": "repository_roster_metadata",
+                "duration_ms": 1,
+                "status": "ok",
+            }
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
     for name in (
         "case_from_scenario",
         "json_depth_extra",
@@ -426,6 +439,25 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
     )
     assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 21
     assert set(wrapper_families) == GROUPS.PUBLISHED_MATRIX_SCENARIOS
+
+
+def test_repository_matrix_timing_labels_have_exact_rust_owners() -> None:
+    support = (
+        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
+    ).read_text(encoding="utf-8")
+    worker = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+    ).read_text(encoding="utf-8")
+    labels = re.findall(
+        r'RepositoryMatrix::(?:RosterMetadata|ResourceRace|Validation) => "([a-z_]+)"',
+        support,
+    )
+    assert len(labels) == len(set(labels)) == 3
+    assert set(labels) == GROUPS.REPOSITORY_MATRIX_NAMES
+    assert worker.count("repository_matrix_timer(") == 3
+    for variant in ("RosterMetadata", "ResourceRace", "Validation"):
+        assert worker.count(f"RepositoryMatrix::{variant}") == 1
+    assert worker.count("timing.success();") == 3
 
 
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:

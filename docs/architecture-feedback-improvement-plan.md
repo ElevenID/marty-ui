@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 19:04 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-07 21:40 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -16,6 +16,10 @@ while routine CI keeps one TLS timeout and one certificate-rejection proof.
 The protected #1150 database step took 10m28s versus 12m30s on the preceding
 protected run; full exact-main qualification passed. #1151 added eight exact
 root pytest source owners without removing a check; its protected run passed.
+#1152 added merge-group historical-input observations without changing gate
+selection. #1153 reused isolated schema clones for 22 Canvas repository cases;
+PR and protected CI passed, with 20 fewer repeated container/migration cycles.
+The hosted wall-time runs vary too much to attribute a pipeline saving yet.
 Full protected checks remain. The separate roster component draft is deferred
 for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
@@ -1524,14 +1528,15 @@ historical probes out of routine CI requires complete mounted-input closure
 and change-triggered full qualification, including merge-group semantics.
 Those conditions are not yet established; the probes remain required.
 
-## A4 Canvas repository-case database reuse (2026-10-07, reviewed candidate)
+## A4 Canvas repository-case database reuse (2026-10-07, merged)
 
 The published Canvas worker contract has two repository-only matrices: ten
 roster metadata reconciliation cases and twelve resource-race stale-write
 cases. Each case previously started a fresh pinned PostgreSQL container and
 ran the same schema migration, even though its mutable rows are case-local.
 The thirteen-case worker-validation matrix already proves an isolated
-`CREATE DATABASE ... TEMPLATE` pattern in this suite. This candidate reuses
+`CREATE DATABASE ... TEMPLATE` pattern in this suite. Reviewed
+[#1153](https://github.com/ElevenID/marty-ui/pull/1153) reuses
 that pattern: one migrated, unseeded template container per matrix, a distinct
 database clone and four-connection pool per case, and explicit verified close
 and drop after each case. It does not change case lists or assertions,
@@ -1543,9 +1548,37 @@ On one Windows/Docker host, passing baseline roster and race executions took
 71.10s and 6.20s respectively. The existing thirteen-case validation matrix
 also passed in 6.90s. One earlier baseline roster attempt failed, so these
 single passing samples do not establish steady-state or CI critical-path
-savings. The candidate was independently reviewed with no concrete findings;
-Linux hosted acceptance and protected qualification remain required before
-merge. The current routine Canvas lane still executes every named matrix.
+savings. Independent review found no concrete issue. Full
+[PR](https://github.com/ElevenID/marty-ui/actions/runs/37682037047) and
+[protected](https://github.com/ElevenID/marty-ui/actions/runs/37686594643)
+CI passed, and #1153 merged as `dbb28c1ce`. The current routine Canvas lane
+still executes every named matrix. Both hosted logs report the roster,
+resource-race, and validation repository tests as `ok`. Their timing artifacts
+have 518 successful rows, zero failed rows, and 110 startup/migration events,
+versus 130 events before the change. The PR database step took 9m05s versus
+7m10s on preceding #1152 PR CI; protected took 7m13s versus 10m25s on
+preceding #1152 protected CI. Unchanged composition also varied strongly, so
+these contrasting wall-time samples establish less repeated setup, not a
+causal CI speedup.
+
+## A0/A6 repository-matrix timing follow-up (2026-10-07, local candidate)
+
+The #1153 artifacts count database setup but have only an aggregate worker
+target duration for the roster, resource-race, and validation repository
+matrices. This prevents separating their test work from concurrent process
+cases and runner variation. A focused follow-up uses the existing sanitized
+CI phase stream to time the database/case work of exactly those three matrices,
+including template setup and owned cleanup but excluding initial reference
+loading. Fixed Rust enum variants emit fixed labels;
+the Python collector accepts them only as `scenario` rows, not fixture or
+cleanup names. It does not change test assertions, selections, databases,
+runtime deadlines, or required gates. Local policy/formatting checks pass;
+the package-scoped Rust test compiled, strict package Clippy passed, and a
+disposable PostgreSQL resource-race run emitted the exact `scenario` marker
+with `ok` after owned cleanup. No labeled container remained. Independent
+review found no blocking issue and verified the existing CI relay path.
+Hosted artifact capture and full protected qualification remain required
+before merge.
 
 ## Design references
 

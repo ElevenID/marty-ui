@@ -91,6 +91,15 @@ SCENARIO_NAMES = REST_SCENARIOS | frozenset(
         ).read_text(encoding="utf-8")
     )["cases"]
 )
+# Fixed, test-owned repository matrices; never derive timing identities from
+# scenario payloads or include them in the fixture/cleanup phase allowlists.
+REPOSITORY_MATRIX_NAMES = frozenset(
+    {
+        "repository_roster_metadata",
+        "repository_resource_race",
+        "repository_validation",
+    }
+)
 FIXTURE_NAMES = SCENARIO_NAMES
 CONTRACT_NAMES = frozenset(
     {
@@ -168,7 +177,7 @@ TIMING_NAMES = {
         }
     ),
     "fixture_seed": FIXTURE_NAMES,
-    "scenario": SCENARIO_NAMES,
+    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
     "contract": CONTRACT_NAMES,
     "contract_phase": frozenset(
