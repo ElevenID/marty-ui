@@ -273,6 +273,21 @@ OID4VP contract, the Go HAIP backend, and related consumer corrections in the
 large UI feature PR; batch remaining fixes and local tests before one hosted
 qualification run.
 
+2026-10-07 Flow live-acceptance batch: the existing disposable coordinated
+OpenBao/PostgreSQL probe now provisions the separate HAIP workload token file
+for the Rust Signing Keys service, runs the independent Go JOSE holder test,
+and executes Flow's live adapter, terminal HTTP replay and expired/cancelled
+HTTP tests against isolated PostgreSQL databases. The Go tool is supplied by
+the plugin Dockerfile's pinned builder image where it is absent on the host.
+The complete probe passed on the final harness revision: four live Issuance
+credential formats, three readiness challenges, ephemeral holder proof, Go
+holder JWE generation, all three Flow targets, and both phases of coordinated
+PostgreSQL/OpenBao Raft restore. Ruff, formatting, Python compilation and diff
+checks passed. No labeled disposable containers or volumes remained. This
+proves these candidate service paths with synthetic data; hosted CI, an
+actual wallet app, the exact release image and supported deployment cutover
+remain open.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -37,6 +38,13 @@ CATALOG = json.loads(
 )["images"]
 DATABASE = "marty_kms_restore_test"
 PASSWORD = "disposable-test-only"
+GO_IMAGE = next(
+    line.split()[1]
+    for line in (ROOT / "openbao/didcomm-authcrypt/Dockerfile")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line.startswith("FROM golang:")
+)
 
 
 def port_of(name: str, internal: str) -> int:
@@ -102,6 +110,22 @@ def build_rust() -> Path:
             "-j",
             "1",
         ],
+        *(
+            [
+                "cargo",
+                "+1.95.0",
+                "test",
+                "--locked",
+                "-p",
+                "marty-flow",
+                "--test",
+                target,
+                "--no-run",
+                "-j",
+                "1",
+            ]
+            for target in ("haip_live_signing", "haip_remote_http", "haip_expired_http")
+        ),
     ):
         result = subprocess.run(command, cwd=rust, timeout=1800, check=False)
         if result.returncode:
@@ -263,7 +287,13 @@ def read_volume_file(volume: str, path: str) -> str:
 
 
 def start_signing(
-    binary: Path, bao_url: str, token: str, redis_port: int, key: str, log_path: Path
+    binary: Path,
+    bao_url: str,
+    token: str,
+    haip_token_file: Path,
+    redis_port: int,
+    key: str,
+    log_path: Path,
 ):
     port = free_port()
     environment = os.environ.copy()
@@ -276,6 +306,7 @@ def start_signing(
             "ISSUER_BASE_URL": "https://issuer.example",
             "BAO_ADDR": bao_url,
             "BAO_TOKEN": token,
+            "HAIP_KMS_TOKEN_FILE": str(haip_token_file),
         }
     )
     with log_path.open("wb") as log:
@@ -407,6 +438,99 @@ def live_issuance_signing_phase(bao_url: str, token: str) -> None:
         raise RuntimeError("Rust holder-proof live-KMS proof failed")
 
 
+def flow_haip_phase(
+    pg_name: str, database_url: str, signing_url: str, key: str, input_path: Path
+) -> None:
+    for name in ("marty_haip_http_test", "marty_haip_expiry_test"):
+        docker("exec", pg_name, "createdb", "-U", "postgres", name)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MARTY_TEST_SIGNING_KEYS_URL": signing_url.removesuffix("/internal"),
+            "MARTY_TEST_SIGNING_KEYS_API_KEY": key,
+            "MARTY_TEST_HAIP_FLOW_INPUT": str(input_path),
+        }
+    )
+    go_test = [
+        "go",
+        "test",
+        "./integration",
+        "-run",
+        "^TestHaipRustSigningRouteLiveOpenBao$",
+        "-count=1",
+    ]
+    if shutil.which("go"):
+        result = subprocess.run(
+            go_test,
+            cwd=ROOT / "openbao/didcomm-authcrypt",
+            env=environment,
+            timeout=300,
+            check=False,
+        )
+    else:
+        container_environment = environment.copy()
+        container_environment["MARTY_TEST_SIGNING_KEYS_URL"] = environment[
+            "MARTY_TEST_SIGNING_KEYS_URL"
+        ].replace("127.0.0.1", "host.docker.internal")
+        container_environment["MARTY_TEST_HAIP_FLOW_INPUT"] = f"/out/{input_path.name}"
+        result = subprocess.run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--label",
+                "marty.disposable=kms-coordinated-restore",
+                "-v",
+                f"{ROOT / 'openbao/didcomm-authcrypt'}:/src:ro",
+                "-v",
+                f"{input_path.parent}:/out",
+                "-w",
+                "/src",
+                "-e",
+                "MARTY_TEST_SIGNING_KEYS_URL",
+                "-e",
+                "MARTY_TEST_SIGNING_KEYS_API_KEY",
+                "-e",
+                "MARTY_TEST_HAIP_FLOW_INPUT",
+                GO_IMAGE,
+                *go_test,
+            ],
+            env=container_environment,
+            timeout=300,
+            check=False,
+        )
+    if result.returncode or not input_path.is_file():
+        raise RuntimeError("Disposable Go holder HAIP response generation failed")
+    for target, database in (
+        ("haip_live_signing", "marty_haip_http_test"),
+        ("haip_remote_http", "marty_haip_http_test"),
+        ("haip_expired_http", "marty_haip_expiry_test"),
+    ):
+        environment["HAIP_FLOW_POSTGRES_TEST_URL"] = (
+            database_url.rsplit("/", 1)[0] + "/" + database
+        )
+        result = subprocess.run(
+            [
+                "cargo",
+                "+1.95.0",
+                "test",
+                "--locked",
+                "-p",
+                "marty-flow",
+                "--test",
+                target,
+                "-j",
+                "1",
+            ],
+            cwd=ROOT / "rust",
+            env=environment,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"Disposable Flow {target} HAIP proof failed")
+
+
 def run() -> None:
     prepare_image()
     binary = build_rust()
@@ -453,6 +577,10 @@ def run() -> None:
             root = read_volume_file(state, "root.token")
             unseal = read_volume_file(state, "unseal.key")
             token = read_volume_file(runtime, "signing_keys_openbao_token")
+            haip_token_file = temp / "haip-kms.token"
+            haip_token_file.write_text(
+                read_volume_file(runtime, "haip-kms.token"), encoding="utf-8"
+            )
             live_issuance_signing_phase(bao_url, token)
             init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
             if unseal != init_material["unseal_keys_b64"][0]:
@@ -497,7 +625,16 @@ def run() -> None:
             )
             api_key = f"disposable-{uuid.uuid4().hex}"
             signing_process, signing_url = start_signing(
-                binary, bao_url, token, redis_port, api_key, temp / "signing-source.log"
+                binary,
+                bao_url,
+                token,
+                haip_token_file,
+                redis_port,
+                api_key,
+                temp / "signing-source.log",
+            )
+            flow_haip_phase(
+                pg_name, database_url, signing_url, api_key, temp / "haip-holder.json"
             )
             rust_phase("write", database_url, signing_url, api_key)
             stop_process(signing_process)
@@ -671,6 +808,7 @@ def run() -> None:
                 binary,
                 restored_bao_url,
                 token,
+                haip_token_file,
                 redis_port,
                 api_key,
                 temp / "signing-restored.log",
