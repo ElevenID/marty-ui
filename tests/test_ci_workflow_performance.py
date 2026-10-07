@@ -1402,6 +1402,80 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     )
 
 
+def test_shadow_planner_sources_use_existing_release_owner_on_prs(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    release = workflow["jobs"]["test-release-contracts"]
+    assert "needs.changes.outputs.rust == 'true'" in release["if"]
+    assert "needs.changes.outputs.release == 'true'" in release["if"]
+    release_steps = {step.get("name"): step for step in release["steps"]}
+    assert release_steps["Run repository release checks"]["run"] == (
+        "python -m pytest tests -v --tb=short"
+    )
+    shadow = release_steps["Report affected Rust packages in shadow mode"]
+    assert shadow["if"] == "github.event_name == 'pull_request'"
+    assert shadow["run"] == "python3 scripts/ci/plan_affected_rust.py"
+    assert shadow["env"] == {
+        "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+        "HEAD_SHA": "${{ github.sha }}",
+    }
+    assert not any(
+        step.get("name") == "Report affected Rust packages in shadow mode"
+        for step in workflow["jobs"]["rust-lint-policy"]["steps"]
+    )
+
+    paths = ("scripts/ci/plan_affected_rust.py", "tests/test_plan_affected_rust.py")
+    for path in paths:
+        assert (ROOT / path).is_file()
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected == {
+            "all": "false",
+            "ui": "false",
+            "python": "false",
+            "rust": "false",
+            "release": "true",
+            "verification": "false",
+            "security": "false",
+        }
+        for other_workflow in (ROOT / ".github/workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert path not in other_workflow.read_text(encoding="utf-8")
+
+    docker_context = (ROOT / "services/Dockerfile.dockerignore").read_text(
+        encoding="utf-8"
+    )
+    assert docker_context.startswith("# Only public service build and runtime inputs.")
+    assert "\n**\n" in docker_context
+    assert "!scripts/ci/run-public-rust-build.sh" in docker_context
+    assert "!scripts/ci/plan_affected_rust.py" not in docker_context
+    assert "plan_affected_rust.py" not in (ROOT / "services/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    assert _classify_changed_paths(paths, tmp_path, combined=True)[0]["rust"] == "false"
+    assert (
+        _classify_changed_paths(
+            [paths[0], "rust/services/flow/src/lib.rs"], tmp_path, combined=True
+        )[0]["rust"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("scripts/ci/unknown_planner.py", tmp_path)["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("tests/test_plan_affected_rust_helper.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
+    assert (
+        _classify_changed_paths([paths[0]], tmp_path, event="merge_group")[0]["all"]
+        == "true"
+    )
+
+
 def test_frozen_reference_test_sources_select_only_release_on_prs(
     tmp_path: Path,
 ) -> None:
@@ -2000,7 +2074,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
         in published
     )
-    assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in published
+    assert (
+        'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in published
+    )
     assert 'wait "$composition_pid" || composition_status=$?' in published
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (

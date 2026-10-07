@@ -1019,6 +1019,32 @@ tests and 11 shell fallback cases. Hosted Linux evidence for the early
 base/Kubernetes proofs and the PostgreSQL completion marker remains required
 before merge. No native process case has been removed.
 
+## A6 shadow-planner ownership candidate (2026-10-07)
+
+The two exact CI-only inputs `scripts/ci/plan_affected_rust.py` and
+`tests/test_plan_affected_rust.py` currently select the entire PR matrix because
+they fall through the general `scripts/*`/`tests/*` classifier. The shadow
+planner is invoked by CI only and is excluded from the public service Docker
+context. Release Contract Tests already run the complete root pytest suite on
+Rust-selected PRs, including the planner tests; its own release selector also
+selects that same job. This candidate routes only those two exact files to
+release checks, moves the informational shadow report to that job, and removes
+the duplicate planner unittest invocation from Rust Lint. Mixed Rust inputs,
+unknown siblings, workflow edits, and protected merge groups retain their
+existing broader lanes. No runtime/test behavior or production release gate is
+relaxed. The report remains observational and does not authorize selective
+Rust service execution.
+
+Local policy validation passed 122 workflow-performance tests; planner pytest
+passed 23 tests and 93 subtests. Independent review verified no other workflow
+or service-image owner for the exact files and reproduced no-dependency Cargo
+metadata plus all planner tests with an empty Cargo home. Existing hosted
+[release-contract evidence](https://github.com/ElevenID/marty-ui/actions/runs/37550835490)
+shows the same planner tests executing on the Ubuntu release runner. The
+candidate needs exact-head PR and protected merge-queue validation before
+promotion. No CI time saving is claimed until a comparable planner-only PR is
+measured after merge.
+
 ## 2026-10-06 protected Canvas and feedback checkpoint
 
 [UI #1127](https://github.com/ElevenID/marty-ui/pull/1127) passed protected
