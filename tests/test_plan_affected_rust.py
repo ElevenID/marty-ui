@@ -564,6 +564,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
         expected_observed_closure = {
             "marty-organization": {
                 "marty-organization",
+                "marty-credential-template",
+                "marty-verification-service",
                 "marty-issuance-service",
                 "marty-auth",
                 "marty-trust-profile",
@@ -573,6 +575,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             },
             "marty-credential-template": {
                 "marty-credential-template",
+                "marty-verification-service",
                 "marty-issuance-service",
                 "marty-flow",
                 "marty-auth",
@@ -580,6 +583,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
             },
             "marty-revocation-profile": {
                 "marty-revocation-profile",
+                "marty-credential-template",
+                "marty-verification-service",
                 "marty-issuance-service",
                 "marty-flow",
                 "marty-auth",
