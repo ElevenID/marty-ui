@@ -469,6 +469,7 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
             "rust": "true",
             "rust_runtime": "false",
             "rust_matrix": '["contracts"]',
+            "openbao": "false",
             "release": "false",
             "verification": "false",
             "security": "false",
@@ -567,6 +568,56 @@ def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
     assert queued["rust_matrix"] == '["canvas","contracts"]'
 
 
+def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> None:
+    for path in (
+        "openbao/didcomm-authcrypt/backend/haip.go",
+        "docker/openbao-haip-migration-audit-policy.hcl",
+    ):
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
+    assert (
+        _classify_changed_path("rust/services/flow/src/lib.rs", tmp_path)["openbao"]
+        == "false"
+    )
+    assert (
+        _classify_changed_paths(
+            ["rust/services/flow/src/lib.rs"], tmp_path, event="merge_group"
+        )[0]["openbao"]
+        == "true"
+    )
+
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-openbao-didcomm-plugin"]
+    assert job["if"] == "needs.changes.outputs.openbao == 'true'"
+    assert job["steps"][2]["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    storage_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Qualify packaged plugin storage and self-host Raft behavior"
+    )
+    assert (
+        storage_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"] == "marty-openbao-didcomm:ci"
+    )
+    for probe in (
+        "probe_didcomm_openbao_file_storage.py",
+        "probe_selfhost_openbao_raft_bootstrap.py",
+        "probe_didcomm_openbao_ha.py",
+    ):
+        assert probe in storage_gate["run"]
+    recovery_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Qualify live Raft snapshot export and recovery"
+    )
+    assert recovery_gate["shell"] == "pwsh"
+    assert "test_openbao_raft_recovery.ps1" in recovery_gate["run"]
+    assert "CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet ./..." in (
+        ROOT / "openbao/didcomm-authcrypt/Dockerfile"
+    ).read_text(encoding="utf-8")
+    assert "test-openbao-didcomm-plugin" in document["jobs"]["ci-gate"]["needs"]
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -629,6 +680,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust",
         "rust_runtime",
         "rust_matrix",
+        "openbao",
         "release",
         "verification",
         "security",
@@ -646,6 +698,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-rust-feature-probe",
         "test-rust-passport-image",
         "test-rust-services",
+        "test-openbao-didcomm-plugin",
         "rust-lint-policy",
         "test-rust-service-images",
         "public-protocol-contract",
@@ -696,6 +749,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             "rust-lint-policy",
             "rust-supply-chain",
         },
+        "openbao": {"test-openbao-didcomm-plugin"},
         "rust_runtime": {
             "test-passport-fence-postgres",
             "test-rust-feature-probe",
@@ -730,6 +784,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "PYTHON_SELECTED": "python",
         "RUST_SELECTED": "rust",
         "RUST_RUNTIME_SELECTED": "rust_runtime",
+        "OPENBAO_SELECTED": "openbao",
         "RELEASE_SELECTED": "release",
         "VERIFICATION_SELECTED": "verification",
         "SECURITY_SELECTED": "security",
@@ -781,7 +836,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 18)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 19)
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -795,6 +850,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         (),
         ("ui",),
         ("rust",),
+        ("rust", "openbao", "security"),
         ("python", "security"),
         ("release",),
         ("release", "verification"),
@@ -1035,6 +1091,7 @@ def test_actual_classifier_selects_gates_for_compiler_and_runtime_inputs(
             "ui",
             "python",
             "rust",
+            "openbao",
             "release",
             "verification",
             "security",
@@ -1166,6 +1223,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "ui": "false",
             "python": "false",
             "rust": str(path.startswith("contracts/")).lower(),
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1235,6 +1293,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1333,6 +1392,7 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1372,6 +1432,7 @@ def test_release_contract_test_sources_keep_their_release_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1429,6 +1490,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1506,6 +1568,7 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
             "ui": "false",
             "python": "false",
             "rust": "false",
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1566,6 +1629,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1630,6 +1694,7 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
     dockerfiles = [
         ROOT / "services/Dockerfile",
         ROOT / "services/Dockerfile.migrations",
+        ROOT / "openbao/didcomm-authcrypt/Dockerfile",
         ROOT / "rust/services/Dockerfile.ci",
         *(ROOT / "rust/services").glob("*/Dockerfile"),
     ]

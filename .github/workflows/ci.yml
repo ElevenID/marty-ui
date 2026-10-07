@@ -38,6 +38,7 @@ jobs:
       rust: ${{ steps.classify.outputs.rust }}
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
       rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
+      openbao: ${{ steps.classify.outputs.openbao }}
       release: ${{ steps.classify.outputs.release }}
       verification: ${{ steps.classify.outputs.verification }}
       security: ${{ steps.classify.outputs.security }}
@@ -61,6 +62,7 @@ jobs:
           rust=false
           rust_runtime=false
           rust_matrix='["canvas","contracts"]'
+          openbao=false
           release=false
           verification=false
           security=false
@@ -152,6 +154,11 @@ jobs:
                 rust/*|proto/*|contracts/*)
                   rust=true
                   ;;
+                openbao/*|docker/openbao-*)
+                  openbao=true
+                  rust=true
+                  security=true
+                  ;;
                 release/stack-lock.json|.github/workflows/ci.yml|.github/actions/*|docker-compose*.yml|k8s/*)
                   all=true
                   ;;
@@ -212,6 +219,7 @@ jobs:
             ui=true
             python=true
             rust=true
+            openbao=true
             release=true
             verification=true
             security=true
@@ -233,6 +241,7 @@ jobs:
             printf 'rust=%s\n' "$rust"
             printf 'rust_runtime=%s\n' "$rust_runtime"
             printf 'rust_matrix=%s\n' "$rust_matrix"
+            printf 'openbao=%s\n' "$openbao"
             printf 'release=%s\n' "$release"
             printf 'verification=%s\n' "$verification"
             printf 'security=%s\n' "$security"
@@ -647,6 +656,41 @@ jobs:
           fi
           grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
 
+  test-openbao-didcomm-plugin:
+    name: Test OpenBao DIDComm plugin image
+    needs: changes
+    if: needs.changes.outputs.openbao == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Test and build the pinned OpenBao plugin image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: openbao/didcomm-authcrypt/Dockerfile
+          load: true
+          push: false
+          tags: marty-openbao-didcomm:ci
+          provenance: false
+      - name: Verify packaged plugin binary
+        run: docker run --rm --entrypoint /bin/sh marty-openbao-didcomm:ci -ec 'test -x /plugins/openbao-didcomm-authcrypt'
+      - name: Qualify packaged plugin storage and self-host Raft behavior
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+        run: |
+          python3 scripts/probe_didcomm_openbao_file_storage.py
+          python3 scripts/probe_selfhost_openbao_raft_bootstrap.py
+          python3 scripts/probe_didcomm_openbao_ha.py
+      - name: Qualify live Raft snapshot export and recovery
+        shell: pwsh
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+        run: ./scripts/test_openbao_raft_recovery.ps1
+
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})
     needs: changes
@@ -683,7 +727,7 @@ jobs:
           --health-timeout 2s
           --health-retries 20
       openbao:
-        image: quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
+        image: quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
         env:
           BAO_DEV_ROOT_TOKEN_ID: test-only
           BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
@@ -1561,12 +1605,15 @@ jobs:
       - name: Check formatting
         working-directory: rust
         run: cargo fmt --all -- --check
-      - name: Keep MMF security on its focused UI feature set
+      - name: Keep MMF security and Marty Core on reviewed feature sets
         working-directory: rust
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --locked --format-version 1 | python3 ../scripts/ci/check_mmf_security_features.py
+          metadata="$RUNNER_TEMP/rust-cargo-metadata.json"
+          cargo metadata --locked --format-version 1 > "$metadata"
+          python3 ../scripts/ci/check_mmf_security_features.py < "$metadata"
+          python3 ../scripts/ci/check_marty_core_kms_boundary.py < "$metadata"
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -2492,7 +2539,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-rust-passport-image, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-rust-passport-image, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -2504,6 +2551,7 @@ jobs:
       RUST_SELECTED: ${{ needs.changes.outputs.rust }}
       RUST_RUNTIME_SELECTED: ${{ needs.changes.outputs.rust_runtime }}
       RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}
+      OPENBAO_SELECTED: ${{ needs.changes.outputs.openbao }}
       RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
       VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
       SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
@@ -2518,6 +2566,7 @@ jobs:
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
       RUST_PASSPORT_RESULT: ${{ needs.test-rust-passport-image.result }}
       RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
+      OPENBAO_RESULT: ${{ needs.test-openbao-didcomm-plugin.result }}
       RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
       RUST_IMAGES_RESULT: ${{ needs.test-rust-service-images.result }}
       PUBLIC_PROTOCOL_RESULT: ${{ needs.public-protocol-contract.result }}
@@ -2533,7 +2582,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 18 ]]
+          [[ "${#results[@]}" -eq 19 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -2549,7 +2598,7 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
-          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
           # The aggregate matrix result alone cannot prove both lanes ran.
@@ -2577,6 +2626,7 @@ jobs:
             require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
+            require_selected test-openbao-didcomm-plugin "$OPENBAO_RESULT" "$OPENBAO_SELECTED"
             require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
             require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"
