@@ -85,6 +85,37 @@ run broader signing-keys tests, then include this with the large UI feature PR.
 The UI source remains uncommitted for that grouped review; no deployment or
 release artifact is qualified by this checkpoint.
 
+2026-10-07 managed-profile follow-up: the canonical Rust profile binding
+validator now rejects a managed key outside the profile tenant and tuple.
+This covers create, update, and DID resolution before publication; direct
+provider public-key lookup and profile enrichment retain their pre-read guards.
+A focused unit test covers valid ownership, a foreign tuple-derived name, and
+a foreign tenant namespace. The library suite passed 131 tests (seven ignored).
+The broader signing-keys test-target run passed 170 tests with 41 opt-in tests
+ignored when built one job at a time. Its initial parallel build ran out of
+Windows compiler memory; it was not a test failure. Five opt-in managed-profile
+route tests passed against disposable Redis and a mock Transit server after
+the mock metadata was corrected to include the real provider's non-exportable,
+non-imported signing flags. The scoped OpenBao policy and adapter checks plus
+mock and real-provider cross-tenant route checks passed again; the probe
+removed both disposable containers. These are local candidate checks, not
+hosted CI or a qualified release artifact. Next: inspect other internal paths
+that consume managed profile keys, then prepare the grouped UI feature review.
+
+2026-10-07 DID-signing consistency review: `sign_with_issuer_did` now reads the
+current managed KMS public key and requires it to match the published DID
+verification method before signing. This closes a rotation/stale-publication
+case where the route could otherwise return a signature that does not verify
+under the method it reports. The opt-in managed-profile route suite now mutates
+the mock provider to a distinct valid Ed25519 public key and expects a conflict
+while the DID document remains stale; its positive create/resolve/sign and
+missing-key assertions still pass. The disposable scoped OpenBao + Redis probe
+passed again, including all five managed-profile route tests. The broader test
+suite passed 170 tests with 41 opt-in tests ignored after this edit, built with
+one Cargo job to avoid the earlier Windows compiler-memory failure. Targeted
+Clippy passed with warnings denied. Hosted CI and release qualification remain
+pending.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
