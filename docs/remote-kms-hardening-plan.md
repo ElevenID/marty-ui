@@ -293,6 +293,36 @@ an existing remote messaging agent or provider extension that implements the
 required protocol with non-exportable custody; do not substitute another curve,
 export a sender key, or downgrade authcrypt to make the pinned Transit API fit.
 
+Additional 2026-10-07 provider screening: [AWS KMS DeriveSharedSecret](https://docs.aws.amazon.com/kms/latest/APIReference/API_DeriveSharedSecret.html)
+documents NIST ECC or SM2 key pairs, so it does not establish X25519 support.
+[Cosmian documents X25519 key-pair creation](https://docs.cosmian.com/versions/kms/5.26.0/kmip_support/_create_key_pair.html),
+but that does not establish a non-exporting operation that produces the two
+ECDH-1PU inputs or a complete DIDComm envelope. These are source-screening
+results only; no provider has passed a real recipient-decryption exercise.
+
+### Integration-secret custody seam
+
+`IntegrationSecretCipher` currently holds a raw AES-256 key and stores standard
+base64 of a 12-byte nonce, AES-GCM ciphertext and 16-byte tag. The database
+column `organization_integration_secrets.encrypted_secret_value` is text; no
+envelope version or tenant/purpose AAD is stored. Issuance startup and the
+Canvas sync worker load the raw master key independently. The same PostgreSQL
+vault serves OAuth, Canvas Credentials and management calls, making it the
+canonical place to move encryption and decryption behind one async remote
+storage interface. The existing Python vector proves the legacy layout but
+does not prove deployed data or old-key availability.
+
+Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
+before decrypting and updated by secret ID alone. The local UI branch now locks
+the tenant-bound row, authenticates ciphertext first, and only then updates
+tenant-bound usage in the same transaction. The focused Rust test target
+compiled, and its tampered-ciphertext regression passed against a disposable
+PostgreSQL 16 container; the container was removed. This is migration preparation,
+not opaque custody yet. New ciphertext must carry an explicit version and bind
+organization, secret ID, provider and purpose; production must not retain a
+legacy raw-key read fallback. Legacy reads need an explicit qualified migration
+and recovery window before raw-key configuration is retired.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch

@@ -732,7 +732,8 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
         let row = sqlx::query(
             "SELECT encrypted_secret_value
              FROM issuance_service.organization_integration_secrets
-             WHERE id = $1 AND organization_id = $2 AND enabled = true",
+             WHERE id = $1 AND organization_id = $2 AND enabled = true
+             FOR UPDATE",
         )
         .bind(secret_id)
         .bind(organization_id)
@@ -743,22 +744,22 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
             transaction.rollback().await.map_err(repository_error)?;
             return Ok(None);
         };
+        let encrypted: String = row
+            .try_get("encrypted_secret_value")
+            .map_err(repository_error)?;
+        let plaintext = self.cipher.decrypt(&encrypted)?;
         sqlx::query(
             "UPDATE issuance_service.organization_integration_secrets
-             SET last_used_at = clock_timestamp() WHERE id = $1",
+             SET last_used_at = clock_timestamp()
+             WHERE id = $1 AND organization_id = $2 AND enabled = true",
         )
         .bind(secret_id)
+        .bind(organization_id)
         .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
         transaction.commit().await.map_err(repository_error)?;
-        let encrypted: String = row
-            .try_get("encrypted_secret_value")
-            .map_err(repository_error)?;
-        self.cipher
-            .decrypt(&encrypted)
-            .map(Some)
-            .map_err(Into::into)
+        Ok(Some(plaintext))
     }
 
     async fn save(&self, secret: NewIntegrationSecret) -> Result<(), CanvasOAuthError> {

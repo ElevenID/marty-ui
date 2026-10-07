@@ -59,6 +59,32 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
     .await
     .expect("encrypted value");
     assert!(!encrypted.contains("plaintext-client-secret"));
+    sqlx::query(
+        "UPDATE issuance_service.organization_integration_secrets
+         SET encrypted_secret_value = 'invalid'
+         WHERE id = 'client-secret-1' AND organization_id = 'org-1'",
+    )
+    .execute(&pool)
+    .await
+    .expect("tamper stored ciphertext");
+    assert!(vault.value("org-1", "client-secret-1").await.is_err());
+    let last_used: Option<chrono::DateTime<Utc>> = sqlx::query_scalar(
+        "SELECT last_used_at FROM issuance_service.organization_integration_secrets
+         WHERE id = 'client-secret-1' AND organization_id = 'org-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("failed read leaves usage unchanged");
+    assert!(last_used.is_none());
+    sqlx::query(
+        "UPDATE issuance_service.organization_integration_secrets
+         SET encrypted_secret_value = $1
+         WHERE id = 'client-secret-1' AND organization_id = 'org-1'",
+    )
+    .bind(&encrypted)
+    .execute(&pool)
+    .await
+    .expect("restore stored ciphertext");
     assert_eq!(
         vault.value("org-1", "client-secret-1").await.unwrap(),
         Some("plaintext-client-secret".to_owned())
