@@ -1145,7 +1145,14 @@ planner still selects the whole Rust workspace for service changes. These
 observations do not close the remaining runtime, proto, rendered-deployment,
 or acceptance-test dependency graph and do not authorize a narrower gate.
 
-Next A3 observation candidate: Issuance, Credential Template, and the
+Reviewed [#1137](https://github.com/ElevenID/marty-ui/pull/1137) merged as
+`daaa41ecb` after its [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/37572181846)
+passed in 10m14s and its full protected [merge CI](https://github.com/ElevenID/marty-ui/actions/runs/37573042075)
+passed all 23 jobs in 39m30s. The protected Canvas timing artifact retained
+602 successful phase rows. This scoped PR result confirms feedback selection;
+it is not a faster Canvas run or a complete non-Cargo dependency map.
+
+This merged A3 observation records that Issuance, Credential Template, and the
 conditionally enabled Verification Credentials compatibility resolver use
 `SIGNING_KEYS_INTERNAL_URL`, defaulting to Gateway's authenticated
 `/internal/signing-keys` route. Each requests `resolve-issuer-did`; Gateway
@@ -1154,7 +1161,30 @@ Verification can fall back to a public DID resolver when its governance policy
 allows it, so that edge is conditional rather than a claim of exclusive
 dependence. The planner records these three source-backed consumers but keeps
 full-workspace service selection. No runtime implementation, release tier,
-test execution, or CI gate changes in this candidate.
+test execution, or CI gate changes were made.
+
+## A6 workflow-policy feedback candidate (2026-10-07)
+
+The protected #1137 release job spent 639 of its 713 seconds in root pytest.
+Timestamp gaps in its completed log identify one synthetic Rust-leaf classifier
+regression as an approximately 99-second span; those gaps are diagnostic, not
+pytest per-case duration measurements. The test repeatedly classified twelve
+independent immutable leaves and rebuilt the same source-ownership inventory
+for each synthetic diff. A test-harness-only change retains the real Bash
+classifier and a separate result assertion for each leaf, but computes the
+unchanged inventory once per synthetic Bash process. Failed proof still forces
+the full Rust runtime plan. The exact test passed locally in 50.96 seconds
+before and 15.85 seconds after this change; the full policy file passed all
+122 tests in 31.32 seconds. Hosted time saving is not yet measured.
+
+The same exact policy-test source has only the root release pytest execution
+owner. A proposed selector routes edits to that source to release checks while
+retaining mixed/unknown inputs and full protected merge-group validation.
+Independent review found and corrected a deletion gap: the release job now
+requires `pytest --collect-only` to find this file and its tests before the
+normal root suite executes them once. Local collection found 122 cases in
+0.23 seconds. No runtime test, image, scanner, or security obligation is
+removed; the workflow edit itself must pass the complete CI matrix.
 
 ## Design references
 
