@@ -349,7 +349,22 @@ git() {
     *) return 99 ;;
   esac
 }
-python3() { "$SYNTHETIC_PYTHON" "$@"; }
+python3() {
+  if [[ "$1" == tests/test_rust_test_only_docker_context.py &&
+        "${2:-}" == --emit-verified-leaves ]]; then
+    # Every synthetic diff in this one Bash process uses the same immutable
+    # checkout. Run the real proof once, but exercise the real classifier and
+    # exact output independently for each diff. A failed proof is never cached.
+    if [[ "${SYNTHETIC_LEAVES_READY:-false}" != true ]]; then
+      "$SYNTHETIC_PYTHON" "$@" > "$RUNNER_TEMP/synthetic-verified-leaves" || return
+      SYNTHETIC_LEAVES_READY=true
+    fi
+    cat "$RUNNER_TEMP/synthetic-verified-leaves"
+  else
+    "$SYNTHETIC_PYTHON" "$@"
+  fi
+}
+SYNTHETIC_LEAVES_READY=false
 export BASE_SHA=synthetic-base
 index=0
 while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
@@ -362,10 +377,9 @@ while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
 done < "$SYNTHETIC_PATHS_FILE"
 """
     if proof_failure:
-        prelude = prelude.replace(
-            'python3() { "$SYNTHETIC_PYTHON" "$@"; }',
-            "python3() { return 43; }",
-        )
+        start = prelude.index("python3() {")
+        end = prelude.index("\nexport BASE_SHA=", start)
+        prelude = prelude[:start] + "python3() { return 43; }" + prelude[end:]
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
@@ -460,8 +474,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         "initiation_didcomm_renewal_tests.rs"
     )
     assert nested in leaves
-    for leaf in leaves:
-        selected = _classify_changed_paths([leaf], tmp_path, include_rust_plan=True)[0]
+    for leaf, selected in zip(
+        leaves,
+        _classify_changed_paths(leaves, tmp_path, include_rust_plan=True),
+        strict=True,
+    ):
         assert selected == {
             "all": "false",
             "ui": "false",
