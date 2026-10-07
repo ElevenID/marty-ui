@@ -5,7 +5,72 @@
 //! path; dependency packages do not receive `CARGO_BIN_EXE_*` from Cargo.
 
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use std::collections::BTreeSet;
+
+// The pinned migration probe leaves its template database disconnected.
+// Repository-only cases can clone that pristine schema while each case keeps
+// independent mutable state. The surviving container owner removes every
+// clone even if a case panics before its explicit DROP DATABASE.
+async fn published_template_admin(owned: &canvas_published_database::PublishedDatabase) -> PgPool {
+    let mut admin_url = url::Url::parse(&owned.url).unwrap();
+    assert_eq!(admin_url.path(), "/canvas_published_schema_test");
+    admin_url.set_path("/postgres");
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(admin_url.as_str())
+        .await
+        .unwrap()
+}
+
+async fn clone_published_case(
+    owned: &canvas_published_database::PublishedDatabase,
+    admin: &PgPool,
+    case_name: &str,
+) -> (String, PgPool) {
+    // SQL identifiers cannot be bound; generate and validate the name here,
+    // never from a scenario or its payload. The admin pool is on `postgres`,
+    // because a connected template cannot be cloned.
+    let database_name = format!("canvas_validation_{}", uuid::Uuid::new_v4().simple());
+    assert!(
+        database_name.len() < 63
+            && database_name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE DATABASE \"{database_name}\" TEMPLATE \"canvas_published_schema_test\""
+    )))
+    .execute(admin)
+    .await
+    .unwrap();
+    let mut case_url = url::Url::parse(&owned.url).unwrap();
+    case_url.set_path(&format!("/{database_name}"));
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(case_url.as_str())
+        .await
+        .unwrap();
+    let unseeded_jobs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(unseeded_jobs, 0, "{case_name}: clone was not pristine");
+    (database_name, pool)
+}
+
+async fn close_published_case(admin: &PgPool, database_name: String, pool: PgPool) {
+    pool.close().await;
+    // No FORCE: a leaked connection fails the test instead of being hidden.
+    // The owned tmpfs container remains the final cleanup boundary.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE \"{database_name}\""
+    )))
+    .execute(admin)
+    .await
+    .unwrap();
+}
 
 #[expect(
     dead_code,
@@ -522,6 +587,10 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = published_template_admin(&owned).await;
     for case in [
         "absent",
         "preexisting",
@@ -534,18 +603,12 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
         "expired_before_write",
         "expired_during_lock",
     ] {
-        let owned = canvas_published_database::PublishedDatabase::start()
-            .await
-            .unwrap();
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&owned.url)
-            .await
-            .unwrap();
+        let (database_name, pool) = clone_published_case(&owned, &admin, case).await;
         canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
-        pool.close().await;
-        owned.close().unwrap();
+        close_published_case(&admin, database_name, pool).await;
     }
+    admin.close().await;
+    owned.close_verified().unwrap();
 }
 
 #[path = "../../../services/issuance/tests/support/canvas_worker_mixed_roster_replay.rs"]
@@ -971,6 +1034,10 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = published_template_admin(&owned).await;
     for name in [
         "platform_reconfigured",
         "application_removed",
@@ -985,18 +1052,12 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
         "application_context_changed_wrong_owner",
         "application_context_changed_wrong_attempt",
     ] {
-        let owned = canvas_published_database::PublishedDatabase::start()
-            .await
-            .unwrap();
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&owned.url)
-            .await
-            .unwrap();
+        let (database_name, pool) = clone_published_case(&owned, &admin, name).await;
         canvas_worker_resource_race_replay::assert_repository_errors(&pool, name).await;
-        pool.close().await;
-        owned.close().unwrap();
+        close_published_case(&admin, database_name, pool).await;
     }
+    admin.close().await;
+    owned.close_verified().unwrap();
 }
 
 fn assert_worker_provider_https(scenario: &str) {
@@ -1450,47 +1511,10 @@ async fn worker_validation_repository_matches_frozen_errors() {
         canvas_published_database::PublishedDatabase::start_for_worker_validation_template()
             .await
             .unwrap();
-    let mut admin_url = url::Url::parse(&owned.url).unwrap();
-    assert_eq!(admin_url.path(), "/canvas_published_schema_test");
-    admin_url.set_path("/postgres");
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(admin_url.as_str())
-        .await
-        .unwrap();
+    let admin = published_template_admin(&owned).await;
     for case in repository_cases {
         let name = case["name"].as_str().unwrap();
-        // This identifier is generated locally, never from scenario content.
-        // PostgreSQL forbids cloning while the template has another client,
-        // so the admin pool connects to `postgres` instead.
-        let database_name = format!("canvas_validation_{}", uuid::Uuid::new_v4().simple());
-        assert!(
-            database_name.len() < 63
-                && database_name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-        );
-        // SQL identifiers cannot be bind parameters; the generated identifier
-        // is checked above before the explicit SQL-safety assertion.
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "CREATE DATABASE \"{database_name}\" TEMPLATE \"canvas_published_schema_test\""
-        )))
-        .execute(&admin)
-        .await
-        .unwrap();
-        let mut case_url = url::Url::parse(&owned.url).unwrap();
-        case_url.set_path(&format!("/{database_name}"));
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(case_url.as_str())
-            .await
-            .unwrap();
-        let unseeded_jobs: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(unseeded_jobs, 0, "{name}: clone was not pristine");
+        let (database_name, pool) = clone_published_case(&owned, &admin, name).await;
         let fixture =
             canvas_worker_rest_replay::prepare(&pool, "https://127.0.0.1:1", "rest").await;
         let case = canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
@@ -1588,16 +1612,7 @@ async fn worker_validation_repository_matches_frozen_errors() {
                 .unwrap();
         assert_eq!(facts, reference[name]["observations"][0]["facts"], "{name}");
         fixture.assert_preserved(&pool).await;
-        pool.close().await;
-        // Dropping without FORCE catches a leaked test connection rather than
-        // silently terminating it; the owned tmpfs container is still the
-        // final cleanup boundary if an assertion fails.
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE \"{database_name}\""
-        )))
-        .execute(&admin)
-        .await
-        .unwrap();
+        close_published_case(&admin, database_name, pool).await;
     }
     admin.close().await;
     owned.close_verified().unwrap();

@@ -1492,13 +1492,17 @@ merge groups retain their existing broad selection. Reviewed
 runs and merged as `447f8ce74`. The protected Canvas database step took
 10m14s, versus 10m28s on #1150's protected run; both workflow-change PRs
 correctly ran the full matrix, so this is not an attributable speed saving.
-No scoped-run saving is claimed until a future source-only PR produces hosted
-evidence.
+The eight source files had no source-only commit in the inspected recent
+history, so no scoped-run saving is claimed until such a future PR produces
+hosted evidence.
 
-## A3 merge-group historical-input shadow (2026-10-07, local candidate)
+## A3 merge-group historical-input shadow (2026-10-07, merged)
 
-The current merge-group classifier conservatively sets `all=true` without
-checking the combined head's changed paths. A local candidate checks out the
+The merge-group classifier conservatively sets `all=true` while checking the
+combined head's changed paths. Reviewed [#1152](https://github.com/ElevenID/marty-ui/pull/1152)
+passed full [PR](https://github.com/ElevenID/marty-ui/actions/runs/37672064740)
+and [protected](https://github.com/ElevenID/marty-ui/actions/runs/37676439510)
+CI and merged as `5c10abcf6`. The change checks out the
 exact combined head and reports a bounded, machine-readable observation of
 whether its base-to-head diff touches broad historical-oracle input families.
 Missing base/history or a failed diff reports `unknown`; the required full
@@ -1506,8 +1510,10 @@ merge-group matrix is unchanged in every case. The same observation is logged
 on PRs for comparison. This is not a complete transitive input closure, a
 qualification decision, or permission to skip a test. Focused synthetic
 checks cover candidate and unrelated paths, mixed diffs, failed fetch, and
-missing base; the workflow-policy suite passed 127 tests locally. Hosted
-PR/protected proof and timing overhead remain to be checked after publication.
+missing base; the workflow-policy suite passed 127 tests locally. Its protected
+classifier logged `merge_group`, `proved`, three changed paths, and
+`shadow-only` authority. This observes one combined head, not a general
+selective-validation proof or an attributable pipeline speedup.
 
 The preceding protected #1150 timing artifact measured `json_depth` at
 126.1s in the pinned published migration/oracle probe and the isolated
@@ -1517,6 +1523,29 @@ validation, provider, and full credential-route owners exist, but moving the
 historical probes out of routine CI requires complete mounted-input closure
 and change-triggered full qualification, including merge-group semantics.
 Those conditions are not yet established; the probes remain required.
+
+## A4 Canvas repository-case database reuse (2026-10-07, reviewed candidate)
+
+The published Canvas worker contract has two repository-only matrices: ten
+roster metadata reconciliation cases and twelve resource-race stale-write
+cases. Each case previously started a fresh pinned PostgreSQL container and
+ran the same schema migration, even though its mutable rows are case-local.
+The thirteen-case worker-validation matrix already proves an isolated
+`CREATE DATABASE ... TEMPLATE` pattern in this suite. This candidate reuses
+that pattern: one migrated, unseeded template container per matrix, a distinct
+database clone and four-connection pool per case, and explicit verified close
+and drop after each case. It does not change case lists or assertions,
+PostgreSQL limits, production behavior, or the existing fresh-database probes
+whose provenance matters. A panic still invokes the owning container's cleanup.
+
+On one Windows/Docker host, passing baseline roster and race executions took
+136.24s and 54.40s of test time; the rebuilt candidate executable took
+71.10s and 6.20s respectively. The existing thirteen-case validation matrix
+also passed in 6.90s. One earlier baseline roster attempt failed, so these
+single passing samples do not establish steady-state or CI critical-path
+savings. The candidate was independently reviewed with no concrete findings;
+Linux hosted acceptance and protected qualification remain required before
+merge. The current routine Canvas lane still executes every named matrix.
 
 ## Design references
 
