@@ -193,6 +193,21 @@ disposable external services remain opt-in, so this default run does not
 replace the previously recorded live OpenBao/Redis policy proof or qualify
 the final packaged artifact. Continue the cross-tenant and profile-resolution
 self-review before committing the broader Signing Keys diff.
+2026-10-07 holder-proof self-review correction: the new VC-API bridge had
+enabled OpenBao key deletion before reading the key, while the shared managed
+key reader correctly rejects deletion-enabled keys as inactive. The operation
+now keeps deletion disabled during public metadata validation and remote
+Ed25519 signing, then enables deletion only in mandatory cleanup; it returns
+no proof if cleanup fails. The opt-in holder-proof test no longer attempts to
+mount Transit with the scoped workload token. The existing disposable
+OpenBao/PostgreSQL/Raft probe now builds and runs this live target in the same
+provider batch as four credential formats, three readiness challenges and
+coordinated restore. The first probe stopped at the test's unauthorized mount
+setup; the corrected full probe passed, including actual holder-proof
+verification, wrong-nonce and wrong-issuer rejection, authenticated HTTP
+routing, ephemeral deletion and stale-key reaping. The probe removed its
+disposable containers and volumes. Rust formatting, Ruff and diff checks
+passed. Hosted CI and exact release artifacts remain pending.
 
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.

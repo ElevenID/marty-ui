@@ -70,6 +70,19 @@ def build_rust() -> Path:
             "test",
             "--locked",
             "-p",
+            "marty-signing-keys",
+            "--test",
+            "vc_api_holder_proof_live_kms",
+            "--no-run",
+            "-j",
+            "1",
+        ],
+        [
+            "cargo",
+            "+1.95.0",
+            "test",
+            "--locked",
+            "-p",
             "marty-issuance-service",
             "--lib",
             "--no-run",
@@ -369,6 +382,28 @@ def live_issuance_signing_phase(bao_url: str, token: str) -> None:
         )
         if result.returncode:
             raise RuntimeError(f"Rust {target} live-KMS proof failed")
+    result = subprocess.run(
+        [
+            "cargo",
+            "+1.95.0",
+            "test",
+            "--locked",
+            "-p",
+            "marty-signing-keys",
+            "--test",
+            "vc_api_holder_proof_live_kms",
+            "-j",
+            "1",
+            "--",
+            "--ignored",
+        ],
+        cwd=ROOT / "rust",
+        env=environment,
+        timeout=300,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Rust holder-proof live-KMS proof failed")
 
 
 def run() -> None:
