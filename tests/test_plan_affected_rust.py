@@ -522,6 +522,82 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-trust-profile"]["dependencies"]},
         )
 
+    def test_organization_membership_consumers_are_observed_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/organization/src/lib.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        consumers = {
+            "marty-compliance-profile",
+            "marty-deployment-profile",
+            "marty-revocation-profile",
+            "marty-presentation-policy",
+        }
+        for consumer in consumers:
+            with self.subTest(consumer=consumer):
+                edges = [
+                    edge
+                    for edge in result["observed_non_cargo_consumers"]
+                    if edge["producer"] == "marty-organization"
+                    and edge["package"] == consumer
+                ]
+                self.assertEqual(len(edges), 1)
+                edge = edges[0]
+                request_source = (
+                    "shared_request_evidence"
+                    if "shared_request_evidence" in edge
+                    else "request_evidence"
+                )
+                for marker, source in (
+                    ("binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("service_marker", "runtime_evidence"),
+                    ("connection_marker", "request_evidence"),
+                    ("request_marker", request_source),
+                    ("provider_marker", "provider_evidence"),
+                ):
+                    with self.subTest(consumer=consumer, marker=marker):
+                        self.assertIn(
+                            edge[marker],
+                            (ROOT / edge[source]).read_text(encoding="utf-8"),
+                        )
+                for marker in ("target_marker", "registration_marker"):
+                    if marker in edge:
+                        self.assertIn(
+                            edge[marker],
+                            (ROOT / edge["request_evidence"]).read_text(
+                                encoding="utf-8"
+                            ),
+                        )
+                self.assertNotIn(
+                    "marty-organization",
+                    {dep["name"] for dep in packages[consumer]["dependencies"]},
+                )
+        gateway_edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-organization"
+            and edge["package"] == "marty-gateway"
+        ]
+        self.assertEqual(len(gateway_edges), 1)
+        gateway = gateway_edges[0]
+        for marker, source in (
+            ("grpc_binding", "evidence"),
+            ("grpc_runtime_marker", "grpc_runtime_evidence"),
+            ("grpc_registration_marker", "grpc_runtime_evidence"),
+            ("grpc_connection_marker", "grpc_request_evidence"),
+            ("grpc_request_marker", "grpc_request_evidence"),
+            ("grpc_provider_marker", "grpc_provider_evidence"),
+        ):
+            with self.subTest(consumer="marty-gateway", marker=marker):
+                self.assertIn(
+                    gateway[marker],
+                    (ROOT / gateway[source]).read_text(encoding="utf-8"),
+                )
+
     def test_credential_template_flow_runtime_edge_is_observed_without_narrowing(
         self,
     ) -> None:
@@ -572,6 +648,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-presentation-policy",
                 "marty-flow",
                 "marty-gateway",
+                "marty-compliance-profile",
+                "marty-deployment-profile",
+                "marty-revocation-profile",
             },
             "marty-credential-template": {
                 "marty-credential-template",

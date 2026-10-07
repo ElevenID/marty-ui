@@ -36,6 +36,64 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-organization": [
         {
+            "package": "marty-compliance-profile",
+            "evidence": "rust/services/compliance-profile/src/config.rs",
+            "binding": '"ORG_GRPC_TARGET"',
+            "runtime_evidence": "rust/services/compliance-profile/src/main.rs",
+            "runtime_marker": "tenant_membership_provider(&c)?",
+            "service_marker": "ComplianceService::new(repo, membership)",
+            "request_evidence": "rust/services/compliance-profile/src/provider.rs",
+            "target_marker": "c.organization_grpc_target.clone()",
+            "connection_marker": "OrganizationServiceClient::new(ch)",
+            "registration_marker": "GrpcTenantMembershipProvider::new(",
+            "shared_request_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+        },
+        {
+            "package": "marty-deployment-profile",
+            "evidence": "rust/services/deployment-profile/src/config.rs",
+            "binding": 'value(&values, "ORG_GRPC_TARGET")',
+            "runtime_evidence": "rust/services/deployment-profile/src/main.rs",
+            "runtime_marker": "tenant_membership_provider(&config)?",
+            "service_marker": "DeploymentService::new(repository, memberships)",
+            "request_evidence": "rust/services/deployment-profile/src/provider.rs",
+            "target_marker": "config.organization_grpc_target.clone()",
+            "connection_marker": "OrganizationServiceClient::new(channel)",
+            "registration_marker": "GrpcTenantMembershipProvider::new(client, config.service_token.as_deref())",
+            "shared_request_evidence": "rust/services/flow/src/grpc_providers.rs",
+            "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+        },
+        {
+            "package": "marty-revocation-profile",
+            "evidence": "rust/services/revocation-profile/src/config.rs",
+            "binding": 'required(values, "ORG_GRPC_TARGET")?',
+            "runtime_evidence": "rust/services/revocation-profile/src/main.rs",
+            "runtime_marker": "config.organization_grpc_target.clone()",
+            "service_marker": "RevocationProfileHttp::new(service.clone(), Arc::new(authorization.clone()))",
+            "request_evidence": "rust/services/revocation-profile/src/authorization.rs",
+            "connection_marker": "OrganizationServiceClient::new(channel)",
+            "request_marker": "client.get_member(request).await",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+        },
+        {
+            "package": "marty-presentation-policy",
+            "evidence": "rust/services/presentation-policy/src/config.rs",
+            "binding": 'value(&values, "ORG_GRPC_TARGET")',
+            "runtime_evidence": "rust/services/presentation-policy/src/main.rs",
+            "runtime_marker": "&config.organization_grpc_target",
+            "service_marker": "PolicyApplication::new(repository, authorization)",
+            "request_evidence": "rust/services/presentation-policy/src/control_plane.rs",
+            "connection_marker": "OrganizationServiceClient::new(channel(organization_target, timeout)?)",
+            "request_marker": "client.get_member(request).await",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+        },
+        {
             # Issuance initiation validates the organization through a real
             # gRPC client; this is observed reachability, not safe selection.
             "package": "marty-issuance-service",
@@ -536,6 +594,25 @@ for producer, (
             "dispatch_marker": "StaticServiceRegistry::from_urls(&config.service_urls)?",
         }
     )
+# Organization also supplies Gateway tenant membership through gRPC. Enrich
+# its existing published-HTTP edge instead of duplicating the same consumer.
+next(
+    edge
+    for edge in OBSERVED_NON_CARGO_CONSUMERS["marty-organization"]
+    if edge["package"] == "marty-gateway"
+).update(
+    {
+        "grpc_binding": 'grpc_target(values, "ORG_GRPC_TARGET", "organization:9002")?',
+        "grpc_runtime_evidence": "rust/services/gateway/src/main.rs",
+        "grpc_runtime_marker": "grpc_channel(&config, &config.organization_grpc_target)?",
+        "grpc_registration_marker": "let memberships: Arc<dyn OrganizationMembershipProvider> = identity_provider;",
+        "grpc_request_evidence": "rust/services/gateway/src/providers.rs",
+        "grpc_connection_marker": "OrganizationServiceClient::new(organizations)",
+        "grpc_request_marker": "self.organizations.lock().await.get_member(request).await",
+        "grpc_provider_evidence": "rust/services/organization/src/grpc_service.rs",
+        "grpc_provider_marker": ".get_membership(&input.user_id, organization_id)",
+    }
+)
 
 
 def changed_paths(base: str, head: str) -> list[str]:
