@@ -152,7 +152,9 @@ naive `transit/keys/cred-*` create/read rule also matches
 `transit/keys/cred-issuer-test/import` and `/config`. Its more-specific
 prefix match wins over `transit/keys/+/rotate`, leaving that credential key
 without update on `/rotate`, while `+/rotate` grants update for unrelated
-keys. Therefore the proposed wildcard management policy is **not** safe or
+keys. A second live probe added `transit/keys/+/import` and `/config` deny
+rules; those lower-priority patterns did not override the `cred-*` grants.
+Therefore the proposed wildcard management policy is **not** safe or
 functional as written. Do not wire it. Resolve the lifecycle boundary with
 an exact-key/operator policy or a purpose-built remote management operation
 whose path and parameters cannot admit imported material or cross-purpose
