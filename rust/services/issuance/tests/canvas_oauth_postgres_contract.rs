@@ -21,6 +21,108 @@ fn database_url() -> Option<String> {
 }
 
 #[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database and live Signing Keys/OpenBao route"]
+async fn integration_secret_coordinated_restore_phase() {
+    let phase = std::env::var("MARTY_KMS_RESTORE_PHASE")
+        .expect("set MARTY_KMS_RESTORE_PHASE to write or read");
+    assert!(matches!(phase.as_str(), "write" | "read"));
+    let database_url = database_url().expect("disposable PostgreSQL contract database");
+    let database_name = url::Url::parse(&database_url)
+        .expect("valid PostgreSQL contract URL")
+        .path()
+        .trim_start_matches('/')
+        .to_owned();
+    assert!(
+        database_name.ends_with("_test"),
+        "the recovery contract must use a dedicated *_test database"
+    );
+    std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_URL")
+        .expect("live Signing Keys URL is required");
+    std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_API_KEY")
+        .expect("live Signing Keys API key is required");
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("disposable PostgreSQL database must connect");
+    if phase == "write" {
+        setup_schema(&pool).await;
+    }
+    let cipher = remote_integration_secret::cipher();
+    let vault = PostgresIntegrationSecretVault::new_remote(pool.clone(), cipher.clone());
+    if phase == "write" {
+        vault
+            .save(NewIntegrationSecret {
+                id: "kms-restore-secret-1".to_owned(),
+                organization_id: "kms-restore-org".to_owned(),
+                name: "Recovery proof".to_owned(),
+                provider: "canvas".to_owned(),
+                purpose: "oauth_client_secret".to_owned(),
+                value: "synthetic-remote-recovery-value".to_owned(),
+                metadata: json!({"proof": "coordinated-restore"}),
+            })
+            .await
+            .expect("live remote secret write");
+        let stored: String = sqlx::query_scalar(
+            "SELECT encrypted_secret_value FROM issuance_service.organization_integration_secrets
+             WHERE id = 'kms-restore-secret-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("stored remote envelope");
+        assert!(stored.contains("marty.integration-secret-envelope/v1"));
+        assert!(!stored.contains("synthetic-remote-recovery-value"));
+    }
+    let mut connection = pool.acquire().await.expect("database connection");
+    assert_eq!(
+        cipher
+            .verify_storage(&mut connection)
+            .await
+            .expect("KMS-only startup verification"),
+        1
+    );
+    drop(connection);
+    assert_eq!(
+        vault
+            .value("kms-restore-org", "kms-restore-secret-1")
+            .await
+            .expect("remote decrypt after restore"),
+        Some("synthetic-remote-recovery-value".to_owned())
+    );
+    assert_eq!(
+        vault
+            .value("foreign-org", "kms-restore-secret-1")
+            .await
+            .expect("tenant-bound read"),
+        None
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable shared database populated by the Python remote-envelope consumer"]
+async fn python_and_rust_share_remote_envelopes_in_clean_database() {
+    let database_url = database_url().expect("disposable PostgreSQL contract database");
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("shared PostgreSQL database must connect");
+    let cipher = remote_integration_secret::cipher();
+    let mut connection = pool.acquire().await.unwrap();
+    assert!(cipher.verify_storage(&mut connection).await.unwrap() >= 2);
+    drop(connection);
+    let vault = PostgresIntegrationSecretVault::new_remote(pool, cipher);
+    assert_eq!(
+        vault.value("org-1", "python-secret-1").await.unwrap(),
+        Some("python-synthetic-secret".to_owned())
+    );
+    assert_eq!(
+        vault.value("org-other", "python-secret-1").await.unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bound() {
     let Some(database_url) = database_url() else {
         eprintln!("skipping Canvas OAuth PostgreSQL contract without database URL");

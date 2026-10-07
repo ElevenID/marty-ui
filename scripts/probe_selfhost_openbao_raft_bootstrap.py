@@ -154,7 +154,52 @@ def run() -> None:
             {"sender_did": did, "sender_key_id": did + "#agreement-1"},
         )
         require_status(base, "POST", "didcomm/haip/keys/tenant_a/flow_a", root, {})
-        print("Clean self-host Raft bootstrap and plugin key creation passed")
+        key_name = "integration-secret-envelope-marty-aes256"
+        metadata = require_status(base, "GET", f"transit/keys/{key_name}", root)["data"]
+        if (
+            metadata.get("type") != "aes256-gcm96"
+            or metadata.get("exportable") is not False
+            or metadata.get("allow_plaintext_backup") is not False
+        ):
+            raise RuntimeError("Disposable integration-secret key has unsafe metadata")
+        token = docker(
+            "run",
+            "--rm",
+            "-v",
+            f"{runtime}:/bao/runtime",
+            "--entrypoint",
+            "/bin/cat",
+            IMAGE,
+            "/bao/runtime/signing_keys_openbao_token",
+        )
+        encrypted = require_status(
+            base,
+            "POST",
+            f"transit/encrypt/{key_name}",
+            token,
+            {"plaintext": "cHJvYmU="},
+        )["data"]["ciphertext"]
+        decrypted = require_status(
+            base,
+            "POST",
+            f"transit/decrypt/{key_name}",
+            token,
+            {"ciphertext": encrypted},
+        )["data"]["plaintext"]
+        if decrypted != "cHJvYmU=":
+            raise RuntimeError(
+                "Scoped token could not decrypt integration-secret proof"
+            )
+        if (
+            request(
+                base, "GET", f"transit/export/encryption-key/{key_name}", token=token
+            )[0]
+            != 403
+        ):
+            raise RuntimeError(
+                "Scoped token unexpectedly exported integration-secret key"
+            )
+        print("Clean self-host Raft bootstrap, plugin and secret custody passed")
     finally:
         if started:
             subprocess.run(

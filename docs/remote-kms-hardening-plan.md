@@ -197,6 +197,24 @@ the reviewed Marty Core feature-graph check in UI commit `260e12755`.
 The local workflow-policy and feature-graph tests passed 133 cases; hosted CI
 has not run at this head.
 
+2026-10-07 coordinated integration-secret recovery checkpoint: a new opt-in
+Rust/PostgreSQL/OpenBao probe writes a synthetic integration secret through the
+live Signing Keys route and scoped OpenBao token, verifies the stored envelope
+and KMS-only startup scan, exports a live Raft snapshot and PostgreSQL dump,
+restores both into clean replacement volumes, restarts Signing Keys, and reads
+the same tenant-bound secret through Rust. This passed locally against the
+candidate plugin image and pinned disposable PostgreSQL/Redis images. A source
+review found that self-host bootstrap had not created the integration-secret
+Transit key or granted its encrypt/decrypt/read paths; the candidate init script
+now creates and validates a non-exportable AES-GCM key and scopes those paths.
+The self-host bootstrap probe checks that metadata, a token-bound round trip,
+and export denial so CI can catch regression. During probe development, force
+removing OpenBao immediately after snapshot-force caused the restored Raft
+barrier to reject the original unseal key; graceful shutdown and restart passed,
+matching the standalone recovery test. This is a disposable source-head proof,
+not a published-image or hosted-CI qualification. Off-host backup handling,
+exact artifact cutover and multi-service release acceptance remain open.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
@@ -551,7 +569,7 @@ safety provides a concrete reason, and record that reason here.
 | K1 | Reconcile preserved branches; map every supported production binary, image, wheel, Cargo root and release pin; enumerate current signing/encryption paths and explicit secret-class exceptions. | In progress |
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned live authcrypt and rotation proof passed; full service/retry/recovery and release deployment qualification pending |
-| K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable live Raft snapshot plus fresh-cluster restore passed separately; coordinated database/KMS restore, packaged image and cutover qualification remain pending |
+| K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; candidate 0.2 pins compile signing-keys, issuance and Flow; Flow's old verification edge is now removed and its package graph contains no marty-crypto 0.1.62; workspace/test matrix pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
