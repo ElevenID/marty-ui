@@ -48,7 +48,7 @@ Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, 
 
 | ID | Work and intended result | Dependencies | Status | Owner / PR / evidence |
 | --- | --- | --- | --- | --- |
-| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | [UI #1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1075](https://github.com/ElevenID/marty-ui/pull/1075), [#1076](https://github.com/ElevenID/marty-ui/pull/1076), and [#1079](https://github.com/ElevenID/marty-ui/pull/1079) merged the Canvas producer, embedded-input, scenario-owner, and scenario-input safeguards. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) merged the preparer-dispatch inventory; [#1122](https://github.com/ElevenID/marty-ui/pull/1122) added public-vector source guarding, not per-vector execution proof. [#1130](https://github.com/ElevenID/marty-ui/pull/1130) and [#1131](https://github.com/ElevenID/marty-ui/pull/1131) added Canvas/ordinary-DB phase timing evidence. Remaining runtime/selector and acceptance obligations still need mapping. |
+| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | [UI #1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1075](https://github.com/ElevenID/marty-ui/pull/1075), [#1076](https://github.com/ElevenID/marty-ui/pull/1076), and [#1079](https://github.com/ElevenID/marty-ui/pull/1079) merged the Canvas producer, embedded-input, scenario-owner, and scenario-input safeguards. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) merged the preparer-dispatch inventory; [#1122](https://github.com/ElevenID/marty-ui/pull/1122) added public-vector source guarding, and [#1141](https://github.com/ElevenID/marty-ui/pull/1141) proved the 23 declared Rust test owners executed in protected CI. [#1130](https://github.com/ElevenID/marty-ui/pull/1130) and [#1131](https://github.com/ElevenID/marty-ui/pull/1131) added Canvas/ordinary-DB phase timing evidence. Remaining runtime/selector and acceptance obligations still need mapping. |
 | A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | [UI #1044](https://github.com/ElevenID/marty-ui/pull/1044), [#1058](https://github.com/ElevenID/marty-ui/pull/1058), [#1081](https://github.com/ElevenID/marty-ui/pull/1081), [#1083](https://github.com/ElevenID/marty-ui/pull/1083), and [#1086](https://github.com/ElevenID/marty-ui/pull/1086) established and parallelized the Canvas acceptance targets; [#1108](https://github.com/ElevenID/marty-ui/pull/1108) merged eleven base-runtime/self-host support moves and [#1111](https://github.com/ElevenID/marty-ui/pull/1111) merged eighteen Flow/DIDComm/renewal/Kubernetes support moves. [#1118](https://github.com/ElevenID/marty-ui/pull/1118) merged Gateway-to-Issuance PostgreSQL webhook ownership; [#1121](https://github.com/ElevenID/marty-ui/pull/1121) merged all six Gateway-to-Signing Redis/OpenBao cases with their exact gates, removing the last service-to-service development dependency in UI service manifests. [#1123](https://github.com/ElevenID/marty-ui/pull/1123) merged the separate Canvas acceptance package after protected validation. |
 | A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | [UI #1045](https://github.com/ElevenID/marty-ui/pull/1045), `7502053e9`; protected queue run passed and merged as `d9947b312` |
 | A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | Core [#348](https://github.com/ElevenID/marty-core/pull/348) and UI [#1046](https://github.com/ElevenID/marty-ui/pull/1046), [#1047](https://github.com/ElevenID/marty-ui/pull/1047), [#1051](https://github.com/ElevenID/marty-ui/pull/1051), and [#1052](https://github.com/ElevenID/marty-ui/pull/1052) established the fail-closed shadow planner. [#1109](https://github.com/ElevenID/marty-ui/pull/1109) merged nine source-backed non-Cargo service-consumer edges; [#1117](https://github.com/ElevenID/marty-ui/pull/1117) added Trust Profile-to-Presentation Policy. [#1132](https://github.com/ElevenID/marty-ui/pull/1132) merged nine further observed control-plane edges into Issuance, Credential Template, and Verification. [#1133](https://github.com/ElevenID/marty-ui/pull/1133) merged four Flow HTTP reference observations; [#1135](https://github.com/ElevenID/marty-ui/pull/1135) merged Organization gRPC membership consumers. All remain shadow-only. Service changes continue to select the full Rust workspace; the complete non-Cargo graph remains unmapped. |
@@ -1230,7 +1230,7 @@ gain. The exact policy-test-source route retains release collection and the
 complete protected matrix.
 
 
-## A0 public-vector execution proof candidate (2026-10-07)
+## A0 public-vector execution proof (2026-10-07)
 
 The existing public-protocol guard inventories 23 Rust tests that load the
 gateway behavior vectors and verifies their source/test registration, but that
@@ -1241,8 +1241,9 @@ contained an exact successful libtest line for all 23 declared owners. This is
 execution evidence for that run, not proof of each vector's dynamic assertion
 coverage or of a future run.
 
-This candidate adds a fail-closed post-workspace check in the existing Rust
-contracts job. It reads the already-produced `rust-workspace.log`, derives
+Reviewed [#1141](https://github.com/ElevenID/marty-ui/pull/1141) added a
+fail-closed post-workspace check in the existing Rust contracts job. It reads
+the already-produced `rust-workspace.log`, derives
 qualified test names from the same 23-owner inventory, and requires an exact
 `ok` line for every owner. Ignored, failed, missing, and merely similar names
 do not satisfy it. The existing static owner guard also requires the checker
@@ -1252,8 +1253,29 @@ repeated. The checker passed against the completed hosted log after stripping
 GitHub's display timestamps; 25 focused local tests and 123 workflow-policy
 tests passed. Independent review caught a step-placement/lane guard weakness,
 which was corrected and covered with negative mutations before PR validation.
-The remaining Canvas, service-acceptance, and transitive input inventories
-are not closed by this narrow proof.
+The [PR run](https://github.com/ElevenID/marty-ui/actions/runs/37582424997)
+passed all required checks. Its full protected [merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/37586114017)
+also passed and logged "Verified 23 public vector Rust test executions"; it
+merged as `ec932e49f`. The Canvas test totals matched the preceding protected
+run (144 composition and 101 worker tests passed, two capture-only worker
+tests ignored). Its timing artifact contained 601 successful phase rows;
+compared with the preceding 602-row artifact, the missing row was one
+`postgres_ready` timing event, not a missing test. The remaining Canvas,
+service-acceptance, and transitive input inventories are not closed by this
+narrow proof.
+
+## A6 protocol-test source ownership follow-up (2026-10-07)
+
+`tests/test_gateway_public_protocol_contract.py` and the new
+`tests/test_public_vector_execution.py` are root pytest sources collected by
+the existing Release Contract Tests job. The public-protocol job executes the
+checker script, not these test files. A proposed exact-path PR selector would
+route edits to either test source to its release execution owner; edits to the
+checker, vector corpora, Rust implementations, workflow, or unknown siblings
+retain their existing broad owners. Protected merge groups remain full. The
+selector and regression proof in this follow-up must still pass independent
+review, targeted tests, full PR CI, and protected validation before a hosted
+feedback improvement can be claimed.
 
 ## Design references
 

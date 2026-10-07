@@ -169,7 +169,7 @@ jobs:
                   # also run in the required release lane, not service images.
                   release=true
                   ;;
-                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
+                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
                   # These test-only policy and fixture guards are collected by
                   # the root release pytest step, with no other CI/image owner.
                   # Their implementation inputs still retain their own lanes.

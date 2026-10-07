@@ -1459,6 +1459,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "tests/test_sanitize_sccache_stats.py",
         "tests/test_oss_boundary.py",
         "tests/test_public_protocol_documentation.py",
+        "tests/test_gateway_public_protocol_contract.py",
+        "tests/test_public_vector_execution.py",
         "tests/test_ci_database_groups.py",
         "tests/test_rust_ownership.py",
         "tests/test_ci_workflow_performance.py",
@@ -1480,6 +1482,29 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         _classify_changed_path(
             "tests/test_sanitize_sccache_stats_helpers.py", tmp_path
         )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "tests/test_public_vector_execution_helpers.py", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("scripts/ci/check_public_vector_execution.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
+    assert (
+        _classify_changed_paths(
+            [
+                "tests/test_public_vector_execution.py",
+                "rust/services/gateway/src/lib.rs",
+            ],
+            tmp_path,
+            combined=True,
+        )[0]["rust"]
         == "true"
     )
     assert (
