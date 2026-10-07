@@ -378,6 +378,11 @@ cleanup_target_logs() {
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
+# A background child's redirection may not create its log before the relay
+# starts. Create both files after registering owned cleanup and before either
+# tail follows one, so a scheduling race cannot drop that target's phase rows.
+: > "$composition_log"
+: > "$worker_log"
 relay_target_timing() {
   local pid="$1" log="$2" end_file="$3"
   # This observer cannot own or obscure the Rust child exit status. Its

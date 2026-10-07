@@ -1354,19 +1354,42 @@ real classifier is exercised for each boundary. This avoids an unrelated
 Canvas build on a future edit to only that test source, but this workflow-edit
 PR itself ran full PR/protected CI and has no measured scoped saving yet.
 
-Fixture-policy test-source batch (2026-10-07, local candidate): eight frequently
+Fixture-policy test-source batch (2026-10-07, merged in #1145): eight frequently
 edited, exact root pytest sources covering Kubernetes, base runtime, Envoy,
 Flow startup, self-host, passport model/Compose ownership, and Canvas compile
 scope have the Release Contract Tests root pytest step as their CI execution
 owner. A repository reference search found no separate workflow invocation or
 runtime-image copy of these Python test files; the public/CI service images
 copy explicit Rust, proto, contract, service, and script inputs, not root
-`tests/*.py`. The proposed PR selector routes edits to those exact test-only
-sources to release pytest. Their production/fixture scripts, Rust acceptance
+`tests/*.py`. Reviewed [#1145](https://github.com/ElevenID/marty-ui/pull/1145)
+routes edits to those exact test-only sources to release pytest. Their
+production/fixture scripts, Rust acceptance
 owners, Compose and workflow inputs, unknown siblings, and protected merge
 groups retain broad checks. This reduces future test-source-only PR feedback
 scope, not this workflow-edit PR's full validation, and no time saving is
-claimed until hosted scoped evidence exists.
+claimed until hosted scoped evidence exists. Its full
+[PR](https://github.com/ElevenID/marty-ui/actions/runs/37609491436) and
+[protected](https://github.com/ElevenID/marty-ui/actions/runs/37614331029)
+CI passed; the protected Canvas group retained 144 composition and 101 worker
+passes with two capture-only ignores. It merged as `9704826da`. The
+protected Canvas compilation and image-build steps took 10m07s and 11m45s,
+versus 7m07s and 8m55s in #1144's protected run; runner/cache conditions
+were not controlled, so neither difference is attributed to this PR.
+
+## A6 Canvas timing-relay reliability follow-up (2026-10-07)
+
+The #1145 PR Canvas run passed the required test cases but its optional timing
+artifact contained only 314 phase rows instead of the prior 602. The hosted
+log reported `tail: cannot open .../worker.log` and missing optional worker
+timing. The runner launches each Rust child with log redirection and then
+starts a `tail --pid` relay; scheduling can start `tail` before the child
+creates its log. Precreating both owned log files after registering EXIT
+cleanup and before launching either child closes that race. The child waits,
+exit statuses, signal handling, and raw-log reporting remain unchanged.
+Four focused local tests, Bash syntax, Ruff, and diff checks passed; an
+independent reviewer found no issue in the corrected two-file diff. This is
+timing-evidence reliability, not a speedup or a change in required coverage.
+The follow-up needs its own hosted PR and protected validation before merge.
 
 ## Design references
 

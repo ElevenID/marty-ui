@@ -150,6 +150,13 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         == 1
     )
     assert 'tail --pid="$pid"' in script
+    assert script.count(': > "$composition_log"') == 1
+    assert script.count(': > "$worker_log"') == 1
+    assert script.index("trap cleanup_target_logs EXIT") < script.index(
+        ': > "$composition_log"'
+    )
+    assert script.index(': > "$composition_log"') < script.index(composition_full)
+    assert script.index(': > "$worker_log"') < script.index(worker_full)
     assert (
         'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
         in script
@@ -1029,6 +1036,8 @@ def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
 def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
     result, _ = shell_case()
     assert result.returncode == 0, result.stderr
+    assert "tail: cannot open" not in result.stderr
+    assert "Optional Canvas target timing unavailable" not in result.stderr
     live = result.stdout.split("Canvas composition target exit:", 1)[0]
     assert live.count('"name":"contract"') == 1
     assert live.count('"name":"worker-contract"') == 1
