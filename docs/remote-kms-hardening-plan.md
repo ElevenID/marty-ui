@@ -124,6 +124,24 @@ Python oracle and the intended product contract before claiming the full
 Issuance integration suite. This is a local candidate run, not hosted CI or
 artifact qualification.
 
+Follow-up Issuance matrix isolation: the pinned Core revision `a5cb567`
+filters mdoc JWT holder-proof algorithms to ES256 (including a Core unit
+assertion), while the frozen UI discovery contracts still advertised ES256
+and EdDSA. The current Credentials Python implementation and its contracts
+also advertise ES256 only for mdoc; all other format proof algorithms remain
+ES256 and EdDSA. Running the complete Issuance `--tests` selection with only
+the two named discovery assertions skipped passed every other test target;
+the library portion reported 565 passed, zero failed and eight ignored.
+The UI copies now update only the four mdoc proof-algorithm fields, exactly
+matching the corresponding upstream Credentials contract files at revision
+`8e3868b` (the later upstream static contract changes unrelated CORS headers).
+The local provenance commit and SHA-256 entries were updated. The complete
+11-test Python Issuance candidate suite and all 12 `http_behavior` tests
+passed. The unfiltered `cargo +1.95.0 test --locked -p
+marty-issuance-service --tests -j 1 --quiet` run then passed every target
+with exit code zero, including 565 library tests (eight ignored opt-in cases).
+Hosted CI and final artifacts are not qualified by these local checks.
+
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
 import endpoint, compatibility adapter, or test fixture that restores those

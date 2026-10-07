@@ -9,8 +9,8 @@
   "behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-static-discovery.json",
-    "commit": "5b210bde2bee4360a9504e4c360250b54f48f5ba",
-    "sha256": "f5a06d71d85dfa1fd75bf7ff1cedd1d9478134697f290267e0b774c812749aa2"
+    "commit": "8e3868bcf424838c7f47085bb7a24cca7006472c",
+    "sha256": "eeef4ae2889ec1c334bb09e72b38530d7cd294ffe2b9b7fbdaf9d4f2e99e701c"
   },
   "oid4vci_authorization_behavior_contract": {
     "path": "contracts/issuance-oid4vci-authorization.json",
@@ -30,8 +30,8 @@
   "tenant_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-tenant-discovery.json",
-    "commit": "d853a14efb5cce2894aea138e2e784735499a7fc",
-    "sha256": "6166e9f839e2e2a5dcabc6a3c6a0f7d47292eb312170a4659d693cf3eb787708"
+    "commit": "8e3868bcf424838c7f47085bb7a24cca7006472c",
+    "sha256": "2d9d195d1f8cc70ebb21a0071cceb2cbe2961576b43a221f3515bfcfe5aa3567"
   },
   "transaction_read_behavior_contract": {
     "repository": "ElevenID/marty-credentials",

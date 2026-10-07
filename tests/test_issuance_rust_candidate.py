@@ -206,7 +206,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["behavior_contract"]["commit"]
-        == "5b210bde2bee4360a9504e4c360250b54f48f5ba"
+        == "8e3868bcf424838c7f47085bb7a24cca7006472c"
     )
     assert discovery["schema"] == "marty.issuance-static-discovery/v1"
     assert (
@@ -215,7 +215,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["tenant_behavior_contract"]["commit"]
-        == "d853a14efb5cce2894aea138e2e784735499a7fc"
+        == "8e3868bcf424838c7f47085bb7a24cca7006472c"
     )
     assert tenant["schema"] == "marty.issuance-tenant-discovery/v1"
     assert (
