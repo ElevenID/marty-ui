@@ -87,6 +87,25 @@ docker compose --env-file .env.selfhost.production.local logs -f edge cloudflare
 docker compose --env-file .env.selfhost.production.local down
 ```
 
+## No-Canvas composition preview
+
+`docker-compose.selfhost.no-canvas.yml` is an opt-in overlay for testing a
+deployment without the Canvas worker. The default bundle still starts that
+worker, preserving existing Canvas installations on upgrade. To inspect the
+overlay against an extracted bundle, layer it explicitly:
+
+```bash
+docker compose --env-file .env.selfhost.production.local \
+  -f docker-compose.yml -f docker-compose.selfhost.no-canvas.yml \
+  config --hash canvas-sync-worker
+```
+
+Compose should report the worker as disabled. This is a configuration preview,
+not a qualified no-Canvas product: issuance still carries Canvas secret,
+migration, and code dependencies. Do not use the overlay for an existing Canvas
+installation. Production use and a default switch require a pre-up migration
+check, no-Canvas startup/business evidence, and a rehearsed upgrade/rollback.
+
 ## Notes
 
 - The open-source services start without a commerce service or license gate.
