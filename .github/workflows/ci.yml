@@ -180,6 +180,12 @@ jobs:
                   # the existing Rust selection; capture scripts stay broad.
                   release=true
                   ;;
+                scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
+                  # The shadow planner has no runtime/image consumer. Release
+                  # pytest owns its unit tests and the report below; real Rust
+                  # sources, manifests, and unknown siblings retain Rust CI.
+                  release=true
+                  ;;
                 .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
                   verification=true
                   release=true
@@ -1560,14 +1566,6 @@ jobs:
         run: |
           set -euo pipefail
           cargo metadata --locked --format-version 1 | python3 ../scripts/ci/check_mmf_security_features.py
-      - name: Report affected Rust packages in shadow mode
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          python3 -m unittest tests.test_plan_affected_rust
-          python3 scripts/ci/plan_affected_rust.py
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -2285,6 +2283,12 @@ jobs:
             --release-image --publication-boundary-reference --check
       - name: Run repository release checks
         run: python -m pytest tests -v --tb=short
+      - name: Report affected Rust packages in shadow mode
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 scripts/ci/plan_affected_rust.py
       - name: Configure the pinned containerd image store
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
