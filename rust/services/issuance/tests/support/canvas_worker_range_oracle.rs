@@ -27,8 +27,9 @@ use marty_issuance_service::{
         JobFailure, WorkerHeartbeat,
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
-    integration_secret::IntegrationSecretCipher,
 };
+#[path = "remote_integration_secret.rs"]
+mod remote_integration_secret;
 use mmf_config::numeric_config::PythonConfigInteger;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -317,10 +318,7 @@ pub(super) fn observed_worker_with_fault(
 }
 
 pub(super) fn observed_vault(pool: &PgPool) -> PostgresIntegrationSecretVault {
-    let cipher =
-        IntegrationSecretCipher::from_base64("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
-            .unwrap();
-    PostgresIntegrationSecretVault::new(pool.clone(), cipher)
+    PostgresIntegrationSecretVault::new_remote(pool.clone(), remote_integration_secret::cipher())
 }
 
 pub async fn assert_consumer_ranges(pool: &PgPool) {

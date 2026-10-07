@@ -14,8 +14,8 @@ use crate::{
         CanvasOAuthPlatformPatch, CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
     integration_secret::{
-        integration_secret_hint, IntegrationSecretCipher, IntegrationSecretMetadata,
-        ManagedIntegrationSecret, NewIntegrationSecret,
+        integration_secret_hint, IntegrationSecretMetadata, ManagedIntegrationSecret,
+        NewIntegrationSecret,
     },
     integration_secret_kms::KmsIntegrationSecretCipher,
 };
@@ -114,80 +114,24 @@ pub(crate) async fn queue_canvas_oauth_revocation_in_transaction(
 #[derive(Clone)]
 pub struct PostgresIntegrationSecretVault {
     pool: PgPool,
-    storage: IntegrationSecretStorage,
-}
-
-#[derive(Clone)]
-enum IntegrationSecretStorage {
-    Legacy(IntegrationSecretCipher),
-    Remote(KmsIntegrationSecretCipher),
-}
-
-impl IntegrationSecretStorage {
-    async fn encrypt(
-        &self,
-        organization_id: &str,
-        secret_id: &str,
-        provider: &str,
-        purpose: &str,
-        plaintext: &str,
-    ) -> Result<String, ()> {
-        match self {
-            Self::Legacy(cipher) => cipher.encrypt(plaintext).map_err(|_| ()),
-            Self::Remote(cipher) => cipher
-                .encrypt(organization_id, secret_id, provider, purpose, plaintext)
-                .await
-                .map_err(|_| ()),
-        }
-    }
-
-    async fn decrypt(
-        &self,
-        organization_id: &str,
-        secret_id: &str,
-        provider: &str,
-        purpose: &str,
-        ciphertext: &str,
-    ) -> Result<String, ()> {
-        match self {
-            Self::Legacy(cipher) => cipher.decrypt(ciphertext).map_err(|_| ()),
-            Self::Remote(cipher) => cipher
-                .decrypt(organization_id, secret_id, provider, purpose, ciphertext)
-                .await
-                .map_err(|_| ()),
-        }
-    }
+    storage: KmsIntegrationSecretCipher,
 }
 
 impl std::fmt::Debug for PostgresIntegrationSecretVault {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PostgresIntegrationSecretVault")
-            .field(
-                "storage",
-                &match &self.storage {
-                    IntegrationSecretStorage::Legacy(_) => "legacy",
-                    IntegrationSecretStorage::Remote(_) => "remote",
-                },
-            )
+            .field("storage", &"remote")
             .finish_non_exhaustive()
     }
 }
 
 impl PostgresIntegrationSecretVault {
     #[must_use]
-    pub fn new(pool: PgPool, cipher: IntegrationSecretCipher) -> Self {
-        Self {
-            pool,
-            storage: IntegrationSecretStorage::Legacy(cipher),
-        }
-    }
-
-    #[must_use]
     pub fn new_remote(pool: PgPool, cipher: KmsIntegrationSecretCipher) -> Self {
         Self {
             pool,
-            storage: IntegrationSecretStorage::Remote(cipher),
+            storage: cipher,
         }
     }
 }

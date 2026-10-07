@@ -140,10 +140,6 @@ fn standalone_process_handles_sigterm_and_signing_key_fallback() {
     let mut child = Command::new(binary)
         .env("DATABASE_URL", "postgresql://127.0.0.1:9/marty")
         .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-        )
-        .env(
             "SIGNING_KEYS_INTERNAL_API_KEY",
             "signing-only-deployment-key",
         )

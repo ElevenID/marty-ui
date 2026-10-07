@@ -5,8 +5,10 @@ use chrono::Utc;
 use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthConnection, CanvasOAuthRepository, CanvasOAuthSecretVault},
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
+    integration_secret::NewIntegrationSecret,
 };
+#[path = "remote_integration_secret.rs"]
+mod remote_integration_secret;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::{collections::BTreeMap, sync::OnceLock, time::Duration};
@@ -172,10 +174,9 @@ pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> Work
         .execute(pool)
         .await
         .unwrap();
-    let vault = PostgresIntegrationSecretVault::new(
+    let vault = PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
-        IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap(),
+        remote_integration_secret::cipher(),
     );
     vault
         .save(NewIntegrationSecret {

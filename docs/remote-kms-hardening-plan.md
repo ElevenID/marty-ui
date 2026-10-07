@@ -356,6 +356,12 @@ already permits `ECDH-1PU+A256KW` with X25519, P-384, P-256 and optional
 P-521; [v2.0](https://identity.foundation/didcomm-messaging/spec/v2.0/)
 listed the same curves, so this is not a new relaxation. The v2.1 changelog
 mentions only service endpoint and empty-body changes, not cryptography.
+The published v2.1 page still identifies itself as the latest stable version;
+there is no newer DIDComm algorithm change to wait for. Current
+[OpenBao Transit key types](https://openbao.org/docs/secrets/transit/) include
+P-384 for ECDSA signing but expose no X25519 or NIST-curve key-agreement
+operation, so a standards-compatible curve alone does not make this backend
+usable for remote DIDComm authcrypt.
 Authcrypt still
 requires ECDH-1PU in a JWE and A256CBC-HS512; P-256 is marked deprecated in
 favor of P-384. A P-384 KMS key would be spec-compatible only if the sender
@@ -482,6 +488,21 @@ the corresponding focused Python manifest checks passed. The missing
 `packages/marty_common` package is absent from this checkout's `HEAD`, not
 caused by the KMS edits, but the nine import failures still prevent a clean
 full suite claim.
+
+2026-10-07 production-graph follow-up: `PostgresIntegrationSecretVault` now
+has one storage path, the remote client; the raw AES implementation and its
+direct `aes-gcm` dependency compile only with the explicit offline
+`integration-secret-migration` feature. Default issuance and Canvas acceptance
+targets compile, and the migration-feature Python AES vectors passed (2).
+The OAuth PostgreSQL contract passed against disposable PostgreSQL 16 using a
+keyless synthetic remote test server. Shared issuance and worker process
+launchers now supply that remote endpoint instead of a raw master key. Their
+runtime behavior still needs a fully migrated disposable service schema:
+the isolated smoke attempt reached issuance startup but failed on a missing
+pre-existing `issuance_transactions` table, before remote preflight. This is
+fixture setup evidence, not a remote process pass. Retire the remaining raw
+key assumptions in rendered deployment fixtures and qualify packaged startup,
+recovery and exact production artifacts before closing K4.
 
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks

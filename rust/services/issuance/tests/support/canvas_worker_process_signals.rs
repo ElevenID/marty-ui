@@ -11,6 +11,9 @@ use std::{
 use serde_json::Value;
 use sqlx::PgPool;
 
+#[path = "remote_integration_secret.rs"]
+mod remote_integration_secret;
+
 pub(super) struct OwnedWorker(pub(super) Child);
 
 pub(super) fn worker_executable() -> PathBuf {
@@ -104,12 +107,15 @@ impl OwnedWorker {
             .env("CANVAS_SYNC_WORKER_ID", worker_id)
             .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
             .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false")
-            .env(
-                "INTEGRATION_SECRET_MASTER_KEY",
-                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
-            )
             .env("ISSUANCE_API_KEY", "synthetic-process-signal-key")
-            .env("SIGNING_KEYS_INTERNAL_URL", "https://signing.invalid")
+            .env(
+                "SIGNING_KEYS_INTERNAL_API_KEY",
+                remote_integration_secret::API_KEY,
+            )
+            .env(
+                "SIGNING_KEYS_INTERNAL_URL",
+                remote_integration_secret::base_url().as_str(),
+            )
             .env("RUST_LOG", "error")
             .envs(environment)
             .stdin(Stdio::null())

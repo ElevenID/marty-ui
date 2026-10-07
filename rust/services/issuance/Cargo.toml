@@ -13,7 +13,7 @@ autotests = false
 default = []
 feature-regression-observer = []
 passport-self-signed-test = ["marty-verification/authority-issuance"]
-integration-secret-migration = []
+integration-secret-migration = ["dep:aes-gcm"]
 
 [[bin]]
 name = "marty-issuance-service"
@@ -42,7 +42,7 @@ path = "src/bin/passport_provider_ingress.rs"
 test = true
 
 [dependencies]
-aes-gcm.workspace = true
+aes-gcm = { workspace = true, optional = true }
 axum.workspace = true
 async-trait.workspace = true
 base64.workspace = true

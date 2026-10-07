@@ -6,12 +6,13 @@ use marty_issuance_service::{
         CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    integration_secret::{IntegrationSecretCipher, ManagedIntegrationSecret, NewIntegrationSecret},
+    integration_secret::{ManagedIntegrationSecret, NewIntegrationSecret},
 };
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
 
-const MASTER_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
+#[path = "support/remote_integration_secret.rs"]
+mod remote_integration_secret;
 
 fn database_url() -> Option<String> {
     std::env::var("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL")
@@ -33,9 +34,9 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
     setup_schema(&pool).await;
     seed_platform(&pool).await;
     let repository = PostgresCanvasOAuthRepository::new(pool.clone());
-    let vault = PostgresIntegrationSecretVault::new(
+    let vault = PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
-        IntegrationSecretCipher::from_base64(MASTER_KEY).expect("cipher"),
+        remote_integration_secret::cipher(),
     );
 
     vault

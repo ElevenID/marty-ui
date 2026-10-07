@@ -19,8 +19,10 @@ use marty_issuance_service::{
         ManagedCredential,
     },
     credential_management_postgres::PostgresCredentialManagementRepository,
-    integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
+    integration_secret::NewIntegrationSecret,
 };
+#[path = "remote_integration_secret.rs"]
+mod remote_integration_secret;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::sync::{
@@ -1627,10 +1629,9 @@ struct RuntimeDependencies {
 }
 
 async fn start_dependencies(pool: &PgPool, responses: Responses) -> RuntimeDependencies {
-    let vault = Arc::new(PostgresIntegrationSecretVault::new(
+    let vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
-        IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap(),
+        remote_integration_secret::cipher(),
     ));
     vault
         .save(NewIntegrationSecret {
@@ -1776,10 +1777,6 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         .env(
             "GRPC_SERVICE_TOKEN",
             "synthetic-main-service-token-at-least-32-bytes",
-        )
-        .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         )
         .env("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
         .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-review")
@@ -1994,10 +1991,6 @@ pub(super) async fn run_review_operations_main_with_transport<F>(
         .env(
             "GRPC_SERVICE_TOKEN",
             "synthetic-main-service-token-at-least-32-bytes",
-        )
-        .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
         )
         .env(
             "REVOCATION_PROFILE_SERVICE_URL",

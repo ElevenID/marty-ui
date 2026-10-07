@@ -1,15 +1,20 @@
+#[cfg(feature = "integration-secret-migration")]
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
+#[cfg(feature = "integration-secret-migration")]
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value};
 use std::fmt;
 use thiserror::Error;
+#[cfg(feature = "integration-secret-migration")]
 use zeroize::Zeroize;
 
+#[cfg(feature = "integration-secret-migration")]
 const NONCE_LENGTH: usize = 12;
+#[cfg(feature = "integration-secret-migration")]
 const TAG_LENGTH: usize = 16;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,16 +92,19 @@ pub enum IntegrationSecretError {
 }
 
 #[derive(Clone)]
+#[cfg(feature = "integration-secret-migration")]
 pub struct IntegrationSecretCipher {
     key: [u8; 32],
 }
 
+#[cfg(feature = "integration-secret-migration")]
 impl Drop for IntegrationSecretCipher {
     fn drop(&mut self) {
         self.key.zeroize();
     }
 }
 
+#[cfg(feature = "integration-secret-migration")]
 impl std::fmt::Debug for IntegrationSecretCipher {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -106,6 +114,7 @@ impl std::fmt::Debug for IntegrationSecretCipher {
     }
 }
 
+#[cfg(feature = "integration-secret-migration")]
 impl IntegrationSecretCipher {
     pub fn from_base64(value: &str) -> Result<Self, IntegrationSecretError> {
         let mut decoded = STANDARD
@@ -191,12 +200,9 @@ pub fn integration_secret_id_from_ref<'value>(
         .filter(|value| !value.is_empty() && !value.contains('/'))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "integration-secret-migration"))]
 mod tests {
-    use super::{
-        integration_secret_id_from_ref, integration_secret_ref, IntegrationSecretCipher,
-        IntegrationSecretError,
-    };
+    use super::{IntegrationSecretCipher, IntegrationSecretError};
 
     const PYTHON_VECTOR_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=";
     const PYTHON_VECTOR_CIPHERTEXT: &str =
@@ -217,18 +223,6 @@ mod tests {
         let encrypted_empty = cipher.encrypt("").expect("encrypt empty value");
         assert_eq!(cipher.decrypt(&encrypted_empty), Ok(String::new()));
         assert!(!format!("{cipher:?}").contains(PYTHON_VECTOR_KEY));
-        let secret = super::NewIntegrationSecret {
-            id: "secret-1".to_owned(),
-            organization_id: "org-1".to_owned(),
-            name: "Secret".to_owned(),
-            provider: "canvas".to_owned(),
-            purpose: "oauth_access_token".to_owned(),
-            value: "plaintext-sensitive".to_owned(),
-            metadata: serde_json::json!({"token": "metadata-sensitive"}),
-        };
-        let debug = format!("{secret:?}");
-        assert!(!debug.contains("plaintext-sensitive"));
-        assert!(!debug.contains("metadata-sensitive"));
     }
 
     #[test]
@@ -244,6 +238,15 @@ mod tests {
                 Err(IntegrationSecretError::InvalidCiphertext)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_tests {
+    use super::{integration_secret_id_from_ref, integration_secret_ref, NewIntegrationSecret};
+
+    #[test]
+    fn references_are_tenant_bound_and_values_are_redacted() {
         assert_eq!(
             integration_secret_ref("org-1", "secret-1"),
             "org_secret://org-1/secret-1"
@@ -260,5 +263,17 @@ mod tests {
             integration_secret_id_from_ref("org-1", "org_secret://org-1/path/secret"),
             None
         );
+        let secret = NewIntegrationSecret {
+            id: "secret-1".to_owned(),
+            organization_id: "org-1".to_owned(),
+            name: "Secret".to_owned(),
+            provider: "canvas".to_owned(),
+            purpose: "oauth_access_token".to_owned(),
+            value: "plaintext-sensitive".to_owned(),
+            metadata: serde_json::json!({"token": "metadata-sensitive"}),
+        };
+        let debug = format!("{secret:?}");
+        assert!(!debug.contains("plaintext-sensitive"));
+        assert!(!debug.contains("metadata-sensitive"));
     }
 }
