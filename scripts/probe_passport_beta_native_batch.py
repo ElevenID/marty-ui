@@ -39,6 +39,23 @@ def _require(condition: bool, message: str) -> None:
         raise NativeBatchProbeError(message)
 
 
+def _conflict_reason(code: Any, result: dict[str, Any]) -> str:
+    """Classify known Rust 409 details without copying private response data."""
+    if code != 409:
+        return "not_conflict"
+    known = {
+        "Physical document changed concurrently; retry the operation": "concurrent_change",
+        "Physical document has already been submitted to the bureau": "already_submitted",
+        "Previously signed SOD material is unavailable; regenerate SOD before submission":
+            "signed_material_unavailable",
+        "Document signer certificate is not trusted by an active organization CSCA":
+            "untrusted_dsc",
+        "Document is not ready for quality verification": "quality_not_ready",
+        "A passing quality result is required before activation": "activation_not_ready",
+    }
+    return known.get(result.get("detail"), "other") if isinstance(result.get("detail"), str) else "other"
+
+
 def _first_dispatch_failure(attempt: int, code: Any, result: dict[str, Any],
                             batch_id: str) -> str:
     """Report only bounded proof shape, never response values or identifiers."""
@@ -53,7 +70,8 @@ def _first_dispatch_failure(attempt: int, code: Any, result: dict[str, Any],
                            and isinstance(proof.get(field), str)
                            and SHA256.fullmatch(proof[field]) is not None)
     return ("Native batch did not return verified first-dispatch proof "
-            f"(attempt={attempt}, http={http}, batch_id_match={result.get('batch_id') == batch_id}, "
+            f"(attempt={attempt}, http={http}, conflict={_conflict_reason(code, result)}, "
+            f"batch_id_match={result.get('batch_id') == batch_id}, "
             f"wire={wire}, wire_http_202={result.get('http_status') == 202}, "
             f"batch_queued={result.get('batch_status') == 'QUEUED'}, "
             f"request_commitment_shape={shape('request_commitment')}, "
