@@ -1483,6 +1483,14 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "tests/test_canvas_published_preflight.py",
         "tests/test_rust_ownership.py",
         "tests/test_ci_workflow_performance.py",
+        "tests/test_kubernetes_resolved_runtime.py",
+        "tests/test_base_native_runtime_fixture.py",
+        "tests/test_envoy_native_configuration.py",
+        "tests/test_flow_public_startup.py",
+        "tests/test_selfhost_runtime_model.py",
+        "tests/test_passport_supported_rust_model.py",
+        "tests/test_passport_supported_compose_ownership.py",
+        "tests/test_ci_canvas_compile_scope.py",
     )
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
@@ -1517,8 +1525,27 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     )
     assert (
         _classify_changed_path(
+            "tests/test_kubernetes_resolved_runtime_helpers.py", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
             "scripts/ci/run-published-canvas-contracts.sh", tmp_path
         )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "scripts/render_base_native_runtime_fixture.py", tmp_path
+        )["all"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path(
+            "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
+            tmp_path,
+        )["rust"]
         == "true"
     )
     assert (
@@ -1547,6 +1574,17 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
             tmp_path,
             combined=True,
         )[0]["rust"]
+        == "true"
+    )
+    assert (
+        _classify_changed_paths(
+            [
+                "tests/test_base_native_runtime_fixture.py",
+                "scripts/render_base_native_runtime_fixture.py",
+            ],
+            tmp_path,
+            combined=True,
+        )[0]["all"]
         == "true"
     )
     assert all(
