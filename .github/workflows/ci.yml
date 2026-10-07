@@ -43,7 +43,7 @@ jobs:
       security: ${{ steps.classify.outputs.security }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -65,8 +65,39 @@ jobs:
           verification=false
           security=false
 
+          # Observation only. Neither this result nor a missing diff may
+          # narrow the mandatory merge-group matrix. This broad candidate
+          # closure precedes any future historical-oracle tier decision.
+          report_historical_input_shadow() {
+            local event="$1" diff_status="$2"
+            shift 2
+            local candidate=unknown path
+            if [[ "$diff_status" == proved ]]; then
+              candidate=false
+              for path in "$@"; do
+                case "$path" in
+                  scripts/*|contracts/*|rust/services/issuance/migrations/*|rust/services/issuance/tests/support/*|rust/crates/canvas-acceptance/tests/*|.github/workflows/ci.yml)
+                    candidate=true
+                    ;;
+                esac
+              done
+            fi
+            printf 'MARTY_CI_HISTORICAL_INPUT_SHADOW_V1 {"event":"%s","diff":"%s","path_count":%s,"candidate":"%s","authority":"shadow-only"}\n' \
+              "$event" "$diff_status" "$#" "$candidate" >&2
+          }
+
           if [[ "${{ github.event_name }}" == merge_group ]]; then
             all=true
+            # Checkout is the exact combined head. A missing base or diff is
+            # an unknown observation, never permission to skip a check.
+            if [[ -n "$BASE_SHA" ]] &&
+               git fetch --no-tags --depth=1 origin "$BASE_SHA" &&
+               git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$RUNNER_TEMP/ci-merge-group-changed-paths"; then
+              mapfile -d '' -t merge_group_changed_files < "$RUNNER_TEMP/ci-merge-group-changed-paths"
+              report_historical_input_shadow merge_group proved "${merge_group_changed_files[@]}"
+            else
+              report_historical_input_shadow merge_group unavailable
+            fi
           elif [[ -z "$BASE_SHA" ]]; then
             all=true
           else
@@ -77,6 +108,7 @@ jobs:
             changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
             git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
             mapfile -d '' -t changed_files < "$changed_paths_file"
+            report_historical_input_shadow pull_request proved "${changed_files[@]}"
             # A nonempty PR consisting solely of proven test-only leaves has
             # no production Rust or image input. Keep every actual test owner.
             leaf_only=false
