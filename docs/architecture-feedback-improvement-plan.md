@@ -1561,6 +1561,25 @@ preceding #1152 protected CI. Unchanged composition also varied strongly, so
 these contrasting wall-time samples establish less repeated setup, not a
 causal CI speedup.
 
+## A0/A6 repository-matrix timing follow-up (2026-10-07, local candidate)
+
+The #1153 artifacts count database setup but have only an aggregate worker
+target duration for the roster, resource-race, and validation repository
+matrices. This prevents separating their test work from concurrent process
+cases and runner variation. A focused follow-up uses the existing sanitized
+CI phase stream to time the database/case work of exactly those three matrices,
+including template setup and owned cleanup but excluding initial reference
+loading. Fixed Rust enum variants emit fixed labels;
+the Python collector accepts them only as `scenario` rows, not fixture or
+cleanup names. It does not change test assertions, selections, databases,
+runtime deadlines, or required gates. Local policy/formatting checks pass;
+the package-scoped Rust test compiled, strict package Clippy passed, and a
+disposable PostgreSQL resource-race run emitted the exact `scenario` marker
+with `ok` after owned cleanup. No labeled container remained. Independent
+review found no blocking issue and verified the existing CI relay path.
+Hosted artifact capture and full protected qualification remain required
+before merge.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

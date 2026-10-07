@@ -587,6 +587,9 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
+    let timing = canvas_published_database::repository_matrix_timer(
+        canvas_published_database::RepositoryMatrix::RosterMetadata,
+    );
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
@@ -609,6 +612,7 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
     }
     admin.close().await;
     owned.close_verified().unwrap();
+    timing.success();
 }
 
 #[path = "../../../services/issuance/tests/support/canvas_worker_mixed_roster_replay.rs"]
@@ -1034,6 +1038,9 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
+    let timing = canvas_published_database::repository_matrix_timer(
+        canvas_published_database::RepositoryMatrix::ResourceRace,
+    );
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
@@ -1058,6 +1065,7 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
     }
     admin.close().await;
     owned.close_verified().unwrap();
+    timing.success();
 }
 
 fn assert_worker_provider_https(scenario: &str) {
@@ -1507,6 +1515,9 @@ async fn worker_validation_repository_matches_frozen_errors() {
     // Clone it into a separate database for each case, so we keep independent
     // schemas and frozen observations without starting thirteen PostgreSQL
     // servers or re-running the same published migrations thirteen times.
+    let timing = canvas_published_database::repository_matrix_timer(
+        canvas_published_database::RepositoryMatrix::Validation,
+    );
     let owned =
         canvas_published_database::PublishedDatabase::start_for_worker_validation_template()
             .await
@@ -1616,6 +1627,7 @@ async fn worker_validation_repository_matches_frozen_errors() {
     }
     admin.close().await;
     owned.close_verified().unwrap();
+    timing.success();
 }
 
 #[tokio::test]
