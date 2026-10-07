@@ -54,6 +54,9 @@ def prepare(
             "Python deletion PR is not an exact open draft")
     target = observer()
     require(isinstance(target, dict), "Live beta target is invalid")
+    docker = target.get("docker")
+    require(isinstance(docker, dict) and docker.get("context") == "default",
+            "Live beta target must use the protected passport runner Docker context")
     beta = target.get("beta")
     require(isinstance(beta, dict), "Live beta target is invalid")
     services = beta.get("services")
