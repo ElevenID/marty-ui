@@ -219,6 +219,23 @@ Kubernetes Signing Keys manifests all supply `ISSUER_BASE_URL`. Targeted binary
 Clippy and formatting passed. This startup correction remains in the broader
 uncommitted Signing Keys feature diff for grouped review.
 
+2026-10-07 managed inventory custody review: inventory had accepted any
+tenant-named Transit key with a readable public JWK, even if that key was
+exportable or imported. It now uses the shared managed-key metadata reader
+and admits only keys whose provider flags prove active signing,
+non-exportability, no plaintext backup, no deletion permission, and no import.
+An unsafe tenant-named key is excluded and degrades inventory rather than
+becoming a signable alias; valid managed keys remain available. The focused
+regression and full default Signing Keys `--tests` selection passed (131
+library tests passed, seven ignored), and all-target Clippy passed with
+warnings denied. The first disposable OpenBao/Redis probe exposed a mock
+Transit response in the cross-tenant route test that omitted custody flags;
+the fixture now supplies the provider's explicit safe flags. The corrected
+full scoped policy probe passed six managed prefixes, Rust adapter operations,
+tenant routes and managed-profile routes, then removed its labeled containers.
+This candidate source remains uncommitted with the broader Signing Keys diff;
+hosted CI and exact artifacts are not qualified.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
