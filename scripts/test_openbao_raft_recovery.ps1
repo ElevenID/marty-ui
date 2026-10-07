@@ -5,12 +5,15 @@ $ErrorActionPreference = 'Stop'
 $suffix = [guid]::NewGuid().ToString('N').Substring(0, 10)
 $sourceName = "kmsrecovery-source-$suffix"
 $restoredName = "kmsrecovery-restored-$suffix"
+$snapshotName = "kmsrecovery-snapshot-$suffix"
 $sourceVolume = "kmsrecovery-source-data-$suffix"
 $restoredVolume = "kmsrecovery-restored-data-$suffix"
+$snapshotVolume = "kmsrecovery-snapshot-data-$suffix"
 $containers = @()
 $volumes = @()
 $config = (Resolve-Path (Join-Path $PSScriptRoot '..\docker\openbao-selfhost.hcl')).Path
 $image = if ($env:MARTY_OPENBAO_PROBE_IMAGE) { $env:MARTY_OPENBAO_PROBE_IMAGE } else { 'marty-openbao-ha-probe:local' }
+$hostTemp = Join-Path ([System.IO.Path]::GetTempPath()) "kms-raft-export-$suffix"
 
 function Wait-InitializedApi([string]$BaseUrl) {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
@@ -53,6 +56,9 @@ try {
     docker volume create --label marty.disposable=kms-raft-recovery-probe $restoredVolume | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'recovery volume creation failed' }
     $volumes += $restoredVolume
+    docker volume create --label marty.disposable=kms-raft-recovery-probe $snapshotVolume | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'snapshot recovery volume creation failed' }
+    $volumes += $snapshotVolume
     foreach ($volume in $volumes) {
         docker run --rm --entrypoint sh `
             --mount "type=volume,src=$volume,dst=/bao/data" `
@@ -102,6 +108,27 @@ try {
     $haipVersion = [string]$haip.data.version
     if (-not $senderVersion -or -not $haipVersion) { throw 'source plugin omitted key versions' }
 
+    $hostState = Join-Path $hostTemp 'state'
+    $hostExports = Join-Path $hostTemp 'exports'
+    New-Item -ItemType Directory -Path $hostState, $hostExports -Force | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $hostState 'selfhost-init.json'), ($initialized | ConvertTo-Json -Depth 12))
+    [System.IO.File]::WriteAllText((Join-Path $hostState 'root.token'), $rootToken)
+    [System.IO.File]::WriteAllText((Join-Path $hostState 'unseal.key'), $unsealKey)
+    python (Join-Path $PSScriptRoot 'export-selfhost-openbao.py') `
+        --state-dir $hostState --export-dir $hostExports --config-file $config --bao-url $sourceUrl | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'live Raft snapshot exporter failed' }
+    $archives = @(Get-ChildItem -LiteralPath $hostExports -Filter '*.zip')
+    if ($archives.Count -ne 1) { throw 'live Raft snapshot exporter did not create one archive' }
+    $extracted = Join-Path $hostTemp 'extracted'
+    Expand-Archive -LiteralPath $archives[0].FullName -DestinationPath $extracted
+    $manifest = Get-Content -LiteralPath (Join-Path $extracted 'manifest.json') -Raw | ConvertFrom-Json
+    $snapshotFile = Join-Path $extracted 'raft.snap'
+    $snapshotHash = (Get-FileHash -LiteralPath $snapshotFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($manifest.format -cne 'marty-openbao-raft-snapshot-v1' -or
+        $manifest.snapshot_sha256 -cne $snapshotHash) {
+        throw 'live Raft snapshot archive failed its manifest check'
+    }
+
     docker stop $sourceName | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'source OpenBao did not stop before snapshot' }
     $containers = @($containers | Where-Object { $_ -ne $sourceName })
@@ -130,12 +157,51 @@ try {
         [string]$restoredHaip.data.version -cne $haipVersion) {
         throw 'restored OpenBao lost pre-snapshot plugin key versions'
     }
-    Write-Output 'PASS disposable OpenBao Raft cold snapshot, unseal, Transit decrypt and versioned plugin keys'
+
+    $containers += $snapshotName
+    $snapshotUrl = Start-RaftOpenBao $snapshotName $snapshotVolume
+    if ((Wait-InitializedApi $snapshotUrl).initialized) { throw 'snapshot recovery volume was already initialized' }
+    $snapshotInit = Invoke-RestMethod -Uri "$snapshotUrl/v1/sys/init" -Method Post `
+        -ContentType 'application/json' -Body '{"secret_shares":1,"secret_threshold":1}'
+    $snapshotUnsealBody = @{ key = [string]$snapshotInit.keys_base64[0] } | ConvertTo-Json -Compress
+    $snapshotUnsealed = Invoke-RestMethod -Uri "$snapshotUrl/v1/sys/unseal" -Method Post `
+        -ContentType 'application/json' -Body $snapshotUnsealBody
+    if ($snapshotUnsealed.sealed) { throw 'snapshot recovery node remained sealed' }
+    $snapshotHeaders = @{ 'X-Vault-Token' = [string]$snapshotInit.root_token }
+    Wait-RaftLeader $snapshotUrl $snapshotHeaders
+    Invoke-RestMethod -Uri "$snapshotUrl/v1/sys/storage/raft/snapshot-force" -Method Post `
+        -Headers $snapshotHeaders -ContentType 'application/octet-stream' -InFile $snapshotFile | Out-Null
+    docker stop $snapshotName | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'snapshot recovery node did not stop' }
+    $snapshotUrl = Start-RaftOpenBao $snapshotName $snapshotVolume
+    $snapshotUnsealed = Invoke-RestMethod -Uri "$snapshotUrl/v1/sys/unseal" -Method Post `
+        -ContentType 'application/json' -Body $unsealBody
+    if ($snapshotUnsealed.sealed) { throw 'snapshot recovery did not accept original unseal key' }
+    Wait-RaftLeader $snapshotUrl $headers
+    $snapshotDecrypted = Invoke-RestMethod -Uri "$snapshotUrl/v1/transit/decrypt/$keyName" -Method Post `
+        -Headers $headers -ContentType 'application/json' `
+        -Body (@{ ciphertext = $ciphertext } | ConvertTo-Json -Compress)
+    if ([string]$snapshotDecrypted.data.plaintext -cne $plaintext) {
+        throw 'snapshot restore could not decrypt pre-snapshot Transit ciphertext'
+    }
+    $snapshotSender = Invoke-RestMethod -Uri "$snapshotUrl/v1/didcomm/keys/tenant_a/sender/versions/$senderVersion" -Headers $headers
+    $snapshotHaip = Invoke-RestMethod -Uri "$snapshotUrl/v1/didcomm/haip/keys/tenant_a/flow_a/versions/$haipVersion" -Headers $headers
+    if ([string]$snapshotSender.data.version -cne $senderVersion -or
+        [string]$snapshotHaip.data.version -cne $haipVersion) {
+        throw 'snapshot restore lost pre-snapshot plugin key versions'
+    }
+    Write-Output 'PASS disposable OpenBao live Raft export, cold restore and fresh-cluster snapshot restore'
 } finally {
     foreach ($name in $containers) {
         docker rm -f $name 2>$null | Out-Null
     }
     foreach ($volume in $volumes) {
         docker volume rm $volume | Out-Null
+    }
+    $tempRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
+    $resolvedTemp = [System.IO.Path]::GetFullPath($hostTemp)
+    if ($resolvedTemp.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase) -and
+        [System.IO.Path]::GetFileName($resolvedTemp).StartsWith('kms-raft-export-', [System.StringComparison]::Ordinal)) {
+        Remove-Item -LiteralPath $resolvedTemp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }

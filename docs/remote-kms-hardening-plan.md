@@ -171,6 +171,28 @@ not run at this head. This is a local cold OpenBao-only restore; coordinated
 PostgreSQL/KMS recovery, off-host backup handling, release image publication,
 and full deployment qualification remain open.
 
+2026-10-07 self-host backup correction: `scripts/export-selfhost-openbao.py`
+previously copied the entire OpenBao directory without requiring shutdown;
+that could produce an inconsistent archive after the switch to Raft. The
+candidate exporter now calls OpenBao 2.5's authenticated local-loopback Raft
+snapshot API while the disposable server is live, streams the snapshot to a
+restricted archive, includes only the three bootstrap recovery files and
+current config, and records a snapshot SHA-256. It refuses remote origins,
+redirects, missing recovery files, and an export directory inside the Raft
+state directory. A disposable source created Transit ciphertext and both
+plugin key types, exported one live archive, and verified its manifest/hash.
+The separate cold-copy restore recovered the ciphertext and versioned public
+keys. A second clean replacement Raft node was initialized, received the
+archive's `raft.snap` through OpenBao's force-restore API, restarted, and
+unsealed with the original recovery key; it also decrypted the old Transit
+ciphertext and returned both original plugin versions. Five focused exporter
+security tests passed, including a live redirect target that received no root
+token. The self-host runbook distinguishes snapshots from cold state copies
+and limits force restore to a clean replacement cluster. This is disposable
+single-node recovery evidence, not a qualified published-image disaster
+recovery runbook. Coordinated PostgreSQL/OpenBao recovery, off-host archive
+handling, and exact release image qualification remain open.
+
 2026-10-07 OpenBao extension checkpoint: the Go secrets-engine source is now
 tracked on this branch in commit `7605fdf7d`. It provides remote X25519
 DIDComm authcrypt and P-256 HAIP response decryption. Review found that a
