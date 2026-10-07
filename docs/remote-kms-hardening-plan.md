@@ -1579,6 +1579,29 @@ default-feature leak, but it does not prove the entire old Core 0.1.61 graph
 lacks private-key implementations or that a release wheel has passed artifact
 inspection.
 
+2026-10-07 HAIP offline audit privilege review: the first migrator draft
+required `HAIP_MIGRATION_IMPORT_TOKEN_FILE` even for its read-only `audit`
+command, giving a preflight operator unnecessary access to the private-key
+import route. `audit` now reads `HAIP_MIGRATION_READ_TOKEN_FILE`, while
+`migrate` alone reads the import token and Transit-decrypt token. The new
+`docker/openbao-haip-migration-audit-policy.hcl` grants read only on exact
+tenant/Flow/version public-key paths. Its `+` single-segment syntax follows
+[OpenBao's policy documentation](https://openbao.org/docs/concepts/policies/).
+A disposable OpenBao 2.5.5 ACL check granted `read` on the versioned key path
+and `deny` on import, decrypt and unversioned key paths; the container was
+removed. The feature-gated Rust migrator passed `cargo +1.95 check --locked`
+after the edit. No running stack or historical row was changed. A real
+offline audit against the exact release plugin/image remains required.
+The same review found that paginated `audit` queries previously used a fresh
+database snapshot per page. The command now starts a read-only,
+repeatable-read transaction before scanning and commits only after all remote
+version checks succeed. A disposable PostgreSQL 16 concurrency probe returned
+the initial row count on both reads while another session inserted a row;
+the container was removed. The feature-gated migrator check and scoped
+`rustfmt --check` passed after the edit. This makes one audit internally
+consistent; a cutover audit still requires Flow writers to be stopped so new
+rows cannot appear after its snapshot.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
