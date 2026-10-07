@@ -1,15 +1,16 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 09:15 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-07 10:34 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
 Canvas job changed from 51m36s before #1131 to 31m57s on its merge candidate;
 only the removed duplicate compilation is clearly attributable to that
 refactor. UI #1132–#1139 added shadow-only dependency observations and bounded
-PR feedback selection; #1141 added public-vector execution proof and #1142
-added exact protocol-test source ownership. Full protected checks remain.
+PR feedback selection; #1141 added public-vector execution proof, #1142
+added exact protocol-test source ownership, and #1144 guarded current Canvas
+REST capture inputs. Full protected checks remain.
 The separate roster
 component draft is deferred for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
@@ -315,7 +316,7 @@ Merged [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050) implements tha
 
 Merged regression-prevention follow-up [UI #1055](https://github.com/ElevenID/marty-ui/pull/1055) walks every pinned Python script in both body and lease corpora and checks statically imported flat `scripts/*.py` helpers are also pinned. Relative/local-package imports and common dynamic-import calls fail closed for manual review. Synthetic tests cover direct, transitive, relative, dotted-package, and dynamic cases; 771 focused body/lease tests passed and an independent exact-head reviewer cleared the change. Full PR and protected combined-head CI passed, including live published-process qualification. This is not proof of every possible dynamic Python import mechanism or full image/environment validity; preserve live qualification until the broader closure is established.
 
-Current-input REST candidate (2026-10-07, not yet hosted-qualified): the
+Current-input REST follow-up (2026-10-07): the
 shared `run_canvas_worker_rest_oracle.py` helper is directly imported by 18
 capture runners. A normalized-hash sidecar and focused drift tests pin its
 bounded static import/child graph: five scripts, the REST/startup scenario
@@ -331,6 +332,13 @@ and selects Rust plus release checks; its exact test-only source selects the
 release owner. This is current repository input evidence, not historical
 capture attestation, complete image/schema/runtime closure, a changed frozen
 observation, or permission to reduce live qualification frequency.
+[UI #1144](https://github.com/ElevenID/marty-ui/pull/1144) passed full
+[PR](https://github.com/ElevenID/marty-ui/actions/runs/37600734527) and
+[protected](https://github.com/ElevenID/marty-ui/actions/runs/37605210608)
+CI, including 144 composition and 101 worker tests (two intentional ignores)
+and 602 successful Canvas timing rows in each run, then merged as
+`2300a8582d`. Its exact preflight-test source selector has no measured
+scoped-PR saving yet.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
@@ -1335,7 +1343,7 @@ with two capture-only ignores and 602 successful timing rows, then #1142
 merged as `7308713f0`. Protected merge groups remain full. This workflow-edit
 PR ran the full matrix; no future scoped-PR saving is measured yet.
 
-Canvas preflight test-source follow-up (2026-10-07, pending hosted validation):
+Canvas preflight test-source follow-up (2026-10-07, merged in #1144):
 `tests/test_canvas_published_preflight.py` is a synthetic Bash/runner policy
 test collected by root release pytest; it is not the shell runner or a Rust
 acceptance executable. Its exact-path PR routing now selects the release
@@ -1344,7 +1352,21 @@ image inputs, corpora, unknown test siblings, and mixed implementation edits
 retain their broad owners; merge groups still run the complete matrix. The
 real classifier is exercised for each boundary. This avoids an unrelated
 Canvas build on a future edit to only that test source, but this workflow-edit
-PR itself requires full PR/protected CI and has no measured scoped saving yet.
+PR itself ran full PR/protected CI and has no measured scoped saving yet.
+
+Fixture-policy test-source batch (2026-10-07, local candidate): eight frequently
+edited, exact root pytest sources covering Kubernetes, base runtime, Envoy,
+Flow startup, self-host, passport model/Compose ownership, and Canvas compile
+scope have the Release Contract Tests root pytest step as their CI execution
+owner. A repository reference search found no separate workflow invocation or
+runtime-image copy of these Python test files; the public/CI service images
+copy explicit Rust, proto, contract, service, and script inputs, not root
+`tests/*.py`. The proposed PR selector routes edits to those exact test-only
+sources to release pytest. Their production/fixture scripts, Rust acceptance
+owners, Compose and workflow inputs, unknown siblings, and protected merge
+groups retain broad checks. This reduces future test-source-only PR feedback
+scope, not this workflow-edit PR's full validation, and no time saving is
+claimed until hosted scoped evidence exists.
 
 ## Design references
 
