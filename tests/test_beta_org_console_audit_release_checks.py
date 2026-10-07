@@ -47,6 +47,34 @@ def _required_steps():
     ]
 
 
+def test_signing_service_audit_uses_the_selected_remote_service() -> None:
+    audit = _load_audit_module()
+    services = [
+        {"id": "first", "name": "First", "status": "configured"},
+        {"id": "remote", "name": "Selected", "status": "configured"},
+    ]
+    assert audit.selected_signing_service({
+        "services": services,
+        "default_service_id": "remote",
+    }) == services[1]
+    assert audit.selected_signing_service({
+        "hsm_enabled": True,
+        "hsm_settings": {"key_reference": "legacy"},
+    }) is None
+    assert audit.selected_signing_service({
+        "services": services,
+        "default_service_id": "missing",
+    }) is None
+    assert audit.selected_signing_service({
+        "services": [{"id": "remote", "status": "disabled"}],
+        "default_service_id": "remote",
+    }) is None
+    assert audit.selected_signing_service({
+        "services": [{"id": "remote", "status": "unavailable"}],
+        "default_service_id": "remote",
+    }) is None
+
+
 def test_release_checks_block_audit_log_501() -> None:
     audit = _load_audit_module()
 
