@@ -399,7 +399,10 @@ def _classify_changed_paths(
     combined: bool = False,
     event: str = "pull_request",
     include_rust_plan: bool = False,
+    include_shadow: bool = False,
     proof_failure: bool = False,
+    fetch_failure: bool = False,
+    missing_base: bool = False,
 ) -> list[dict[str, str]]:
     """Exercise the real Bash classifier against synthetic diffs."""
     _, document = _workflow(CI_PATH)
@@ -456,6 +459,10 @@ done < "$SYNTHETIC_PATHS_FILE"
         start = prelude.index("python3() {")
         end = prelude.index("\nexport BASE_SHA=", start)
         prelude = prelude[:start] + "python3() { return 43; }" + prelude[end:]
+    if fetch_failure:
+        prelude = prelude.replace("fetch) return 0 ;;", "fetch) return 44 ;;")
+    if missing_base:
+        prelude = prelude.replace("export BASE_SHA=synthetic-base", "export BASE_SHA=''")
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
@@ -507,7 +514,7 @@ done < "$SYNTHETIC_PATHS_FILE"
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    return [
+    outputs = [
         {
             key: value
             for key, value in (
@@ -520,10 +527,93 @@ done < "$SYNTHETIC_PATHS_FILE"
             for index in range(len(paths_to_run))
         )
     ]
+    if include_shadow:
+        marker = "MARTY_CI_HISTORICAL_INPUT_SHADOW_V1 "
+        records = [
+            json.loads(line.removeprefix(marker))
+            for line in result.stderr.splitlines()
+            if line.startswith(marker)
+        ]
+        assert len(records) == len(outputs), result.stderr
+        for output, record in zip(outputs, records, strict=True):
+            output["historical_shadow"] = json.dumps(record, sort_keys=True)
+    return outputs
 
 
 def _classify_changed_path(changed_path: str, tmp_path: Path) -> dict[str, str]:
     return _classify_changed_paths([changed_path], tmp_path)[0]
+
+
+def test_merge_group_historical_input_shadow_keeps_full_validation(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    checkout = workflow["jobs"]["changes"]["steps"][0]
+    assert checkout["if"] == (
+        "github.event_name == 'pull_request' || github.event_name == 'merge_group'"
+    )
+    assert checkout["with"]["persist-credentials"] is False
+    for path, candidate in (
+        ("contracts/canvas-json-depth-scenarios.json", "true"),
+        ("scripts/run_canvas_json_depth_oracle.py", "true"),
+        ("rust/services/issuance/migrations/20260101.sql", "true"),
+        ("rust/services/issuance/src/canvas_operation_http.rs", "false"),
+    ):
+        selected = _classify_changed_paths(
+            [path], tmp_path, event="merge_group", include_shadow=True
+        )[0]
+        observed = json.loads(selected.pop("historical_shadow"))
+        assert set(selected.values()) == {"true"}
+        assert observed == {
+            "event": "merge_group",
+            "diff": "proved",
+            "path_count": 1,
+            "candidate": candidate,
+            "authority": "shadow-only",
+        }
+    mixed = _classify_changed_paths(
+        [
+            "contracts/canvas-json-depth-scenarios.json",
+            "rust/services/issuance/src/canvas_operation_http.rs",
+        ],
+        tmp_path,
+        combined=True,
+        event="merge_group",
+        include_shadow=True,
+    )[0]
+    assert json.loads(mixed.pop("historical_shadow")) == {
+        "event": "merge_group",
+        "diff": "proved",
+        "path_count": 2,
+        "candidate": "true",
+        "authority": "shadow-only",
+    }
+    assert set(mixed.values()) == {"true"}
+    unavailable = _classify_changed_paths(
+        ["contracts/canvas-json-depth-scenarios.json"],
+        tmp_path,
+        event="merge_group",
+        include_shadow=True,
+        fetch_failure=True,
+    )[0]
+    observed = json.loads(unavailable.pop("historical_shadow"))
+    assert set(unavailable.values()) == {"true"}
+    assert observed == {
+        "event": "merge_group",
+        "diff": "unavailable",
+        "path_count": 0,
+        "candidate": "unknown",
+        "authority": "shadow-only",
+    }
+    absent_base = _classify_changed_paths(
+        ["contracts/canvas-json-depth-scenarios.json"],
+        tmp_path,
+        event="merge_group",
+        include_shadow=True,
+        missing_base=True,
+    )[0]
+    assert json.loads(absent_base.pop("historical_shadow")) == observed
+    assert set(absent_base.values()) == {"true"}
 
 
 def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
