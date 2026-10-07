@@ -142,10 +142,11 @@ jobs:
                   rust=true
                   release=true
                   ;;
-                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py)
+                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
                   # These exact test-only sources run in release pytest. Their
                   # manifest inputs retain the Rust discovery/evidence owner;
-                  # unknown siblings and corpora remain conservatively broad.
+                  # implementation scripts, unknown siblings, and corpora
+                  # remain conservatively broad.
                   release=true
                   ;;
                 rust/*|proto/*|contracts/*)
