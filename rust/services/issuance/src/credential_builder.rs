@@ -917,7 +917,6 @@ mod tests {
         Json, Router,
     };
     use base64::engine::general_purpose::STANDARD;
-    use ed25519_dalek::{Signer, SigningKey};
     use marty_crypto::jwk::public_key_pem_to_jwk;
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -928,21 +927,12 @@ mod tests {
     #[derive(Debug)]
     struct RecordingSigner {
         requests: Mutex<Vec<SignRequest>>,
-        ed25519: Option<SigningKey>,
     }
 
     impl RecordingSigner {
         fn fixed() -> Arc<Self> {
             Arc::new(Self {
                 requests: Mutex::new(Vec::new()),
-                ed25519: None,
-            })
-        }
-
-        fn ed25519(key: SigningKey) -> Arc<Self> {
-            Arc::new(Self {
-                requests: Mutex::new(Vec::new()),
-                ed25519: Some(key),
             })
         }
     }
@@ -953,16 +943,7 @@ mod tests {
             &self,
             request: SignRequest,
         ) -> Result<SignResponse, CredentialIssuanceError> {
-            let signature = if request.algorithm == "EdDSA" {
-                self.ed25519
-                    .as_ref()
-                    .expect("Ed25519 test signer")
-                    .sign(&request.payload)
-                    .to_bytes()
-                    .to_vec()
-            } else {
-                vec![0x11; 64]
-            };
+            let signature = vec![0x11; 64];
             self.requests.lock().expect("request lock").push(request);
             Ok(SignResponse {
                 signature_b64: URL_SAFE_NO_PAD.encode(signature),
@@ -993,7 +974,16 @@ mod tests {
                     request.key_purpose.clone(),
                     request.payload.clone(),
                 ));
-            let digest = Sha256::digest(&request.payload);
+            let body = if request.algorithm == "EdDSA" {
+                json!({"input": STANDARD.encode(&request.payload), "prehashed": false})
+            } else {
+                let digest = Sha256::digest(&request.payload);
+                json!({
+                    "input": STANDARD.encode(digest),
+                    "prehashed": true,
+                    "hash_algorithm": "sha2-256",
+                })
+            };
             let response = self
                 .client
                 .post(
@@ -1002,11 +992,7 @@ mod tests {
                         .map_err(|error| signing_error(error.to_string()))?,
                 )
                 .header("X-Vault-Token", &self.token)
-                .json(&json!({
-                    "input": STANDARD.encode(digest),
-                    "prehashed": true,
-                    "hash_algorithm": "sha2-256",
-                }))
+                .json(&body)
                 .send()
                 .await
                 .map_err(|error| signing_error(error.to_string()))?
@@ -1022,7 +1008,11 @@ mod tests {
             let signature = STANDARD
                 .decode(encoded)
                 .map_err(|error| signing_error(error.to_string()))?;
-            let signature = normalize_ecdsa_signature(&signature, "ES256").map_err(native_error)?;
+            let signature = if request.algorithm == "EdDSA" {
+                signature
+            } else {
+                normalize_ecdsa_signature(&signature, "ES256").map_err(native_error)?
+            };
             Ok(SignResponse {
                 signature_b64: URL_SAFE_NO_PAD.encode(signature),
                 signature_native_b64: None,
@@ -1030,7 +1020,10 @@ mod tests {
         }
     }
 
-    async fn disposable_transit_signer(key_purpose: &str) -> (Arc<DisposableTransitSigner>, Value) {
+    async fn disposable_transit_signer(
+        key_purpose: &str,
+        algorithm: &str,
+    ) -> (Arc<DisposableTransitSigner>, Value) {
         assert_eq!(
             std::env::var("MARTY_KMS_DISPOSABLE_PROBE").as_deref(),
             Ok("1"),
@@ -1052,6 +1045,11 @@ mod tests {
             _ => panic!("unsupported disposable key purpose"),
         };
         let key_name = format!("{key_prefix}-test-{}", uuid::Uuid::new_v4().simple());
+        let key_type = match algorithm {
+            "ES256" => "ecdsa-p256",
+            "EdDSA" => "ed25519",
+            _ => panic!("unsupported disposable key algorithm"),
+        };
         let client = reqwest::Client::new();
         let key_url = base_url
             .join(&format!("/v1/transit/keys/{key_name}"))
@@ -1059,7 +1057,7 @@ mod tests {
         client
             .post(key_url.clone())
             .header("X-Vault-Token", &token)
-            .json(&json!({"type": "ecdsa-p256"}))
+            .json(&json!({"type": key_type}))
             .send()
             .await
             .expect("create remote issuer key")
@@ -1081,10 +1079,18 @@ mod tests {
         let pem = metadata["data"]["keys"]["1"]["public_key"]
             .as_str()
             .expect("provider-generated public key");
-        let mut public_jwk = serde_json::to_value(
-            public_key_pem_to_jwk(pem).expect("valid remote issuer public key"),
-        )
-        .expect("public JWK JSON");
+        let mut public_jwk = if algorithm == "EdDSA" {
+            let raw = STANDARD
+                .decode(pem)
+                .expect("OpenBao Ed25519 public key base64");
+            assert_eq!(raw.len(), 32, "OpenBao Ed25519 public key length");
+            json!({"kty":"OKP", "crv":"Ed25519", "x":URL_SAFE_NO_PAD.encode(raw)})
+        } else {
+            serde_json::to_value(
+                public_key_pem_to_jwk(pem).expect("valid remote issuer public key"),
+            )
+            .expect("public JWK JSON")
+        };
         public_jwk["kid"] = json!("did:web:issuer.example#key-1");
         let signer = Arc::new(DisposableTransitSigner {
             client,
@@ -1176,7 +1182,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn sd_jwt_signs_exact_native_input_with_public_holder_key() {
-        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer").await;
+        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "ES256").await;
         let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::SdJwt);
         request.issuer.public_jwk = Some(public_jwk);
@@ -1244,7 +1250,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn jwt_vc_preserves_open_badge_profile_and_reserved_id() {
-        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer").await;
+        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "ES256").await;
         let builder = HttpCredentialBuilder::with_signer(signer);
         let mut request = request(CredentialBuilderKind::JwtVcJson);
         request.issuer.public_jwk = Some(public_jwk);
@@ -1277,7 +1283,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn mdoc_ignores_request_controlled_certificate_chain() {
-        let (signer, public_jwk) = disposable_transit_signer("mdoc_dsc").await;
+        let (signer, public_jwk) = disposable_transit_signer("mdoc_dsc", "ES256").await;
         let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::Mdoc);
         request.issuer.public_jwk = Some(public_jwk);
@@ -1303,18 +1309,13 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn data_integrity_uses_native_canonicalization_and_verifies_completion() {
-        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
-        let verifying_key = signing_key.verifying_key();
-        let signer = RecordingSigner::ed25519(signing_key);
+        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "EdDSA").await;
         let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::DataIntegrity);
         request.issuer.algorithm = "EdDSA".to_owned();
-        request.issuer.public_jwk = Some(json!({
-            "kty":"OKP", "crv":"Ed25519",
-            "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
-            "kid":"did:web:issuer.example#key-1",
-        }));
+        request.issuer.public_jwk = Some(public_jwk);
 
         let built = builder.build(&request).await.expect("Data Integrity build");
 
@@ -1323,8 +1324,8 @@ mod tests {
         assert_eq!(document["id"], request.credential_id);
         assert_eq!(document["proof"]["cryptosuite"], "eddsa-rdfc-2022");
         assert_eq!(
-            signer.requests.lock().expect("request lock")[0].algorithm,
-            "EdDSA"
+            signer.requests.lock().expect("remote signer request lock")[0].1,
+            "vc_jwt_issuer"
         );
     }
 

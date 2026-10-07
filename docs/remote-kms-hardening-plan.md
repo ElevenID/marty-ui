@@ -74,6 +74,16 @@ PostgreSQL/Raft restore proof. The normal credential-builder unit selection
 passed six tests with those three explicitly routed to the live probe. The
 readiness random-challenge signer remains open; hosted CI and release artifacts
 have not yet run this checkpoint.
+2026-10-07 Data Integrity test-custody follow-up: the same disposable Transit
+adapter now supports provider-generated Ed25519 keys and remote EdDSA signing.
+OpenBao returns that public key as base64 raw bytes rather than PEM, matching
+the production Signing Keys adapter's public-only decoding. The positive Data
+Integrity test retains canonicalization, credential ID and cryptosuite checks
+without a Rust Ed25519 private key. Four live credential-builder format tests
+passed in the disposable probe, then the Rust/PostgreSQL/Raft restore passed.
+The normal credential-builder selection passed five tests with four live tests
+explicitly run by the probe. Rust formatting and source diff checks passed;
+hosted CI and exact release artifacts remain unqualified.
 
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
