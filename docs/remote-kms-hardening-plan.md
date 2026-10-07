@@ -73,6 +73,7 @@ dependencies require separate PRs; a single PR cannot span repositories.
 | Core feature PR, if needed | Shared remote envelope/storage contracts and cryptographic boundaries, missing canonical APIs, fixture support, compile-fail enforcement, documentation and self-review corrections. | Backend feasibility and consumer contract tests demonstrated first. Preserve current consumers where safe; never restore forbidden production APIs. |
 | UI native hardening feature PR | Hardened Core adoption across service roots, DIDComm remote custody, integration-secret migration, supported BYOK wiring, test isolation, dependency/artifact guards and acceptance evidence. This tracker belongs here. | Exact reviewed Core revision and proven remote backend capabilities. |
 | Credentials compatibility retirement feature PR | Remove obsolete compatibility custody paths and pins once their native replacements and data reads are qualified; preserve required rollback behavior without private-key fallback. | Qualified native service artifacts and supported routing/cutover evidence. |
+| Integration acceptance feature PR | Migrate the production-image positive verifier probe to a qualified external fixture or separate acceptance artifact while preserving actual shipped verifier execution and assertions. | Coordinated UI packaging change; the existing caller executes the probe inside the published service image. |
 | Dependency fork PRs, only if necessary | Narrow missing cryptographic capability separation that cannot be achieved at existing owners. | Demonstrated production graph gap; ElevenID forks only. No upstream disclosure or publication is implied. |
 
 Batch local implementation and review corrections before pushing. Do not create
@@ -89,9 +90,9 @@ safety provides a concrete reason, and record that reason here.
 | ID | Work and exit evidence | Status |
 | --- | --- | --- |
 | K1 | Reconcile preserved branches; map every supported production binary, image, wheel, Cargo root and release pin; enumerate current signing/encryption paths and explicit secret-class exceptions. | In progress |
-| K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | Pending |
+| K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; pinned OpenBao rejects X25519 creation |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | Pending |
-| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | Pending |
+| K4 | Design and implement opaque integration-secret custody and existing AES-GCM envelope migration; prove legacy reads, tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; isolated Transit storage baseline verified |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | Pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | Pending |
 | K7 | Reconcile Credentials compatibility retirement with native owner selection, published artifacts and encrypted-data readability; remove obsolete raw-key adapters and wheel requirements where qualified. | Pending |
@@ -174,6 +175,71 @@ to live key policies, key deletion or irreversible data migration require their
 specific operational context; prepare a concrete reviewed operation first.
 
 ## Evidence and progress log
+
+### Production and acceptance inventory checkpoint
+
+The public shared image is built by `services/Dockerfile` through
+`scripts/build-rust-service-binaries.sh`. It explicitly builds and copies these
+24 binaries: `marty-event-stream`, `marty-gateway`, `marty-revocation-profile`,
+`marty-signing-keys`, `marty-passport-callback-signer`,
+`marty-passport-callback-signer-supported`, `marty-notification`, `marty-flow`,
+`marty-organization`, `marty-passport-acceptance-api-key`, `marty-auth`,
+`marty-credential-template`, `marty-presentation-policy`,
+`marty-verifier-positive-gate`, `marty-trust-profile`, `marty-applicant`,
+`marty-device-registration`, `marty-verification-service`,
+`marty-issuance-service`, `marty-canvas-sync-worker`, `marty-passport-beta-bureau`,
+`marty-passport-provider-ingress`, `marty-deployment-profile`, and
+`marty-compliance-profile`. Its opt-in self-signed passport build adds
+`marty-issuance-service/passport-self-signed-test` to the same binary list.
+
+`marty-verifier-positive-gate` generates issuer and holder private keys and
+locally signs credentials. This capability is explicitly shipped, not merely
+present under unit-test compilation. The integration repository invokes it
+inside the production image in `scripts/credentials_verifier_artifact.py`.
+Removing it without replacing that actual-artifact acceptance path would lose
+coverage. A coordinated integration acceptance PR is therefore necessary.
+Preserve the positive checks while moving key creation to a separate test owner
+and keeping verification exercised in the shipping runtime.
+
+Other build roots include `rust/services/Dockerfile.ci` and the dedicated
+event-stream, signing-keys and revocation-profile Dockerfiles. The CI multi-target
+build has a different binary set from the public shared image. Both dependency
+cooking stages build the workspace, so narrowing the final binary list alone
+does not qualify the compiled feature graph. Remaining K1 work includes full
+release/wheel ownership, standalone products, and per-root feature resolution.
+
+Integration-secret raw-key consumers include issuance startup, the Canvas sync
+worker and `canvas_oauth_postgres.rs`. The existing envelope is base64 of a
+12-byte nonce followed by AES-GCM ciphertext and tag, with no tenant/purpose AAD
+in the inspected implementation. Preserve reads during migration and bind new
+envelopes to repository identity and purpose. Import/rewrap compatibility is
+still unproven; never assume an OpenBao ciphertext prefix supplies that proof.
+
+### Isolated provider capability evidence
+
+On 2026-10-07, `python scripts/probe_kms_hardening_capabilities.py` passed against
+the locally available CI-pinned image
+`quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878`.
+The image reports OpenBao 2.5.2, revision
+`932fcf892eba8d646a9bfc58a59ea3b2475b17fa`. The script creates only synthetic
+material in a disposable container with no network, ports or host mounts and
+removes that container afterward.
+
+- Both `x25519` and `ecdh-x25519` key creation return unsupported-key-type errors.
+- `transit/derive-key` exists and describes a named symmetric output; it does
+  not establish an X25519 ECDH-1PU operation compatible with current DIDComm.
+- Non-exportable AES-256-GCM key creation, encryption, old-version decryption
+  after rotation, tamper rejection and explicit key-export rejection passed.
+  Plaintext backup remained disabled.
+- No real recipient, application data migration, deployed provider or tenant
+  authorization acceptance is claimed by this probe.
+
+The upstream [ECDH change](https://github.com/openbao/openbao/pull/811) and
+[documentation issue](https://github.com/openbao/openbao/issues/1350) explain why
+generic ECDH support must not be mistaken for DIDComm capability. Next: examine
+an existing remote messaging agent or provider extension that implements the
+required protocol with non-exportable custody; do not substitute another curve,
+export a sender key, or downgrade authcrypt to make the pinned Transit API fit.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
