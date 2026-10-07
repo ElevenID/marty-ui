@@ -166,6 +166,19 @@ impl OpenBaoEnvelopeProvider {
             .json()
             .await
     }
+
+    pub(crate) async fn get(&self, path: &str) -> Result<Value, reqwest::Error> {
+        self.client
+            .get(format!("{}{path}", self.endpoint))
+            .timeout(TIMEOUT)
+            .header("X-Vault-Token", &self.token)
+            .header("accept", "application/json")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await
+    }
 }
 
 pub fn prepare_envelope(request: &WrapRequest) -> Result<Vec<u8>, FlowEnvelopeError> {

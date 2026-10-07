@@ -300,6 +300,32 @@ but that does not establish a non-exporting operation that produces the two
 ECDH-1PU inputs or a complete DIDComm envelope. These are source-screening
 results only; no provider has passed a real recipient-decryption exercise.
 
+Strategy decision for the current capability gap: keep the existing X25519
+ECDH-1PU authcrypt profile and fail closed when its remote backend is absent.
+Define one narrow Rust provider contract for a scoped, versioned sender key
+reference and the exact authcrypt operation. First qualify an existing remote
+KMS/HSM-backed messaging service or provider that keeps the sender private key
+non-exportable and performs ECDH-1PU inside that trusted boundary; its output
+must decrypt under the current holder and preserve authenticated sender headers.
+A software sidecar merely relocating an exportable private key fails this goal.
+Returning a raw ECDH shared secret to issuance also fails the strict
+cryptographic custody boundary. A vendor's X25519 key creation, generic ECDH,
+ECIES or signing claim is insufficient. If no existing backend passes, evaluate
+a dedicated OpenBao secrets-engine plugin. [OpenBao 2.5.x supports external
+secrets-engine plugins](https://openbao.org/docs/2.5.x/plugins/) as separate
+processes; that mechanism does not add
+X25519 to Transit or automatically inherit Transit's key custody. The plugin
+would need its own reviewed non-exportable key lifecycle, storage protection,
+backup and rotation policy, process isolation, API authorization and audit,
+and the complete normative ECDH-1PU operation without returning shared or
+private key material to issuance. A plugin that uses an exportable key outside
+OpenBao's protected custody is not a solution. This is a distinct security
+review and deployment dependency, not a silent provider switch. If no
+qualifying backend exists,
+authcrypt release remains blocked while independent Core adoption,
+integration-secret custody and BYOK work continue. Do not use local-key fallback
+or change recipient curve/profile to make an available KMS fit.
+
 ### Integration-secret custody seam
 
 `IntegrationSecretCipher` currently holds a raw AES-256 key and stores standard
@@ -322,6 +348,15 @@ service token authenticates issuance to signing-keys, while the issuance vault
 continues to enforce tenant-bound database selection. The envelope additionally
 binds organization, secret ID, provider and purpose on decrypt. This reuses the
 deployed remote-custody owner without duplicating OpenBao code in issuance.
+
+2026-10-07 implementation checkpoint: signing-keys now has a dedicated
+integration-secret Transit envelope and authenticated encrypt/decrypt endpoints;
+the gateway forwards these with its trusted organization scope. A disposable
+OpenBao 2.5.2 exercise passed remote round-trip, identity mismatch, tamper and
+rotation checks. This is an API seam only: issuance and the Canvas worker still
+use the legacy raw AES key, so K4 custody and migration remain incomplete. The
+OpenBao plugin option above is separate K2 research and has not been built or
+qualified as an X25519 solution.
 
 Review found `PostgresIntegrationSecretVault::value` committed `last_used_at`
 before decrypting and updated by secret ID alone. The local UI branch now locks

@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 444,
+  "route_count": 446,
   "routes": [
     {
       "include_in_schema": true,
@@ -195,6 +195,18 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/internal/signing-keys/flow-key-envelopes/wrap",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "POST",
+      "path": "/internal/signing-keys/integration-secrets/encrypt",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": false,
+      "method": "POST",
+      "path": "/internal/signing-keys/integration-secrets/decrypt",
       "status_code": 200
     },
     {

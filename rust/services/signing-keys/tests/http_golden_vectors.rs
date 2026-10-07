@@ -65,6 +65,51 @@ async fn passport_artifact_transit_routes_require_auth_and_kms() {
 }
 
 #[tokio::test]
+async fn integration_secret_transit_routes_require_auth_and_kms() {
+    for (operation, body) in [
+        (
+            "encrypt",
+            serde_json::json!({
+                "organization_id": "org-a", "secret_id": "secret-1",
+                "provider": "canvas", "purpose": "oauth_client_secret",
+                "plaintext_b64": STANDARD.encode("secret")
+            }),
+        ),
+        (
+            "decrypt",
+            serde_json::json!({
+                "organization_id": "org-a", "secret_id": "secret-1",
+                "provider": "canvas", "purpose": "oauth_client_secret",
+                "envelope": {"schema": "marty.integration-secret-envelope/v1", "ciphertext": "vault:v1:synthetic"}
+            }),
+        ),
+    ] {
+        let path = format!("/internal/integration-secrets/{operation}");
+        let unauthorized = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unavailable = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path.as_str())
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "dev-signing-keys-internal-api-key")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+
+#[tokio::test]
 async fn passport_artifact_http_round_trip_preserves_kms_and_tenant_boundary() {
     async fn kms_encrypt(Json(body): Json<Value>) -> Json<Value> {
         STANDARD

@@ -8,6 +8,7 @@ pub mod domain;
 pub mod dsc_issuance_store;
 pub mod flow_envelope;
 pub mod http;
+pub mod integration_secret_envelope;
 pub mod kms;
 pub mod passport_artifact_envelope;
 pub mod passport_callback_hmac;

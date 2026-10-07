@@ -6,6 +6,8 @@ use mmf_platform::HttpMethod;
 pub enum SigningCompatibilityOperation {
     FlowEnvelopeUnwrap,
     FlowEnvelopeWrap,
+    IntegrationSecretEncrypt,
+    IntegrationSecretDecrypt,
     IssuerContext,
     IssuerDidSign,
     CreateProfile,
@@ -33,6 +35,12 @@ pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityO
         }
         (HttpMethod::Post, "flow-key-envelopes/wrap") => {
             Some(SigningCompatibilityOperation::FlowEnvelopeWrap)
+        }
+        (HttpMethod::Post, "integration-secrets/encrypt") => {
+            Some(SigningCompatibilityOperation::IntegrationSecretEncrypt)
+        }
+        (HttpMethod::Post, "integration-secrets/decrypt") => {
+            Some(SigningCompatibilityOperation::IntegrationSecretDecrypt)
         }
         (HttpMethod::Get, "issuer-context") => Some(SigningCompatibilityOperation::IssuerContext),
         (HttpMethod::Post, "issuer-dids/sign") => {
@@ -141,7 +149,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 18);
+        assert_eq!(contract.routes.len(), 20);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -153,6 +161,8 @@ mod tests {
         match operation {
             SigningCompatibilityOperation::FlowEnvelopeUnwrap => "flow_envelope_unwrap",
             SigningCompatibilityOperation::FlowEnvelopeWrap => "flow_envelope_wrap",
+            SigningCompatibilityOperation::IntegrationSecretEncrypt => "integration_secret_encrypt",
+            SigningCompatibilityOperation::IntegrationSecretDecrypt => "integration_secret_decrypt",
             SigningCompatibilityOperation::IssuerContext => "issuer_context",
             SigningCompatibilityOperation::IssuerDidSign => "issuer_did_sign",
             SigningCompatibilityOperation::CreateProfile => "create_profile",

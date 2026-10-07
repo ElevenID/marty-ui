@@ -3167,6 +3167,8 @@ async fn internal_signing_compatibility_handler(
         &operation,
         SigningCompatibilityOperation::FlowEnvelopeWrap
             | SigningCompatibilityOperation::FlowEnvelopeUnwrap
+            | SigningCompatibilityOperation::IntegrationSecretEncrypt
+            | SigningCompatibilityOperation::IntegrationSecretDecrypt
             | SigningCompatibilityOperation::PassportArtifactEncrypt
             | SigningCompatibilityOperation::PassportArtifactDecrypt
             | SigningCompatibilityOperation::PassportCallbackVerify
@@ -3444,6 +3446,14 @@ async fn forward_bound_envelope(
         SigningCompatibilityOperation::FlowEnvelopeUnwrap => {
             body["organization_id"] = Value::String(organization_id.into());
             "/internal/flow-key-envelopes/unwrap".to_owned()
+        }
+        SigningCompatibilityOperation::IntegrationSecretEncrypt => {
+            body["organization_id"] = Value::String(organization_id.into());
+            "/internal/integration-secrets/encrypt".to_owned()
+        }
+        SigningCompatibilityOperation::IntegrationSecretDecrypt => {
+            body["organization_id"] = Value::String(organization_id.into());
+            "/internal/integration-secrets/decrypt".to_owned()
         }
         SigningCompatibilityOperation::PassportArtifactEncrypt => format!(
             "/internal/documents/{}/passport-artifacts/encrypt",
@@ -5161,6 +5171,24 @@ mod tests {
                     .expect("flow envelope JSON");
                     assert_eq!(body["organization_id"], "org-1");
                     br#"{"schema":"marty.flow-key-envelope/v1","flow_instance_id":"flow-1","plaintext_b64":"cHJpdmF0ZS1qd2s"}"#.to_vec()
+                }
+                "/internal/integration-secrets/encrypt" => {
+                    let body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("integration-secret body"),
+                    )
+                    .expect("integration-secret JSON");
+                    assert_eq!(body["organization_id"], "org-1");
+                    assert_eq!(body["secret_id"], "secret-1");
+                    br#"{"schema":"marty.integration-secret-envelope/v1","ciphertext":"vault:v1:synthetic"}"#.to_vec()
+                }
+                "/internal/integration-secrets/decrypt" => {
+                    let body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("integration-secret body"),
+                    )
+                    .expect("integration-secret JSON");
+                    assert_eq!(body["organization_id"], "org-1");
+                    assert_eq!(body["secret_id"], "secret-1");
+                    br#"{"plaintext_b64":"c2VjcmV0"}"#.to_vec()
                 }
                 "/internal/documents/org%2D1/passport-artifacts/encrypt" => {
                     let body: Value = serde_json::from_slice(
@@ -8839,6 +8867,65 @@ mod tests {
         )
         .expect("unwrap JSON");
         assert_eq!(body["plaintext_b64"], "cHJpdmF0ZS1qd2s");
+    }
+
+    #[tokio::test]
+    async fn integration_secret_routes_replace_client_scope_with_trusted_scope() {
+        let unauthorized = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/signing-keys/integration-secrets/encrypt?organization_id=org-1")
+                    .body(Body::from("{}"))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+
+        for (operation, body, expected) in [
+            (
+                "encrypt",
+                json!({
+                    "organization_id": "attacker-org", "secret_id": "secret-1",
+                    "provider": "canvas", "purpose": "oauth_client_secret",
+                    "plaintext_b64": "c2VjcmV0"
+                }),
+                "ciphertext",
+            ),
+            (
+                "decrypt",
+                json!({
+                    "organization_id": "attacker-org", "secret_id": "secret-1",
+                    "provider": "canvas", "purpose": "oauth_client_secret",
+                    "envelope": {"schema": "marty.integration-secret-envelope/v1", "ciphertext": "vault:v1:synthetic"}
+                }),
+                "plaintext_b64",
+            ),
+        ] {
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/internal/signing-keys/integration-secrets/{operation}?organization_id=org-1"
+                        ))
+                        .header("x-api-key", "internal-signing-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from(body.to_string()))
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: Value = serde_json::from_slice(
+                &to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+                    .await
+                    .expect("body"),
+            )
+            .expect("response JSON");
+            assert!(body.get(expected).is_some());
+        }
     }
 
     #[tokio::test]

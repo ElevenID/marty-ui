@@ -25,6 +25,10 @@ use crate::dsc_issuance_store::{
 use crate::flow_envelope::{
     FlowEnvelopeError, OpenBaoEnvelopeProvider, UnwrapRequest, WrapRequest,
 };
+use crate::integration_secret_envelope::{
+    self, DecryptRequest as DecryptIntegrationSecretRequest,
+    EncryptRequest as EncryptIntegrationSecretRequest, IntegrationSecretEnvelopeError,
+};
 use crate::kms::{self, ProviderRequest, SignRequest};
 use crate::passport_artifact_envelope::{
     self, ArtifactEnvelopeError, DecryptChunkRequest, EncryptChunkRequest,
@@ -298,6 +302,14 @@ pub fn router_with_dependencies_and_ceremony_keys(
         .route("/internal/kms/verify", post(kms_verify))
         .route("/internal/flow-key-envelopes/wrap", post(wrap_flow_key))
         .route("/internal/flow-key-envelopes/unwrap", post(unwrap_flow_key))
+        .route(
+            "/internal/integration-secrets/encrypt",
+            post(encrypt_integration_secret),
+        )
+        .route(
+            "/internal/integration-secrets/decrypt",
+            post(decrypt_integration_secret),
+        )
         .route("/internal/compat/issuer-context", post(issuer_context))
         .route(
             "/internal/compat/resolve-issuer-did",
@@ -6566,6 +6578,38 @@ async fn unwrap_flow_key(
         .as_ref()
         .ok_or(FlowEnvelopeError::Unavailable)?;
     provider.unwrap(request).await.map(Json)
+}
+
+async fn encrypt_integration_secret(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<EncryptIntegrationSecretRequest>,
+) -> Result<Json<Value>, IntegrationSecretEnvelopeError> {
+    authorize_internal(&state, &headers)
+        .map_err(|_| IntegrationSecretEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(IntegrationSecretEnvelopeError::Unavailable)?;
+    integration_secret_envelope::encrypt(provider, request)
+        .await
+        .map(Json)
+}
+
+async fn decrypt_integration_secret(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DecryptIntegrationSecretRequest>,
+) -> Result<Json<Value>, IntegrationSecretEnvelopeError> {
+    authorize_internal(&state, &headers)
+        .map_err(|_| IntegrationSecretEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(IntegrationSecretEnvelopeError::Unavailable)?;
+    integration_secret_envelope::decrypt(provider, request)
+        .await
+        .map(Json)
 }
 
 async fn encrypt_passport_artifact_chunk(
