@@ -184,6 +184,15 @@ profile. Next: review remaining profile resolution and internal signing paths,
 run broader signing-keys tests, then include this with the large UI feature PR.
 The UI source remains uncommitted for that grouped review; no deployment or
 release artifact is qualified by this checkpoint.
+2026-10-07 broad Signing Keys candidate check: all test targets compiled with
+`cargo +1.95.0 test --locked -p marty-signing-keys --tests --no-run -j 1
+--quiet`, then the unfiltered default `--tests` selection exited zero. Its
+library portion reported 131 passed, zero failed and seven ignored; all
+non-ignored integration targets also passed. Provider/Redis tests requiring
+disposable external services remain opt-in, so this default run does not
+replace the previously recorded live OpenBao/Redis policy proof or qualify
+the final packaged artifact. Continue the cross-tenant and profile-resolution
+self-review before committing the broader Signing Keys diff.
 
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
