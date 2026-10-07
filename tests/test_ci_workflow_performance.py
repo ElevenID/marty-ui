@@ -349,7 +349,22 @@ git() {
     *) return 99 ;;
   esac
 }
-python3() { "$SYNTHETIC_PYTHON" "$@"; }
+python3() {
+  if [[ "$1" == tests/test_rust_test_only_docker_context.py &&
+        "${2:-}" == --emit-verified-leaves ]]; then
+    # Every synthetic diff in this one Bash process uses the same immutable
+    # checkout. Run the real proof once, but exercise the real classifier and
+    # exact output independently for each diff. A failed proof is never cached.
+    if [[ "${SYNTHETIC_LEAVES_READY:-false}" != true ]]; then
+      "$SYNTHETIC_PYTHON" "$@" > "$RUNNER_TEMP/synthetic-verified-leaves" || return
+      SYNTHETIC_LEAVES_READY=true
+    fi
+    cat "$RUNNER_TEMP/synthetic-verified-leaves"
+  else
+    "$SYNTHETIC_PYTHON" "$@"
+  fi
+}
+SYNTHETIC_LEAVES_READY=false
 export BASE_SHA=synthetic-base
 index=0
 while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
@@ -362,10 +377,9 @@ while IFS= read -r -d '' SYNTHETIC_CHANGED_PATH; do
 done < "$SYNTHETIC_PATHS_FILE"
 """
     if proof_failure:
-        prelude = prelude.replace(
-            'python3() { "$SYNTHETIC_PYTHON" "$@"; }',
-            "python3() { return 43; }",
-        )
+        start = prelude.index("python3() {")
+        end = prelude.index("\nexport BASE_SHA=", start)
+        prelude = prelude[:start] + "python3() { return 43; }" + prelude[end:]
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
@@ -460,8 +474,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         "initiation_didcomm_renewal_tests.rs"
     )
     assert nested in leaves
-    for leaf in leaves:
-        selected = _classify_changed_paths([leaf], tmp_path, include_rust_plan=True)[0]
+    for leaf, selected in zip(
+        leaves,
+        _classify_changed_paths(leaves, tmp_path, include_rust_plan=True),
+        strict=True,
+    ):
         assert selected == {
             "all": "false",
             "ui": "false",
@@ -1424,6 +1441,11 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         step.get("run") == "python -m pytest tests -v --tb=short"
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
+    assert any(
+        step.get("run")
+        == "python -m pytest --collect-only -q tests/test_ci_workflow_performance.py"
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    )
     selected = {
         "all": "false",
         "ui": "false",
@@ -1439,11 +1461,15 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "tests/test_public_protocol_documentation.py",
         "tests/test_ci_database_groups.py",
         "tests/test_rust_ownership.py",
+        "tests/test_ci_workflow_performance.py",
     )
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
-        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        expected_refs = 2 if path == "tests/test_ci_workflow_performance.py" else 1
+        assert ci_source.count(path) == expected_refs, (
+            f"other direct CI consumer: {path}"
+        )
         for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
             if other_workflow == CI_PATH:
                 continue
@@ -1471,6 +1497,29 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
             combined=True,
         )[0]["all"]
         == "true"
+    )
+    assert (
+        _classify_changed_paths(
+            [
+                "tests/test_ci_workflow_performance.py",
+                "rust/services/issuance/src/lib.rs",
+            ],
+            tmp_path,
+            combined=True,
+        )[0]["rust"]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("tests/test_ci_workflow_performance.py", tmp_path)["all"]
+        == "false"
+    )
+    assert all(
+        value == "true"
+        for value in _classify_changed_paths(
+            ["tests/test_ci_workflow_performance.py"],
+            tmp_path,
+            event="merge_group",
+        )[0].values()
     )
 
 
