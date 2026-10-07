@@ -16,6 +16,23 @@ mod diagnostic_tests {
         assert!(worker_matrix_timing_name("retry-after", "http_date_future").is_err());
     }
 
+    #[test]
+    fn published_probe_timing_names_reveal_only_fixed_constructor_origins() {
+        assert_eq!(
+            published_probe_timing_name(Some("operations")),
+            "operations"
+        );
+        assert_eq!(
+            published_probe_timing_name(Some("worker_provider_signals")),
+            "worker_provider_signals"
+        );
+        assert_eq!(published_probe_timing_name(None), "published_probe");
+        assert_eq!(
+            published_probe_timing_name(Some("credential://secret")),
+            "published_probe"
+        );
+    }
+
     fn recovery_rows() -> (Uuid, Vec<(String, Value)>) {
         let (mut database, id, scope) = borrow_fixture();
         database["HostConfig"]["Privileged"] = json!(false);

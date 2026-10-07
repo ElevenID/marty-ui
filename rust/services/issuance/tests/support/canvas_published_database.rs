@@ -10,6 +10,45 @@ use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 
+// Fixed constructor origins only. Never print a probe argument, fixture
+// payload, Docker identity, or an unrecognized future script as a phase name.
+const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
+    "enqueue_input",
+    "heartbeat_readiness",
+    "issued_review",
+    "json_consumer",
+    "json_depth",
+    "mixed_roster",
+    "operations",
+    "operations_input",
+    "status_provider",
+    "timeout_consumer",
+    "utf7_consumer",
+    "validation_boundary",
+    "worker_concurrent",
+    "worker_facts",
+    "worker_provider_completion",
+    "worker_provider_final",
+    "worker_provider_generation",
+    "worker_provider_recovery",
+    "worker_provider_recovery_first",
+    "worker_provider_signals",
+    "worker_reclaimers",
+    "worker_reclaimers_retry",
+    "worker_rest",
+    "worker_retry",
+    "worker_startup",
+];
+
+fn published_probe_timing_name(script: Option<&str>) -> String {
+    let script = script.unwrap_or_default();
+    if TIMED_PUBLISHED_SCRIPTS.contains(&script) {
+        script.to_owned()
+    } else {
+        "published_probe".to_owned()
+    }
+}
+
 // Only fixed phase labels and elapsed time leave the fixture. Never emit its
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
 struct PhaseTimer {
@@ -1171,15 +1210,8 @@ impl PublishedDatabase {
         matrix_timing_name: Option<String>,
     ) -> Result<Self, String> {
         // These are fixed constructor origins, not text from a scenario or probe.
-        let timing_name = matrix_timing_name.unwrap_or_else(|| {
-            match oracle.map(|(script, _, _, _)| script) {
-                Some("json_consumer") => "json_consumer",
-                Some("json_depth") => "json_depth",
-                Some("timeout_consumer") => "timeout_consumer",
-                _ => "published_probe",
-            }
-            .to_owned()
-        });
+        let timing_name = matrix_timing_name
+            .unwrap_or_else(|| published_probe_timing_name(oracle.map(|(script, _, _, _)| script)));
         Self::start_probe_with_scope(
             oracle,
             extra_fixture,

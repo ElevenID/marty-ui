@@ -354,11 +354,13 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
             {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
         )
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+    for name in GROUPS.TIMED_PUBLISHED_SCRIPTS:
+        marker = json.dumps(
+            {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for phase, name in (
         ("migration_seed", "published_probe"),
-        ("migration_seed", "json_consumer"),
-        ("migration_seed", "json_depth"),
-        ("migration_seed", "timeout_consumer"),
         ("migration_seed", "worker_validation_template"),
         ("scenario", "retry-after.http_date_future"),
         ("cleanup", "published_database_removal"),
@@ -395,8 +397,16 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
     worker = (
         ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
-    for name in ("json_consumer", "json_depth", "timeout_consumer"):
-        assert f'Some("{name}") => "{name}"' in support
+    fixed_names = support.split("const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[", 1)[
+        1
+    ].split("];", 1)[0]
+    fixed_names = re.findall(r'"([a-z0-9_]+)"', fixed_names)
+    assert len(fixed_names) == len(set(fixed_names)) == 25
+    assert set(fixed_names) == GROUPS.TIMED_PUBLISHED_SCRIPTS
+    constructor_scripts = re.findall(r'Some\(\(\s*"([a-z0-9_]+)"', support)
+    assert set(constructor_scripts) == GROUPS.TIMED_PUBLISHED_SCRIPTS
+    assert "TIMED_PUBLISHED_SCRIPTS.contains(&script)" in support
+    assert '"published_probe".to_owned()' in support
     assert support.count('"worker_validation_template"') == 1
     assert (
         worker.count("PublishedDatabase::start_for_worker_validation_template()") == 1
