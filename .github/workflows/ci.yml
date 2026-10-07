@@ -151,6 +151,13 @@ jobs:
                   # remain conservatively broad.
                   release=true
                   ;;
+                rust/services/flow/src/request_object.rs|rust/services/flow/src/verification_submission.rs|rust/services/flow/src/http_verification.rs|rust/services/flow/src/http_providers.rs|rust/services/flow/src/providers.rs|rust/services/flow/src/connections.rs|rust/services/flow/src/config.rs|rust/services/flow/tests/haip_*|rust/services/signing-keys/src/flow_envelope.rs|rust/services/signing-keys/src/http.rs|rust/services/signing-keys/src/config.rs|rust/services/signing-keys/src/main.rs|rust/crates/oid4vp-contract/src/haip_key.rs)
+                  # These owners can change the live HAIP custody path even
+                  # when the OpenBao plugin source is untouched.
+                  rust=true
+                  openbao=true
+                  security=true
+                  ;;
                 rust/*|proto/*|contracts/*)
                   rust=true
                   ;;

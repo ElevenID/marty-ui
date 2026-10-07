@@ -478,6 +478,8 @@ def flow_haip_phase(
                 "docker",
                 "run",
                 "--rm",
+                "--add-host",
+                "host.docker.internal:host-gateway",
                 "--label",
                 "marty.disposable=kms-coordinated-restore",
                 "-v",

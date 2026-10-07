@@ -306,6 +306,18 @@ targeted Rust formatting and diff checks passed. This remains in the broad
 uncommitted UI feature diff; hosted CI and exact release artifacts remain
 pending.
 
+2026-10-07 HAIP CI-selection self-review: the packaged OpenBao/Flow live
+probe was selected for plugin changes but could be skipped by a later PR that
+only changed Flow's HAIP request/decrypt path or Signing Keys' HAIP provider.
+The CI classifier now selects the existing OpenBao image/probe lane for those
+specific production owners, the shared HAIP key contract and the live Flow
+tests. An unrelated Flow library edit still skips that costly lane. The Go
+container fallback also supplies Docker's host-gateway alias for Linux runners.
+The focused classifier test and the full workflow-performance file passed
+(124 tests); Ruff, Python compilation, YAML parsing, diff checks and a pinned
+Go-container host-gateway smoke passed. This is local source evidence, not a
+hosted CI run of the grouped UI PR.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct

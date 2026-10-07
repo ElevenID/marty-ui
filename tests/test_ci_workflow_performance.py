@@ -575,6 +575,17 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
     ):
         selected = _classify_changed_path(path, tmp_path)
         assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
+    for path in (
+        "rust/services/flow/src/request_object.rs",
+        "rust/services/flow/src/verification_submission.rs",
+        "rust/services/flow/src/http_providers.rs",
+        "rust/services/flow/tests/haip_live_signing.rs",
+        "rust/services/signing-keys/src/flow_envelope.rs",
+        "rust/services/signing-keys/src/http.rs",
+        "rust/crates/oid4vp-contract/src/haip_key.rs",
+    ):
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
     assert (
         _classify_changed_path("rust/services/flow/src/lib.rs", tmp_path)["openbao"]
         == "false"
