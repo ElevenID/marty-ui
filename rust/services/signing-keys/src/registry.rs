@@ -1437,6 +1437,11 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
 }
 
 fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
+    if crate::private_material::contains_private_key(value) {
+        return Err(RegistryError::Invalid(
+            "signing configuration must not include private key material".into(),
+        ));
+    }
     let Some(body) = value.as_object() else {
         return Ok(empty_registry());
     };
@@ -1912,6 +1917,30 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[test]
+    fn requested_registry_rejects_private_material_before_normalization() {
+        for request in [
+            json!({"services": [], "private_key_pem": "synthetic-secret"}),
+            json!({"services": [{"managed": true, "privateKey": "synthetic-secret"}]}),
+            json!({"services": [{"key_reference": "-----BEGIN PRIVATE KEY-----"}]}),
+            json!({"services": [], "unexpected": {"kty": "EC", "d": "synthetic-secret"}}),
+            json!({"services": [], "metadata": {"privateKeyJwk": "synthetic-secret"}}),
+            json!({"services": [], "metadata": "{\"kty\":\"EC\",\"d\":\"synthetic-secret\"}"}),
+        ] {
+            assert!(matches!(
+                normalize_requested_registry(&request),
+                Err(RegistryError::Invalid(message)) if message.contains("private key material")
+            ));
+        }
+
+        assert!(normalize_requested_registry(&json!({
+            "services": [],
+            "auth_reference": "vault-token-reference",
+            "cert_pem": "-----BEGIN CERTIFICATE-----"
+        }))
+        .is_ok());
+    }
 
     async fn disposable_redis_url() -> String {
         let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
