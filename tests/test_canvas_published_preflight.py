@@ -113,7 +113,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
-    composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+    composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
     assert (
         sum(
             line.strip() == 'timed canvas_serial "$mode" ' + preflight
@@ -136,7 +136,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         == 1
     )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in script
     )
     assert script.count(composition_full + ' >"$composition_log" 2>&1 &') == 1
@@ -432,6 +432,13 @@ else
         substituted) printf 'test wrong_worker_validation_repository_matches_frozen_errors ... ok\n' ;;
       esac
     elif [[ "$name" == contract ]]; then
+      if [[ "$*" != *"--skip timeout_consumer_matches_published_socket_behavior"* ]]; then
+        case "$TEST_TIMEOUT_MARKER" in
+          ok) printf 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\n' ;;
+          missing) ;;
+          duplicate) printf 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\nPUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\n' ;;
+        esac
+      fi
       if [[ "$*" != *"--skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
       case "$TEST_RENDERED_CONFIG_MARKER" in
         ok) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
@@ -504,6 +511,7 @@ fi
         qualification=False,
         fast_owner_row="ok",
         config_marker="ok",
+        timeout_marker="ok",
         private_ip_pg_marker="ok",
         k8s_config_marker="ok",
     ):
@@ -519,6 +527,7 @@ fi
                 (
                     "heartbeat_readiness_",
                     "json_consumer_diagnostic_",
+                    "timeout_consumer_",
                     RENDERED_CONFIG,
                     PRIVATE_IP_PG,
                     K8S_RENDERED_CONFIG,
@@ -573,6 +582,7 @@ fi
                 "TEST_FAILURE": failure,
                 "TEST_FAST_OWNER_ROW": fast_owner_row,
                 "TEST_RENDERED_CONFIG_MARKER": config_marker,
+                "TEST_TIMEOUT_MARKER": timeout_marker,
                 "TEST_PRIVATE_IP_PG_MARKER": private_ip_pg_marker,
                 "TEST_K8S_CONFIG_MARKER": k8s_config_marker,
                 "TEST_POSTGRES_IMAGE": pins[0],
@@ -622,7 +632,7 @@ source "$CONTRACT_SOURCE" "$@"
         (["full-after-preflights"], True, "full"),
     ],
 )
-def test_nested_tiers_are_explicit_only_on_the_worker_target(
+def test_nested_tiers_select_worker_and_historical_timeout_owners(
     shell_case, tmp_path, arguments, qualification, expected
 ):
     if arguments == ["full-after-preflights"]:
@@ -640,6 +650,23 @@ def test_nested_tiers_are_explicit_only_on_the_worker_target(
     assert [call for call in calls if call[0] == "validation-tier"] == [
         ["validation-tier", expected]
     ]
+    composition = next(
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    )
+    assert ("timeout_consumer_matches_published_socket_behavior" in composition) == (
+        arguments == ["full-after-preflights"] and not qualification
+    )
+
+
+@pytest.mark.parametrize("timeout_marker", ["missing", "duplicate"])
+def test_full_timeout_reference_requires_one_verified_completion(
+    shell_case, timeout_marker
+):
+    result, _ = shell_case(["full"], qualification=True, timeout_marker=timeout_marker)
+    assert result.returncode != 0
+    assert "Published HTTPX timeout reference did not match" in result.stderr
 
 
 def test_caller_cannot_override_native_retry_tier(shell_case, monkeypatch):
@@ -737,7 +764,9 @@ def test_same_run_composition_proof_skips_only_two_completed_cases(
     assert len(composition) == 1
     assert composition[0].count(RENDERED_CONFIG) == 1
     assert composition[0].count(K8S_RENDERED_CONFIG) == 1
-    assert composition[0].count("--skip") == 3  # serial plus the two config cases
+    assert composition[0].count("--skip") == (
+        4 if mode == "full-after-preflights" and not qualification else 3
+    )  # serial, two config cases, and routine-only historical HTTPX proof
     assert PRIVATE_IP_PG not in composition[0]
 
 

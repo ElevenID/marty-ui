@@ -20,7 +20,7 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert "preflight_skips=()" in script
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in script
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
         in script
     )
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()

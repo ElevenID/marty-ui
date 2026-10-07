@@ -1424,6 +1424,35 @@ is therefore not a dropped relay line; it is one fewer emitted
 `migration_seed` marker than in #1145's protected artifact. Do not interpret
 it as a removed test or a proven speed change.
 
+## A6 HTTP timeout test pyramid (2026-10-07, candidate)
+
+Reviewed [#1148](https://github.com/ElevenID/marty-ui/pull/1148) merged as
+`77d2644e8`; its protected [CI run](https://github.com/ElevenID/marty-ui/actions/runs/37636041696)
+passed, including Canvas. The fixed constructor-origin labels are diagnostic,
+not a measured speedup.
+
+The 104-case Canvas timeout corpus tests several separate responsibilities.
+Deadline scalar conversion, operation-scoped budgets, cancellation, and
+header/body transitions are our code and should be tested with in-memory
+futures/duplex I/O. Content decoding and response text have their own fast
+unit owners. The historical pinned HTTPX socket corpus is independent
+compatibility evidence, but repeatedly exercising HTTPX/TLS timing in routine
+PR and merge-queue CI mostly tests dependency scheduling. Keep that complete
+historical probe and all 104 native TLS observations in `schedule` or
+`workflow_dispatch` full qualification. The stable stack-tag policy requires
+a successful full-qualification run on the *exact* main SHA, so official
+release evidence is retained. Routine CI should retain one real TLS
+`body_timeout` case to verify client configuration, TLS transport, and timeout
+error classification across the wiring seam, plus
+`untrusted_certificate` as a distinct TLS security assertion. Neither is a
+substitute for worker/database timeout and lease tests, which prove our own
+durable behavior and remain in their existing tiers.
+
+The candidate adds an in-memory body-stall test, explicit routine/full native
+case selection, and a fail-closed completion marker for the full historical
+probe. Focused local checks and protected CI are still required; no CI saving
+or parity conclusion is claimed until the candidate runs on hosted runners.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

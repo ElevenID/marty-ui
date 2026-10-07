@@ -478,6 +478,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mocked_response_body_stall_is_classified_as_a_read_timeout() {
+        // Exercise our operation boundary with in-memory I/O. Hyper, TCP and
+        // TLS timing are not under test here; one real TLS case covers wiring.
+        let (io, mut peer) = tokio::io::duplex(128);
+        let mut socket = OperationSocket {
+            inner: Box::new(io),
+            timeout: CanvasNetworkTimeout::from_seconds(0.05),
+            read_budget: None,
+            write_budget: None,
+            phase: Arc::new(AtomicU8::new(0)),
+            header_tail: 0,
+            headers_written: true,
+            body_remaining: 0,
+            request_flushed: true,
+        };
+        peer.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\na")
+            .await
+            .unwrap();
+        let mut bytes = [0; 128];
+        let count = socket.read(&mut bytes).await.unwrap();
+        assert_eq!(
+            &bytes[..count],
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\na"
+        );
+        assert!(
+            socket.read_budget.is_none(),
+            "completed I/O resets the budget"
+        );
+        let failure = socket.read(&mut bytes).await.unwrap_err();
+        assert_eq!(failure.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(socket.phase.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            failed(&socket.phase, CanvasOperationHttpError::Response),
+            CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Read)
+        );
+    }
+
+    #[tokio::test]
     async fn cancellation_and_response_drop_close_the_owned_connection() {
         for response_started in [false, true] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

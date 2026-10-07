@@ -52,9 +52,10 @@ def test_canvas_native_oracle_decodes_artifacts_and_child_output_as_utf8() -> No
     source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
         encoding="utf-8"
     )
+    tree = ast.parse(source)
     native = next(
         node
-        for node in ast.parse(source).body
+        for node in tree.body
         if isinstance(node, ast.FunctionDef) and node.name == "run_native"
     )
     reads = [
@@ -118,6 +119,8 @@ def test_canvas_native_oracle_preserves_unicode_line_separators(
         "Path": Path,
         "json": json,
         "os": SimpleNamespace(environ={}),
+        "FROZEN_NATIVE_CASE_COUNT": 1,
+        "ROUTINE_NATIVE_CASES": frozenset({case["name"]}),
         "subprocess": SimpleNamespace(run=lambda *args, **kwargs: child),
         "loopback_tls": lambda: nullcontext(
             ("https://127.0.0.1:1", None, tmp_path / "synthetic.pem")
@@ -132,6 +135,79 @@ def test_canvas_native_oracle_preserves_unicode_line_separators(
     namespace["run_native"](tmp_path / "never-executed")
     assert json.loads(capsys.readouterr().out) == {
         "native_timeout_cases": 1,
+        "status": "passed",
+    }
+
+
+@pytest.mark.parametrize("qualification,expected_count", [("0", 2), ("1", 104)])
+def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
+    qualification: str,
+    expected_count: int,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    native = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_native"
+    )
+    routine_assignment = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "ROUTINE_NATIVE_CASES"
+            for target in node.targets
+        )
+    )
+    assert isinstance(routine_assignment.value, ast.Call)
+    routine_names = frozenset(ast.literal_eval(routine_assignment.value.args[0]))
+    assert routine_names == {"body_timeout", "untrusted_certificate"}
+    cases = json.loads(
+        (ROOT / "contracts/canvas-timeout-consumer-scenarios.json").read_text(
+            encoding="utf-8"
+        )
+    )["cases"]
+    expected = json.loads(
+        (ROOT / "contracts/canvas-timeout-consumer-oracle.json").read_text(
+            encoding="utf-8"
+        )
+    )["cases"]
+    by_name = dict(zip((case["name"] for case in cases), expected, strict=True))
+    seen: list[str] = []
+
+    def child(*_args, env, **_kwargs):
+        name = json.loads(env["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"])["name"]
+        seen.append(name)
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout="CANVAS_TIMEOUT_NATIVE=" + json.dumps(by_name[name]) + "\n",
+        )
+
+    namespace = {
+        "__file__": str(ROOT / "scripts/run_canvas_timeout_consumer_oracle.py"),
+        "Path": Path,
+        "json": json,
+        "os": SimpleNamespace(environ={}),
+        "subprocess": SimpleNamespace(run=child),
+        "loopback_tls": lambda: nullcontext(("https://127.0.0.1:1", None, Path("synthetic.pem"))),
+        "ROUTINE_NATIVE_CASES": routine_names,
+        "FROZEN_NATIVE_CASE_COUNT": 104,
+    }
+    exec(compile(ast.Module(body=[native], type_ignores=[]), "<native-tier>", "exec"), namespace)
+    namespace["run_native"](Path("unused"), qualification)
+    assert len(seen) == expected_count
+    assert seen == (
+        [case["name"] for case in cases]
+        if qualification == "1"
+        else ["body_timeout", "untrusted_certificate"]
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "native_timeout_cases": expected_count,
         "status": "passed",
     }
 
@@ -1969,10 +2045,10 @@ def _assert_required_canvas_target_completion(published: str) -> None:
         == 1
     )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in published
     )
-    assert '"${config_skips[@]}" --nocapture --test-threads=4' in published
+    assert '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4' in published
     assert published.rstrip().endswith(
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
@@ -2292,7 +2368,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -2323,7 +2399,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert '"$composition_executable" --nocapture --test-threads=1' not in published
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
         in published
     )
     assert '[[ ${#matches[@]} == 1 && -x "${matches[0]}" ]]' in published
@@ -2344,6 +2420,7 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
         in gate["run"]
     )
     assert "--native-executable" in gate["run"]
+    assert '--qualification "$MARTY_CANVAS_FULL_QUALIFICATION"' in gate["run"]
     assert "select(.profile.test == true)" in gate["run"]
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
 
@@ -2376,7 +2453,7 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -2485,8 +2562,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4',
+            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
+            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
         )
     else:
         start = source.index(f"async fn {name}")

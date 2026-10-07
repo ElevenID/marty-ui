@@ -214,7 +214,7 @@ def _validate(manifest: dict, inputs: dict[str, str]) -> None:
     assert all(item["retained"].strip() for item in manifest["profiles"])
     assert 'export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"' in runner
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
         in runner
     )
     assert "--skip renewal_" not in runner
@@ -609,7 +609,7 @@ def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_mark
     assert bash is not None
     runner = RUNNER.read_text(encoding="utf-8")
     guard = re.search(
-        r"(?ms)^\(\( composition_status == 0 && worker_status == 0 \)\).*?^\}",
+        r"(?ms)^\(\( composition_status == 0 && worker_status == 0 \)\).*?^fi$",
         runner,
     )
     assert guard is not None
@@ -632,7 +632,7 @@ def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_mark
             [
                 bash,
                 "-c",
-                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nworker_status=0\nexpected_skipped_config_tests=0\n{guard.group()}',
+                f'set -euo pipefail\ncomposition_log="$1"\ncomposition_status={composition_status}\nworker_status=0\nexpected_skipped_config_tests=0\nexpected_skipped_timeout_tests=1\n{guard.group()}',
                 "_",
                 log.as_posix(),
             ],
