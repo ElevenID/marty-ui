@@ -126,21 +126,17 @@ fn thumbprint(jwk: &serde_json::Map<String, Value>) -> Result<String, TokenExcha
 
 #[cfg(test)]
 mod tests {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use jsonwebtoken::{encode, jwk::Jwk, Algorithm, EncodingKey, Header};
-    use p256::{elliptic_curve::sec1::ToEncodedPoint, pkcs8::EncodePrivateKey, SecretKey};
-    use rand08::rngs::OsRng;
-    use rsa::{
-        pss::BlindedSigningKey,
-        signature::{RandomizedSigner, SignatureEncoding},
-        traits::PublicKeyParts,
-        RsaPrivateKey,
-    };
     use serde_json::json;
-    use sha2::Sha256;
 
     use super::{thumbprint, verify_dpop};
     use crate::token_exchange::TokenExchangeError;
+
+    fn public_proof_vector(algorithm: &str) -> serde_json::Value {
+        let vectors: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/dpop_public_proofs.json"))
+                .expect("public signed DPoP proof vectors");
+        vectors[algorithm].clone()
+    }
 
     #[test]
     fn thumbprint_uses_only_rfc_7638_public_members() {
@@ -154,39 +150,20 @@ mod tests {
 
     #[test]
     fn es256_proof_requires_its_embedded_key_method_and_endpoint() {
-        let secret = SecretKey::from_slice(&[9_u8; 32]).expect("P-256 private key");
-        let public = secret.public_key().to_encoded_point(false);
-        let jwk = json!({
-            "kty": "EC",
-            "crv": "P-256",
-            "x": URL_SAFE_NO_PAD.encode(public.x().unwrap()),
-            "y": URL_SAFE_NO_PAD.encode(public.y().unwrap())
-        });
-        let mut header = Header::new(Algorithm::ES256);
-        header.typ = Some("dpop+jwt".to_owned());
-        header.jwk = Some(serde_json::from_value::<Jwk>(jwk.clone()).expect("public JWK"));
-        let proof = encode(
-            &header,
-            &json!({
-                "htm": "POST",
-                "htu": "https://issuer.example/v1/issuance/token",
-                "iat": 1_700_000_000,
-                "jti": "proof-1"
-            }),
-            &EncodingKey::from_ec_der(secret.to_pkcs8_der().unwrap().as_bytes()),
-        )
-        .expect("signed DPoP proof");
+        let vector = public_proof_vector("es256");
+        let proof = vector["proof"].as_str().expect("signed public DPoP proof");
+        let jwk = &vector["jwk"];
         assert_eq!(
-            verify_dpop(&proof, "POST", "https://issuer.example/v1/issuance/token"),
+            verify_dpop(proof, "POST", "https://issuer.example/v1/issuance/token"),
             thumbprint(jwk.as_object().unwrap())
         );
         assert_eq!(
-            verify_dpop(&proof, "GET", "https://issuer.example/v1/issuance/token"),
+            verify_dpop(proof, "GET", "https://issuer.example/v1/issuance/token"),
             Err(TokenExchangeError::InvalidDpopProof)
         );
         assert_eq!(
             verify_dpop(
-                &proof,
+                proof,
                 "POST",
                 "https://issuer.example/v1/issuance/credential"
             ),
@@ -196,40 +173,14 @@ mod tests {
 
     #[test]
     fn ps256_proof_supports_the_oidf_conformance_key_shape() {
-        let private = RsaPrivateKey::new(&mut OsRng, 2_048).expect("RSA private key");
-        let public = private.to_public_key();
-        let jwk = json!({
-            "kty": "RSA",
-            "n": URL_SAFE_NO_PAD.encode(public.n().to_bytes_be()),
-            "e": URL_SAFE_NO_PAD.encode(public.e().to_bytes_be())
-        });
-        let header = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&json!({
-                "typ": "dpop+jwt",
-                "alg": "PS256",
-                "jwk": jwk
-            }))
-            .expect("DPoP header"),
-        );
-        let claims = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&json!({
-                "htm": "POST",
-                "htu": "https://issuer.example/v1/issuance/token",
-                "iat": 1_700_000_000,
-                "jti": "rsa-proof-1"
-            }))
-            .expect("DPoP claims"),
-        );
-        let signing_input = format!("{header}.{claims}");
-        let signature = BlindedSigningKey::<Sha256>::new(private)
-            .sign_with_rng(&mut OsRng, signing_input.as_bytes());
-        let proof = format!(
-            "{signing_input}.{}",
-            URL_SAFE_NO_PAD.encode(signature.to_bytes())
-        );
+        let vector = public_proof_vector("ps256");
+        let proof = vector["proof"]
+            .as_str()
+            .expect("signed public RSA DPoP proof");
+        let jwk = &vector["jwk"];
 
         assert_eq!(
-            verify_dpop(&proof, "POST", "https://issuer.example/v1/issuance/token"),
+            verify_dpop(proof, "POST", "https://issuer.example/v1/issuance/token"),
             thumbprint(jwk.as_object().expect("public JWK"))
         );
     }

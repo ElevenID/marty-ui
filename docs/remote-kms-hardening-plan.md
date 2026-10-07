@@ -96,6 +96,18 @@ tests; its three live cases are explicitly run by the probe in the OpenBao CI
 job. Rust formatting, Ruff and diff checks passed. Hosted CI and exact
 artifact qualification remain pending.
 
+2026-10-07 Issuance library regression checkpoint: the first full
+`marty-issuance-service --lib` run passed 564 tests but failed one DPoP verifier
+test because it still invoked local JWT signing through hardened Core. The
+ES256 and PS256 DPoP tests now consume public signed proof vectors; their
+embedded-key, method, endpoint and RFC 7638 thumbprint assertions remain.
+No private key or signing implementation is retained in that test module or
+fixture. The three targeted DPoP tests passed, followed by the full Issuance
+library suite: 565 passed, zero failed, eight opt-in tests ignored. Seven of
+those opt-in live-format/readiness cases already passed in the disposable
+OpenBao probe; the remaining ignored case requires separate qualification.
+This is candidate source evidence, not hosted CI or a release artifact.
+
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
 import endpoint, compatibility adapter, or test fixture that restores those
