@@ -140,15 +140,25 @@ token can pass while the production service token fails. The same token is
 mounted into several other self-host workloads; adding management capability
 to it would broaden all of them. Before release, issue a separate signing-keys
 token combining the existing runtime policy with narrowly scoped managed-key
-create/read/rotate rights, wire only the signing-keys service to that token,
+management rights, wire only the signing-keys service to that token,
 and require the analogous scoped token in Kubernetes. Cover all currently
 supported managed-key prefixes (`cred-issuer-`, `cred-dsc-`, `cred-holder-`,
 `cred-presenter-`, `lti-tool-`, `oid4vp-verifier-`) without granting export,
 delete, or arbitrary key configuration. The current runtime policy grants
 sign/read only for two fixed `lti-tool-` and `oid4vp-verifier-` keys; the
 signing-keys token also needs sign/verify/read on tenant-scoped managed keys
-under those prefixes. Exercise create/sign/rotate with the
-scoped token against disposable OpenBao and assert a plain credential-service
+under those prefixes. A disposable OpenBao 2.5.5 ACL probe showed that the
+naive `transit/keys/cred-*` create/read rule also matches
+`transit/keys/cred-issuer-test/import` and `/config`. Its more-specific
+prefix match wins over `transit/keys/+/rotate`, leaving that credential key
+without update on `/rotate`, while `+/rotate` grants update for unrelated
+keys. Therefore the proposed wildcard management policy is **not** safe or
+functional as written. Do not wire it. Resolve the lifecycle boundary with
+an exact-key/operator policy or a purpose-built remote management operation
+whose path and parameters cannot admit imported material or cross-purpose
+rotation; preserve the managed-create/rotate product behavior. Then exercise
+create/sign/rotate and negative import/config/export/foreign-key cases with
+scoped tokens against disposable OpenBao, and assert a plain credential-service
 token is denied create/rotate. The OpenBao administrator/root credential can
 rotate outside the application lease; reserve it for an explicit operator
 ceremony and verify the service fails closed on a changed key version. This
