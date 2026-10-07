@@ -197,6 +197,16 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             "cargo test --locked --workspace --exclude marty-canvas-acceptance",
             "cargo test --locked -p marty-canvas-acceptance",
         ),
+        (
+            "python3 -m scripts.ci.check_public_vector_execution",
+            "python3 -m scripts.ci.missing_vector_execution_check",
+        ),
+        (
+            "      - name: Require public protocol vector test execution\n"
+            "        if: matrix.lane == 'contracts'",
+            "      - name: Require public protocol vector test execution\n"
+            "        if: matrix.lane == 'canvas'",
+        ),
         ('\'true:true:["canvas","contracts"]\'', "'true:true:[\"contracts\"]'"),
         (
             '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]',
@@ -214,6 +224,26 @@ def test_vector_workspace_owner_rejects_missing_contracts_or_protected_canvas(
     assert workflow.count(old) >= 1
     with pytest.raises(AssertionError, match="workspace test owner"):
         _assert_full_workspace_ci_owner(workflow.replace(old, new))
+
+
+def test_vector_execution_guard_must_follow_workspace_run() -> None:
+    workflow = (
+        Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+    ).read_text(encoding="utf-8")
+    workspace_step = "      - name: Run safe Rust contract groups concurrently\n"
+    vector_step = (
+        "      - name: Require public protocol vector test execution\n"
+        "        if: matrix.lane == 'contracts'\n"
+        "        shell: bash\n"
+        "        run: python3 -m scripts.ci.check_public_vector_execution "
+        '"$RUNNER_TEMP/rust-workspace.log"\n'
+    )
+    assert workflow.count(vector_step) == workflow.count(workspace_step) == 1
+    premature = workflow.replace(vector_step, "").replace(
+        workspace_step, vector_step + workspace_step
+    )
+    with pytest.raises(AssertionError, match="workspace test owner"):
+        _assert_full_workspace_ci_owner(premature)
 
 
 def test_vector_owner_guard_rejects_uncalled_loader_and_production_only_reference(

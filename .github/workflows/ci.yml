@@ -1304,6 +1304,10 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Require public protocol vector test execution
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: python3 -m scripts.ci.check_public_vector_execution "$RUNNER_TEMP/rust-workspace.log"
       - name: Require terminal validation worker fast-owner execution
         if: matrix.lane == 'contracts'
         shell: bash
