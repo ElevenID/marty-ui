@@ -213,6 +213,20 @@ random labeled dev container and removes it in `finally`; Ruff check/format
 passed. `bao version` for the pinned digest reported OpenBao 2.5.5 at revision
 `028992583c693c4de6350b8aa52ff85e30375a99`; the disposable-image
 catalog's stale 2.5.2 metadata has been corrected in the working tree.
+The probe now also verifies the catalog version/revision against `bao version`
+and offers `--rust-adapter`. With that option, it writes a synthetic disposable
+guard marker and runs the ignored Rust `managed_policy_live_kms` test with the
+scoped token as `BAO_TOKEN`. That live test created a provider-generated key,
+read active public metadata, rotated to version 2, observed a changed public
+key, and saw no private JWK member; it passed against the exact pinned digest.
+The Redis-backed `live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sign`
+test also passed against disposable pinned Redis, rejecting wrong-tenant and
+wrong-purpose selection before its mock signer. That is application-scope
+evidence, not a per-tenant OpenBao ACL. The single signing-keys process still
+holds a service-wide token for all six managed purposes and tenants; the Rust
+authorization, deterministic tenant key names and registry/profile binding
+remain security-critical. A full adversarial multi-tenant live-provider route
+test and exact deployment artifact are still pending.
 
 2026-10-07 current checkpoint: the Credentials feature branch now rejects
 the Python DIDComm legacy owner, forwards HTTP initiation/delivery to native
