@@ -384,16 +384,20 @@ fn audience_matches(value: Option<&Value>, expected: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use chrono::{Duration, Utc};
-    use jsonwebtoken::{encode, jwk::Jwk, Algorithm, EncodingKey, Header};
-    use p256::{elliptic_curve::sec1::ToEncodedPoint, pkcs8::EncodePrivateKey, SecretKey};
+    use chrono::{DateTime, Utc};
 
     use super::{
         audience_matches, json_truthy, normalize_registered_client_jwks, normalized_keys,
         numeric_date, verify_assertion,
     };
     use serde_json::json;
+
+    fn public_assertion_vectors() -> serde_json::Value {
+        serde_json::from_str(include_str!(
+            "../tests/fixtures/oid4vci_client_assertions.json"
+        ))
+        .expect("public signed client assertion vectors")
+    }
 
     #[test]
     fn audience_and_numeric_date_policy_fail_closed() {
@@ -417,37 +421,13 @@ mod tests {
 
     #[test]
     fn registered_client_assertions_use_only_the_registered_public_key() {
-        let secret = SecretKey::from_slice(&[7_u8; 32]).expect("P-256 private key");
-        let public = secret.public_key().to_encoded_point(false);
-        let jwk = json!({"keys": [{
-            "kty": "EC",
-            "crv": "P-256",
-            "alg": "ES256",
-            "use": "sig",
-            "kid": "wallet-key-1",
-            "x": URL_SAFE_NO_PAD.encode(public.x().unwrap()),
-            "y": URL_SAFE_NO_PAD.encode(public.y().unwrap())
-        }]});
-        let now = Utc::now();
-        let mut header = Header::new(Algorithm::ES256);
-        header.kid = Some("wallet-key-1".to_owned());
-        let assertion = encode(
-            &header,
-            &json!({
-                "iss": "wallet-client",
-                "sub": "wallet-client",
-                "aud": "https://issuer.example/token",
-                "iat": now.timestamp(),
-                "nbf": now.timestamp(),
-                "exp": (now + Duration::seconds(60)).timestamp(),
-                "jti": "assertion-1"
-            }),
-            &EncodingKey::from_ec_der(secret.to_pkcs8_der().unwrap().as_bytes()),
-        )
-        .expect("signed assertion");
+        let vectors = public_assertion_vectors();
+        let jwk = &vectors["jwks"];
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let assertion = vectors["valid"].as_str().unwrap();
 
         let verified = verify_assertion(
-            &assertion,
+            assertion,
             "wallet-client",
             &jwk,
             &["https://issuer.example/token".to_owned()],
@@ -456,7 +436,7 @@ mod tests {
         .expect("verified registered client");
         assert_eq!(verified.jti, "assertion-1");
         assert!(verify_assertion(
-            &assertion,
+            assertion,
             "wallet-client",
             &jwk,
             &["https://other.example/token".to_owned()],
@@ -464,22 +444,8 @@ mod tests {
         )
         .is_err());
 
-        let attacker = SecretKey::from_slice(&[8_u8; 32]).expect("attacker P-256 key");
-        let attacker_assertion = encode(
-            &header,
-            &json!({
-                "iss": "wallet-client",
-                "sub": "wallet-client",
-                "aud": "https://issuer.example/token",
-                "iat": now.timestamp(),
-                "exp": (now + Duration::seconds(60)).timestamp(),
-                "jti": "assertion-attacker"
-            }),
-            &EncodingKey::from_ec_der(attacker.to_pkcs8_der().unwrap().as_bytes()),
-        )
-        .expect("attacker assertion");
         assert!(verify_assertion(
-            &attacker_assertion,
+            vectors["attacker"].as_str().unwrap(),
             "wallet-client",
             &jwk,
             &["https://issuer.example/token".to_owned()],
@@ -487,25 +453,8 @@ mod tests {
         )
         .is_err());
 
-        let mut embedded_header = header;
-        embedded_header.jwk = Some(
-            serde_json::from_value::<Jwk>(jwk["keys"][0].clone()).expect("embedded public JWK"),
-        );
-        let embedded_assertion = encode(
-            &embedded_header,
-            &json!({
-                "iss": "wallet-client",
-                "sub": "wallet-client",
-                "aud": "https://issuer.example/token",
-                "iat": now.timestamp(),
-                "exp": (now + Duration::seconds(60)).timestamp(),
-                "jti": "assertion-embedded"
-            }),
-            &EncodingKey::from_ec_der(secret.to_pkcs8_der().unwrap().as_bytes()),
-        )
-        .expect("embedded-key assertion");
         assert!(verify_assertion(
-            &embedded_assertion,
+            vectors["embedded_jwk"].as_str().unwrap(),
             "wallet-client",
             &jwk,
             &["https://issuer.example/token".to_owned()],
@@ -522,22 +471,16 @@ mod tests {
         let mut malformed_jwks = jwk.clone();
         malformed_jwks["keys"][0]["x"] = json!("AA");
         assert!(normalized_keys(&malformed_jwks).is_err());
-        let mut duplicate_verify_operation = jwk;
+        let mut duplicate_verify_operation = jwk.clone();
         duplicate_verify_operation["keys"][0]["key_ops"] = json!(["verify", "verify"]);
         assert!(normalized_keys(&duplicate_verify_operation).is_ok());
     }
 
     #[test]
     fn registered_client_storage_materializes_optional_jose_defaults() {
-        let secret = SecretKey::from_slice(&[7_u8; 32]).expect("P-256 private key");
-        let public = secret.public_key().to_encoded_point(false);
-        let input = json!({"keys": [{
-            "kty": "EC",
-            "crv": "P-256",
-            "kid": "wallet-key-1",
-            "x": URL_SAFE_NO_PAD.encode(public.x().unwrap()),
-            "y": URL_SAFE_NO_PAD.encode(public.y().unwrap())
-        }]});
+        let mut input = public_assertion_vectors()["jwks"].clone();
+        input["keys"][0].as_object_mut().unwrap().remove("alg");
+        input["keys"][0].as_object_mut().unwrap().remove("use");
 
         let normalized = normalize_registered_client_jwks(&input).expect("valid key set");
 

@@ -42,6 +42,15 @@ for verification tests. Keep private-key operations only in separately justified
 wallet/product or cryptographic conformance boundaries. Preserve the acceptance
 assertions and real protocol behavior while changing how inputs are produced.
 
+2026-10-07 test-custody review checkpoint: the OID4VCI registered-client
+verification test in native Issuance still constructed P-256 private keys and
+signed JWTs locally. It now reads only fixed public JWK and pre-signed assertion
+vectors; positive verification, wrong-signer rejection, embedded-JWK rejection,
+and public-key normalization remain covered. The three focused Rust tests
+passed. This removes one test signer, not the full K8 test graph: the readiness
+runtime and other service/acceptance fixtures still need the same custody
+review before release.
+
 Final custody decision on 2026-10-07: KMS-only is a release invariant. Do not
 retain a legacy private-key unwrap, local cryptography fallback, private-key
 import endpoint, compatibility adapter, or test fixture that restores those
