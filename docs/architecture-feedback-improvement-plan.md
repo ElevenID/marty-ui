@@ -1617,7 +1617,7 @@ for each of `repository_resource_race` (19.820s),
 (73.234s), with zero failed rows. These timings improve attribution, not
 runtime by themselves.
 
-## A4 roster-metadata case ownership (2026-10-08 candidate; not yet CI-qualified)
+## A4 roster-metadata case ownership (2026-10-08, merged)
 
 The protected #1155 timing artifact measured `repository_roster_metadata` at
 73.234s, but two natural 30-second lease-expiry cases account for most of its
@@ -1637,10 +1637,12 @@ preservation, and durable row effects. It also retains all five fence cases:
 real leases and prove different failure points. Only `worker_only` and
 `heartbeat_only` stop repeating the cloned-database matrix; their production
 patch paths remain covered by the fast owner. Published whole-worker process
-and frozen-oracle checks are unchanged. This candidate does not shorten leases,
-alter production behavior intentionally, or establish a CI speedup. Require
-independent review, focused Rust checks, the real PostgreSQL matrix, and
-protected CI before accepting the ownership change.
+and frozen-oracle checks are unchanged. The independent reviewer cleared the
+source-preserving extraction, focused Rust checks passed, and full PR plus
+protected combined-head CI passed, including the Canvas database lane.
+[#1172](https://github.com/ElevenID/marty-ui/pull/1172) merged as `b5cf2ae53`.
+This change does not shorten real leases or establish an attributable CI
+speedup; collect comparable case timing before claiming one.
 
 ## Product packaging and integration workstream (added 2026-10-07)
 
@@ -1758,12 +1760,15 @@ behavior before publication. The `db-migrate` reuse claim is limited to the
 exact digest and isolated profile proven by #1167, not future releases. No CI
 speedup is claimed from this generator alone.
 
-PKG02 follow-up: the opt-in official-release preparation lane builds the two
+PKG02 preparation merged in [#1171](https://github.com/ElevenID/marty-ui/pull/1171)
+as `e350df8f6` after full PR and protected combined-head CI. The opt-in
+official-release preparation lane builds the two
 distinct self-host roles by digest only after existing stack qualification,
 checks the source-bound image map and Marty attestations, anonymously pulls
 each locked image, and uploads only a short-lived workflow artifact explicitly
-marked unqualified; the digest-only OCI images remain in GHCR. It does not
-alter the three-role stack transaction or ordinary PR gates. Its independent
+marked unqualified; the digest-only OCI images remain in GHCR. The opt-in
+official-release path itself has not yet run. It does not alter the three-role
+stack transaction or ordinary PR gates. Its independent
 infrastructure refs still lack a reviewed provenance/licensing policy, and it
 neither signs nor qualifies an installable bundle. The next release-only gate
 must bind a packaged Linux ZIP and its
