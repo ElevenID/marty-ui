@@ -6217,6 +6217,17 @@ native service DDL. This is source-level evidence only. The assembled fresh
 PostgreSQL database, every legacy initialization entrypoint, JSON payload
 writes and shipped release artifacts still need K10 qualification before
 calling the product database free of private-key storage.
+2026-10-08 K10 Credentials JSON-write correction: the Canvas LTI platform
+probe previously persisted a fetched `lti_jwks_json` after checking only that
+`keys` was nonempty. Candidate commit `a6c80de` now rejects private JWK
+fields and PEM private-key markers anywhere in that document before the
+probe result reaches the platform write path. The private-field policy is
+shared by the existing registered-client, readiness and Rust-integration
+public-JWK checks, removing duplicate lists. Public JWKS extensions remain
+accepted. Ruff and 134 focused Canvas/client-auth tests passed, including
+new direct private-field and nested/PEM rejection cases. This closes one
+specific JSON ingress; other JSON-bearing writes and assembled row-level
+inspection remain open K10 work.
 The device-registration write path calls Core's
 `validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
 rejects other DER shapes, and binds the claimed key identifier to its public
