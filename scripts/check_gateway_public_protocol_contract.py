@@ -534,7 +534,7 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and "if: needs.changes.outputs.rust == 'true'" in service
         and "lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}" in service
         and "cargo test --locked --workspace --no-run" in service
-        and "cargo test --locked --workspace --exclude marty-canvas-acceptance"
+        and "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance"
         in service
         and service.count(workspace_step) == 1
         and service.count(vector_step) == 1

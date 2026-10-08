@@ -103,7 +103,11 @@ mod canvas_published_borrowed_database;
 #[test]
 fn worker_repository_root_is_independent_of_cargo_package_depth() {
     let root = canvas_published_database::repository_root();
-    for package in ["rust/services/issuance", "rust/crates/canvas-acceptance"] {
+    for package in [
+        "rust/services/issuance",
+        "rust/crates/canvas-acceptance",
+        "rust/crates/canvas-worker-acceptance",
+    ] {
         assert_eq!(
             canvas_published_database::repository_root_from(&root.join(package)),
             Some(root.as_path()),

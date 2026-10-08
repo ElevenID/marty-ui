@@ -59,7 +59,8 @@ find_executable() {
   local target="$1"
   local package
   case "$target" in
-    canvas_published_schema_contract|canvas_published_worker_contract) package=marty-canvas-acceptance ;;
+    canvas_published_schema_contract) package=marty-canvas-acceptance ;;
+    canvas_published_worker_contract) package=marty-canvas-worker-acceptance ;;
     *) echo "Unknown Canvas contract target: $target" >&2; return 1 ;;
   esac
   local -a matches=()

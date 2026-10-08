@@ -1,9 +1,9 @@
 {
   "schema": "marty.canvas-worker-tier-obligations/v1",
   "scope": "The 33 historical-reference cases, four preflight-capable native cases, and 20 nested native-validation cases; this is not an inventory of either complete Canvas target.",
-  "package": "marty-canvas-acceptance",
+  "package": "marty-canvas-worker-acceptance",
   "target": "canvas_published_worker_contract",
-  "test_source": "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
+  "test_source": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
   "shared_inputs": [
     "contracts/canvas-worker-consumer-range-oracle.json",
     "contracts/canvas-worker-oracle-producers.json",

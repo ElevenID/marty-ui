@@ -175,6 +175,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertFalse(result["all"])
         self.assertEqual(result["direct"], ["marty-selfhost-bundle"])
         self.assertIn("marty-canvas-acceptance", result["packages"])
+        self.assertNotIn("marty-canvas-worker-acceptance", result["packages"])
         self.assertIn("marty-selfhost-bundle", result["packages"])
 
     def test_selfhost_bundle_document_requires_existing_owned_asset(self) -> None:
