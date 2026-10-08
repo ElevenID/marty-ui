@@ -6240,6 +6240,19 @@ private-existing negative test passed; the full signing-keys library passed
 135 tests with 8 ignored, and warnings-denied Clippy passed on Rust 1.97.1.
 This is a local uncommitted UI candidate paired with the broader document/
 HTTP change; live leased-Redis and assembled artifact qualification remain.
+2026-10-08 K10 full signing-keys package review: the first package run exposed
+two golden vectors that still supplied private JWK fields and expected silent
+stripping. The candidate fixtures now use public positive inputs and explicit
+private rejection inputs. The ignored Redis document round trip likewise
+proves private publish/update/DID requests are rejected before successful
+public writes, and now requires a loopback DB >=13 plus nonce sentinel.
+`update_jwks_document` rejects private JWK update fields rather than silently
+ignoring them. The four golden-vector tests passed, the full non-default
+signing-keys package suite passed, warnings-denied Clippy passed, and both
+document Redis tests passed against a disposable Redis 7 container removed
+afterward. The existing CI Redis lane now includes those two ignored tests.
+These are local UI candidate changes; hosted CI and assembled release
+qualification remain.
 2026-10-08 Core PR #355 third-run CodeQL timing: the hosted Rust `Analyze`
 job passed on head `f5ca93c`, and code-scanning alert #260 now reports its
 most recent instance as `fixed`. The separate aggregate `CodeQL` check run
