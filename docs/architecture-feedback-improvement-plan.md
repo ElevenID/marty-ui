@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 21:40 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-08 19:43 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -20,6 +20,8 @@ root pytest source owners without removing a check; its protected run passed.
 selection. #1153 reused isolated schema clones for 22 Canvas repository cases;
 PR and protected CI passed, with 20 fewer repeated container/migration cycles.
 The hosted wall-time runs vary too much to attribute a pipeline saving yet.
+UI #1186 and #1187 and Core #354 have merged; the A5 REST fresh-run attestation
+candidate awaits hosted full-main evidence and does not authorize test skips.
 Full protected checks remain. The separate roster component draft is deferred
 for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
