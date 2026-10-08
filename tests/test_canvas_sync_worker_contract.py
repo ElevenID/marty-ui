@@ -231,12 +231,17 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         for item in container["env"]
         if "valueFrom" in item
     }
-    # Retain the historical three-key artifact. The confirmed shared-key wiring
-    # repair is additive deployment coverage, not a rewritten behavior oracle.
+    # Preserve supported secret bindings while forbidding the retired local
+    # integration-secret master key in the native worker deployment.
     assert secret_environment == {
-        **kubernetes_contract["secret_environment"],
+        **{
+            key: value
+            for key, value in kubernetes_contract["secret_environment"].items()
+            if key != "INTEGRATION_SECRET_MASTER_KEY"
+        },
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in secret_environment
     literal_environment = {
         item["name"]: item["value"] for item in container["env"] if "value" in item
     }

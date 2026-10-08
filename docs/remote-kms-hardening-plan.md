@@ -3079,6 +3079,41 @@ pinned Puppeteer Chrome binary is absent from this Windows host; it still needs
 the standard release build in CI. The full Rust `--workspace --no-run` test
 target build is running; do not claim it passed until its process exits zero.
 
+2026-10-07 local matrix result and renewal blocker: the complete UI Rust
+workspace `cargo +1.95.0 test --locked --workspace --no-run -j 1` passed, then
+an incremental final-source rerun passed after one Signing Keys test formatting
+fix. Package-level Rustfmt checks passed for the changed service and acceptance
+crates. The locked Cargo metadata boundary check also passed. The broad Python
+suite reached 693 passed and three skipped before
+`test_six_renewal_profiles_retain_distinct_runtime_obligations` failed: its
+guard correctly expects both anoncrypt and authcrypt in the fast renewal
+matrix, but the current fast test handles anoncrypt only. Worse, the packaged
+Canvas renewal fixture still writes `sender_x25519_private_key` into policy
+JSON. This is the already identified K3 test-custody/feature gap, now confirmed
+as a current regression gate. Do not weaken the guard or claim renewal
+acceptance. Move the packaged renewal path to the scoped non-exportable
+OpenBao sender reference, run both modes and private-IP outcomes with holder
+decryption and send-fence assertions, then restore the guard and full suite.
+
+2026-10-07 reused live-probe qualification: the existing disposable coordinated
+PostgreSQL/OpenBao Raft recovery script now compiles and runs the Issuance Rust
+`didcomm_remote_kms_live` target in its already booted Go-plugin OpenBao
+instance. Its scoped token test generated a non-exportable X25519 sender key,
+packed authcrypt, and independently decrypted at the holder after rotation.
+The complete combined local probe exited zero, including four remote format
+tests, three readiness tests, holder proof, three Flow HAIP routes, the Go
+integration test, and integration-secret write/restore/read phases. The
+disposable resources were cleaned. This is local real-KMS evidence with no new
+hosted CI lane; it does not yet cover positive renewal or a release image.
+The broad Python suite also found a stale Kubernetes worker assertion that
+still required `INTEGRATION_SECRET_MASTER_KEY`; it now rejects that deployment
+binding while preserving the supported secret map. Its 12 focused tests pass.
+The next full sweep requires the checked-out `Marty/packages/marty-common` on
+this Windows host, while CI installs its pinned wheel; this local dependency
+was verified with the affected deployment test. The known positive renewal
+failure remains excluded only during independent-failure discovery and is
+still a required pre-PR gate.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch

@@ -110,6 +110,19 @@ def build_rust() -> Path:
             "-j",
             "1",
         ],
+        [
+            "cargo",
+            "+1.95.0",
+            "test",
+            "--locked",
+            "-p",
+            "marty-issuance-service",
+            "--test",
+            "didcomm_remote_kms_live",
+            "--no-run",
+            "-j",
+            "1",
+        ],
         *(
             [
                 "cargo",
@@ -438,6 +451,39 @@ def live_issuance_signing_phase(bao_url: str, token: str) -> None:
         raise RuntimeError("Rust holder-proof live-KMS proof failed")
 
 
+def live_didcomm_phase(bao_url: str, root_token: str) -> None:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "MARTY_TEST_OPENBAO_URL": bao_url,
+            "MARTY_TEST_OPENBAO_TOKEN": root_token,
+        }
+    )
+    result = subprocess.run(
+        [
+            "cargo",
+            "+1.95.0",
+            "test",
+            "--locked",
+            "-p",
+            "marty-issuance-service",
+            "--test",
+            "didcomm_remote_kms_live",
+            "-j",
+            "1",
+            "--",
+            "--ignored",
+            "--test-threads=1",
+        ],
+        cwd=ROOT / "rust",
+        env=environment,
+        timeout=300,
+        check=False,
+    )
+    if result.returncode:
+        raise RuntimeError("Rust DIDComm authcrypt live-KMS proof failed")
+
+
 def flow_haip_phase(
     pg_name: str, database_url: str, signing_url: str, key: str, input_path: Path
 ) -> None:
@@ -584,6 +630,7 @@ def run() -> None:
                 read_volume_file(runtime, "haip-kms.token"), encoding="utf-8"
             )
             live_issuance_signing_phase(bao_url, token)
+            live_didcomm_phase(bao_url, root)
             init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
             if unseal != init_material["unseal_keys_b64"][0]:
                 raise RuntimeError(
