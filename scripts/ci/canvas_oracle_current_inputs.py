@@ -74,6 +74,7 @@ def assert_current_inputs(
     schema: str,
     label: str,
     disclaimer: str,
+    additional_inputs: frozenset[str] = frozenset(),
 ) -> None:
     assert evidence["schema"] == schema
     assert set(evidence) == {"schema", "purpose", "normalization", "sha256"}
@@ -85,6 +86,6 @@ def assert_current_inputs(
         assert Path(name).as_posix() == name and ".." not in Path(name).parts
         assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
         assert normalized_sha256(root / name) == pinned, f"{label} input drift: {name}"
-    assert set(evidence["sha256"]) == expanded_inputs(graph, entrypoint, root), (
-        f"{label} script, local imports, children, and scenarios need input review"
-    )
+    assert set(evidence["sha256"]) == (
+        expanded_inputs(graph, entrypoint, root) | additional_inputs
+    ), f"{label} script, local imports, children, and scenarios need input review"

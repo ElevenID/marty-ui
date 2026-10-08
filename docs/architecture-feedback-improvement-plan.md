@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-07 21:40 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-08 19:43 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -20,6 +20,8 @@ root pytest source owners without removing a check; its protected run passed.
 selection. #1153 reused isolated schema clones for 22 Canvas repository cases;
 PR and protected CI passed, with 20 fewer repeated container/migration cycles.
 The hosted wall-time runs vary too much to attribute a pipeline saving yet.
+UI #1186 and #1187 and Core #354 have merged; the A5 REST fresh-run attestation
+candidate awaits hosted full-main evidence and does not authorize test skips.
 Full protected checks remain. The separate roster component draft is deferred
 for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
@@ -2134,6 +2136,48 @@ the worker-only Cargo dependency closure has 620 unique package versions
 versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
+
+## A5 REST fresh-run provenance boundary (2026-10-08 candidate)
+
+[UI #1186](https://github.com/ElevenID/marty-ui/pull/1186) merged the
+132-case JSON-consumer timing labels without changing its frozen corpus or
+qualification. [UI #1187](https://github.com/ElevenID/marty-ui/pull/1187)
+merged as `4b15de493` after protected validation; it moves the unchanged
+published worker target into `marty-canvas-worker-acceptance`. Its protected
+Canvas job took 31m58s (19:10:49–19:42:47 UTC), including 622s host Rust
+compile, 122s published-worker preflight, 484s public self-host image build,
+and 596s isolated database suites. These are observations from one run, not an
+attributed speed improvement. Core
+[#354](https://github.com/ElevenID/marty-core/pull/354) merged as `fe8de9eec`
+with source-backed Verification JWK fixture selection; no Core CI speedup is
+claimed from that ownership guard. Neither change closes historical REST
+capture inputs.
+
+The four-observation `canvas-worker-rest-oracle.json` contains installed worker
+and route source hashes, not hashes of its Python capture scripts and scenario
+inputs. The ten-file `canvas-worker-rest-current-inputs.json` guards the
+*current checkout*, including the mounted preparer and worker trust hook, and
+explicitly disclaims original-capture provenance.
+The unchanged REST producer is imported by many other worker producers and its
+bytes are pinned in the body-timeout and lease-expiry capture maps, so changing
+it merely to decorate the REST oracle would disturb independent references.
+
+This candidate instead emits `canvas-rest-fresh-run.json` only after the
+published REST JSON equals all four frozen observations and the owned database
+and probe have closed. The record is restricted to a scheduled or manually
+dispatched full run on checked-out `main`; it binds run/attempt/SHA/job, exact
+current input hashes, script graph, corpus, pinned image fixture, migration
+revision, and test executable. Upload runs only after preceding Canvas steps
+succeed, with fourteen-day retention and a missing-file failure; external use
+also requires the final job and workflow to succeed. A fresh
+matching capture proves reproducibility under those present inputs, **not**
+the inputs used for the original historical capture, permission to reuse
+qualification, or authority to skip any live case. All existing process,
+PostgreSQL, historical replay, and release gates remain in force. The original
+147 package-migrated worker identities remain required; three additive Rust
+tests check input drift and evidence-constructor refusal. The first hosted
+full-main record is still required before calling this evidence achieved;
+local source tests only validate fail-closed construction.
 
 ## Design references
 

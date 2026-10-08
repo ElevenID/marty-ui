@@ -1380,6 +1380,9 @@ async fn worker_rest_native_child() {
     owned.close().unwrap();
 }
 
+#[path = "support/canvas_rest_requalification.rs"]
+mod canvas_rest_requalification;
+
 #[tokio::test]
 async fn worker_rest_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
@@ -1392,8 +1395,13 @@ async fn worker_rest_reference_matches_published_process() {
         "../../../../contracts/canvas-worker-rest-oracle.json"
     ))
     .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
+    let observed = owned.oracle.clone().unwrap();
+    assert_eq!(observed, expected);
     owned.close().unwrap();
+    canvas_rest_requalification::emit_after_rest_pass(
+        &canvas_published_database::repository_root(),
+        &observed,
+    );
 }
 
 #[tokio::test]

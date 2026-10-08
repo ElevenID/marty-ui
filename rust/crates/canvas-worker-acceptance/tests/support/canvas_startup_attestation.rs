@@ -17,11 +17,11 @@ const INPUTS: [&str; 3] = [
     "scripts/run_canvas_worker_startup_oracle.py",
 ];
 
-fn valid_sha(value: &str, length: usize) -> bool {
+pub(super) fn valid_sha(value: &str, length: usize) -> bool {
     value.len() == length && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn main_run_from(env: impl Fn(&str) -> Option<String>) -> Option<Value> {
+pub(super) fn main_run_from(env: impl Fn(&str) -> Option<String>) -> Option<Value> {
     if env("GITHUB_ACTIONS").as_deref() != Some("true")
         || env("MARTY_CANVAS_FULL_QUALIFICATION").as_deref() != Some("1")
         || env("GITHUB_REF").as_deref() != Some("refs/heads/main")
@@ -95,7 +95,7 @@ fn verify_checkout_identity(root: &Path, run: &Value) {
     );
 }
 
-fn normalized_sha(path: &Path) -> String {
+pub(super) fn normalized_sha(path: &Path) -> String {
     let source = fs::read_to_string(path).expect("Startup capture input is missing or not UTF-8");
     format!(
         "{:x}",
@@ -158,7 +158,7 @@ fn source_inputs(root: &Path, sidecar: &Value) -> BTreeMap<String, String> {
         .collect()
 }
 
-fn image_digest(reference: &Value) -> &str {
+pub(super) fn image_digest(reference: &Value) -> &str {
     let image = reference.as_str().expect("Pinned image reference missing");
     let (_, digest) = image.split_once("@sha256:").expect("Unpinned image");
     assert!(valid_sha(digest, 64), "Invalid image digest");
@@ -271,7 +271,7 @@ pub(super) fn emit_after_startup_pass(
     });
 }
 
-fn persist_verified_evidence(
+pub(super) fn persist_verified_evidence(
     root: &Path,
     output: &Path,
     run: &Value,

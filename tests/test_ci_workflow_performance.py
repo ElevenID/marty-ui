@@ -1297,12 +1297,14 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
+            "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
+            "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         },
         "canvas-worker-retry-after-current-inputs.json": {
             ".github/workflows/ci.yml",
@@ -3140,6 +3142,7 @@ def _assert_no_rust_executable_transfer(steps) -> None:
         ),
         "Upload Rust build evidence": "${{ runner.temp }}/rust-build-evidence/",
         "Preserve fresh full-main startup attestation": "${{ runner.temp }}/canvas-startup-fresh-run.json",
+        "Preserve fresh full-main REST requalification evidence": "${{ runner.temp }}/canvas-rest-fresh-run.json",
     }
     uploads = {}
     for step in steps:
@@ -3151,6 +3154,73 @@ def _assert_no_rust_executable_transfer(steps) -> None:
             assert step.get("with", {}).get("path") == expected_uploads[name]
             uploads[name] = step
     assert set(uploads) == set(expected_uploads)
+
+
+def _assert_paired_fresh_worker_evidence(steps) -> None:
+    condition = (
+        "success() && matrix.lane == 'canvas' && "
+        "env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && "
+        "github.ref == 'refs/heads/main'"
+    )
+    guard = next(
+        step
+        for step in steps
+        if step.get("name") == "Require paired fresh full-main worker evidence"
+    )
+    assert guard["if"] == condition
+    assert guard["shell"] == "bash" and not guard.get("continue-on-error", False)
+    for name in ("canvas-startup-fresh-run.json", "canvas-rest-fresh-run.json"):
+        assert guard["run"].count(f'test -s "$RUNNER_TEMP/{name}"') == 1
+    startup = next(
+        step
+        for step in steps
+        if step.get("name") == "Preserve fresh full-main startup attestation"
+    )
+    rest = next(
+        step
+        for step in steps
+        if step.get("name") == "Preserve fresh full-main REST requalification evidence"
+    )
+    for upload in (startup, rest):
+        assert upload["if"] == condition
+        assert upload["with"]["if-no-files-found"] == "error"
+        assert upload["with"]["retention-days"] == 14
+    assert steps.index(guard) < steps.index(startup) < steps.index(rest)
+
+
+def test_rest_requalification_upload_requires_successful_full_main_canvas() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    _assert_no_rust_executable_transfer(steps)
+    _assert_paired_fresh_worker_evidence(steps)
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing-rest", "missing-startup", "wrong-condition", "late-guard"]
+)
+def test_fresh_worker_evidence_pair_rejects_weakening(fault: str) -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    guard = next(
+        step
+        for step in steps
+        if step.get("name") == "Require paired fresh full-main worker evidence"
+    )
+    if fault == "missing-rest":
+        guard["run"] = guard["run"].replace(
+            'test -s "$RUNNER_TEMP/canvas-rest-fresh-run.json"', "true"
+        )
+    elif fault == "missing-startup":
+        guard["run"] = guard["run"].replace(
+            'test -s "$RUNNER_TEMP/canvas-startup-fresh-run.json"', "true"
+        )
+    elif fault == "wrong-condition":
+        guard["if"] = "matrix.lane == 'canvas'"
+    else:
+        steps.remove(guard)
+        steps.append(guard)
+    with pytest.raises(AssertionError):
+        _assert_paired_fresh_worker_evidence(steps)
 
 
 @pytest.mark.parametrize(
