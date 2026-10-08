@@ -2817,6 +2817,10 @@ existing Linux `zkp-native-security` job now runs the same live test with
 `zk_mdoc` enabled after installing native OpenSSL dependencies, without mock
 mode; its hosted result remains pending. Core commit: `7f0cf8c`. No PR or
 hosted CI run was triggered at this checkpoint.
+The live target now also checks that the issuer-signed `age_over_18` item is
+the CBOR boolean `true`, rather than merely checking its name. All four live
+cases passed again against a fresh disposable OpenBao and Rustfmt/diff checks
+passed; the container was removed. Core follow-up commit: `078800a`.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
