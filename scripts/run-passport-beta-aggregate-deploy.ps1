@@ -43,11 +43,13 @@ $writePath = $output + '.rust-write.json'
 $writeIntentPath = $output + '.rust-write-intent.json'
 $flowWritePath = $output + '.rust-flow.json'
 $flowWriteIntentPath = $output + '.rust-flow-intent.json'
+$referenceIntentPath = $output + '.reference-intents'
 $continuityPath = $output + '.credentials-continuity.json'
+$issuanceMigrationPath = $output + '.issuance-migration.json'
+$issuanceDependencyPath = $output + '.issuance-dependency.json'
 $applicationPath = [IO.Path]::GetFullPath($ApplicationFile)
-if (-not [IO.Path]::IsPathRooted($ApplicationFile) -or
-    -not (Test-Path -LiteralPath $applicationPath -PathType Leaf)) {
-    throw 'Private Rust passport application file is unavailable'
+if (-not [IO.Path]::IsPathRooted($ApplicationFile)) {
+    throw 'Private Rust passport application path must be absolute'
 }
 if ($applicationPath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) {
@@ -85,13 +87,37 @@ if (-not [IO.Path]::IsPathRooted($FlowFile) -or
     throw 'Private Rust Flow inputs must be absolute files'
 }
 foreach ($privatePath in @($flowPath, $sessionPath)) {
-    if (-not (Test-Path -LiteralPath $privatePath -PathType Leaf) -or
-        $privatePath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
+    if ($privatePath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
             [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Private Rust Flow input must be an absolute file outside protected source'
     }
 }
+if (-not (Test-Path -LiteralPath $sessionPath -PathType Leaf)) {
+    throw 'Private Rust Flow session is unavailable'
+}
 $intentPath = [IO.Path]::GetFullPath($MaintenanceReceipt) + '.intent.json'
+$reservedPaths = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase)
+foreach ($path in @(
+    $output, $planPath, $productionPostflightPath, $productionRecoveryPath,
+    $fenceRecheckPath, $credentialsPretransitionPath, $ceremonyIntentPath,
+    $ceremonyPath, $kmsPretransitionPath, $transitionPath, $writePath,
+    $writeIntentPath, $flowWritePath, $flowWriteIntentPath, $referenceIntentPath,
+    $continuityPath, $issuanceMigrationPath, $issuanceDependencyPath,
+    ($output + '.fence-receipt.json'),
+    ($output + '.maintenance-receipt.json'), ($output + '.maintenance-intent.json'),
+    ($output + '.native-receipt.json'), $intentPath,
+    ([IO.Path]::GetFullPath($StackManifest)),
+    ([IO.Path]::GetFullPath($FenceReceipt)),
+    ([IO.Path]::GetFullPath($MaintenanceReceipt)),
+    ([IO.Path]::GetFullPath($NativeReceipt)), $issuerChainPath,
+    $issuerCeremonyPath, $cscaSessionPath, $dscSessionPath, $sessionPath,
+    $applicationPath, $flowPath
+)) {
+    if (-not $reservedPaths.Add($path)) {
+        throw "Aggregate beta input/output paths must be distinct: $path"
+    }
+}
 . (Join-Path $PSScriptRoot 'beta-deployment-lock.ps1')
 . (Join-Path $PSScriptRoot 'beta-passport-fence-legacy-boundary.ps1')
 
@@ -287,6 +313,64 @@ function Assert-OpenBaoToken {
         $check.verified -ne $true -or
         $check.source_commit -cne $script:plan.source_commit) {
         throw 'New callback signer token differs from preserved beta OpenBao'
+    }
+}
+
+function Invoke-SignedIssuanceMigration {
+    Assert-Render
+    $arguments = @('compose', '--project-name', 'elevenid-beta')
+    foreach ($file in @('.env.tunnel.beta.local', '.env.beta.generated.local')) {
+        $arguments += @('--env-file', (Join-Path $root $file))
+    }
+    foreach ($file in @(
+        'docker-compose.base.yml', 'docker-compose.beta.yml',
+        'docker-compose.profile.dev.yml', 'docker-compose.profile.tunnel.yml',
+        'docker-compose.profile.waltid.yml',
+        'docker-compose.profile.canvas-real.yml',
+        'docker-compose.profile.canvas-sandbox.yml',
+        'docker-compose.profile.passport-native-beta.yml',
+        'docker-compose.profile.passport-premigrated-beta.yml')) {
+        $arguments += @('-f', (Join-Path $root $file))
+    }
+    $arguments += @('-f', '-', 'run', '--rm', '--no-deps', '--no-build',
+        'issuance-migrations')
+    $script:plan.image_override | & docker @arguments | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Signed Rust issuance migration failed' }
+    $expected = @(
+        'issuance_service_baseline_v1',
+        '0001_oid4vci_public_protocol', '0002_physical_document_jobs',
+        '0003_passport_bureau_provider_binding', '0004_passport_submission_intent',
+        '0005_passport_submission_provenance', '0006_passport_beta_batch_identity',
+        '0007_passport_beta_batch_provenance', '0008_passport_beta_batch_wire_evidence'
+    ) | Sort-Object
+    $actual = @(Invoke-BetaPsql -Sql `
+        'SELECT version FROM issuance_service.rust_schema_migrations ORDER BY version;')
+    if (($actual -join ',') -cne ($expected -join ',')) {
+        throw 'Rust issuance migration ledger differs from the signed migration set'
+    }
+    $receipt = [ordered]@{
+        schema = 'marty.passport-beta-issuance-migration/v1'
+        source_commit = $script:plan.source_commit
+        services_image = $script:plan.services_image
+        postgres_container_id = $script:plan.postgres_container_id
+        versions = $actual
+    }
+    if (Test-Path -LiteralPath $issuanceMigrationPath) {
+        $prior = Get-Content -LiteralPath $issuanceMigrationPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+        if (@($prior.PSObject.Properties.Name).Count -ne $receipt.Count -or
+            @($prior.PSObject.Properties.Name | Where-Object { $_ -notin $receipt.Keys }).Count -ne 0 -or
+            $prior.schema -cne $receipt.schema -or
+            $prior.source_commit -cne $receipt.source_commit -or
+            $prior.services_image -cne $receipt.services_image -or
+            $prior.postgres_container_id -cne $receipt.postgres_container_id -or
+            (@($prior.versions) -join ',') -cne ($actual -join ',')) {
+            throw 'Prior Rust issuance migration receipt differs on resume'
+        }
+    }
+    else {
+        Write-DurableJson -Path $issuanceMigrationPath `
+            -Json ($receipt | ConvertTo-Json -Depth 5 -Compress)
     }
 }
 
@@ -739,6 +823,17 @@ try {
         [string]$script:intent.postgres_container_id) {
         throw 'Aggregate beta database identity differs from maintenance intent'
     }
+    $referenceOutputPreflight = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--preflight-outputs', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath, '--flow-file', $flowPath)
+    if ($referenceOutputPreflight.schema -cne
+        'marty.passport-beta-reference-output-preflight/v1' -or
+        $referenceOutputPreflight.verified -ne $true) {
+        throw 'Beta passport reference outputs failed preflight'
+    }
     $loginBefore = @(Invoke-BetaPsql -Sql `
         "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty';")
     if ($loginBefore.Count -ne 1 -or $loginBefore[0] -notin @('t', 'f')) {
@@ -786,16 +881,9 @@ try {
     $script:productionRecoveryDigest = [string]$recoveryBaseline.baseline_sha256
     $script:productionRecoveryReady = $true
     $null = Assert-ProductionContinuity
-    $applicationProof = Invoke-Plan -Arguments @(
-        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_write.py'),
-        '--plan', $planPath, '--application-file', $applicationPath,
-        '--validate-only')
-    if ($applicationProof.schema -cne 'marty.passport-beta-rust-owner-input/v1' -or
-        $applicationProof.source_commit -cne $script:plan.source_commit -or
-        [string]$applicationProof.application_file_sha256 -notmatch '^[0-9a-f]{64}$') {
-        throw 'Private Rust passport probe input is invalid'
-    }
     $env:MARTY_SERVICES_IMAGE = [string]$script:plan.services_image
+    # Compose resolves the base file before the signed Rust override replaces
+    # its issuance image. Bind the pinned historical image for parsing only.
     $env:MARTY_ISSUANCE_IMAGE = [string]$script:plan.issuance_image
     $env:MARTY_UI_RELEASE_IMAGE = [string]$script:plan.ui_image
     $expectedBuildVars = @(
@@ -821,8 +909,7 @@ try {
     Assert-PreservedIngressOrigin
     Assert-PreservedOpenBao
     Assert-OpenBaoToken
-    foreach ($image in @($script:plan.services_image, $script:plan.issuance_image,
-            $script:plan.ui_image)) {
+    foreach ($image in @($script:plan.services_image, $script:plan.ui_image)) {
         & docker pull $image | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Signed aggregate beta image pull failed' }
     }
@@ -847,6 +934,7 @@ try {
     if ($login.Count -ne 1 -or $login[0] -cne 't') {
         throw 'Aggregate beta app login did not open after native gates'
     }
+    Invoke-SignedIssuanceMigration
     $old = $script:plan.old_container_ids_by_service
     $infra = @($script:plan.restart_infrastructure |
         Sort-Object { [Array]::IndexOf(@('redis','keycloak'), [string]$_) })
@@ -866,20 +954,30 @@ try {
     $resumingAfterContinuity = Test-Path -LiteralPath $continuityPath
     Assert-ForwardGeneration -RequireIngressClosed:(-not $resumingAfterContinuity) |
         Out-Null
-    $flowReferences = Invoke-Plan -Arguments @(
-        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_flow.py'),
-        '--plan', $planPath, '--flow-file', $flowPath,
-        '--application-file', $applicationPath,
-        '--session-file', $sessionPath, '--validate-only')
-    if ($flowReferences.schema -cne 'marty.passport-beta-rust-owner-flow-references/v1' -or
-        $flowReferences.verified -ne $true -or
-        $flowReferences.source_commit -cne $script:plan.source_commit -or
-        [string]$flowReferences.application_file_sha256 -cne
-            [string]$applicationProof.application_file_sha256 -or
-        [string]$flowReferences.flow_file_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        [string]$flowReferences.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
-        [string]$flowReferences.flow_container_id -cnotmatch '^[0-9a-f]{64}$') {
-        throw 'Live private Flow references differ from beta application input'
+    $references = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--phase', 'references', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--session-file', $sessionPath, '--dsc-session-file', $dscSessionPath,
+        '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath)
+    if ($references.schema -cne 'marty.passport-beta-reference-provision/v1' -or
+        $references.phase -cne 'references' -or
+        $references.verified -ne $true -or
+        $references.source_commit -cne $script:plan.source_commit -or
+        [string]$references.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$references.application_file_sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Pilot beta passport references were not provisioned by staged Gateway'
+    }
+    $applicationProof = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_write.py'),
+        '--plan', $planPath, '--application-file', $applicationPath,
+        '--validate-only')
+    if ($applicationProof.schema -cne 'marty.passport-beta-rust-owner-input/v1' -or
+        $applicationProof.source_commit -cne $script:plan.source_commit -or
+        [string]$applicationProof.application_file_sha256 -cne
+            [string]$references.application_file_sha256) {
+        throw 'Private Rust passport probe input differs from staged references'
     }
     $phaseBeforeTransition = @(Invoke-BetaPsql -Sql `
         "SELECT phase FROM passport_cutover.state WHERE singleton=true;")
@@ -896,11 +994,11 @@ try {
             $pretransition.source_commit -cne $script:plan.source_commit -or
             $pretransition.postgres_container_id -cne $script:plan.postgres_container_id -or
             [string]$pretransition.fence_epoch -cne [string]$script:plan.fence_epoch -or
-            $pretransition.issuance_image -cne $script:plan.issuance_image -or
-            $pretransition.removed_python_passport_routes_absent -ne $true -or
+            $pretransition.issuance_image -cne $script:plan.services_image -or
+            $pretransition.rust_passport_capabilities_verified -ne $true -or
             $pretransition.unrelated_issuance_nonce_write_verified -ne $true -or
             [string]$pretransition.receipt_sha256 -cnotmatch '^[0-9a-f]{64}$') {
-            throw 'Replacement Credentials image lacks pretransition retirement proof'
+            throw 'Signed Rust issuance lacks pretransition passport proof'
         }
         Replace-DurableJson -Path $credentialsPretransitionPath `
             -Json ($pretransition | ConvertTo-Json -Depth 20 -Compress)
@@ -919,7 +1017,7 @@ try {
         $pretransitionCheck.postgres_container_id -cne
             $script:plan.postgres_container_id -or
         [string]$pretransitionCheck.fence_epoch -cne [string]$script:plan.fence_epoch -or
-        $pretransitionCheck.issuance_image -cne $script:plan.issuance_image -or
+        $pretransitionCheck.issuance_image -cne $script:plan.services_image -or
         [string]$pretransitionCheck.receipt_file_sha256 -cne
             (Get-FileHash -LiteralPath $credentialsPretransitionPath `
                 -Algorithm SHA256).Hash.ToLowerInvariant()) {
@@ -991,6 +1089,35 @@ try {
     else {
         Write-DurableJson -Path $kmsPretransitionPath -Json $kmsJson
     }
+    $dependencyOutput = & docker exec $pretransitionCheck.issuance_container_id `
+        /usr/local/bin/marty-issuance-service probe-dependencies
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Signed Rust issuance dependency probe failed before owner transition'
+    }
+    $dependency = $dependencyOutput | ConvertFrom-Json -ErrorAction Stop
+    if ($dependency.schema -cne 'marty.issuance-dependency-probe/v1' -or
+        $dependency.verified -ne $true) {
+        throw 'Signed Rust issuance dependency probe did not verify before owner transition'
+    }
+    $dependencyReceipt = [ordered]@{
+        schema = 'marty.passport-beta-issuance-dependency/v1'
+        source_commit = $script:plan.source_commit
+        services_image = $script:plan.services_image
+        issuance_container_id = $pretransitionCheck.issuance_container_id
+        postgres_container_id = $script:plan.postgres_container_id
+        verified = $true
+    }
+    $dependencyJson = $dependencyReceipt | ConvertTo-Json -Depth 5 -Compress
+    if (Test-Path -LiteralPath $issuanceDependencyPath) {
+        $priorDependency = Get-Content -LiteralPath $issuanceDependencyPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json -ErrorAction Stop
+        if (($priorDependency | ConvertTo-Json -Depth 5 -Compress) -cne $dependencyJson) {
+            throw 'Prior Rust issuance dependency receipt differs on resume'
+        }
+    }
+    else {
+        Write-DurableJson -Path $issuanceDependencyPath -Json $dependencyJson
+    }
     $owner = Invoke-RustOwnerTransition
     $firstWriteAttempt = -not (Test-Path -LiteralPath $writeIntentPath)
     if ($firstWriteAttempt) {
@@ -1043,6 +1170,38 @@ try {
     }
     Assert-ForwardGeneration -RequireIngressClosed:(-not $resumingAfterContinuity) |
         Out-Null
+    $flowProvision = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--phase', 'flow', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--session-file', $sessionPath, '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath, '--flow-file', $flowPath)
+    if ($flowProvision.schema -cne 'marty.passport-beta-reference-provision/v1' -or
+        $flowProvision.phase -cne 'flow' -or
+        $flowProvision.verified -ne $true -or
+        $flowProvision.source_commit -cne $script:plan.source_commit -or
+        [string]$flowProvision.gateway_container_id -cne
+            [string]$references.gateway_container_id -or
+        [string]$flowProvision.application_file_sha256 -cne
+            [string]$applicationProof.application_file_sha256 -or
+        [string]$flowProvision.flow_file_sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Pilot beta physical Flow was not provisioned by staged Gateway'
+    }
+    $flowReferences = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_flow.py'),
+        '--plan', $planPath, '--flow-file', $flowPath,
+        '--application-file', $applicationPath,
+        '--session-file', $sessionPath, '--validate-only')
+    if ($flowReferences.schema -cne 'marty.passport-beta-rust-owner-flow-references/v1' -or
+        $flowReferences.verified -ne $true -or
+        $flowReferences.source_commit -cne $script:plan.source_commit -or
+        [string]$flowReferences.application_file_sha256 -cne
+            [string]$applicationProof.application_file_sha256 -or
+        [string]$flowReferences.flow_file_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$flowReferences.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$flowReferences.flow_container_id -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Live private Flow references differ from beta application input'
+    }
     $firstFlowAttempt = -not (Test-Path -LiteralPath $flowWriteIntentPath)
     if ($firstFlowAttempt) {
         $flowWriteIntent = [ordered]@{
@@ -1120,11 +1279,11 @@ try {
         [string]$continuity.issuance_container_id -cnotmatch '^[0-9a-f]{64}$' -or
         $continuity.issuance_container_id -cne
             $pretransitionCheck.issuance_container_id -or
-        $continuity.issuance_image -cne $script:plan.issuance_image -or
-        $continuity.removed_python_passport_routes_absent -ne $true -or
+        $continuity.issuance_image -cne $script:plan.services_image -or
+        $continuity.rust_passport_capabilities_verified -ne $true -or
         $continuity.unrelated_issuance_nonce_write_verified -ne $true -or
         [string]$continuity.nonce_sha256 -cnotmatch '^[0-9a-f]{64}$') {
-        throw 'Python passport retirement or unrelated issuance continuity proof is invalid'
+        throw 'Rust passport or unrelated issuance continuity proof is invalid'
     }
     if (-not $resumingAfterContinuity) {
         Write-DurableJson -Path $continuityPath `
@@ -1142,8 +1301,8 @@ try {
                 [string]$owner.transition_txid -or
             $continuityResume.issuance_container_id -cne
                 $continuity.issuance_container_id -or
-            $continuityResume.issuance_image -cne $script:plan.issuance_image -or
-            $continuityResume.removed_python_passport_routes_absent -ne $true -or
+            $continuityResume.issuance_image -cne $script:plan.services_image -or
+            $continuityResume.rust_passport_capabilities_verified -ne $true -or
             $continuityResume.unrelated_issuance_nonce_write_verified -ne $true -or
             [string]$continuityResume.prior_receipt_sha256 -cne
                 (Get-FileHash -LiteralPath $continuityPath -Algorithm SHA256).Hash.ToLowerInvariant()) {
@@ -1195,6 +1354,8 @@ try {
         source_commit = $script:plan.source_commit
         plan_sha256 = (Get-FileHash -LiteralPath $planPath -Algorithm SHA256).Hash.ToLowerInvariant()
         native_receipt_sha256 = $script:plan.native_receipt_sha256
+        issuance_migration_receipt_sha256 = (Get-FileHash `
+            -LiteralPath $issuanceMigrationPath -Algorithm SHA256).Hash.ToLowerInvariant()
         transition_receipt_sha256 = (Get-FileHash -LiteralPath $transitionPath `
             -Algorithm SHA256).Hash.ToLowerInvariant()
         rust_owner = $runtime.rust_owner
@@ -1207,6 +1368,7 @@ try {
         credentials_continuity_receipt_sha256 = (Get-FileHash -LiteralPath $continuityPath `
             -Algorithm SHA256).Hash.ToLowerInvariant()
         credentials_continuity = $continuity
+        issuance_dependency_receipt_sha256 = (Get-FileHash -LiteralPath $issuanceDependencyPath -Algorithm SHA256).Hash.ToLowerInvariant()
         credentials_pretransition_receipt_sha256 = (Get-FileHash `
             -LiteralPath $credentialsPretransitionPath -Algorithm SHA256).Hash.ToLowerInvariant()
         credentials_pretransition = $pretransitionCheck

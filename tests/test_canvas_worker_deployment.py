@@ -709,7 +709,19 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
 ):
     calls = []
     namespace = compose_worker_gate["run"].__globals__
-    monkeypatch.setitem(namespace, "render", lambda *args: {})
+    monkeypatch.setitem(
+        namespace,
+        "render",
+        lambda *args: {
+            "services": {
+                "canvas-sync-worker": (
+                    {"profiles": ["canvas"]}
+                    if compose_worker_gate["NO_CANVAS"] in args
+                    else {}
+                )
+            }
+        },
+    )
     for name in (
         "assert_worker_preserved",
         "assert_published_issuance_preserved",
@@ -741,6 +753,7 @@ def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_own
     def renderer(*files, **options):
         renders.append((files, options))
         return {
+            "services": {"canvas-sync-worker": {"profiles": ["canvas"]}},
             "networks": {"marty-network": {"name": "elevenid-beta-network"}},
             "x-service-image": {"image": compose_worker_gate["GHCR_WORKER_IMAGE"]},
             "x-selfhost-service-image": {
@@ -752,6 +765,9 @@ def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_own
         pytest.fail("Consumer suite must not silently replace the older bundle owner")
 
     monkeypatch.setitem(namespace, "render", renderer)
+    monkeypatch.setitem(
+        namespace, "assert_no_canvas_overlay_activation", lambda *_: None
+    )
     monkeypatch.setitem(namespace, "assert_base_worker_selection", lambda model: None)
     monkeypatch.setitem(
         namespace,
@@ -1027,6 +1043,22 @@ def test_production_preflight_requires_a_configured_canvas_worker_processor() ->
         }
     )
     assert "CANVAS_LTI_TOOL_ISSUER_DID" in configured
+
+
+def test_canvas_preflight_honors_shell_enablement_override(monkeypatch) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    env = selfhost_canvas_environment()
+    env["CANVAS_PORTABLE_INTEGRATION_ENABLED"] = "false"
+    monkeypatch.setenv("CANVAS_PORTABLE_INTEGRATION_ENABLED", "true")
+    monkeypatch.setitem(
+        namespace["validate_selfhost_canvas_configuration"].__globals__,
+        "run_compose_command",
+        lambda *_: subprocess.CompletedProcess([], 0, '{"services":{}}', ""),
+    )
+    with pytest.raises(namespace["CheckError"], match="worker model is missing"):
+        namespace["validate_selfhost_canvas_configuration"](
+            env, Path("synthetic.env"), Path("synthetic.yml")
+        )
 
 
 @pytest.mark.parametrize("with_model", [False, True])

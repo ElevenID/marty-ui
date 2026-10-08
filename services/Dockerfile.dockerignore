@@ -10,7 +10,11 @@
 contracts/canvas-worker-oracle-producers.json
 contracts/canvas-worker-oracle-script-imports.json
 contracts/canvas-worker-startup-current-inputs.json
+contracts/canvas-worker-rest-current-inputs.json
+contracts/canvas-json-depth-current-inputs.json
+contracts/canvas-worker-retry-after-current-inputs.json
 contracts/canvas-worker-tier-obligations.json
+contracts/canvas-worker-package-migration.json
 contracts/python-value-fast-obligations.json
 contracts/canvas-renewal-profile-obligations.json
 !services/
@@ -24,6 +28,7 @@ services/common/
 !scripts/load-secrets-env.sh
 !scripts/ci/
 !scripts/ci/run-public-rust-build.sh
+!scripts/ci/public-sccache-stats.awk
 rust/services/*/tests
 rust/crates/*/tests
 rust/**/target

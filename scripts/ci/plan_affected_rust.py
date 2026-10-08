@@ -20,6 +20,30 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     # affect Auth even though Cargo has no reverse dependency on them.
     "marty-flow": [
         {
+            # Applicant submits approved applications to Flow's native webhook.
+            "package": "marty-applicant",
+            "evidence": "rust/services/applicant/src/main.rs",
+            "binding": 'env_value("FLOW_SERVICE_URL", "http://flow:8011")',
+            "runtime_marker": "Arc::new(HttpFlowProvider::new(flow_url, application_auth))",
+            "request_evidence": "rust/services/applicant/src/providers.rs",
+            "request_marker": '"{}/v1/flows/webhooks/application-approved"',
+            "callsite_evidence": "rust/services/applicant/src/service.rs",
+            "callsite_marker": ".issue(&application, &applicant, &reserved_claims, attempt_id)",
+            "provider_evidence": "rust/services/flow/src/http_application.rs",
+            "provider_marker": '"/v1/flows/webhooks/application-approved"',
+            "route_registration_evidence": "rust/services/flow/src/http_read.rs",
+            "route_registration_marker": ".merge(flow_application_routes())",
+            "server_evidence": "rust/services/flow/src/main.rs",
+            "server_marker": ".merge(flow_read_router(http_state))",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "flow",
+            "deployment_marker": 'FLOW_SERVICE_PORT: "8011"',
+            "deployment_consumer_service": "applicant",
+            "deployment_consumer_marker": 'APPLICANT_SERVICE_PORT: "8006"',
+            "deployment_consumer_absent_marker": "FLOW_SERVICE_URL:",
+            "deployment_network_marker": "- marty-network",
+        },
+        {
             "package": "marty-auth",
             "evidence": "rust/services/auth/src/config.rs",
             "binding": "FLOW_GRPC_TARGET",
@@ -35,6 +59,30 @@ OBSERVED_NON_CARGO_CONSUMERS = {
         },
     ],
     "marty-organization": [
+        {
+            # Device registration checks active membership over Organization gRPC
+            # when a request is scoped to an organization.
+            "package": "marty-device-registration",
+            "evidence": "rust/services/device-registration/src/main.rs",
+            "binding": 'env_value("ORG_GRPC_TARGET", "organization:9002")',
+            "runtime_marker": "OrganizationMembershipClient::connect_lazy(",
+            "registration_marker": "router(HttpState {",
+            "request_evidence": "rust/services/device-registration/src/control_plane.rs",
+            "connection_marker": "OrganizationServiceClient::new(endpoint.connect_lazy())",
+            "request_marker": ".get_member(self.request(GetMemberRequest {",
+            "response_marker": '!member.status.eq_ignore_ascii_case("active")',
+            "callsite_evidence": "rust/services/device-registration/src/http.rs",
+            "condition_marker": "if let Some(organization_id) = organization_id {",
+            "callsite_marker": ".require_active(user_id, organization_id)",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_handler_marker": "async fn get_member(",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_registration_evidence": "rust/services/organization/src/main.rs",
+            "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "device-registration",
+            "deployment_marker": "ORG_GRPC_TARGET: organization:9002",
+        },
         {
             "package": "marty-compliance-profile",
             "evidence": "rust/services/compliance-profile/src/config.rs",
@@ -184,7 +232,6 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "connection_marker": "templates: CredentialTemplateServiceClient::new(channel(",
             "request_marker": ".get_template(self.grpc_request(GetTemplateRequest {",
             "response_marker": "template_from_grpc(template_id, response.into_inner())",
-            "fallback_marker": "self.resolve_template_http(template_id).await",
             "provider_evidence": "rust/services/credential-template/src/grpc_service.rs",
             "provider_marker": ".get_template_for_internal_service(&request.get_ref().template_id)",
         },
@@ -270,11 +317,57 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-issuance-service": [
         {
+            # Applicant resolves application templates from native Issuance
+            # over HTTP; it has no Cargo dependency on the provider.
+            "package": "marty-applicant",
+            "evidence": "rust/services/applicant/src/main.rs",
+            "binding": 'env::var("ISSUANCE_NATIVE_SERVICE_URL").ok()',
+            "runtime_marker": "HttpTemplateProvider::new(",
+            "request_evidence": "rust/services/applicant/src/providers.rs",
+            "request_call_marker": ".get(format!(",
+            "request_marker": '"{}/v1/application-templates/{id}"',
+            "provider_evidence": "rust/services/issuance/src/application_template_http.rs",
+            "provider_marker": '"/v1/application-templates/{template_id}"',
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
+        },
+        {
+            # The base runtime's Presentation Policy resolver looks up
+            # credential status at the native Issuance HTTP endpoint.
+            "package": "marty-presentation-policy",
+            "evidence": "rust/services/presentation-policy/src/config.rs",
+            "binding": 'value(&values, "ISSUANCE_NATIVE_SERVICE_URL")',
+            "status_marker": "{issuance_url}/v1/issuance/credentials/{{credential_id}}/status",
+            "runtime_evidence": "rust/services/presentation-policy/src/main.rs",
+            "runtime_marker": "&config.credential_status_url_template,",
+            "request_evidence": "rust/services/presentation-policy/src/control_plane.rs",
+            "request_marker": "self.http.get(endpoint)",
+            "provider_evidence": "rust/services/issuance/src/http.rs",
+            "provider_marker": '"/v1/issuance/credentials/{credential_id}/status"',
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
+        },
+        {
+            # Auth finalizes Canvas LTI sessions through Issuance's
+            # conditionally registered native HTTP route, without a Cargo edge.
             "package": "marty-auth",
             "evidence": "rust/services/auth/src/config.rs",
             "binding": "ISSUANCE_NATIVE_SERVICE_URL",
             "runtime_evidence": "rust/services/auth/src/main.rs",
             "runtime_marker": "&config.issuance_native_service_url",
+            "startup_marker": "HttpCanvasExperienceSessionProvider::new(",
+            "request_evidence": "rust/services/auth/src/canvas_transport.rs",
+            "request_marker": '"/v1/integrations/canvas/lti/experience-sessions/current"',
+            "request_method_marker": "method: OutboundHttpMethod::Get,",
+            "request_auth_marker": 'headers.insert("authorization".into(), format!("Bearer {token}"));',
+            "callsite_evidence": "rust/services/auth/src/http_service.rs",
+            "callsite_route_marker": '"/v1/auth/canvas-lti/finalize"',
+            "callsite_marker": ".finalize(&CanvasFinalizeContext {",
+            "provider_evidence": "rust/services/issuance/src/http.rs",
+            "provider_condition_marker": "if services.canvas_lti_experience_session.is_some() {",
+            "provider_marker": "get(get_canvas_lti_experience_session)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
         },
         {
             "package": "marty-flow",
@@ -680,6 +773,45 @@ next(
     }
 )
 
+# Flow's callback worker sends to Auth's internal credential-verification route
+# only when its callback secret and allowlisted destination are configured.
+# This is separate from Gateway's public Auth proxy edge above.
+OBSERVED_NON_CARGO_CONSUMERS["marty-auth"].append(
+    {
+        "package": "marty-flow",
+        "auth_request_evidence": "rust/services/auth/src/credential_http.rs",
+        "auth_url_marker": '"{}/internal/v1/auth/credential-verified?nonce={nonce}"',
+        "auth_request_marker": "callback_url: self.config.callback_url(&nonce),",
+        "evidence": "rust/services/flow/src/config.rs",
+        "binding": 'value(&values, "FLOW_CALLBACK_DESTINATIONS")',
+        "grpc_evidence": "rust/services/flow/src/grpc_service.rs",
+        "grpc_marker": "callback_url: nonempty(input.callback_url),",
+        "runtime_evidence": "rust/services/flow/src/main.rs",
+        "conditional_marker": "let callback_worker = callback_secret.map(|secret| {",
+        "runtime_marker": "tokio::spawn(run_callback_dispatcher(",
+        "selection_evidence": "rust/services/flow/src/verification_start.rs",
+        "selection_marker": ".require(&request.organization_id, callback_url)",
+        "submission_evidence": "rust/services/flow/src/verification_submission.rs",
+        "submission_context_marker": '.get("callback_url")',
+        "submission_secret_marker": ".callback_secret",
+        "submission_event_marker": "CallbackEvent::new_with_retention(",
+        "submission_outbox_marker": ".map(|event| event.into_outbox_message_with_max_attempts(options.callback_max_attempts))",
+        "outbox_evidence": "rust/services/flow/src/callback.rs",
+        "outbox_marker": "reply_to: Some(self.destination_url)",
+        "delivery_evidence": "rust/services/flow/src/callback_delivery.rs",
+        "delivery_marker": ".post(&callback.destination_url)",
+        "provider_evidence": "rust/services/auth/src/http_service.rs",
+        "provider_marker": '"/internal/v1/auth/credential-verified"',
+        "provider_registration_marker": "post(credential_verified),",
+        "deployment_evidence": "docker-compose.base.yml",
+        "deployment_service": "flow",
+        "deployment_auth_base_marker": "AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}",
+        "deployment_secret_marker": "FLOW_WEBHOOK_SECRET:",
+        "deployment_binding_marker": "FLOW_CALLBACK_DESTINATIONS:",
+        "deployment_marker": "http://auth:8001/internal/v1/auth/credential-verified?nonce=__MARTY_TOKEN__",
+    }
+)
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     # Both move endpoints matter, including a deleted package that metadata no
@@ -739,6 +871,36 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
             "rust/Cargo.lock"
         ):
             return full(f"workspace manifest or lock: {path}")
+        if path == PurePosixPath("SELFHOST_BUNDLE.md"):
+            # This exact root document is copied into the customer bundle by
+            # marty-selfhost-bundle. Keep the Cargo reverse consumers (notably
+            # Canvas acceptance). Its ownership must remain declared by the
+            # bundle descriptor; an absent/deleted or unowned input fails closed.
+            asset = root / path
+            descriptor = root / "deploy-config/bundles/selfhost.json"
+            if (
+                not asset.is_file()
+                or asset.is_symlink()
+                or not descriptor.is_file()
+                or descriptor.is_symlink()
+                or descriptor.parent.is_symlink()
+                or descriptor.parent.parent.is_symlink()
+                or "marty-selfhost-bundle" not in names
+            ):
+                return full(f"missing known package asset: {path}")
+            try:
+                declared_assets = json.loads(descriptor.read_text(encoding="utf-8"))[
+                    "assets"
+                ]
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+                declared_assets = None
+            if (
+                not isinstance(declared_assets, list)
+                or declared_assets.count(path.as_posix()) != 1
+            ):
+                return full(f"missing known package asset: {path}")
+            direct.add("marty-selfhost-bundle")
+            continue
         if not path.parts or path.parts[0] != "rust":
             # Protocol corpora, workflows, Dockerfiles, scripts, release inputs,
             # and undeclared consumers are not represented by Cargo metadata.

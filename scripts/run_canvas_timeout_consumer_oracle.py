@@ -801,7 +801,11 @@ def run(source=None, response_source=None):
     }
 
 
-def run_native(executable):
+ROUTINE_NATIVE_CASES = frozenset({"body_timeout", "untrusted_certificate"})
+FROZEN_NATIVE_CASE_COUNT = 104
+
+
+def run_native(executable, qualification="1"):
     root = Path(__file__).resolve().parents[1] / "contracts"
     cases = json.loads(
         (root / "canvas-timeout-consumer-scenarios.json").read_text(encoding="utf-8")
@@ -809,9 +813,25 @@ def run_native(executable):
     expected = json.loads(
         (root / "canvas-timeout-consumer-oracle.json").read_text(encoding="utf-8")
     )["cases"]
+    assert qualification in {"0", "1"}, "unknown Canvas qualification tier"
+    assert len(cases) == len(expected) == FROZEN_NATIVE_CASE_COUNT, (
+        "frozen socket corpus changed"
+    )
+    names = [case["name"] for case in cases]
+    assert len(names) == len(set(names)), "duplicate frozen socket case"
+    assert ROUTINE_NATIVE_CASES <= set(names), "routine TLS proof is missing"
+    if qualification == "0":
+        selected = [
+            (case, observation)
+            for case, observation in zip(cases, expected, strict=True)
+            if case["name"] in ROUTINE_NATIVE_CASES
+        ]
+        assert len(selected) == len(ROUTINE_NATIVE_CASES)
+    else:
+        selected = list(zip(cases, expected, strict=True))
     observations = []
     with loopback_tls() as (origin, _, cert):
-        for case in cases:
+        for case, _ in selected:
             environment = dict(os.environ)
             environment["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"] = json.dumps(case)
             environment["MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN"] = origin
@@ -841,10 +861,11 @@ def run_native(executable):
             ]
             assert len(lines) == 1, "native child must emit exactly one observation"
             observations.append(json.loads(lines[0]))
-    assert observations == expected, {
+    selected_expected = [observation for _, observation in selected]
+    assert observations == selected_expected, {
         "mismatches": [
             {"expected": left, "native": right}
-            for left, right in zip(expected, observations, strict=True)
+            for left, right in zip(selected_expected, observations, strict=True)
             if left != right
         ]
     }
@@ -861,9 +882,10 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--source-repository")
     mode.add_argument("--native-executable", type=Path)
+    parser.add_argument("--qualification", choices=("0", "1"), default="1")
     arguments = parser.parse_args()
     if arguments.native_executable:
-        run_native(arguments.native_executable)
+        run_native(arguments.native_executable, arguments.qualification)
         raise SystemExit(0)
     source = (
         subprocess.run(

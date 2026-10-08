@@ -10,9 +10,107 @@ use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 
+// Fixed constructor origins only. Never print a probe argument, fixture
+// payload, Docker identity, or an unrecognized future script as a phase name.
+const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
+    "enqueue_input",
+    "heartbeat_readiness",
+    "issued_review",
+    "json_consumer",
+    "json_depth",
+    "mixed_roster",
+    "operations",
+    "operations_input",
+    "status_provider",
+    "timeout_consumer",
+    "utf7_consumer",
+    "validation_boundary",
+    "worker_concurrent",
+    "worker_facts",
+    "worker_provider_completion",
+    "worker_provider_final",
+    "worker_provider_generation",
+    "worker_provider_recovery",
+    "worker_provider_recovery_first",
+    "worker_provider_signals",
+    "worker_reclaimers",
+    "worker_reclaimers_retry",
+    "worker_rest",
+    "worker_retry",
+    "worker_startup",
+];
+
+fn published_probe_timing_name(script: Option<&str>) -> String {
+    let script = script.unwrap_or_default();
+    if TIMED_PUBLISHED_SCRIPTS.contains(&script) {
+        script.to_owned()
+    } else {
+        "published_probe".to_owned()
+    }
+}
+
+// The pinned probe returns this metadata beside, never inside, its frozen
+// oracle. Validate every label against the checked-in case order before any
+// value can reach CI logs or the short-retention phase artifact.
+fn json_consumer_case_timings(report: &Value) -> Result<Vec<(String, u64)>, String> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-scenarios.json"
+    ))
+    .map_err(|_| "Invalid checked-in JSON consumer scenarios")?;
+    let mut expected = Vec::new();
+    for phase in ["validation", "provider"] {
+        let cases = fixture[phase]
+            .as_array()
+            .ok_or("Invalid JSON consumer case inventory")?;
+        for case in cases {
+            let name = case["name"]
+                .as_str()
+                .ok_or("Invalid JSON consumer case name")?;
+            if name.is_empty()
+                || name.len() > 64
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                return Err("Unsafe JSON consumer case name".into());
+            }
+            expected.push(format!("json_consumer.{phase}.{name}"));
+        }
+    }
+    if expected.len() != 132
+        || expected
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 132
+    {
+        return Err("JSON consumer case inventory changed".into());
+    }
+    let rows = report["ci_case_timing"]
+        .as_array()
+        .ok_or("Missing JSON consumer case timing")?;
+    if rows.len() != expected.len() {
+        return Err("Incomplete JSON consumer case timing".into());
+    }
+    rows.iter()
+        .zip(expected)
+        .map(|(row, name)| {
+            let object = row.as_object().ok_or("Invalid JSON consumer case timing")?;
+            if object.len() != 2 || row["name"].as_str() != Some(name.as_str()) {
+                return Err("Unexpected JSON consumer case timing identity".into());
+            }
+            let duration = row["duration_ms"]
+                .as_u64()
+                .filter(|duration| *duration <= 120_000)
+                .ok_or("Invalid JSON consumer case duration")?;
+            Ok((name, duration))
+        })
+        .collect()
+}
+
 // Only fixed phase labels and elapsed time leave the fixture. Never emit its
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
-struct PhaseTimer {
+pub(super) struct PhaseTimer {
     phase: &'static str,
     name: String,
     started: Instant,
@@ -29,9 +127,31 @@ impl PhaseTimer {
         }
     }
 
-    fn success(mut self) {
+    pub(super) fn success(mut self) {
         self.succeeded = true;
     }
+}
+
+// These are exact test-owned identities, never an oracle value or payload.
+// Time the whole repository matrix, including its template and owned cleanup,
+// so the CI artifact can distinguish it from the surrounding worker target.
+pub(super) enum RepositoryMatrix {
+    RosterMetadata,
+    RosterExpiredBeforeWrite,
+    RosterExpiredDuringLock,
+    ResourceRace,
+    Validation,
+}
+
+pub(super) fn repository_matrix_timer(matrix: RepositoryMatrix) -> PhaseTimer {
+    let name = match matrix {
+        RepositoryMatrix::RosterMetadata => "repository_roster_metadata",
+        RepositoryMatrix::RosterExpiredBeforeWrite => "repository_roster_expired_before_write",
+        RepositoryMatrix::RosterExpiredDuringLock => "repository_roster_expired_during_lock",
+        RepositoryMatrix::ResourceRace => "repository_resource_race",
+        RepositoryMatrix::Validation => "repository_validation",
+    };
+    PhaseTimer::start("scenario", name)
 }
 
 // Matrix names come only from checked-in scenario fixtures after membership
@@ -71,7 +191,8 @@ pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
     // Cargo's compile-time manifest path still has a fixed package suffix.
     if !start.is_absolute()
         || !(start.ends_with("rust/services/issuance")
-            || start.ends_with("rust/crates/canvas-acceptance"))
+            || start.ends_with("rust/crates/canvas-acceptance")
+            || start.ends_with("rust/crates/canvas-worker-acceptance"))
     {
         return None;
     }
@@ -1171,15 +1292,8 @@ impl PublishedDatabase {
         matrix_timing_name: Option<String>,
     ) -> Result<Self, String> {
         // These are fixed constructor origins, not text from a scenario or probe.
-        let timing_name = matrix_timing_name.unwrap_or_else(|| {
-            match oracle.map(|(script, _, _, _)| script) {
-                Some("json_consumer") => "json_consumer",
-                Some("json_depth") => "json_depth",
-                Some("timeout_consumer") => "timeout_consumer",
-                _ => "published_probe",
-            }
-            .to_owned()
-        });
+        let timing_name = matrix_timing_name
+            .unwrap_or_else(|| published_probe_timing_name(oracle.map(|(script, _, _, _)| script)));
         Self::start_probe_with_scope(
             oracle,
             extra_fixture,
@@ -1729,12 +1843,27 @@ impl PublishedDatabase {
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
         if oracle.is_some() {
-            owned.oracle = Some(
-                report
-                    .get(report_key)
-                    .ok_or("Missing published behavior oracle")?
-                    .clone(),
-            );
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published behavior oracle")?;
+            owned.oracle = Some(if script == "json_consumer" {
+                observation
+                    .get("oracle")
+                    .ok_or("Missing published JSON consumer oracle")?
+                    .clone()
+            } else {
+                observation.clone()
+            });
+        }
+        if script == "json_consumer" {
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published JSON consumer diagnostics")?;
+            for (name, duration) in json_consumer_case_timings(observation)? {
+                eprintln!(
+                    "MARTY_CI_PHASE_V1 {{\"phase\":\"oracle_case\",\"name\":\"{name}\",\"duration_ms\":{duration},\"status\":\"ok\"}}"
+                );
+            }
         }
         migration_timing.success();
         Ok(owned)

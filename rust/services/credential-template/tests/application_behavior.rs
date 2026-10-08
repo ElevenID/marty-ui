@@ -400,7 +400,7 @@ async fn internal_metadata_fails_closed_when_the_repository_is_unavailable() {
 async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid4vci() {
     let (_repository, application) = build_application(ControlPlane {
         deny_membership: false,
-        deny_revocation: false,
+        deny_revocation: true,
         deny_trust: false,
     });
     let mut physical = command();
@@ -410,6 +410,7 @@ async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid
     physical.supported_formats = vec![CredentialFormat::IcaoEmrtd];
     physical.credential_payload_format = Some("ICAO_EMRTD".into());
     physical.issuance_protocol = Some("PHYSICAL_DOCUMENT".into());
+    physical.revocation_profile_id = None;
     let draft = application.create_template(physical.clone()).await.unwrap();
     assert_eq!(draft.credential_payload_format, "ICAO_EMRTD");
     assert_eq!(draft.issuance_protocol, "PHYSICAL_DOCUMENT");
@@ -425,6 +426,32 @@ async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid
         .unwrap()
         .configurations
         .is_empty());
+    let mut invalid_revocation = physical.clone();
+    invalid_revocation.revocation_profile_id = Some("revocation-1".into());
+    assert!(application
+        .create_template(invalid_revocation)
+        .await
+        .is_err());
+    let mut blank_revocation = physical.clone();
+    blank_revocation.revocation_profile_id = Some("  ".into());
+    assert!(application.create_template(blank_revocation).await.is_err());
+    let digital_draft = application.create_template(command()).await.unwrap();
+    let converted = application
+        .update_template(UpdateTemplateCommand {
+            user_id: "user-1".into(),
+            template_id: digital_draft.id,
+            patch: UpdateTemplatePatch {
+                supported_formats: Some(vec![CredentialFormat::IcaoEmrtd]),
+                credential_payload_format: Some("ICAO_EMRTD".into()),
+                issuance_protocol: Some("PHYSICAL_DOCUMENT".into()),
+                revocation_profile_id: Some(String::new()),
+                ..UpdateTemplatePatch::default()
+            },
+            now: Utc::now(),
+        })
+        .await
+        .expect("draft conversion clears the digital revocation profile");
+    assert_eq!(converted.revocation_profile_id, None);
     physical.issuance_protocol = Some("OID4VCI_PRE_AUTH".into());
     assert!(application.create_template(physical).await.is_err());
 }

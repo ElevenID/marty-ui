@@ -299,10 +299,8 @@ services:
     networks:
       - marty-network
 
-  # The issuance service and its Alembic history are released by
-  # marty-credentials, not by the Marty UI migration image. Run that exact
-  # released image as a one-shot migration before starting either issuance
-  # process so the deployed schema cannot drift from the service artifact.
+  # Keep the default stack's Python owner until the protected beta transition
+  # qualifies the Rust replacement and its schema migration.
   issuance-migrations:
     image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
     command: ["python", "manage_migrations.py", "upgrade"]
@@ -897,9 +895,6 @@ services:
     environment:
       <<: *native_issuance_grpc_auth
       ISSUANCE_SERVICE_PORT: "8005"
-      # Retain this Python owner only for the two retention and nine physical-
-      # passport routes absent from the native coverage contract. Its migrated
-      # direct DIDComm entrypoints delegate whole requests without fallback.
       DIDCOMM_DELIVERY_OWNER: native
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -1007,9 +1002,8 @@ services:
       - marty-network
     restart: unless-stopped
 
-  # Default owner for every route enumerated by
-  # contracts/issuance-native-coverage.json. The legacy service above remains
-  # reachable for the contract's exact eleven-route remainder.
+  # Rust owner for the native route contract. The protected beta overlay
+  # activates its passport API before the Python alias is retired.
   issuance-native:
     extends:
       file: docker-compose.profile.issuance-native.yml
@@ -1026,7 +1020,7 @@ services:
     command: ["/usr/local/bin/marty-canvas-sync-worker"]
     environment:
       SERVICE_NAME: canvas_sync_worker
-      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Repository initialization verifies opaque OAuth/session material.
       # Keep this identical to issuance so the worker can process jobs.

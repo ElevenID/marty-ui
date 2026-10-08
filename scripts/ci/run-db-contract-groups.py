@@ -37,6 +37,7 @@ TIMING_PHASES = {
     "canvas_serial",
     "canvas_target",
     "image_pull",
+    "oracle_case",
 }
 TIMING_STATUSES = {"ok", "failed"}
 REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
@@ -91,6 +92,28 @@ SCENARIO_NAMES = REST_SCENARIOS | frozenset(
         ).read_text(encoding="utf-8")
     )["cases"]
 )
+JSON_CONSUMER_SCENARIOS = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "contracts/canvas-json-consumer-scenarios.json"
+    ).read_text(encoding="utf-8")
+)
+JSON_CONSUMER_CASE_NAMES = frozenset(
+    f"json_consumer.{phase}.{case['name']}"
+    for phase in ("validation", "provider")
+    for case in JSON_CONSUMER_SCENARIOS[phase]
+)
+# Fixed, test-owned repository matrices; never derive timing identities from
+# scenario payloads or include them in the fixture/cleanup phase allowlists.
+REPOSITORY_MATRIX_NAMES = frozenset(
+    {
+        "repository_roster_metadata",
+        "repository_roster_expired_before_write",
+        "repository_roster_expired_during_lock",
+        "repository_resource_race",
+        "repository_validation",
+    }
+)
 FIXTURE_NAMES = SCENARIO_NAMES
 CONTRACT_NAMES = frozenset(
     {
@@ -125,21 +148,51 @@ CONTRACT_NAMES = frozenset(
         "proof_nonce_postgres_contract",
     }
 )
+# Match the Rust fixture's fixed constructor-origin labels. Do not accept
+# arbitrary probe output, dynamic case text, or paths as timing identities.
+TIMED_PUBLISHED_SCRIPTS = frozenset(
+    {
+        "enqueue_input",
+        "heartbeat_readiness",
+        "issued_review",
+        "json_consumer",
+        "json_depth",
+        "mixed_roster",
+        "operations",
+        "operations_input",
+        "status_provider",
+        "timeout_consumer",
+        "utf7_consumer",
+        "validation_boundary",
+        "worker_concurrent",
+        "worker_facts",
+        "worker_provider_completion",
+        "worker_provider_final",
+        "worker_provider_generation",
+        "worker_provider_recovery",
+        "worker_provider_recovery_first",
+        "worker_provider_signals",
+        "worker_reclaimers",
+        "worker_reclaimers_retry",
+        "worker_rest",
+        "worker_retry",
+        "worker_startup",
+    }
+)
 TIMING_NAMES = {
     "container_startup": frozenset({"postgres_create"}),
     "database_readiness": frozenset({"postgres_ready"}),
     "migration_seed": PUBLISHED_MATRIX_PROBE_NAMES
+    | TIMED_PUBLISHED_SCRIPTS
     | frozenset(
         {
             "published_probe",
-            "json_consumer",
-            "json_depth",
-            "timeout_consumer",
             "worker_validation_template",
         }
     ),
     "fixture_seed": FIXTURE_NAMES,
-    "scenario": SCENARIO_NAMES,
+    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
+    "oracle_case": JSON_CONSUMER_CASE_NAMES,
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
     "contract": CONTRACT_NAMES,
     "contract_phase": frozenset(
@@ -239,7 +292,7 @@ def _canvas_executable() -> Path:
             artifact["executable"]
             for line in source
             if (artifact := json.loads(line)).get("reason") == "compiler-artifact"
-            and "#marty-canvas-acceptance@" in artifact.get("package_id", "")
+            and "#marty-canvas-worker-acceptance@" in artifact.get("package_id", "")
             and artifact.get("target", {}).get("name")
             == "canvas_published_worker_contract"
             and artifact.get("executable") is not None

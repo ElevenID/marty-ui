@@ -4,14 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from scripts import probe_passport_beta_credentials_continuity as proof
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 OLD = "a" * 64
 NEW = "b" * 64
+OLD_NATIVE = "7" * 64
+NATIVE = "8" * 64
 IMAGE_ID = "sha256:" + "c" * 64
 POSTGRES = "d" * 64
 IMAGE = proof.IMAGE_PREFIX + "e" * 64
@@ -28,9 +34,12 @@ def plan():
         "fence_epoch": "7",
         "migration_set_sha256": "3" * 64,
         "fence_verify_sql_sha256": "4" * 64,
-        "issuance_image": IMAGE,
-        "old_container_ids_by_service": {"issuance": OLD},
-        "service_config_hashes": {"issuance": "1" * 64},
+        "services_image": IMAGE,
+        "issuance_image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "6" * 64,
+        "old_container_ids_by_service": {"issuance": OLD,
+                                         "issuance-native": OLD_NATIVE},
+        "service_config_hashes": {"issuance": "1" * 64,
+                                  "issuance-native": "1" * 64},
         "recreate_ingress_last": ["nginx-proxy"],
         "restart_ingress_last": [],
     }
@@ -54,15 +63,18 @@ def record(name, container, *, running=True, image=IMAGE):
     }
 
 
-def harness(monkeypatch, *, routes=None, hidden_route=None, nonce_row="1",
+def harness(monkeypatch, *, capabilities=None, nonce_row="1",
             ingress_running=False, ui_running=False, image=IMAGE):
-    routes = routes or {
-        "/v1/issuance/nonce": {"post": {}},
-        "/v1/issuance/credential": {"post": {}},
+    capabilities = capabilities if capabilities is not None else {
+        "supported": True, "encrypted_artifact_store": True,
+        "bureau_configured": True, "blockers": [],
+        "signer": {"configured": True, "mode": "MANAGED_ISSUER_PROFILE"},
     }
     records = {
         OLD: record("issuance", OLD, running=False),
         NEW: record("issuance", NEW, image=image),
+        OLD_NATIVE: record("issuance-native", OLD_NATIVE, running=False),
+        NATIVE: record("issuance-native", NATIVE, image=image),
         "2" * 64: record("nginx-proxy", "2" * 64,
                          running=ingress_running),
     }
@@ -81,20 +93,12 @@ def harness(monkeypatch, *, routes=None, hidden_route=None, nonce_row="1",
         observed.append(command)
         if command[:3] == ["docker", "image", "inspect"]:
             return json.dumps([{"Id": IMAGE_ID, "RepoDigests": [IMAGE]}])
-        assert command[:3] == ["docker", "exec", NEW]
-        if command[3:5] == ["python", "-c"]:
-            result = [
-                {"path": "/v1/issuance/nonce", "methods": ["POST"]},
-                {"path": "/v1/issuance/credential", "methods": ["POST"]},
-            ]
-            if hidden_route:
-                result.append({"path": hidden_route, "methods": ["GET"]})
-            return json.dumps(result)
+        assert command[:3] in (["docker", "exec", NEW],
+                               ["docker", "exec", NATIVE])
         path = command[-1]
-        if path.endswith("/openapi.json"):
-            return json.dumps({"paths": routes}) + "\n200"
         if path.endswith("/v1/passport/capabilities"):
-            return json.dumps({"detail": "Not Found"}) + "\n404"
+            assert command[2] == NATIVE
+            return json.dumps(capabilities) + "\n200"
         if path.endswith("/ready"):
             return json.dumps({"status": "ready", "service": "issuance-service"}) + "\n200"
         if path.endswith("/v1/issuance/nonce"):
@@ -108,38 +112,35 @@ def harness(monkeypatch, *, routes=None, hidden_route=None, nonce_row="1",
     return runner, owner, observed
 
 
-def test_private_signed_credentials_proves_absence_and_nonce_write(monkeypatch):
+def test_private_signed_rust_issuance_proves_passport_and_nonce_write(monkeypatch):
     runner, owner, observed = harness(monkeypatch)
     result = proof.probe(plan(), runner=runner, owner_verifier=owner)
-    assert result["removed_python_passport_routes_absent"] is True
+    assert result["rust_passport_capabilities_verified"] is True
     assert result["unrelated_issuance_nonce_write_verified"] is True
     assert result["nonce_sha256"] == hashlib.sha256(NONCE.encode()).hexdigest()
     assert NONCE not in json.dumps(result)
     assert [item[-1] for item in observed if item[:2] == ["docker", "exec"]
             and item[3] == "curl"] == [
-        "http://127.0.0.1:8005/openapi.json",
         "http://127.0.0.1:8005/v1/passport/capabilities",
         "http://127.0.0.1:8005/ready",
         "http://127.0.0.1:8005/v1/issuance/nonce",
     ]
 
 
-def test_rejects_retained_python_passport_route_before_write(monkeypatch):
-    routes = {
-        "/v1/issuance/nonce": {"post": {}},
-        "/v1/issuance/credential": {"post": {}},
-        "/v1/passport/capabilities": {"get": {}},
-    }
-    runner, owner, observed = harness(monkeypatch, routes=routes)
-    with pytest.raises(proof.HostProbeError, match="passport route"):
+def test_rejects_unavailable_rust_passport_before_write(monkeypatch):
+    runner, owner, observed = harness(monkeypatch, capabilities={"supported": False})
+    with pytest.raises(proof.HostProbeError, match="Rust passport capabilities"):
         proof.probe(plan(), runner=runner, owner_verifier=owner)
     assert not any(item[-1].endswith("/nonce") for item in observed)
 
 
-def test_rejects_hidden_passport_route_before_write(monkeypatch):
-    runner, owner, observed = harness(
-        monkeypatch, hidden_route="/v1/passport/capabilities")
-    with pytest.raises(proof.HostProbeError, match="ASGI registry"):
+def test_rejects_wrong_passport_signer_before_write(monkeypatch):
+    runner, owner, observed = harness(monkeypatch, capabilities={
+        "supported": True, "encrypted_artifact_store": True,
+        "bureau_configured": True, "blockers": [],
+        "signer": {"configured": True, "mode": "LEGACY_LOCAL_KEY"},
+    })
+    with pytest.raises(proof.HostProbeError, match="Rust passport capabilities"):
         proof.probe(plan(), runner=runner, owner_verifier=owner)
     assert not any(item[-1].endswith("/nonce") for item in observed)
 
@@ -172,7 +173,7 @@ def prior_receipt():
         "transition_txid": "42",
         "issuance_container_id": NEW,
         "issuance_image": IMAGE,
-        "removed_python_passport_routes_absent": True,
+        "rust_passport_capabilities_verified": True,
         "unrelated_issuance_nonce_write_verified": True,
         "nonce_sha256": "0" * 64,
     }
@@ -224,7 +225,7 @@ def test_pretransition_proves_signed_replacement_before_phase_change(monkeypatch
     assert result["schema"] == "marty.passport-beta-credentials-pretransition/v1"
     assert result["fence_epoch"] == "7"
     assert result["issuance_container_id"] == NEW
-    assert result["removed_python_passport_routes_absent"] is True
+    assert result["rust_passport_capabilities_verified"] is True
     assert result["unrelated_issuance_nonce_write_verified"] is True
     assert any(item[-1].endswith("/nonce") for item in observed)
 
@@ -304,8 +305,15 @@ def test_pretransition_receipt_check_rejects_changed_plan(monkeypatch):
     receipt = proof.probe_pretransition(plan(), runner=runner,
                                         pretransition_verifier=fenced)
     changed = plan()
-    changed["issuance_image"] = proof.IMAGE_PREFIX + "a" * 64
+    changed["services_image"] = proof.IMAGE_PREFIX + "a" * 64
     with pytest.raises(proof.HostProbeError, match="signed plan"):
         proof.verify_pretransition_receipt(
             changed, json.dumps(receipt).encode(),
             render_verifier=lambda _plan: {"verified": True})
+
+
+def test_signed_dependency_probe_precedes_one_way_owner_transition():
+    operator = (ROOT / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(
+        encoding="utf-8")
+    assert operator.index("probe-dependencies") < operator.index(
+        "$owner = Invoke-RustOwnerTransition")

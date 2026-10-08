@@ -207,7 +207,7 @@ build_and_push \
   "ui-selfhost" \
   "docker/ui.Dockerfile" \
   "." \
-  "--build-arg UI_VARIANT=selfhost --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA} --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
+  "--target selfhost --build-arg UI_VARIANT=selfhost --build-arg NGINX_CONFIG=nginx.spa.conf --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA} --build-arg MARTY_API_CORE_VERSION=${MARTY_API_CORE_VERSION} --build-arg MARTY_API_CORE_URI=${MARTY_API_CORE_URI} --build-arg MARTY_API_CORE_DIGEST=${MARTY_API_CORE_DIGEST} --build-arg MARTY_BLOG_VERSION=${MARTY_BLOG_VERSION} --build-arg MARTY_BLOG_URI=${MARTY_BLOG_URI} --build-arg MARTY_BLOG_DIGEST=${MARTY_BLOG_DIGEST}"
 
 build_and_push \
   "ui" \

@@ -1,4 +1,4 @@
-use marty_selfhost_bundle::{package, transform, Options, MARKER};
+use marty_selfhost_bundle::{package, package_with_image_lock, transform, Options, MARKER};
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
@@ -76,6 +76,64 @@ fn render(stage: &Path, args: &[String]) -> marty_selfhost_bundle::Result<String
         )
     );
     Ok(format!("services:\n  app:\n    build:\n      context: .\n    image: example:v1\n    volumes:\n      - type: bind\n        source: {}\n        target: /launch.sh\nsecrets:\n  operator:\n    file: {}/${{SECRET_DIR}}/key\n", stage.join("scripts/launch.sh").display(), stage.display()))
+}
+
+#[test]
+fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
+    let root = tempfile::tempdir().unwrap();
+    let mut options = fixture(root.path());
+    let release_path = options.repo.join("release/stack-lock.json");
+    fs::create_dir_all(release_path.parent().unwrap()).unwrap();
+    fs::write(&release_path, r#"{"release":"marty-ui@1.2.3"}"#).unwrap();
+    let lock_path = root.path().join("images.json");
+    let image = format!("ghcr.io/elevenid/app@sha256:{}", "a".repeat(64));
+    let image_lock = json!({
+        "schema": "marty.selfhost-image-lock/v1",
+        "release": "marty-ui@1.2.3",
+        "services": {"app": image}
+    });
+    fs::write(&lock_path, image_lock.to_string()).unwrap();
+    let published = package_with_image_lock(&options, render, &lock_path).unwrap();
+    let compose = fs::read_to_string(published.output.join("docker-compose.yml")).unwrap();
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&compose).unwrap();
+    assert_eq!(
+        parsed["services"]["app"]["image"].as_str(),
+        Some(image.as_str())
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(
+            &fs::read(published.output.join(".marty-selfhost-images.json")).unwrap()
+        )
+        .unwrap(),
+        image_lock
+    );
+
+    options.output = root.path().join("rejected-bundle");
+    options.archive = None;
+    let mut wrong_release = image_lock.clone();
+    wrong_release["release"] = json!("marty-ui@1.2.4");
+    fs::write(&lock_path, wrong_release.to_string()).unwrap();
+    assert!(package_with_image_lock(&options, render, &lock_path)
+        .unwrap_err()
+        .contains("differs from source stack lock"));
+    assert!(!options.output.exists());
+
+    fs::write(&lock_path, image_lock.to_string()).unwrap();
+    let manifest_path = options.repo.join("deploy-config/bundles/selfhost.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["render"] = json!({
+        "env_file": ".env.selfhost.production.example",
+        "compose_files": ["docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"],
+        "output_file": ".marty-selfhost-images.json",
+        "strip_build_blocks": true,
+        "relativize_paths": true,
+        "no_interpolate": true
+    });
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    assert!(package_with_image_lock(&options, render, &lock_path)
+        .unwrap_err()
+        .contains("conflicts with the staged image lock"));
+    assert!(!options.output.exists());
 }
 
 #[test]

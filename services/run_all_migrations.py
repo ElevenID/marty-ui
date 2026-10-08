@@ -52,13 +52,9 @@ from passport_disposable_identity import (  # noqa: E402 - services path is boot
 )
 
 
-# Service configurations
-SERVICES = [
-    {
-        "name": "issuance",
-        "module": "issuance.infrastructure.models",
-    },
-]
+# Issuance migrations are owned by the one-shot Rust issuance service. This
+# shared job prepares schemas and KMS bootstrap before that owner runs.
+SERVICES = []
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
 MARTY_FLOW_ENVELOPE_KEY_ID = "flow-response-envelope-marty-aes256"

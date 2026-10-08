@@ -53,6 +53,7 @@ PROTECTED_FILES = (
     "scripts/probe_passport_beta_fence_direct_writes.py",
     "scripts/probe_passport_beta_host.py",
     "scripts/collect_passport_beta_acceptance.py",
+    "scripts/collect_passport_beta_aggregate_acceptance.py",
     "scripts/prepare_official_beta_release.py",
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
@@ -74,10 +75,19 @@ PROTECTED_FILES = (
     "scripts/probe_passport_beta_rust_owner_flow.py",
     "scripts/probe_passport_beta_aggregate_kms.py",
     "scripts/probe_passport_beta_aggregate_ceremony.py",
+    "scripts/probe_passport_beta_reference_provision.py",
+    "scripts/passport_beta_reference_intents.py",
+    "scripts/passport_supported_flow_references.py",
+    "scripts/passport_supported_flow_start.py",
     "scripts/probe_passport_beta_chain.py",
     "scripts/verify_passport_beta_issuer_profiles.py",
     "scripts/probe_passport_beta_credentials_continuity.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
+    "rust/services/issuance/src/dependency_probe.rs",
+    "rust/services/issuance/src/grpc_client_channel.rs",
+    "rust/services/issuance/src/migration_seed.rs",
+    "rust/services/issuance/migrations/0000_issuance_service_baseline.sql",
+    "rust/services/issuance/migrations/0000_issuance_service_catalog.json",
     "scripts/probe_passport_beta_cutover_snapshot.py",
     "scripts/verify_passport_beta_protected_cutover.py",
     "scripts/collect_passport_python_deletion_cutover.py",
@@ -389,6 +399,72 @@ def require_deletion_lineage(
             "Credentials deletion PR no longer descends from approved head")
 
 
+def merged_deletion_pr(
+    runner: Callable[[list[str]], str] = run,
+) -> tuple[str, str]:
+    """Require the deleted source to be merged into protected Credentials main."""
+    pull = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/pulls/305",
+    ]))
+    base = pull.get("base") if isinstance(pull, dict) else None
+    head = pull.get("head") if isinstance(pull, dict) else None
+    merge_commit = pull.get("merge_commit_sha") if isinstance(pull, dict) else None
+    require(isinstance(pull, dict) and pull.get("number") == 305
+            and pull.get("state") == "closed" and pull.get("merged") is True
+            and isinstance(pull.get("merged_at"), str)
+            and SHA.fullmatch(str(merge_commit)) is not None
+            and isinstance(base, dict) and base.get("ref") == "main"
+            and isinstance(base.get("repo"), dict)
+            and base["repo"].get("full_name") == DELETION_REPOSITORY
+            and isinstance(head, dict) and SHA.fullmatch(str(head.get("sha"))) is not None
+            and isinstance(head.get("repo"), dict)
+            and head["repo"].get("full_name") == DELETION_REPOSITORY,
+            "Credentials passport deletion is not a merged same-repository PR")
+    branch = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/branches/main",
+    ]))
+    main_commit = branch.get("commit") if isinstance(branch, dict) else None
+    require(isinstance(branch, dict) and branch.get("protected") is True
+            and isinstance(main_commit, dict)
+            and SHA.fullmatch(str(main_commit.get("sha"))) is not None,
+            "Protected Credentials main is unavailable")
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
+        f"{merge_commit}...{main_commit['sha']}",
+    ]))
+    require(isinstance(comparison, dict)
+            and comparison.get("status") in ("identical", "ahead")
+            and comparison.get("behind_by") == 0
+            and isinstance(comparison.get("merge_base_commit"), dict)
+            and comparison["merge_base_commit"].get("sha") == merge_commit,
+            "Credentials passport deletion merge is not on protected main")
+    return head["sha"], merge_commit
+
+
+def require_predeletion_signed_image(
+    merge_commit: str, image_source_commit: str,
+    runner: Callable[[list[str]], str] = run,
+) -> None:
+    """Keep passport routes available until the beta Rust owner is live."""
+    require(SHA.fullmatch(merge_commit) is not None
+            and SHA.fullmatch(str(image_source_commit)) is not None,
+            "Signed Credentials source is invalid")
+    require(image_source_commit != merge_commit,
+            "Signed Credentials image must predate passport Python deletion")
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
+        f"{image_source_commit}...{merge_commit}",
+    ]))
+    require(isinstance(comparison, dict)
+            and comparison.get("status") == "ahead"
+            and type(comparison.get("ahead_by")) is int
+            and comparison["ahead_by"] > 0
+            and comparison.get("behind_by") == 0
+            and isinstance(comparison.get("merge_base_commit"), dict)
+            and comparison["merge_base_commit"].get("sha") == image_source_commit,
+            "Signed Credentials image must be the predeletion ancestor")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -443,22 +519,11 @@ def check_authority(
         f"{local_tag_object}\trefs/tags/{tag}",
         f"{head}\trefs/tags/{tag}^{{}}",
     }, "Published annotated release tag differs from protected source")
-    deletion = json.loads(runner([
-        "gh", "api", f"repos/{DELETION_REPOSITORY}/pulls/305",
-    ]))
-    base = deletion.get("base") if isinstance(deletion, dict) else None
-    deletion_head = deletion.get("head") if isinstance(deletion, dict) else None
-    require(isinstance(deletion, dict) and deletion.get("number") == 305
-            and deletion.get("state") == "open" and deletion.get("draft") is True
-            and isinstance(base, dict) and base.get("ref") == "main"
-            and isinstance(base.get("repo"), dict)
-            and base["repo"].get("full_name") == DELETION_REPOSITORY
-            and isinstance(deletion_head, dict)
-            and isinstance(deletion_head.get("repo"), dict)
-            and deletion_head["repo"].get("full_name") == DELETION_REPOSITORY,
-            "Credentials deletion PR is not the approved same-repository draft")
+    deletion_head, deletion_merge_commit = merged_deletion_pr(runner)
+    require_predeletion_signed_image(
+        deletion_merge_commit, source["issuance_source_commit"], runner)
     require_deletion_lineage(approval["credentials_deletion_head"],
-                             deletion_head.get("sha"), runner)
+                             deletion_head, runner)
     target = observer()
     require(target.get("authority") == "discovery_only_requires_protected_baseline"
             and target.get("observation_sha256") == approval["observation_sha256"]

@@ -1047,6 +1047,7 @@ $applicationImageArguments = @{
     OfficialStackRelease = [bool]$OfficialStackRelease
     IssuanceReference = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
     IssuanceDigest = [string]$martyIssuance.Digest
+    UseRustIssuance = [bool]$EnablePassportNative
 }
 if ($OfficialStackRelease) {
     $applicationImageArguments.IssuanceDigest = [string]$officialPlan.images.issuance.digest
@@ -1183,15 +1184,18 @@ if ($EnablePassportNative) {
 if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
-    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_ISSUANCE_IMAGE)) {
+    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage)) {
         Invoke-Checked -FilePath docker -Arguments @("pull", $image)
     }
     Assert-OfficialImageLabels -Reference $env:MARTY_SERVICES_IMAGE -Role "services" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
     Assert-OfficialImageLabels -Reference $migrationImage -Role "migrations" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
     Assert-OfficialImageLabels -Reference $uiImage -Role "UI" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
-    Assert-OfficialImageLabels -Reference $env:MARTY_ISSUANCE_IMAGE -Role "issuance" -ExpectedVersion "v$($martyIssuance.Version)" -ExpectedRevision $martyIssuance.Commit
+    if (-not $EnablePassportNative) {
+        Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
+        Assert-OfficialImageLabels -Reference $env:MARTY_ISSUANCE_IMAGE -Role "issuance" -ExpectedVersion "v$($martyIssuance.Version)" -ExpectedRevision $martyIssuance.Commit
+    }
 }
-else {
+elseif (-not $EnablePassportNative) {
     Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
 }
 foreach ($service in @("postgres", "redis", "openbao", "keycloak", "applicant", "gateway")) {
@@ -1330,13 +1334,15 @@ try {
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
     $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
-    $copyIssuanceUrl = "postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty"
+    $copyIssuanceUrl = if ($EnablePassportNative) { "postgresql://marty:$copyPassword@${copyContainer}:5432/marty" } else { "postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty" }
+    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
+    if (-not $EnablePassportNative) { $rehearsalIssuanceVerify += @("python", "manage_migrations.py", "current") }
     Invoke-ComposeLogged `
         -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
         -FailureMessage "Issuance migration rehearsal failed"
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
+        -Arguments $rehearsalIssuanceVerify `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal-verify.log") `
         -FailureMessage "Issuance migration rehearsal verification failed"
     foreach ($verificationPass in 1..2) {
@@ -1498,13 +1504,15 @@ try {
         $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
         $liveMutationStarted = $true
         Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
-        $liveIssuanceUrl = "postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty"
+        $liveIssuanceUrl = if ($EnablePassportNative) { "postgresql://marty:${martyDbPassword}@postgres:5432/marty" } else { "postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty" }
+        $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations")
+        if (-not $EnablePassportNative) { $liveIssuanceVerify += @("python", "manage_migrations.py", "current") }
         Invoke-ComposeLogged `
             -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations") `
             -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
             -FailureMessage "Live issuance migration failed"
         Invoke-ComposeLogged `
-            -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations", "python", "manage_migrations.py", "current") `
+            -Arguments $liveIssuanceVerify `
             -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
             -FailureMessage "Live issuance migration verification failed"
         Invoke-VerificationMigration -Image $verificationMigrationImage `

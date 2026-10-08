@@ -129,6 +129,12 @@ services:
     environment:
       SERVICE_NAME: issuance
 
+  issuance-native:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
+
   canvas-sync-worker:
     <<: *service-image
     build: !reset null

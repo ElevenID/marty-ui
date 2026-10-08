@@ -5,7 +5,72 @@
 //! path; dependency packages do not receive `CARGO_BIN_EXE_*` from Cargo.
 
 use sqlx::postgres::PgPoolOptions;
+use sqlx::PgPool;
 use std::collections::BTreeSet;
+
+// The pinned migration probe leaves its template database disconnected.
+// Repository-only cases can clone that pristine schema while each case keeps
+// independent mutable state. The surviving container owner removes every
+// clone even if a case panics before its explicit DROP DATABASE.
+async fn published_template_admin(owned: &canvas_published_database::PublishedDatabase) -> PgPool {
+    let mut admin_url = url::Url::parse(&owned.url).unwrap();
+    assert_eq!(admin_url.path(), "/canvas_published_schema_test");
+    admin_url.set_path("/postgres");
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(admin_url.as_str())
+        .await
+        .unwrap()
+}
+
+async fn clone_published_case(
+    owned: &canvas_published_database::PublishedDatabase,
+    admin: &PgPool,
+    case_name: &str,
+) -> (String, PgPool) {
+    // SQL identifiers cannot be bound; generate and validate the name here,
+    // never from a scenario or its payload. The admin pool is on `postgres`,
+    // because a connected template cannot be cloned.
+    let database_name = format!("canvas_validation_{}", uuid::Uuid::new_v4().simple());
+    assert!(
+        database_name.len() < 63
+            && database_name
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE DATABASE \"{database_name}\" TEMPLATE \"canvas_published_schema_test\""
+    )))
+    .execute(admin)
+    .await
+    .unwrap();
+    let mut case_url = url::Url::parse(&owned.url).unwrap();
+    case_url.set_path(&format!("/{database_name}"));
+    let pool = PgPoolOptions::new()
+        .max_connections(4)
+        .connect(case_url.as_str())
+        .await
+        .unwrap();
+    let unseeded_jobs: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(unseeded_jobs, 0, "{case_name}: clone was not pristine");
+    (database_name, pool)
+}
+
+async fn close_published_case(admin: &PgPool, database_name: String, pool: PgPool) {
+    pool.close().await;
+    // No FORCE: a leaked connection fails the test instead of being hidden.
+    // The owned tmpfs container remains the final cleanup boundary.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "DROP DATABASE \"{database_name}\""
+    )))
+    .execute(admin)
+    .await
+    .unwrap();
+}
 
 #[expect(
     dead_code,
@@ -38,7 +103,11 @@ mod canvas_published_borrowed_database;
 #[test]
 fn worker_repository_root_is_independent_of_cargo_package_depth() {
     let root = canvas_published_database::repository_root();
-    for package in ["rust/services/issuance", "rust/crates/canvas-acceptance"] {
+    for package in [
+        "rust/services/issuance",
+        "rust/crates/canvas-acceptance",
+        "rust/crates/canvas-worker-acceptance",
+    ] {
         assert_eq!(
             canvas_published_database::repository_root_from(&root.join(package)),
             Some(root.as_path()),
@@ -517,35 +586,123 @@ mod canvas_worker_effect_expiry;
 #[path = "../../../services/issuance/tests/support/canvas_worker_roster_metadata.rs"]
 mod canvas_worker_roster_metadata;
 
+const ROSTER_DATABASE_CASES: &[&str] = &[
+    "absent",
+    "preexisting",
+    "explicit_null",
+    "stale_target_generation",
+    "wrong_owner",
+    "wrong_attempt",
+    "expired_before_write",
+    "expired_during_lock",
+];
+const ROSTER_FAST_DATABASE_CASES: &[&str] = &[
+    "absent",
+    "preexisting",
+    "explicit_null",
+    "stale_target_generation",
+    "wrong_owner",
+    "wrong_attempt",
+];
+const ROSTER_EXPIRY_DATABASE_CASES: &[&str] = &["expired_before_write", "expired_during_lock"];
+
+#[test]
+fn roster_case_ownership_matches_frozen_obligations() {
+    let obligations: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-roster-metadata-obligations.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        obligations["schema"],
+        "marty.canvas-roster-metadata-obligations/v1"
+    );
+    let fast: Vec<&str> = obligations["fast_shape_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        fast,
+        [
+            "absent",
+            "preexisting",
+            "explicit_null",
+            "worker_only",
+            "heartbeat_only"
+        ]
+    );
+    let database: Vec<&str> = obligations["database_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case.as_str().unwrap())
+        .collect();
+    assert_eq!(database, ROSTER_DATABASE_CASES);
+    assert_eq!(database.len(), 8);
+    assert_eq!(fast.len(), 5);
+    assert_eq!(ROSTER_FAST_DATABASE_CASES, &ROSTER_DATABASE_CASES[..6]);
+    assert_eq!(ROSTER_EXPIRY_DATABASE_CASES, &ROSTER_DATABASE_CASES[6..]);
+}
+
 #[tokio::test]
 async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fences() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    for case in [
-        "absent",
-        "preexisting",
-        "explicit_null",
-        "worker_only",
-        "heartbeat_only",
-        "stale_target_generation",
-        "wrong_owner",
-        "wrong_attempt",
-        "expired_before_write",
-        "expired_during_lock",
-    ] {
-        let owned = canvas_published_database::PublishedDatabase::start()
-            .await
-            .unwrap();
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&owned.url)
-            .await
-            .unwrap();
+    let timing = canvas_published_database::repository_matrix_timer(
+        canvas_published_database::RepositoryMatrix::RosterMetadata,
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = published_template_admin(&owned).await;
+    for case in ROSTER_FAST_DATABASE_CASES {
+        let (database_name, pool) = clone_published_case(&owned, &admin, case).await;
         canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
-        pool.close().await;
-        owned.close().unwrap();
+        close_published_case(&admin, database_name, pool).await;
     }
+    admin.close().await;
+    owned.close_verified().unwrap();
+    timing.success();
+}
+
+async fn run_roster_expiry_case(case: &str, matrix: canvas_published_database::RepositoryMatrix) {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    assert!(ROSTER_EXPIRY_DATABASE_CASES.contains(&case));
+    let timing = canvas_published_database::repository_matrix_timer(matrix);
+    // Each expiry test owns its published tmpfs container and pristine clone.
+    // Neither test changes the 30-second lease or the database clock.
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = published_template_admin(&owned).await;
+    let (database_name, pool) = clone_published_case(&owned, &admin, case).await;
+    canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
+    close_published_case(&admin, database_name, pool).await;
+    admin.close().await;
+    owned.close_verified().unwrap();
+    timing.success();
+}
+
+#[tokio::test]
+async fn worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences() {
+    run_roster_expiry_case(
+        "expired_before_write",
+        canvas_published_database::RepositoryMatrix::RosterExpiredBeforeWrite,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences() {
+    run_roster_expiry_case(
+        "expired_during_lock",
+        canvas_published_database::RepositoryMatrix::RosterExpiredDuringLock,
+    )
+    .await;
 }
 
 #[path = "../../../services/issuance/tests/support/canvas_worker_mixed_roster_replay.rs"]
@@ -971,6 +1128,13 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
+    let timing = canvas_published_database::repository_matrix_timer(
+        canvas_published_database::RepositoryMatrix::ResourceRace,
+    );
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = published_template_admin(&owned).await;
     for name in [
         "platform_reconfigured",
         "application_removed",
@@ -985,18 +1149,13 @@ async fn worker_resource_race_repository_preserves_stale_write_fences() {
         "application_context_changed_wrong_owner",
         "application_context_changed_wrong_attempt",
     ] {
-        let owned = canvas_published_database::PublishedDatabase::start()
-            .await
-            .unwrap();
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&owned.url)
-            .await
-            .unwrap();
+        let (database_name, pool) = clone_published_case(&owned, &admin, name).await;
         canvas_worker_resource_race_replay::assert_repository_errors(&pool, name).await;
-        pool.close().await;
-        owned.close().unwrap();
+        close_published_case(&admin, database_name, pool).await;
     }
+    admin.close().await;
+    owned.close_verified().unwrap();
+    timing.success();
 }
 
 fn assert_worker_provider_https(scenario: &str) {
@@ -1221,6 +1380,9 @@ async fn worker_rest_native_child() {
     owned.close().unwrap();
 }
 
+#[path = "support/canvas_rest_requalification.rs"]
+mod canvas_rest_requalification;
+
 #[tokio::test]
 async fn worker_rest_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
@@ -1233,8 +1395,13 @@ async fn worker_rest_reference_matches_published_process() {
         "../../../../contracts/canvas-worker-rest-oracle.json"
     ))
     .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
+    let observed = owned.oracle.clone().unwrap();
+    assert_eq!(observed, expected);
     owned.close().unwrap();
+    canvas_rest_requalification::emit_after_rest_pass(
+        &canvas_published_database::repository_root(),
+        &observed,
+    );
 }
 
 #[tokio::test]
@@ -1446,51 +1613,17 @@ async fn worker_validation_repository_matches_frozen_errors() {
     // Clone it into a separate database for each case, so we keep independent
     // schemas and frozen observations without starting thirteen PostgreSQL
     // servers or re-running the same published migrations thirteen times.
+    let timing = canvas_published_database::repository_matrix_timer(
+        canvas_published_database::RepositoryMatrix::Validation,
+    );
     let owned =
         canvas_published_database::PublishedDatabase::start_for_worker_validation_template()
             .await
             .unwrap();
-    let mut admin_url = url::Url::parse(&owned.url).unwrap();
-    assert_eq!(admin_url.path(), "/canvas_published_schema_test");
-    admin_url.set_path("/postgres");
-    let admin = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(admin_url.as_str())
-        .await
-        .unwrap();
+    let admin = published_template_admin(&owned).await;
     for case in repository_cases {
         let name = case["name"].as_str().unwrap();
-        // This identifier is generated locally, never from scenario content.
-        // PostgreSQL forbids cloning while the template has another client,
-        // so the admin pool connects to `postgres` instead.
-        let database_name = format!("canvas_validation_{}", uuid::Uuid::new_v4().simple());
-        assert!(
-            database_name.len() < 63
-                && database_name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
-        );
-        // SQL identifiers cannot be bind parameters; the generated identifier
-        // is checked above before the explicit SQL-safety assertion.
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "CREATE DATABASE \"{database_name}\" TEMPLATE \"canvas_published_schema_test\""
-        )))
-        .execute(&admin)
-        .await
-        .unwrap();
-        let mut case_url = url::Url::parse(&owned.url).unwrap();
-        case_url.set_path(&format!("/{database_name}"));
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(case_url.as_str())
-            .await
-            .unwrap();
-        let unseeded_jobs: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM issuance_service.canvas_evidence_sync_jobs")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(unseeded_jobs, 0, "{name}: clone was not pristine");
+        let (database_name, pool) = clone_published_case(&owned, &admin, name).await;
         let fixture =
             canvas_worker_rest_replay::prepare(&pool, "https://127.0.0.1:1", "rest").await;
         let case = canvas_worker_rest_replay::seed_validation_case(&pool, name).await;
@@ -1588,19 +1721,11 @@ async fn worker_validation_repository_matches_frozen_errors() {
                 .unwrap();
         assert_eq!(facts, reference[name]["observations"][0]["facts"], "{name}");
         fixture.assert_preserved(&pool).await;
-        pool.close().await;
-        // Dropping without FORCE catches a leaked test connection rather than
-        // silently terminating it; the owned tmpfs container is still the
-        // final cleanup boundary if an assertion fails.
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
-            "DROP DATABASE \"{database_name}\""
-        )))
-        .execute(&admin)
-        .await
-        .unwrap();
+        close_published_case(&admin, database_name, pool).await;
     }
     admin.close().await;
     owned.close_verified().unwrap();
+    timing.success();
 }
 
 #[tokio::test]

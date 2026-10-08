@@ -30,8 +30,7 @@ RUNTIME = EXTRACTION["RUNTIME"]
 PROJECT = "marty-base-native-render"
 IMAGE = "synthetic.invalid/services@sha256:" + "a" * 64
 
-# These are the ONLY added native environment bindings. Every other native
-# expression is identical to the independently read existing base issuance map.
+# These are the native instance bindings beyond the Rust issuance alias.
 NATIVE_ONLY = {
     "GRPC_SERVICE_TOKEN": "${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}",
     "SERVICE_NAME": "issuance_native",
@@ -55,9 +54,8 @@ CANVAS_PUBLICATION_INPUTS = {
     "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
     "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
 }
-# Exact base legacy-only settings remain on the old owner. Passport provider
-# settings are now explicitly paired on the default-off native owner; no
-# wildcard copying of unrelated KMS or worker secrets is permitted.
+# Alias-only settings include the validated-schema startup mode. The native
+# instance alone runs the Canvas mirror automation loop.
 LEGACY_ONLY = frozenset(
     """
 BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
@@ -236,6 +234,8 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "SERVICE_NAME": "issuance_native",
             "ENVIRONMENT": inputs.get("ENVIRONMENT") or "development",
             "ISSUANCE_GRPC_ENABLED": "true",
+            "CANVAS_MIRROR_WORKER_ENABLED": inputs.get("CANVAS_MIRROR_WORKER_ENABLED")
+            or "false",
             "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
             or "false",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": inputs.get(

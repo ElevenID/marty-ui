@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
+import tempfile
+import threading
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -37,7 +41,7 @@ NATIVE_LOADER = (
 )
 
 HARNESS = r"""
-param([string]$Source, [string]$InputPath)
+param([string]$Source)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $tokens = $null
@@ -60,14 +64,17 @@ function Invoke-Checked {
     throw 'Unexpected mutation in pure helper'
 }
 $env:SERVICE_NAME = 'ambient-must-not-be-used'
-$reports = @()
-$cases = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $InputPath -Raw)
-foreach ($case in $cases) {
+function Invoke-ContractCases {
+  param([string]$InputLine)
+  $reports = @()
+  $cases = ConvertFrom-Json -InputObject $inputLine
+  foreach ($case in $cases) {
     $launch = $null
     $lines = @()
     $mutations = 0
     $caught = $false
     $message = $null
+    $script:ForbiddenCalls = 0
     try {
         switch ($case.operation) {
             'capture' { $launch = New-BetaWorkerRollbackLaunch -ContainerConfig $case.config }
@@ -92,8 +99,15 @@ foreach ($case in $cases) {
         mutations=$mutations; ambient=$env:SERVICE_NAME
         forbidden_calls=$script:ForbiddenCalls
     }
+  }
+  [Console]::Out.WriteLine((ConvertTo-Json -InputObject @($reports) -Depth 30 -Compress))
+  [Console]::Out.Flush()
 }
-ConvertTo-Json -InputObject @($reports) -Depth 30 -Compress
+$inputLine = [Console]::ReadLine()
+while ($null -ne $inputLine) {
+  Invoke-ContractCases -InputLine $inputLine
+  $inputLine = [Console]::ReadLine()
+}
 """
 
 
@@ -103,17 +117,59 @@ def test_ci_requires_executable_launch_contracts() -> None:
     )
 
 
-@pytest.fixture
-def exercise(tmp_path: Path):
+def test_reused_contract_has_no_mutable_shared_scope() -> None:
+    source = CONTRACT.read_text(encoding="utf-8").lower()
+    assert "$script:" not in source
+    assert "$global:" not in source
+
+
+def stop_contract_process(
+    process: subprocess.Popen, reader: threading.Thread | None, *, timeout: float = 5
+) -> int:
+    if process.stdin is not None and not process.stdin.closed:
+        process.stdin.close()
+    try:
+        process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+    if reader is not None:
+        reader.join(timeout=5)
+        assert not reader.is_alive(), "PowerShell response reader did not stop"
+    if process.stdout is not None:
+        process.stdout.close()
+    assert process.returncode is not None
+    return process.returncode
+
+
+def assert_clean_contract_exit(exit_code: int, *, timed_out: bool) -> None:
+    # A response timeout is already the primary failure. The killed helper's
+    # nonzero exit is expected cleanup, not a second assertion to report.
+    if not timed_out:
+        assert exit_code == 0
+
+
+def get_contract_response(process, responses, timed_out, *, timeout: float = 30):
+    try:
+        return responses.get(timeout=timeout)
+    except queue.Empty:
+        if process.poll() is not None:
+            pytest.fail("PowerShell contract helper exited without a response")
+        timed_out[0] = True
+        process.kill()
+        pytest.fail(
+            f"PowerShell contract helper did not respond within {timeout:g} seconds"
+        )
+
+
+@pytest.fixture(scope="module")
+def powershell_contract(tmp_path_factory):
     if not POWERSHELL:
         pytest.skip("PowerShell is required for executable launch rollback contracts")
-    harness = tmp_path / "exercise.ps1"
+    harness = tmp_path_factory.mktemp("beta-worker-launch") / "exercise.ps1"
     harness.write_text(HARNESS, encoding="utf-8")
-
-    def run(cases: list[dict]) -> list[dict]:
-        inputs = tmp_path / "cases.json"
-        inputs.write_text(json.dumps(cases), encoding="utf-8")
-        result = subprocess.run(
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
+        process = subprocess.Popen(
             [
                 str(POWERSHELL),
                 "-NoProfile",
@@ -121,21 +177,111 @@ def exercise(tmp_path: Path):
                 str(harness),
                 "-Source",
                 str(CONTRACT),
-                "-InputPath",
-                str(inputs),
             ],
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errors,
             text=True,
             encoding="utf-8",
-            check=True,
-            timeout=30,
+            bufsize=1,
         )
-        reports = json.loads(result.stdout)
+        responses: queue.Queue[str | None] = queue.Queue()
+
+        def read_responses() -> None:
+            assert process.stdout is not None
+            for line in process.stdout:
+                responses.put(line)
+            responses.put(None)
+
+        reader = threading.Thread(target=read_responses, daemon=True)
+        reader.start()
+        timed_out = [False]
+        try:
+            yield process, responses, errors, timed_out
+        finally:
+            assert_clean_contract_exit(
+                stop_contract_process(process, reader), timed_out=timed_out[0]
+            )
+
+
+@pytest.fixture
+def exercise(powershell_contract):
+    process, responses, errors, timed_out = powershell_contract
+
+    def run(cases: list[dict]) -> list[dict]:
+        assert process.stdin is not None
+        process.stdin.write(json.dumps(cases) + "\n")
+        process.stdin.flush()
+        line = get_contract_response(process, responses, timed_out)
+        if line is None:
+            errors.seek(0)
+            pytest.fail(f"PowerShell contract helper exited: {errors.read()}")
+        reports = json.loads(line)
         assert len(reports) == len(cases)
         assert all(report["forbidden_calls"] == 0 for report in reports)
         return reports
 
     return run
+
+
+def test_timeout_cleanup_preserves_primary_diagnostic() -> None:
+    process = Mock()
+    process.poll.return_value = None
+    responses = queue.Queue()
+    timed_out = [False]
+    with pytest.raises(
+        pytest.fail.Exception, match="did not respond within 0.01 seconds"
+    ):
+        get_contract_response(process, responses, timed_out, timeout=0.01)
+    assert timed_out == [True]
+    process.kill.assert_called_once_with()
+    assert_clean_contract_exit(-9, timed_out=True)
+    with pytest.raises(AssertionError):
+        assert_clean_contract_exit(-9, timed_out=False)
+    exited = Mock()
+    exited.poll.return_value = 1
+    with pytest.raises(pytest.fail.Exception, match="exited without a response"):
+        get_contract_response(exited, queue.Queue(), [False], timeout=0.01)
+    exited.kill.assert_not_called()
+
+
+def test_contract_helper_reaps_an_unresponsive_process() -> None:
+    if not POWERSHELL:
+        pytest.skip("PowerShell is required for helper cleanup")
+    process = subprocess.Popen(
+        [str(POWERSHELL), "-NoProfile", "-Command", "Start-Sleep -Seconds 30"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        stop_contract_process(process, None, timeout=0.1)
+        assert process.poll() is not None
+        assert process.stdin is not None and process.stdin.closed
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def test_contract_helper_does_not_carry_state_across_requests(exercise) -> None:
+    invalid = launch(["/usr/local/bin/marty-canvas-sync-worker"], None)
+    invalid["service_name"] = "synthetic-secret"
+    [rejected] = exercise([{"operation": "validate", "launch": invalid}])
+    [accepted] = exercise(
+        [
+            {
+                "operation": "validate",
+                "launch": launch(["/usr/local/bin/marty-canvas-sync-worker"], None),
+            }
+        ]
+    )
+    assert rejected["caught"] is True
+    assert rejected["mutations"] == 0
+    assert accepted["caught"] is False
+    assert accepted["mutations"] == 1
+    assert accepted["ambient"] == "ambient-must-not-be-used"
+    assert "synthetic-secret" not in json.dumps(accepted)
 
 
 def launch(entrypoint, command, selector=None, processor=None) -> dict:
@@ -930,7 +1076,11 @@ $condition=$conditions[0]
         < report["attach"]
         < report["first_mutation"]
     )
-    assert max(target["end"] for target in report["data_targets"]) < report["fence_guard"] < report["write"]
+    assert (
+        max(target["end"] for target in report["data_targets"])
+        < report["fence_guard"]
+        < report["write"]
+    )
     assert "stop" in report["first_mutation_arguments"]
     targets = {target["variable"]: target for target in report["data_targets"]}
     assert len(targets) == 3

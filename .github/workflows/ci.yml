@@ -39,12 +39,14 @@ jobs:
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
       rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
       openbao: ${{ steps.classify.outputs.openbao }}
+      planner_only: ${{ steps.classify.outputs.planner_only }}
+      rollback_test_only: ${{ steps.classify.outputs.rollback_test_only }}
       release: ${{ steps.classify.outputs.release }}
       verification: ${{ steps.classify.outputs.verification }}
       security: ${{ steps.classify.outputs.security }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -63,12 +65,45 @@ jobs:
           rust_runtime=false
           rust_matrix='["canvas","contracts"]'
           openbao=false
+          planner_only=false
+          rollback_test_only=false
           release=false
           verification=false
           security=false
 
+          # Observation only. Neither this result nor a missing diff may
+          # narrow the mandatory merge-group matrix. This broad candidate
+          # closure precedes any future historical-oracle tier decision.
+          report_historical_input_shadow() {
+            local event="$1" diff_status="$2"
+            shift 2
+            local candidate=unknown path
+            if [[ "$diff_status" == proved ]]; then
+              candidate=false
+              for path in "$@"; do
+                case "$path" in
+                  scripts/*|contracts/*|rust/services/issuance/migrations/*|rust/services/issuance/tests/support/*|rust/crates/canvas-acceptance/tests/*|.github/workflows/ci.yml)
+                    candidate=true
+                    ;;
+                esac
+              done
+            fi
+            printf 'MARTY_CI_HISTORICAL_INPUT_SHADOW_V1 {"event":"%s","diff":"%s","path_count":%s,"candidate":"%s","authority":"shadow-only"}\n' \
+              "$event" "$diff_status" "$#" "$candidate" >&2
+          }
+
           if [[ "${{ github.event_name }}" == merge_group ]]; then
             all=true
+            # Checkout is the exact combined head. A missing base or diff is
+            # an unknown observation, never permission to skip a check.
+            if [[ -n "$BASE_SHA" ]] &&
+               git fetch --no-tags --depth=1 origin "$BASE_SHA" &&
+               git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$RUNNER_TEMP/ci-merge-group-changed-paths"; then
+              mapfile -d '' -t merge_group_changed_files < "$RUNNER_TEMP/ci-merge-group-changed-paths"
+              report_historical_input_shadow merge_group proved "${merge_group_changed_files[@]}"
+            else
+              report_historical_input_shadow merge_group unavailable
+            fi
           elif [[ -z "$BASE_SHA" ]]; then
             all=true
           else
@@ -79,6 +114,42 @@ jobs:
             changed_paths_file="$RUNNER_TEMP/ci-changed-paths"
             git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
             mapfile -d '' -t changed_files < "$changed_paths_file"
+            report_historical_input_shadow pull_request proved "${changed_files[@]}"
+            # Only the two informational planner sources plus their exact
+            # coordination document may use the bounded PR feedback path.
+            # Protected merge groups always retain the complete release job.
+            planner_candidate=false
+            planner_source=false
+            if (( ${#changed_files[@]} > 0 )); then
+              planner_candidate=true
+            fi
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
+                  planner_source=true
+                  ;;
+                docs/architecture-feedback-improvement-plan.md) ;;
+                *) planner_candidate=false ;;
+              esac
+            done
+            if [[ "$planner_candidate" == true && "$planner_source" == true &&
+                  -f scripts/ci/plan_affected_rust.py &&
+                  ! -L scripts/ci/plan_affected_rust.py &&
+                  -f tests/test_plan_affected_rust.py &&
+                  ! -L tests/test_plan_affected_rust.py ]]; then
+              planner_only=true
+            fi
+            # The rollback launch harness is a root-pytest-only source, not
+            # an input to deployed rollback scripts or any service image.
+            # A second path, a deletion, or an untrusted file type falls back
+            # to the existing complete PR plan.
+            if [[ "${{ github.event_name }}" == pull_request &&
+                  ${#changed_files[@]} -eq 1 &&
+                  "${changed_files[0]}" == tests/test_beta_worker_launch_rollback.py &&
+                  -f tests/test_beta_worker_launch_rollback.py &&
+                  ! -L tests/test_beta_worker_launch_rollback.py ]]; then
+              rollback_test_only=true
+            fi
             # A nonempty PR consisting solely of proven test-only leaves has
             # no production Rust or image input. Keep every actual test owner.
             leaf_only=false
@@ -138,13 +209,13 @@ jobs:
                   python=true
                   security=true
                   ;;
-                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
+                contracts/canvas-worker-oracle-producers.json|contracts/canvas-worker-oracle-script-imports.json|contracts/canvas-worker-startup-current-inputs.json|contracts/canvas-worker-rest-current-inputs.json|contracts/canvas-worker-retry-after-current-inputs.json|contracts/canvas-json-depth-current-inputs.json|contracts/canvas-worker-tier-obligations.json|contracts/python-value-fast-obligations.json|contracts/canvas-renewal-profile-obligations.json)
                   # Retain Rust qualification for contract metadata and also
                   # run release-collected evidence/obligation ownership checks.
                   rust=true
                   release=true
                   ;;
-                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
+                tests/test_canvas_worker_oracle_producer_inventory.py|tests/test_canvas_worker_oracle_script_closure.py|tests/test_canvas_worker_startup_input_evidence.py|tests/test_canvas_worker_rest_input_evidence.py|tests/test_canvas_worker_retry_after_input_evidence.py|tests/test_canvas_json_depth_current_inputs.py|tests/test_canvas_worker_validation_tier.py|tests/test_python_value_fast_obligations.py|tests/test_canvas_renewal_profile_obligations.py)
                   # These exact test-only sources run in release pytest. Their
                   # manifest inputs retain the Rust discovery/evidence owner;
                   # implementation scripts, unknown siblings, and corpora
@@ -183,10 +254,22 @@ jobs:
                   # also run in the required release lane, not service images.
                   release=true
                   ;;
-                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_ci_database_groups.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py)
+                tests/test_sanitize_sccache_stats.py|tests/test_oss_boundary.py|tests/test_public_protocol_documentation.py|tests/test_gateway_public_protocol_contract.py|tests/test_public_vector_execution.py|tests/test_ci_database_groups.py|tests/test_canvas_published_preflight.py|tests/test_rust_ownership.py|tests/test_selfhost_packager_reference.py|tests/test_ci_workflow_performance.py)
                   # These test-only policy and fixture guards are collected by
                   # the root release pytest step, with no other CI/image owner.
                   # Their implementation inputs still retain their own lanes.
+                  release=true
+                  ;;
+                tests/test_kubernetes_resolved_runtime.py|tests/test_base_native_runtime_fixture.py|tests/test_envoy_native_configuration.py|tests/test_flow_public_startup.py|tests/test_selfhost_runtime_model.py|tests/test_passport_supported_rust_model.py|tests/test_passport_supported_compose_ownership.py|tests/test_ci_canvas_compile_scope.py)
+                  # These exact fixture-policy test sources run in root release
+                  # pytest. Renderers, acceptance targets, and unknown siblings
+                  # retain the broad source-input selection below.
+                  release=true
+                  ;;
+                tests/test_issuance_rust_candidate.py|tests/test_kubernetes_native_issuance.py|tests/test_shared_rust_service_image.py|tests/test_passport_supported_provisioning_producer.py|tests/test_issuance_passport_native_compose.py|tests/test_conformance_native.py|tests/test_passport_supported_disposable_compose.py|tests/test_gateway_rust_cutover.py)
+                  # These exact model/Compose policy test sources are collected
+                  # by root release pytest, not runtime images or another CI
+                  # job. Production inputs and unknown test siblings stay broad.
                   release=true
                   ;;
                 tests/test_signing_response_reference.py|tests/test_token_rate_reference.py|tests/test_canvas_url_template_reference.py)
@@ -195,10 +278,24 @@ jobs:
                   # the existing Rust selection; capture scripts stay broad.
                   release=true
                   ;;
+                tests/test_beta_worker_launch_rollback.py)
+                  if [[ "$rollback_test_only" == true ]]; then
+                    release=true
+                    security=true
+                  else
+                    all=true
+                  fi
+                  ;;
                 scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
                   # The shadow planner has no runtime/image consumer. Release
                   # pytest owns its unit tests and the report below; real Rust
                   # sources, manifests, and unknown siblings retain Rust CI.
+                  release=true
+                  ;;
+                scripts/ci/canvas_oracle_current_inputs.py)
+                  # Only root release-pytest Canvas input guards import this
+                  # helper. Capture scripts, manifest inputs, and unknown
+                  # script siblings keep their existing broader selection.
                   release=true
                   ;;
                 .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
@@ -249,6 +346,8 @@ jobs:
             printf 'rust_runtime=%s\n' "$rust_runtime"
             printf 'rust_matrix=%s\n' "$rust_matrix"
             printf 'openbao=%s\n' "$openbao"
+            printf 'planner_only=%s\n' "$planner_only"
+            printf 'rollback_test_only=%s\n' "$rollback_test_only"
             printf 'release=%s\n' "$release"
             printf 'verification=%s\n' "$verification"
             printf 'security=%s\n' "$security"
@@ -773,22 +872,41 @@ jobs:
           if [[ "${{ matrix.lane }}" == contracts ]]; then
             cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
           else
+            mkdir -p "$RUNNER_TEMP/rust-build-evidence"
+            host_metrics="$RUNNER_TEMP/rust-build-evidence/bookworm-host-phases.tsv"
+            printf 'phase\telapsed_seconds\texit_code\n' > "$host_metrics"
+            run_host_phase() {
+              local phase="$1" started elapsed exit_code
+              shift
+              started="$(date +%s)"
+              printf 'Bookworm host phase %s started\n' "$phase" >&2
+              if "$@"; then
+                exit_code=0
+              else
+                exit_code="$?"
+              fi
+              elapsed="$(( $(date +%s) - started ))"
+              printf '%s\t%s\t%s\n' "$phase" "$elapsed" "$exit_code" >> "$host_metrics"
+              printf 'Bookworm host phase %s: %ss, exit %s\n' \
+                "$phase" "$elapsed" "$exit_code" >&2
+              return "$exit_code"
+            }
             # Fetch on the host before closing the builder's network. The
             # pinned Bookworm compiler writes to the normal host-visible target,
             # so both host and Bookworm checks consume these exact executables.
-            cargo fetch --locked
+            run_host_phase cargo_fetch cargo fetch --locked
             mapfile -t builder_images < <(awk '$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }' ../services/Dockerfile)
             [[ ${#builder_images[@]} == 1 ]]
             bookworm_builder="${builder_images[0]}"
             [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
-            docker pull "$bookworm_builder"
+            run_host_phase builder_pull docker pull "$bookworm_builder"
             host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
             test -d "$host_cargo_home"
             mkdir -p target
             [[ ! -L target ]]
             [[ "$(realpath target)" == "$GITHUB_WORKSPACE/rust/target" ]]
             [[ -z "$(find target -mindepth 1 -maxdepth 1 -print -quit)" ]]
-            docker run --rm --network none --read-only \
+            run_host_phase container_compile docker run --rm --network none --read-only \
               --user "$(id -u):$(id -g)" \
               --env HOME=/tmp \
               --env "CARGO_HOME=$host_cargo_home" \
@@ -802,24 +920,44 @@ jobs:
               --workdir "$GITHUB_WORKSPACE/rust" \
               "$bookworm_builder" \
               sh -ceu '
+                 metrics="$CARGO_TARGET_DIR/bookworm-compile-phases.tsv"
+                 printf "phase\telapsed_seconds\ttarget_bytes\texit_code\n" > "$metrics"
+                 run_cargo_phase() {
+                   phase="$1"
+                   shift
+                   started="$(date +%s)"
+                   printf "Bookworm Cargo phase %s started\n" "$phase" >&2
+                   if "$@"; then
+                     exit_code=0
+                   else
+                     exit_code="$?"
+                   fi
+                   elapsed="$(( $(date +%s) - started ))"
+                   target_bytes="$(du -sb "$CARGO_TARGET_DIR" | cut -f1)"
+                   printf "%s\t%s\t%s\t%s\n" \
+                     "$phase" "$elapsed" "$target_bytes" "$exit_code" >> "$metrics"
+                   printf "Bookworm Cargo phase %s: %ss, %s target bytes, exit %s\n" \
+                     "$phase" "$elapsed" "$target_bytes" "$exit_code" >&2
+                   return "$exit_code"
+                 }
                 # Resolve shared test features once; the Canvas library is an
                 # empty ownership marker guarded separately from real targets.
-                cargo test --locked --offline -p marty-canvas-acceptance -p marty-issuance-service \
+                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-issuance-service \
                   --lib \
                   --test canvas_published_worker_contract \
                   --test canvas_published_schema_contract \
                   --test canvas_oauth_behavior --test issuance-behavior \
                   --no-run --timings --message-format=json
                 # Retain package-specific feature resolution for each binary.
-                cargo build --locked --offline -p marty-issuance-service \
+                 run_cargo_phase issuance_binaries cargo build --locked --offline -p marty-issuance-service \
                   --bin marty-issuance-service --bin marty-canvas-sync-worker \
                   --message-format=json
-                cargo build --locked --offline -p marty-gateway --bin marty-gateway \
+                 run_cargo_phase gateway_binary cargo build --locked --offline -p marty-gateway --bin marty-gateway \
                   --message-format=json
-                cargo build --locked --offline -p marty-flow --bin marty-flow \
+                 run_cargo_phase flow_binary cargo build --locked --offline -p marty-flow --bin marty-flow \
                   --message-format=json
               ' > "$artifacts"
-            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+            run_host_phase verify_artifacts python3 ../scripts/ci/verify-canvas-test-artifacts.py \
               "$artifacts" target
           fi
       - name: Capture host compiler cache counters after compile
@@ -828,6 +966,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/rust-build-evidence"
+          if test -f rust/target/bookworm-compile-phases.tsv &&
+             test ! -L rust/target/bookworm-compile-phases.tsv &&
+             [[ "$(wc -c < rust/target/bookworm-compile-phases.tsv)" -le 4096 ]]; then
+            cp rust/target/bookworm-compile-phases.tsv \
+              "$RUNNER_TEMP/rust-build-evidence/bookworm-compile-phases.tsv"
+          fi
           stats_file="$RUNNER_TEMP/rust-build-evidence/sccache-stats.json"
           if [[ "${RUSTC_WRAPPER:-}" != sccache ]]; then
             echo 'Optional compiler cache unavailable; no host counters captured.'
@@ -955,6 +1099,13 @@ jobs:
           printf 'MARTY_ENVOY_TEST_IMAGE=%s\n' "$envoy_image_id" >> "$GITHUB_ENV"
           test -x "$MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
           test -x "$MARTY_DIDCOMM_TEST_PYTHON"
+      # These published worker cases use the verified Bookworm executables and
+      # their own pinned fixtures, not the public selfhost image built below.
+      - name: Preflight published worker parity in two isolated groups
+        if: matrix.lane == 'canvas'
+        working-directory: rust
+        shell: bash
+        run: python3 ../scripts/ci/run-db-contract-groups.py preflights
       - name: Expose public image compiler cache credentials
         if: matrix.lane == 'canvas'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -1241,11 +1392,6 @@ jobs:
           cp "$verification_postgres_executable" target/debug/verification-postgres-contract
           cp "$gateway_redis_executable" target/debug/gateway-redis-contract
           test -x target/debug/marty-revocation-profile
-      - name: Preflight published worker parity in two isolated groups
-        if: matrix.lane == 'canvas'
-        working-directory: rust
-        shell: bash
-        run: python3 ../scripts/ci/run-db-contract-groups.py preflights
       - name: Create isolated Rust contract databases
         if: matrix.lane == 'contracts'
         shell: bash
@@ -1270,7 +1416,7 @@ jobs:
             set +e
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
-              cargo test --locked --workspace --exclude marty-canvas-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+              cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")
@@ -1304,6 +1450,10 @@ jobs:
             fi
           done
           exit "$status"
+      - name: Require public protocol vector test execution
+        if: matrix.lane == 'contracts'
+        shell: bash
+        run: python3 -m scripts.ci.check_public_vector_execution "$RUNNER_TEMP/rust-workspace.log"
       - name: Require terminal validation worker fast-owner execution
         if: matrix.lane == 'contracts'
         shell: bash
@@ -1526,7 +1676,7 @@ jobs:
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
           "${executables[0]}" --list | grep -Fx 'canvas_operation_http::tests::native_socket_case: test'
-          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}"
+          "$RUNNER_TEMP/canvas-operation-tls/bin/python" ../scripts/run_canvas_timeout_consumer_oracle.py --native-executable "${executables[0]}" --qualification "$MARTY_CANVAS_FULL_QUALIFICATION"
       - name: Report compiler cache effectiveness
         if: always()
         shell: bash
@@ -1545,14 +1695,31 @@ jobs:
           path: ${{ runner.temp }}/rust-build-evidence/
           if-no-files-found: warn
           retention-days: 2
-      # Upload only after the entire Canvas job succeeds. The Rust test wrote
-      # this file after its live comparison, native replay, and owned cleanup.
+      # Check both records before either upload. A failed overall workflow is
+      # still inadmissible evidence even if this job produced both files.
+      - name: Require paired fresh full-main worker evidence
+        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$RUNNER_TEMP/canvas-startup-fresh-run.json"
+          test -s "$RUNNER_TEMP/canvas-rest-fresh-run.json"
       - name: Preserve fresh full-main startup attestation
         if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: canvas-startup-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/canvas-startup-fresh-run.json
+          if-no-files-found: error
+          retention-days: 14
+      # This separate record is produced only after the unchanged REST oracle
+      # comparison and owned cleanup. It attests a new run, not the old capture.
+      - name: Preserve fresh full-main REST requalification evidence
+        if: success() && matrix.lane == 'canvas' && env.MARTY_CANVAS_FULL_QUALIFICATION == '1' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: canvas-rest-fresh-run-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/canvas-rest-fresh-run.json
           if-no-files-found: error
           retention-days: 14
   rust-lint-policy:
@@ -2295,6 +2462,7 @@ jobs:
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Replay Canvas mirror oracle in exact Credentials release image
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -2312,7 +2480,20 @@ jobs:
           python scripts/capture_canvas_mirror_reference.py \
             .reference/marty-credentials-v0.1.76 \
             --release-image --publication-boundary-reference --check
+      - name: Require workflow policy test collection
+        run: python -m pytest --collect-only -q tests/test_ci_workflow_performance.py
+      - name: Run planner-owned PR checks
+        if: needs.changes.outputs.planner_only == 'true'
+        run: >-
+          python -m pytest tests/test_plan_affected_rust.py
+          tests/test_ci_workflow_performance.py -v --tb=short
+      - name: Run rollback-test-owned PR checks
+        if: needs.changes.outputs.rollback_test_only == 'true'
+        run: >-
+          python -m pytest tests/test_beta_worker_launch_rollback.py
+          tests/test_ci_workflow_performance.py -v --tb=short
       - name: Run repository release checks
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         run: python -m pytest tests -v --tb=short
       - name: Report affected Rust packages in shadow mode
         if: github.event_name == 'pull_request'
@@ -2321,6 +2502,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: python3 scripts/ci/plan_affected_rust.py
       - name: Configure the pinned containerd image store
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
@@ -2331,6 +2513,7 @@ jobs:
               }
             }
       - name: Configure the pinned OCI exporter
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
@@ -2338,11 +2521,13 @@ jobs:
           driver: docker-container
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Require the exact supported OCI backend
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         env:
           MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
           MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
         run: python scripts/check_verification_candidate_backend.py
       - name: Prove the same OCI archive through the future consumer path
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         env:
           MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
         run: >-
@@ -2350,8 +2535,10 @@ jobs:
           tests/test_verification_candidate_backend.py
           tests/test_verification_candidate_workflow.py
       - name: Require a compatible Credentials image for native DIDComm consumers
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         run: python scripts/check_didcomm_native_credentials_release.py
       - name: Require the event-owner migration for native retention
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         run: python scripts/check_issuance_retention_credentials_release.py
 
   test-credential-lifecycle-browser:
@@ -2536,6 +2723,7 @@ jobs:
       RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}
       OPENBAO_SELECTED: ${{ needs.changes.outputs.openbao }}
       RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
+      ROLLBACK_TEST_ONLY: ${{ needs.changes.outputs.rollback_test_only }}
       VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
       SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
       CHANGES_RESULT: ${{ needs.changes.result }}
@@ -2580,9 +2768,16 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
-          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
+          if [[ "$ROLLBACK_TEST_ONLY" == true ]]; then
+            [[ "${{ github.event_name }}" == pull_request &&
+               "$RELEASE_SELECTED" == true && "$SECURITY_SELECTED" == true &&
+               "$UI_SELECTED" == false && "$PYTHON_SELECTED" == false &&
+               "$RUST_SELECTED" == false && "$RUST_RUNTIME_SELECTED" == false &&
+               "$VERIFICATION_SELECTED" == false ]]
+          fi
           # The aggregate matrix result alone cannot prove both lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
@@ -2590,6 +2785,7 @@ jobs:
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac
           if [[ "${{ github.event_name }}" == merge_group ]]; then
+            [[ "$ROLLBACK_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
                "$RUST_MATRIX" == '["canvas","contracts"]' ]]
             for result in "${results[@]}"; do

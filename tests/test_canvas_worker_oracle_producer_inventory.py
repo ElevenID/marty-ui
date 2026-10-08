@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ci.canvas_oracle_current_inputs import json_references
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "contracts"
@@ -223,17 +225,6 @@ def test_preparer_worker_dispatch_guard_rejects_unmapped_runner():
     )
 
 
-def _json_references(value):
-    if isinstance(value, str) and (value.endswith(".json") or ".json#" in value):
-        yield value
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from _json_references(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _json_references(item)
-
-
 def _check_json_pointer(data, fragment, reference):
     assert fragment.startswith("/"), f"Invalid JSON pointer: {reference}"
     for encoded in fragment[1:].split("/"):
@@ -254,7 +245,7 @@ def _check_json_pointer(data, fragment, reference):
 
 def test_json_pointer_references_are_not_silently_ignored():
     reference = "canvas-worker-provider-final-scenarios.json#/initial_job_seed"
-    assert list(_json_references({"initial_history": reference})) == [reference]
+    assert list(json_references({"initial_history": reference})) == [reference]
     _check_json_pointer(
         {"initial_job_seed": ["seed"]}, "/initial_job_seed/0", reference
     )
@@ -296,7 +287,7 @@ def test_canvas_scenario_references_are_complete_and_acyclic():
         assert path.is_file(), f"Missing scenario: {scenario}"
         visiting.add(scenario)
         data = json.loads(path.read_text(encoding="utf-8"))
-        for reference in _json_references(data):
+        for reference in json_references(data):
             filename, marker, fragment = reference.partition("#")
             assert filename.endswith(".json") and Path(filename).name == filename, (
                 f"Unsafe JSON reference: {reference}"

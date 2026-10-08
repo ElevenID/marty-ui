@@ -132,7 +132,7 @@ def assert_registration(source, runner, workflow):
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
     assert '[[ -f "$evidence" ]]' in runner
     assert (
-        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+        '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
         in runner
     )
     jobs = workflow["jobs"]

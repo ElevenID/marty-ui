@@ -939,6 +939,7 @@ async fn timeout_consumer_matches_published_socket_behavior() {
         serde_json::Value::Object(iso2022),
         "published ISO-2022 mappings and state/escape outcomes"
     );
+    eprintln!("PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1");
 }
 
 #[tokio::test]

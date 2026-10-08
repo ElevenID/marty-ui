@@ -89,6 +89,7 @@ use marty_issuance_service::{
     credential_management_postgres::PostgresCredentialManagementRepository,
     credential_postgres::PostgresCredentialRepository,
     credential_renewal::CredentialRenewalService,
+    dependency_probe,
     didcomm_remote_kms::RemoteDidcommKms,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
@@ -152,6 +153,7 @@ use marty_issuance_service::{
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_schema_startup::SchemaStartupMode;
+use sqlx::ConnectOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::transport::Server;
@@ -166,6 +168,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+    let mut arguments = std::env::args().skip(1);
+    match (arguments.next().as_deref(), arguments.next()) {
+        (Some("migrate"), None) => {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let options = database_url
+                .parse::<sqlx::postgres::PgConnectOptions>()?
+                .disable_statement_logging();
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await?;
+            migration::migrate_owned_schema(&pool).await?;
+            pool.close().await;
+            return Ok(());
+        }
+        (Some("probe-dependencies"), None) => {
+            let config = IssuanceServiceConfig::from_env()?;
+            dependency_probe::probe(&config)
+                .await
+                .map_err(std::io::Error::other)?;
+            println!("{{\"schema\":\"marty.issuance-dependency-probe/v1\",\"verified\":true}}");
+            return Ok(());
+        }
+        (None, None) => {}
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "issuance service accepts only migrate or probe-dependencies subcommands",
+            )
+            .into());
+        }
+    }
     validate_embedded_contract().map_err(|error| {
         error!(%error, "invalid embedded issuance migration contract");
         error
@@ -580,7 +614,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &config.organization_grpc_target,
         &config.credential_template_grpc_target,
         &config.revocation_profile_grpc_target,
-        config.credential_template_service_url.clone(),
         config.internal_service_token.as_deref(),
         config.dependency_timeout,
     )?);

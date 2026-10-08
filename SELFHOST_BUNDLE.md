@@ -13,14 +13,23 @@ This bundle is the image-based distribution for the open-source self-host stack.
 
 ## Image contract
 
-The bundle pulls the published self-host images instead of building from source.
+The bundle is an image-only packaging format. Its image roles must be published
+and qualified together before a customer installation; the packager does not
+produce them. The v1.1.231 public release publishes `ui`, `services`, and
+`migrations` OSS images, but not this bundle's `ui-selfhost`, `db-migrate`, or
+`cloudflared-wrapper` roles. Do not treat that release as a ready-to-install
+self-host bundle.
 
 - `SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui`
 - `SELFHOST_IMAGE_TAG=<released-version>`
 
-The UI service uses the published `ui-selfhost` image variant, which excludes the public marketing and blog surface from the self-host product bundle.
+The intended UI role is `ui-selfhost`, excluding the public marketing and blog
+surface. It is not among the v1.1.231 public images.
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
+For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
+images no longer use `SELFHOST_IMAGE_TAG` or `MARTY_ISSUANCE_IMAGE`; the
+qualified image lock supplies those references instead.
 
 Use the image artifacts and verification evidence from the release workflow, then
 stage this bundle with `make package-selfhost-bundle` (Rust 1.95.0 and Docker
@@ -33,6 +42,17 @@ Optional arguments retain directory and ZIP output:
 ```bash
 make package-selfhost-bundle SELFHOST_BUNDLE_ARGS='--output-dir /existing/parent/customer-bundle --archive /existing/parent/customer-release'
 ```
+
+An opt-in `--image-lock /path/to/qualified-images.json` binds every rendered
+Compose service to an exact `registry/path@sha256:<64 lowercase hex>` reference.
+The JSON must use schema `marty.selfhost-image-lock/v1`, a `release` matching
+`release/stack-lock.json`, and a `services` object keyed by every rendered
+Compose service name. Packaging rejects missing/extra services, mutable image
+references, and a release mismatch, then includes the lock in the bundle as
+`.marty-selfhost-images.json`. This is a binding mechanism, not a qualification
+claim: the release process must first verify the image digests, provenance,
+signatures, licensing, and clean installed stack. No current public release
+provides such a qualified self-host image lock.
 
 `--archive` appends `.zip` to its basename. ZIPs contain the bundle directory,
 runtime files and directories. Unix packaging preserves executable modes;
@@ -51,14 +71,29 @@ rendering and removed only from the generated bundle after flattening. The
 extracted ZIP must render without the source checkout. Operator secret files
 remain external; packaging does not load their values.
 
-## First run
+## First run (after a qualified image/bundle release)
 
 1. Copy `.env.selfhost.production.example` to `.env.selfhost.production.local`.
-2. Set `SELFHOST_IMAGE_TAG`, `PUBLIC_DOMAIN`, `PUBLIC_API_URL`, `UI_BASE_URL`, `BAO_ADDR`, `SELFHOST_STATE_DIR`, `CREDENTIAL_LOGIN_POLICY_ID`, and `MARTY_ORG_ADMIN_EMAIL` in `.env.selfhost.production.local`.
+2. For an unpinned bundle, set `SELFHOST_IMAGE_TAG` and
+   `MARTY_ISSUANCE_IMAGE` (the exact matching issuance OCI digest). A
+   digest-pinned bundle gets both image references from its qualified image
+   lock; these two settings may be left unused. Set `PUBLIC_DOMAIN`,
+   `PUBLIC_API_URL`, `UI_BASE_URL`, `BAO_ADDR`, `SELFHOST_STATE_DIR`,
+   `CREDENTIAL_LOGIN_POLICY_ID`, and `MARTY_ORG_ADMIN_EMAIL` in
+   `.env.selfhost.production.local`. For unpinned bundles the issuance image is
+   intentionally empty; Compose rejects it until set. The operator must verify
+   its URI and digest against the qualified stack manifest; Compose does not
+   authenticate that match. The example `FLOW_CALLBACK_DESTINATIONS` maps the
+   default `MARTY_ORG_ID` to Auth's internal Compose-network HTTP callback.
+   Update it whenever the organization ID or internal Auth URL changes; Flow
+   validates the callback registry at startup. External destinations require
+   HTTPS.
 	If the same stack also serves a secondary UI hostname, set `UI_ADDITIONAL_BASE_URLS` and include the same origin in `CORS_ORIGINS`; otherwise social-login callbacks from that host will fall back to `UI_BASE_URL`. Do not add a beta/staging hostname here when it has its own stack and Keycloak.
 3. Copy `docker/secrets/selfhost.example` to a directory outside the bundle and set `SELFHOST_SECRET_DIR` to that directory.
 4. Replace every required secret placeholder file.
 5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write `openbao_service_token`, or place an equivalent least-privilege token in `SELFHOST_SECRET_DIR` yourself:
+
+   The bundled helper runs OpenBao 2.7.1 by its immutable multi-architecture image digest (`quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`). This pins the helper executable, not the external OpenBao server or a qualified installed-bundle release.
 
 ```bash
 BAO_ADDR=https://vault.example.com \
@@ -86,6 +121,25 @@ docker compose --env-file .env.selfhost.production.local ps
 docker compose --env-file .env.selfhost.production.local logs -f edge cloudflared gateway keycloak
 docker compose --env-file .env.selfhost.production.local down
 ```
+
+## No-Canvas composition preview
+
+`docker-compose.selfhost.no-canvas.yml` is an opt-in overlay for testing a
+deployment without the Canvas worker. The default bundle still starts that
+worker, preserving existing Canvas installations on upgrade. To inspect the
+overlay against an extracted bundle, layer it explicitly:
+
+```bash
+docker compose --env-file .env.selfhost.production.local \
+  -f docker-compose.yml -f docker-compose.selfhost.no-canvas.yml \
+  config --hash canvas-sync-worker
+```
+
+Compose should report the worker as disabled. This is a configuration preview,
+not a qualified no-Canvas product: issuance still carries Canvas secret,
+migration, and code dependencies. Do not use the overlay for an existing Canvas
+installation. Production use and a default switch require a pre-up migration
+check, no-Canvas startup/business evidence, and a rehearsed upgrade/rollback.
 
 ## Notes
 

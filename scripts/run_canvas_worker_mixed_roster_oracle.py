@@ -333,12 +333,12 @@ def run(case_name):
                         if jobs[-1]["status"] in {"retry", "dead_letter"}:
                             _raise_job_failure(jobs[-1])
                         if jobs[-1]["status"] == "succeeded":
-                            heartbeat = scalar(
-                                engine,
-                                "SELECT metadata->>'phase' FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest'",
-                            )
-                            if heartbeat == "idle":
-                                return observe()
+                            state, roster = observe()
+                            # The worker can begin scheduling its next cycle
+                            # between a separate idle query and this snapshot.
+                            # Return only the snapshot that records idle.
+                            if state["heartbeat"]["metadata"]["phase"] == "idle":
+                                return state, roster
                     return None
 
                 # Natural due times are intentionally not shortened. The

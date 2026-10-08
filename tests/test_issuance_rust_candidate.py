@@ -912,7 +912,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
             "http": 9,
         "grpc": 0,
         "runtime_modes": ["api", "canvas-sync-worker"],
-        "literal_environment_variables": 15,
+            "literal_environment_variables": 13,
         "dynamic_configuration_lookups": 20,
         "migration_revisions": 46,
         "migration_heads": 1,
@@ -967,8 +967,10 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "DIDCOMM_TLS_CA_FILE",
         "DIDCOMM_UNIVERSAL_RESOLVER_URL",
         "ENVIRONMENT",
+            "GRPC_CA_CERT",
         "GRPC_SERVICE_TOKEN",
         "GRPC_SERVICE_TOKEN_FILE",
+            "GRPC_TLS_CA_CERT",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "ISSUANCE_GRPC_ENABLED",
         "ISSUANCE_GRPC_PORT",
@@ -1007,6 +1009,9 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_MIRROR_WORKER_RETRY_FAILED",
         "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+            "GRPC_INSECURE_ALLOWED",
+            "GRPC_TLS_CLIENT_CERT",
+            "GRPC_TLS_CLIENT_KEY",
     ]
     frozen_environment_variables = set(
         surface["configuration"]["environment_variables"]
@@ -1109,6 +1114,7 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "MARTY_ISSUANCE_IMAGE" in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
     assert "MARTY_ISSUANCE_IMAGE" in compose
+    assert 'command: ["python", "manage_migrations.py", "upgrade"]' in compose
 
 
 def test_public_issued_credential_adapters_cut_over_without_claiming_siblings() -> None:

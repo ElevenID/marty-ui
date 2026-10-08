@@ -165,6 +165,120 @@ class AffectedRustPlannerTests(unittest.TestCase):
             )
             self.assertEqual(result["packages"], ["nested"])
 
+    def test_selfhost_bundle_document_keeps_rust_consumers_in_shadow_plan(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["SELFHOST_BUNDLE.md", "rust/crates/selfhost-bundle/src/lib.rs"],
+            metadata,
+            ROOT,
+        )
+        self.assertFalse(result["all"])
+        self.assertEqual(result["direct"], ["marty-selfhost-bundle"])
+        self.assertIn("marty-canvas-acceptance", result["packages"])
+        self.assertNotIn("marty-canvas-worker-acceptance", result["packages"])
+        self.assertIn("marty-selfhost-bundle", result["packages"])
+
+    def test_selfhost_bundle_document_requires_existing_owned_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root)
+            result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(result["all"])
+            self.assertIn("missing known package asset", result["reason"])
+
+    def test_selfhost_document_owner_must_remain_in_bundle_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root)
+            bundle = {
+                "id": "marty-selfhost-bundle",
+                "name": "marty-selfhost-bundle",
+                "manifest_path": str(root / "rust/crates/selfhost-bundle/Cargo.toml"),
+                "dependencies": [],
+            }
+            metadata["packages"].append(bundle)
+            metadata["workspace_members"].append(bundle["id"])
+            (root / "SELFHOST_BUNDLE.md").write_text("test", encoding="utf-8")
+            descriptor = root / "deploy-config/bundles/selfhost.json"
+            descriptor.parent.mkdir(parents=True)
+
+            descriptor.write_text(
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"]}), encoding="utf-8"
+            )
+            owned = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertFalse(owned["all"])
+            self.assertEqual(owned["direct"], ["marty-selfhost-bundle"])
+
+            for content in (
+                json.dumps({"assets": []}),
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"] * 2}),
+                json.dumps({"assets": "SELFHOST_BUNDLE.md"}),
+                "not JSON",
+            ):
+                with self.subTest(content=content):
+                    descriptor.write_text(content, encoding="utf-8")
+                    result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+                    self.assertTrue(result["all"])
+                    self.assertIn("missing known package asset", result["reason"])
+
+            descriptor.unlink()
+            missing = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(missing["all"])
+            self.assertIn("missing known package asset", missing["reason"])
+
+            target = root / "alternate-descriptor.json"
+            target.write_text(
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"]}), encoding="utf-8"
+            )
+            try:
+                descriptor.symlink_to(target)
+            except OSError:
+                return  # File symlinks are unavailable on this Windows host.
+            linked = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(linked["all"])
+            self.assertIn("missing known package asset", linked["reason"])
+
+    def test_unknown_root_document_still_selects_every_package(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(["OTHER_SELFHOST_BUNDLE.md"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertIn("external or unknown input", result["reason"])
+
+    def test_known_document_does_not_mask_unknown_root_input(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["SELFHOST_BUNDLE.md", "OTHER_SELFHOST_BUNDLE.md"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertIn("external or unknown input", result["reason"])
+
+    def test_symlinked_known_document_stays_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "source.md"
+            target.write_text("test", encoding="utf-8")
+            try:
+                (root / "SELFHOST_BUNDLE.md").symlink_to(target)
+            except OSError:
+                self.skipTest("This host cannot create file symlinks")
+            metadata = self.metadata(root)
+            bundle = {
+                "id": "marty-selfhost-bundle",
+                "name": "marty-selfhost-bundle",
+                "manifest_path": str(root / "rust/crates/selfhost-bundle/Cargo.toml"),
+                "dependencies": [],
+            }
+            metadata["packages"].append(bundle)
+            metadata["workspace_members"].append(bundle["id"])
+            descriptor = root / "deploy-config/bundles/selfhost.json"
+            descriptor.parent.mkdir(parents=True)
+            descriptor.write_text(
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"]}), encoding="utf-8"
+            )
+            result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(result["all"])
+            self.assertIn("missing known package asset", result["reason"])
+
     def test_service_runtime_consumers_fail_closed_beyond_cargo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -407,6 +521,101 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
         )
 
+    def test_flow_applicant_webhook_is_observed_without_narrowing(self) -> None:
+        self.assert_source_bound_service_edge(
+            producer="marty-flow",
+            consumer="marty-applicant",
+            changed="rust/services/flow/src/http_application.rs",
+            markers=(
+                "binding",
+                "runtime_marker",
+                "request_marker",
+                "callsite_marker",
+                "provider_marker",
+                "route_registration_marker",
+                "server_marker",
+            ),
+        )
+
+    def test_organization_device_registration_membership_is_observed_only(self) -> None:
+        self.assert_source_bound_service_edge(
+            producer="marty-organization",
+            consumer="marty-device-registration",
+            changed="rust/services/organization/src/grpc_service.rs",
+            markers=(
+                "binding",
+                "runtime_marker",
+                "registration_marker",
+                "connection_marker",
+                "request_marker",
+                "response_marker",
+                "condition_marker",
+                "callsite_marker",
+                "provider_handler_marker",
+                "provider_marker",
+                "provider_registration_marker",
+            ),
+        )
+
+    def assert_source_bound_service_edge(
+        self, *, producer: str, consumer: str, changed: str, markers: tuple[str, ...]
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan([changed], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == producer and edge["package"] == consumer
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        marker_sources = {
+            "binding": "evidence",
+            "runtime_marker": "evidence",
+            "registration_marker": "evidence",
+            "connection_marker": "request_evidence",
+            "request_marker": "request_evidence",
+            "response_marker": "request_evidence",
+            "condition_marker": "callsite_evidence",
+            "callsite_marker": "callsite_evidence",
+            "provider_handler_marker": "provider_evidence",
+            "provider_marker": "provider_evidence",
+            "provider_registration_marker": "provider_registration_evidence",
+            "route_registration_marker": "route_registration_evidence",
+            "server_marker": "server_evidence",
+        }
+        for marker in markers:
+            source = marker_sources[marker]
+            with self.subTest(producer=producer, consumer=consumer, marker=marker):
+                source_text = (ROOT / edge[source]).read_text(encoding="utf-8")
+                self.assertIn(edge[marker], source_text)
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        service = compose.split(f"\n  {edge['deployment_service']}:\n", 1)[1]
+        service = re.split(r"(?m)^  [a-z][a-z0-9_-]*:\s*$", service, maxsplit=1)[0]
+        self.assertIn(edge["deployment_marker"], service)
+        if "deployment_network_marker" in edge:
+            self.assertIn(edge["deployment_network_marker"], service)
+        if "deployment_consumer_service" in edge:
+            consumer_service = compose.split(
+                f"\n  {edge['deployment_consumer_service']}:\n", 1
+            )[1]
+            consumer_service = re.split(
+                r"(?m)^  [a-z][a-z0-9_-]*:\s*$", consumer_service, maxsplit=1
+            )[0]
+            self.assertIn(edge["deployment_consumer_marker"], consumer_service)
+            self.assertIn(edge["deployment_network_marker"], consumer_service)
+            if "deployment_consumer_absent_marker" in edge:
+                self.assertNotIn(
+                    edge["deployment_consumer_absent_marker"], consumer_service
+                )
+        self.assertNotIn(
+            producer, {dep["name"] for dep in packages[consumer]["dependencies"]}
+        )
+
     def test_published_gateway_upstream_routes_are_observed_without_narrowing(
         self,
     ) -> None:
@@ -489,6 +698,81 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertEqual(
                     producer == "marty-signing-keys", producer in direct_dependencies
                 )
+
+    def test_flow_callback_to_auth_internal_route_is_observed_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/auth/src/http_service.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-auth" and edge["package"] == "marty-flow"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("auth_url_marker", "auth_request_evidence"),
+            ("auth_request_marker", "auth_request_evidence"),
+            ("binding", "evidence"),
+            ("grpc_marker", "grpc_evidence"),
+            ("conditional_marker", "runtime_evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("selection_marker", "selection_evidence"),
+            ("submission_context_marker", "submission_evidence"),
+            ("submission_secret_marker", "submission_evidence"),
+            ("submission_event_marker", "submission_evidence"),
+            ("submission_outbox_marker", "submission_evidence"),
+            ("outbox_marker", "outbox_evidence"),
+            ("delivery_marker", "delivery_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_registration_marker", "provider_evidence"),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in {edge[source] for _, source in markers}
+        }
+
+        def assert_markers() -> None:
+            for marker, source in markers:
+                self.assertIn(edge[marker], sources[edge[source]])
+
+        assert_markers()
+        for marker, source in markers:
+            path = edge[source]
+            original = sources[path]
+            sources[path] = original.replace(edge[marker], "removed-runtime-edge")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_markers()
+            sources[path] = original
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        flow = compose.split("\n  flow:\n", 1)[1].split("\n  issuance:\n", 1)[0]
+        auth = compose.split("\n  auth:\n", 1)[1].split("\n  organization:\n", 1)[0]
+        deployment_markers = (
+            ("deployment_auth_base_marker", "auth"),
+            ("deployment_secret_marker", "flow"),
+            ("deployment_binding_marker", "flow"),
+            ("deployment_marker", "flow"),
+        )
+        deployments = {"auth": auth, "flow": flow}
+
+        def assert_deployment_markers() -> None:
+            for marker, service in deployment_markers:
+                self.assertIn(edge[marker], deployments[service])
+
+        assert_deployment_markers()
+        for marker, service in deployment_markers:
+            original = deployments[service]
+            deployments[service] = original.replace(edge[marker], "removed-runtime-edge")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_deployment_markers()
+            deployments[service] = original
+        self.assertNotIn(
+            "marty-auth", {dep["name"] for dep in packages["marty-flow"]["dependencies"]}
+        )
 
     def test_organization_trust_profile_control_plane_is_observed(self) -> None:
         metadata = planner.cargo_metadata()
@@ -650,26 +934,32 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-presentation-policy",
                 "marty-flow",
                 "marty-gateway",
+                "marty-applicant",
                 "marty-compliance-profile",
                 "marty-deployment-profile",
                 "marty-revocation-profile",
+                "marty-device-registration",
             },
             "marty-credential-template": {
                 "marty-credential-template",
                 "marty-verification-service",
                 "marty-issuance-service",
+                "marty-presentation-policy",
                 "marty-flow",
                 "marty-auth",
                 "marty-gateway",
+                "marty-applicant",
             },
             "marty-revocation-profile": {
                 "marty-revocation-profile",
                 "marty-credential-template",
                 "marty-verification-service",
                 "marty-issuance-service",
+                "marty-presentation-policy",
                 "marty-flow",
                 "marty-auth",
                 "marty-gateway",
+                "marty-applicant",
             },
         }
         for producer, expected in expected_observed_closure.items():
@@ -713,6 +1003,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             encoding="utf-8"
                         )
                         self.assertIn(edge[marker], source_text)
+                if producer == "marty-credential-template":
+                    source_text = (ROOT / edge["request_evidence"]).read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertNotIn("resolve_template_http", source_text)
                 self.assertNotIn(
                     producer,
                     {
@@ -733,6 +1028,104 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             reachable.add(consumer)
                             frontier.append(consumer)
                 self.assertEqual(reachable, expected)
+
+    def test_issuance_applicant_template_http_consumer_is_observed_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/issuance/src/application_template_http.rs"],
+                              metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [edge for edge in result["observed_non_cargo_consumers"]
+                 if edge["producer"] == "marty-issuance-service"
+                 and edge["package"] == "marty-applicant"]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("binding", "evidence"),
+            ("runtime_marker", "evidence"),
+            ("request_call_marker", "request_evidence"),
+            ("request_marker", "request_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("deployment_marker", "deployment_evidence"),
+        )
+        sources = {path: (ROOT / path).read_text(encoding="utf-8")
+                   for path in {edge[source] for _, source in markers}}
+
+        def assert_markers() -> None:
+            for marker, source in markers:
+                self.assertIn(edge[marker], sources[edge[source]])
+
+        assert_markers()
+        compose = sources[edge["deployment_evidence"]]
+        applicant = compose.split("\n  applicant:\n", 1)[1].split(
+            "\n  notification:\n", 1
+        )[0]
+        self.assertIn(edge["deployment_marker"], applicant)
+        for marker, source in markers:
+            path = edge[source]
+            original = sources[path]
+            sources[path] = original.replace(edge[marker], "removed-route-or-binding")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_markers()
+            sources[path] = original
+        assert_markers()
+        self.assertNotIn("marty-issuance-service", {
+            dep["name"] for dep in packages["marty-applicant"]["dependencies"]
+        })
+
+    def test_issuance_presentation_policy_status_http_consumer_is_observed_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/issuance/src/http.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        edges = [edge for edge in result["observed_non_cargo_consumers"]
+                 if edge["producer"] == "marty-issuance-service"
+                 and edge["package"] == "marty-presentation-policy"]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("binding", "evidence"),
+            ("status_marker", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("provider_marker", "provider_evidence"),
+        )
+        sources = {path: (ROOT / path).read_text(encoding="utf-8")
+                   for path in {edge[source] for _, source in markers}}
+
+        def assert_markers() -> None:
+            for marker, source in markers:
+                self.assertIn(edge[marker], sources[edge[source]])
+
+        assert_markers()
+        for marker, source in markers:
+            path = edge[source]
+            original = sources[path]
+            sources[path] = original.replace(edge[marker], "removed-route-or-binding")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_markers()
+            sources[path] = original
+        assert_markers()
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        presentation = compose.split("\n  presentation-policy:\n", 1)[1].split(
+            "\n  deployment-profile:\n", 1
+        )[0]
+        self.assertIn(edge["deployment_marker"], presentation)
+        with self.assertRaises(AssertionError):
+            self.assertIn(
+                edge["deployment_marker"],
+                presentation.replace(edge["deployment_marker"], "removed-binding"),
+            )
+        self.assertNotIn("marty-issuance-service", {
+            dep["name"] for dep in packages["marty-presentation-policy"]["dependencies"]
+        })
 
     def test_three_flow_grpc_runtime_consumers_are_observed_without_narrowing(
         self,
@@ -995,6 +1388,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-issuance-service",
                 "marty-credential-template",
                 "marty-verification-service",
+                "marty-applicant",
             },
         )
 
@@ -1093,6 +1487,56 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     edge["runtime_marker"],
                     (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
                 )
+                if provider == "marty-issuance-service":
+                    markers = (
+                        ("startup_marker", "runtime_evidence"),
+                        ("request_marker", "request_evidence"),
+                        ("request_method_marker", "request_evidence"),
+                        ("request_auth_marker", "request_evidence"),
+                        ("callsite_route_marker", "callsite_evidence"),
+                        ("callsite_marker", "callsite_evidence"),
+                        ("provider_condition_marker", "provider_evidence"),
+                        ("provider_marker", "provider_evidence"),
+                    )
+                    sources = {
+                        path: (ROOT / path).read_text(encoding="utf-8")
+                        for path in {edge[source] for _, source in markers}
+                    }
+
+                    def assert_markers() -> None:
+                        for marker, source in markers:
+                            self.assertIn(edge[marker], sources[edge[source]])
+
+                    assert_markers()
+                    for marker, source in markers:
+                        path = edge[source]
+                        original = sources[path]
+                        sources[path] = original.replace(
+                            edge[marker], "removed-runtime-contract-marker"
+                        )
+                        with self.subTest(marker=marker), self.assertRaises(
+                            AssertionError
+                        ):
+                            assert_markers()
+                        sources[path] = original
+                    assert_markers()
+                    compose = (ROOT / edge["deployment_evidence"]).read_text(
+                        encoding="utf-8"
+                    )
+                    auth_tail = compose.split("\n  auth:\n", 1)[1]
+                    next_service = re.search(
+                        r"(?m)^  [a-z][a-z0-9_-]*:\s*$", auth_tail
+                    )
+                    self.assertIsNotNone(next_service)
+                    auth_service = auth_tail[: next_service.start()]
+                    self.assertIn(edge["deployment_marker"], auth_service)
+                    with self.assertRaises(AssertionError):
+                        self.assertIn(
+                            edge["deployment_marker"],
+                            auth_service.replace(
+                                edge["deployment_marker"], "removed-runtime-binding"
+                            ),
+                        )
 
     def test_shared_and_unowned_inputs_request_full_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

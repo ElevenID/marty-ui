@@ -1,0 +1,17 @@
+{
+  "schema": "marty.canvas-worker-retry-after-current-inputs/v1",
+  "purpose": "Current repository input inventory for the Retry-After capture producer, including its caller-selected REST scenario and transitive shared seed. These hashes do not attest the historical Retry-After corpus, qualify a release, or authorize skipping a live oracle.",
+  "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+  "sha256": {
+    "contracts/canvas-issued-review-scenarios.json": "68b85919047ed359bc7114c17003c5da1b50c045c0e32fa25d5d17dd4dc5865f",
+    "contracts/canvas-worker-rest-scenarios.json": "ab9e1f28a23a4db50982a8e64b01a6fb14d67d47f8c1ead9f255247e8ecb7e52",
+    "contracts/canvas-worker-retry-after-scenarios.json": "d7c571b9c599585c97eca8a0958d9658aa8f0934a9cdce9b2f8e5d56054314e3",
+    "contracts/canvas-worker-startup-scenarios.json": "7459f28b9e878ed8a228375af54fc958e82b597ef4b152f0efd129089133d8f6",
+    "scripts/canvas_worker_https_fixture.py": "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992",
+    "scripts/run_canvas_worker_rest_oracle.py": "4d1a569be3f21242e1055bf48aa1b4c363c82fee2ccbed423d8524f2759a7a08",
+    "scripts/run_canvas_worker_retry_after_oracle.py": "4b466e411e668e70afee14f29a51eb6bc4edd5f70b756aa52a335a8dd12e0ad5",
+    "scripts/run_canvas_worker_single_cycle.py": "0019ef98065d5db1e356a140cd6dfb09bb351211bcd61beb934c82315357f6c0",
+    "scripts/run_canvas_worker_startup_oracle.py": "93147a1fe03cce598c380a5f9ceb1b366699b79063392fb299c52adb33512e37",
+    "scripts/test_canvas_lti_https.py": "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d"
+  }
+}

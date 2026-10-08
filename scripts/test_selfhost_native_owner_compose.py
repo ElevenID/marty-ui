@@ -367,6 +367,14 @@ def assert_models(
             "target": "/run/secrets/openbao_service_token",
         }
     )
+    migration = preserved["services"]["db-migrate"]
+    assert migration["environment"].pop("NOTIFICATION_OPENBAO_TOKEN_FILE") == (
+        "/run/secrets/notification_openbao_token"
+    )
+    assert migration["secrets"].pop() == {
+        "source": "notification_openbao_token",
+        "target": "/run/secrets/notification_openbao_token",
+    }
     assert preserved == before, "Unowned self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(before, sort_keys=True, indent=2).splitlines(keepends=True),

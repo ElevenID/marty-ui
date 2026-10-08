@@ -59,7 +59,8 @@ find_executable() {
   local target="$1"
   local package
   case "$target" in
-    canvas_published_schema_contract|canvas_published_worker_contract) package=marty-canvas-acceptance ;;
+    canvas_published_schema_contract) package=marty-canvas-acceptance ;;
+    canvas_published_worker_contract) package=marty-canvas-worker-acceptance ;;
     *) echo "Unknown Canvas contract target: $target" >&2; return 1 ;;
   esac
   local -a matches=()
@@ -100,6 +101,15 @@ composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
 config_skips=()
 expected_skipped_config_tests=0
+timeout_skips=()
+expected_skipped_timeout_tests=0
+# The historical HTTPX socket corpus is release evidence. Routine CI proves
+# our timeout handling below HTTP and keeps one real native TLS timeout case;
+# an exact-main full CI run is mandatory before any stable stack tag claim.
+if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 && "$mode" == full-after-preflights ]]; then
+  timeout_skips=(--skip timeout_consumer_matches_published_socket_behavior)
+  expected_skipped_timeout_tests=1
+fi
 # The early image-free proof is tied to this composition executable, not the
 # independently compiled worker preflight executable. Missing/stale proof
 # keeps the ordinary full composition run and its completion-marker checks.
@@ -228,6 +238,8 @@ printf '%s\n' "$all_test_names" | grep -Fx 'worker_provider_resource_race_native
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_resource_race_repository_preserves_stale_write_fences: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_effect_transaction_obeys_real_database_lease_expiry: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_reconciliation_preserves_current_fields_and_fences: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_dispatch_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_matches_frozen_published_process: test'
@@ -353,12 +365,12 @@ printf '%s\n' "$worker_tests" | grep -Fx "$serial_test: test"
 serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
 printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
-composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" | grep -c ': test$')
+composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" | grep -c ': test$')
 worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
 parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
-[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]
+[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
 timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # The packaged renewal cases need an actual non-exportable X25519 sender. Keep
 # root authority in this acceptance process; the native binary gets only the
@@ -406,6 +418,11 @@ cleanup_target_logs() {
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
+# A background child's redirection may not create its log before the relay
+# starts. Create both files after registering owned cleanup and before either
+# tail follows one, so a scheduling race cannot drop that target's phase rows.
+: > "$composition_log"
+: > "$worker_log"
 relay_target_timing() {
   local pid="$1" log="$2" end_file="$3"
   # This observer cannot own or obscure the Rust child exit status. Its
@@ -415,7 +432,7 @@ relay_target_timing() {
   fi
 }
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &
 composition_relay_pid=$!
@@ -475,6 +492,11 @@ report_target_timing composition "$composition_started" "$composition_status" "$
 report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
 report_target_logs "$composition_status" "$worker_status"
 (( composition_status == 0 && worker_status == 0 ))
+timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$composition_log" | wc -l || true)
+[[ "$timeout_completions" == "$((1 - expected_skipped_timeout_tests))" ]] || {
+  echo 'Published HTTPX timeout reference did not match the selected qualification tier' >&2
+  exit 1
+}
 if (( expected_skipped_config_tests == 0 )); then
   [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
     echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2

@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::{
     canvas_award_candidate_postgres::{record_fact_and_policy, CanvasSyncCommitFence},
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
+    canvas_roster_patch::roster_cursor_patch,
     canvas_sync_lease::{lease_lost, CanvasSyncLease},
     canvas_sync_processor::{
         application_unavailable, platform_reconfigured, CanvasAuthoritativeObservation,
@@ -587,21 +588,12 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         next_cursor: usize,
         roster_size: usize,
     ) -> Result<(), CanvasSyncProcessingError> {
-        let mut patch = json!({
-            "roster_cursor": next_cursor,
-            "roster_size": roster_size,
-            "roster_cycle_completed_at": (next_cursor == 0).then(Utc::now),
-        });
-        // The worker passes its target snapshot from before touching the run's
-        // heartbeat. Published roster progress restores these two snapshot keys,
-        // including their absence, rather than retaining this run's heartbeat.
-        // Reconcile only those keys: unrelated metadata may have changed since
-        // the snapshot and must retain its current transactional value.
-        for key in ["worker_id", "worker_heartbeat_at"] {
-            if let Some(value) = target.metadata.get(key) {
-                patch[key] = value.clone();
-            }
-        }
+        let patch = roster_cursor_patch(
+            &target.metadata,
+            next_cursor,
+            roster_size,
+            (next_cursor == 0).then(Utc::now),
+        );
         let mut transaction = self.begin_write(target).await?;
         lock_current_scope(&mut transaction, target, resources).await?;
         let result = sqlx::query(

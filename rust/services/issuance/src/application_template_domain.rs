@@ -518,6 +518,8 @@ impl ApplicationTemplateRecord {
 pub struct CredentialTemplateValidationView {
     pub organization_id: String,
     pub status: String,
+    pub credential_payload_format: String,
+    pub issuance_protocol: String,
     pub revocation_profile_id: Option<String>,
     pub claims: BTreeSet<String>,
 }
@@ -611,10 +613,23 @@ pub fn validate_application_template(
                     "Credential Template must be active.",
                 );
             }
-            if value
-                .revocation_profile_id
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
+            let physical_passport = value
+                .credential_payload_format
+                .eq_ignore_ascii_case("icao_emrtd")
+                && value.issuance_protocol == "PHYSICAL_DOCUMENT";
+            if physical_passport && value.revocation_profile_id.is_some() {
+                add(
+                    "credential_template",
+                    "credential_template_id".to_owned(),
+                    "REVOCATION_PROFILE_FORBIDDEN",
+                    "Physical Credential Template must not reference a digital Revocation Profile.",
+                );
+            }
+            if !physical_passport
+                && value
+                    .revocation_profile_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
             {
                 add(
                     "credential_template",
@@ -1249,6 +1264,58 @@ mod tests {
                 && error.field == "approval_policy_set_id"
                 && error.code == "NOT_FOUND"
         }));
+    }
+
+    #[test]
+    fn physical_passport_exempts_only_matching_format_and_protocol_from_digital_revocation() {
+        let record = canonical_request()
+            .into_record("template-1".to_owned(), now())
+            .expect("record");
+        for (format, protocol, requires_profile) in [
+            ("icao_emrtd", "PHYSICAL_DOCUMENT", false),
+            ("icao_emrtd", "OID4VCI", true),
+            ("W3C_VCDM_V2_SD_JWT", "PHYSICAL_DOCUMENT", true),
+            ("W3C_VCDM_V2_SD_JWT", "OID4VCI", true),
+        ] {
+            let view = CredentialTemplateValidationView {
+                organization_id: record.organization_id.clone(),
+                status: "ACTIVE".to_owned(),
+                credential_payload_format: format.to_owned(),
+                issuance_protocol: protocol.to_owned(),
+                revocation_profile_id: None,
+                claims: BTreeSet::new(),
+            };
+            let errors = validate_application_template(
+                &record,
+                &CredentialTemplateValidationState::Found(view),
+                &ApprovalPolicyValidationState::NotRequested,
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .any(|error| error.code == "REVOCATION_PROFILE_REQUIRED"),
+                requires_profile,
+                "{format}/{protocol}"
+            );
+        }
+        for profile in ["revocation-profile-1", "  "] {
+            let view = CredentialTemplateValidationView {
+                organization_id: record.organization_id.clone(),
+                status: "ACTIVE".to_owned(),
+                credential_payload_format: "ICAO_EMRTD".to_owned(),
+                issuance_protocol: "PHYSICAL_DOCUMENT".to_owned(),
+                revocation_profile_id: Some(profile.to_owned()),
+                claims: BTreeSet::new(),
+            };
+            let errors = validate_application_template(
+                &record,
+                &CredentialTemplateValidationState::Found(view),
+                &ApprovalPolicyValidationState::NotRequested,
+            );
+            assert!(errors
+                .iter()
+                .any(|error| error.code == "REVOCATION_PROFILE_FORBIDDEN"));
+        }
     }
 
     #[test]

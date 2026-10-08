@@ -9,6 +9,7 @@ use axum::{
 use uuid::Uuid;
 
 const ALLOWED_METHODS: &str = "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT";
+const PREFLIGHT_VARY: &str = "Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Access-Control-Request-Private-Network";
 
 #[derive(Clone)]
 struct UnhandledHttpFailure;
@@ -111,7 +112,7 @@ fn preflight_response(
             .into_response()
     };
     let headers = response.headers_mut();
-    headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    headers.insert(header::VARY, HeaderValue::from_static(PREFLIGHT_VARY));
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
         HeaderValue::from_static(ALLOWED_METHODS),

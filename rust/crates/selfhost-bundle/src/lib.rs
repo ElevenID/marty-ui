@@ -14,6 +14,8 @@ pub mod transform;
 pub type Result<T> = std::result::Result<T, String>;
 pub const MARKER: &str = ".marty-selfhost-bundle.json";
 const SCHEMA: &str = "marty.selfhost-bundle-files/v1";
+const IMAGE_LOCK_SCHEMA: &str = "marty.selfhost-image-lock/v1";
+const IMAGE_LOCK_NAME: &str = ".marty-selfhost-images.json";
 const MANIFEST: &str = "deploy-config/bundles/selfhost.json";
 const DEFAULT_ASSETS: &[&str] = &[
     "docker-compose.selfhost.prod.yml",
@@ -65,6 +67,13 @@ struct Manifest {
     assets: Vec<String>,
     #[serde(default)]
     render: Render,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImageLock {
+    schema: String,
+    release: String,
+    services: BTreeMap<String, String>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -539,11 +548,24 @@ pub fn package(
     options: &Options,
     renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
 ) -> Result<Published> {
-    package_with_publication(options, renderer, publication::rename_noreplace)
+    package_with_publication(options, renderer, None, publication::rename_noreplace)
+}
+pub fn package_with_image_lock(
+    options: &Options,
+    renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
+    image_lock: &Path,
+) -> Result<Published> {
+    package_with_publication(
+        options,
+        renderer,
+        Some(image_lock),
+        publication::rename_noreplace,
+    )
 }
 fn package_with_publication(
     options: &Options,
     renderer: impl FnOnce(&Path, &[String]) -> Result<String>,
+    image_lock_path: Option<&Path>,
     publish: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
 ) -> Result<Published> {
     check_ancestors(&options.repo)?;
@@ -580,12 +602,22 @@ fn package_with_publication(
         );
     }
     let final_compose = relative(&manifest.render.output_file)?;
+    if image_lock_path.is_some() && final_compose == Path::new(IMAGE_LOCK_NAME) {
+        return Err("Rendered Compose output conflicts with the staged image lock".into());
+    }
     relative(&manifest.render.env_file)?;
     let assets: Vec<_> = manifest
         .assets
         .iter()
         .map(|s| relative(s))
         .collect::<Result<_>>()?;
+    if image_lock_path.is_some()
+        && assets
+            .iter()
+            .any(|asset| asset == Path::new(IMAGE_LOCK_NAME))
+    {
+        return Err("Bundle assets conflict with the staged image lock".into());
+    }
     for asset in &assets {
         check_ancestors(&repo.join(asset))?;
         if output.starts_with(repo.join(asset))
@@ -621,6 +653,33 @@ fn package_with_publication(
     }
     let rendered = renderer(stage.path(), &render_arguments(&manifest.render))?;
     let rendered = relativize(&transform::strip_build_blocks(&rendered), stage.path())?;
+    let rendered = if let Some(path) = image_lock_path {
+        check_ancestors(path)?;
+        let bytes = fs::read(path).map_err(failure("Cannot read image lock"))?;
+        if bytes.len() > 64 * 1024 {
+            return Err("Image lock exceeds the size limit".into());
+        }
+        let lock: ImageLock =
+            serde_json::from_slice(&bytes).map_err(|_| "Image lock is invalid JSON")?;
+        if lock.schema != IMAGE_LOCK_SCHEMA {
+            return Err("Image lock schema is unsupported".into());
+        }
+        let source_lock_path = repo.join("release/stack-lock.json");
+        check_ancestors(&source_lock_path)?;
+        let stack_lock: serde_json::Value = serde_json::from_slice(
+            &fs::read(source_lock_path).map_err(failure("Cannot read source stack lock"))?,
+        )
+        .map_err(|_| "Source stack lock is invalid JSON")?;
+        if stack_lock["release"].as_str() != Some(lock.release.as_str()) {
+            return Err("Image lock release differs from source stack lock".into());
+        }
+        let pinned = transform::pin_service_images(&rendered, &lock.services)?;
+        fs::write(stage.path().join(IMAGE_LOCK_NAME), bytes)
+            .map_err(failure("Cannot stage image lock"))?;
+        pinned
+    } else {
+        rendered
+    };
     transform::validate_strict(&rendered)?;
     fs::write(stage.path().join(final_compose), rendered)
         .map_err(failure("Cannot write rendered Compose"))?;
@@ -742,7 +801,7 @@ mod publication_pipeline_tests {
             package(&options, renderer).unwrap();
             options.replace = true;
             fs::write(options.repo.join("SELFHOST_BUNDLE.md"), "replacement").unwrap();
-            let error = package_with_publication(&options, renderer, |stage, destination| {
+            let error = package_with_publication(&options, renderer, None, |stage, destination| {
                 if directory {
                     fs::create_dir(destination).unwrap();
                 } else {

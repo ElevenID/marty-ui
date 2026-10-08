@@ -2,20 +2,16 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tonic::{
-    metadata::AsciiMetadataValue,
-    transport::{Channel, Endpoint},
-    Code, Request,
-};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 
 use crate::{
     application_template_domain::CredentialTemplateValidationView,
     application_template_service::{ApplicationTemplateCatalog, ApplicationTemplateCatalogError},
-    config::normalize_grpc_target,
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
         TemplateResponse,
     },
+    grpc_client_channel,
 };
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
@@ -88,12 +84,14 @@ impl GrpcApplicationTemplateCatalog {
             .ok_or(ApplicationTemplateCatalogConfigurationError::MissingServiceToken)?
             .parse()
             .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidServiceToken)?;
-        let target = normalize_grpc_target(target)
-            .ok_or(ApplicationTemplateCatalogConfigurationError::InvalidTarget)?;
-        let channel = Endpoint::from_shared(target)
-            .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidTarget)?
-            .connect_timeout(timeout)
-            .timeout(timeout)
+        let channel = grpc_client_channel::endpoint(target, timeout)
+            .map_err(|error| {
+                if error == "invalid gRPC target" {
+                    ApplicationTemplateCatalogConfigurationError::InvalidTarget
+                } else {
+                    ApplicationTemplateCatalogConfigurationError::InvalidTlsConfiguration
+                }
+            })?
             .connect_lazy();
         Ok(Self {
             templates: CredentialTemplateServiceClient::new(channel),
@@ -150,6 +148,8 @@ fn response_view(
     Ok(Some(CredentialTemplateValidationView {
         organization_id: response.organization_id,
         status: response.status,
+        credential_payload_format: response.credential_payload_format,
+        issuance_protocol: response.issuance_protocol,
         revocation_profile_id: non_empty(response.revocation_profile_id),
         claims: response
             .claims
@@ -172,6 +172,8 @@ pub enum ApplicationTemplateCatalogConfigurationError {
     InvalidServiceToken,
     #[error("application-template credential catalog requires a valid gRPC target")]
     InvalidTarget,
+    #[error("application-template credential catalog gRPC TLS configuration is invalid")]
+    InvalidTlsConfiguration,
     #[error("application-template credential catalog dependency timeout must be positive")]
     InvalidTimeout,
 }
@@ -225,6 +227,8 @@ mod tests {
                     id: template_id,
                     organization_id: "org-a".to_owned(),
                     status: "ACTIVE".to_owned(),
+                    credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                    issuance_protocol: "OID4VCI".to_owned(),
                     revocation_profile_id: "revocation-1".to_owned(),
                     claims: vec![ClaimDefinition {
                         name: "member_number".to_owned(),
@@ -372,6 +376,8 @@ mod tests {
             id: "template-1".to_owned(),
             organization_id: "org-a".to_owned(),
             status: "ACTIVE".to_owned(),
+            credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+            issuance_protocol: "OID4VCI".to_owned(),
             revocation_profile_id: " revocation-1 ".to_owned(),
             claims: vec![
                 ClaimDefinition {
@@ -391,10 +397,30 @@ mod tests {
             Ok(Some(CredentialTemplateValidationView {
                 organization_id: "org-a".to_owned(),
                 status: "ACTIVE".to_owned(),
+                credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                issuance_protocol: "OID4VCI".to_owned(),
                 revocation_profile_id: Some("revocation-1".to_owned()),
                 claims: BTreeSet::from(["membership_number".to_owned()]),
             }))
         );
+    }
+
+    #[test]
+    fn response_projection_preserves_physical_passport_public_wire_format() {
+        let response = TemplateResponse {
+            id: "passport-template".to_owned(),
+            organization_id: "org-a".to_owned(),
+            status: "ACTIVE".to_owned(),
+            credential_payload_format: "icao_emrtd".to_owned(),
+            issuance_protocol: "PHYSICAL_DOCUMENT".to_owned(),
+            ..TemplateResponse::default()
+        };
+        let view = response_view("passport-template", response)
+            .expect("valid response")
+            .expect("template");
+        assert_eq!(view.credential_payload_format, "icao_emrtd");
+        assert_eq!(view.issuance_protocol, "PHYSICAL_DOCUMENT");
+        assert_eq!(view.revocation_profile_id, None);
     }
 
     #[test]
@@ -458,6 +484,8 @@ mod tests {
             Ok(Some(CredentialTemplateValidationView {
                 organization_id: "org-a".to_owned(),
                 status: "ACTIVE".to_owned(),
+                credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                issuance_protocol: "OID4VCI".to_owned(),
                 revocation_profile_id: Some("revocation-1".to_owned()),
                 claims: BTreeSet::from(["member_number".to_owned()]),
             }))

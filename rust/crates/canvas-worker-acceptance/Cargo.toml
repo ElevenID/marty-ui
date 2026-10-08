@@ -1,0 +1,51 @@
+[package]
+name = "marty-canvas-worker-acceptance"
+version = "0.1.0"
+description = "Published Canvas worker acceptance tests"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+autotests = false
+
+[dev-dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+ed25519-dalek.workspace = true
+futures-util.workspace = true
+hex.workspace = true
+hmac.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+marty-issuance-service = { path = "../../services/issuance" }
+percent-encoding.workspace = true
+prost.workspace = true
+redis.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zip.workspace = true
+
+[[test]]
+name = "canvas_published_worker_contract"
+path = "tests/canvas_published_worker_contract.rs"
+
+[lints.rust]
+unsafe_code = "forbid"

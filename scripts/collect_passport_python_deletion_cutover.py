@@ -14,7 +14,8 @@ from typing import Any, Callable
 
 try:
     from .check_passport_beta_fence_authority import (
-        protected_file, protected_source, require_deletion_lineage,
+        merged_deletion_pr, protected_file, protected_source,
+        require_deletion_lineage,
     )
     from .probe_passport_beta_cutover_snapshot import digest
     from .probe_passport_beta_fence_direct_writes import verified_unrelated_writes
@@ -22,7 +23,8 @@ try:
     from .verify_passport_beta_protected_cutover import checked_run, command, utc
 except ImportError:
     from check_passport_beta_fence_authority import (
-        protected_file, protected_source, require_deletion_lineage,
+        merged_deletion_pr, protected_file, protected_source,
+        require_deletion_lineage,
     )
     from probe_passport_beta_cutover_snapshot import digest
     from probe_passport_beta_fence_direct_writes import verified_unrelated_writes
@@ -50,22 +52,8 @@ def read(path: Path) -> tuple[dict[str, Any], str]:
 
 
 def pull_head(deletion_head: str) -> None:
-    try:
-        pull = json.loads(command([
-            "gh", "api", "repos/ElevenID/marty-credentials/pulls/305",
-        ]))
-    except ValueError as exc:
-        raise HostProbeError("Python deletion pull request is unavailable") from exc
-    base = pull.get("base") if isinstance(pull, dict) else None
-    head = pull.get("head") if isinstance(pull, dict) else None
-    require(isinstance(pull, dict) and pull.get("number") == 305
-            and pull.get("state") == "open"
-            and isinstance(base, dict) and base.get("ref") == "main"
-            and isinstance(base.get("repo"), dict)
-            and base["repo"].get("full_name") == "ElevenID/marty-credentials"
-            and isinstance(head, dict) and head.get("sha") == deletion_head
-            and isinstance(head.get("repo"), dict)
-            and head["repo"].get("full_name") == "ElevenID/marty-credentials",
+    current_head, _ = merged_deletion_pr(command)
+    require(current_head == deletion_head,
             "Python deletion pull request differs from approved head")
 
 
@@ -263,6 +251,7 @@ def main() -> int:
         require(os.environ.get("GITHUB_SHA") == source,
                 "Final cutover checkout differs from workflow source")
         for relative in ("scripts/collect_passport_python_deletion_cutover.py",
+                         "scripts/check_passport_beta_fence_authority.py",
                          "scripts/probe_passport_beta_cutover_snapshot.py",
                          "scripts/verify_passport_beta_protected_cutover.py"):
             protected_file(relative, run)

@@ -279,6 +279,40 @@ impl CanvasOAuthProvider for NoOAuth {
     }
 }
 
+#[test]
+fn retry_delay_owns_all_normalized_header_shapes_and_backoff_edges() {
+    // The provider parser owns the raw header/date shapes; this policy sees
+    // only their effective hints. Expected delays are literal, not derived
+    // from the production backoff function.
+    for (shape, hint, expected) in [
+        ("http_date_future", Some(60), 60),
+        ("http_date_past", Some(0), 15),
+        ("malformed", Some(0), 15),
+        ("negative", Some(0), 15),
+        ("zero", Some(0), 15),
+        ("clamped", Some(86_400), 86_400),
+        ("huge_integer", Some(86_400), 86_400),
+    ] {
+        assert_eq!(job_retry_delay_seconds(1, hint, 0), expected, "{shape}");
+    }
+
+    for (attempt, hint, jitter, expected) in [
+        (0, None, 0, 15),
+        (1, None, u64::MAX, 20),
+        (2, None, u64::MAX, 40),
+        (3, Some(10), 0, 60),
+        (12, None, u64::MAX, 4_800),
+        (i32::MAX, None, u64::MAX, 4_800),
+        (1, Some(100_000), 0, 86_400),
+    ] {
+        assert_eq!(
+            job_retry_delay_seconds(attempt, hint, jitter),
+            expected,
+            "attempt={attempt}, hint={hint:?}, jitter={jitter}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn retry_hint_reaches_the_actual_worker_failure_port() {
     let now = Utc::now();

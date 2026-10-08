@@ -38,6 +38,11 @@ def models():
     # Small independently spelled models test the comparator, not Compose.
     before = {
         "services": {
+            "db-migrate": {
+                "environment": {"ENVIRONMENT": "production"},
+                "secrets": [{"source": "openbao_service_token",
+                             "target": "/run/secrets/openbao_service_token"}],
+            },
             "issuance": {
                 "environment": {
                     "ISSUANCE_AUTH_SESSION_TTL_MINUTES": GATE["SHARED_SETTINGS"][
@@ -95,6 +100,13 @@ def models():
             "target": "/run/secrets/signing_keys_openbao_token",
         }
     ]
+    after["services"]["db-migrate"]["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = (
+        "/run/secrets/notification_openbao_token"
+    )
+    after["services"]["db-migrate"]["secrets"].append({
+        "source": "notification_openbao_token",
+        "target": "/run/secrets/notification_openbao_token",
+    })
     after["services"]["flow"]["environment"].update(
         ISSUANCE_GRPC_TARGET="issuance-native:9005",
         ISSUANCE_API_KEY_FILE="/run/secrets/issuance_api_key",
@@ -211,6 +223,20 @@ def test_passport_consumer_additions_are_closed(models, owner, key):
     before, after = models
     after["services"][owner]["environment"][key] = "unreviewed"
     with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize("fault", ["token-path", "secret-source", "missing-secret"])
+def test_production_migration_notification_identity_is_closed(models, fault):
+    before, after = models
+    migration = after["services"]["db-migrate"]
+    if fault == "token-path":
+        migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = "/other"
+    elif fault == "secret-source":
+        migration["secrets"][-1]["source"] = "openbao_service_token"
+    else:
+        migration["secrets"].pop()
+    with pytest.raises((AssertionError, KeyError, IndexError)):
         GATE["assert_models"](before, after)
 
 

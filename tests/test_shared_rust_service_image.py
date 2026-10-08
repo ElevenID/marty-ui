@@ -194,6 +194,21 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         warm_build["with"]["cache-to"]
         == "type=gha,mode=max,scope=marty-ui-public-services,ignore-error=true"
     )
+    release_warm = next(
+        step
+        for step in warmer["steps"]
+        if step.get("name") == "Warm public service release-binary compiler outputs"
+    )
+    assert warmer["steps"].index(warm_build) < warmer["steps"].index(release_warm)
+    assert release_warm["uses"] == warm_build["uses"]
+    release_config = release_warm["with"]
+    assert release_config["file"] == "services/Dockerfile"
+    assert release_config["target"] == "rust-service-builder"
+    assert release_config["cache-from"] == "type=gha,scope=marty-ui-public-services"
+    assert release_config["secret-envs"] == warm_build["with"]["secret-envs"]
+    assert release_config["push"] is False
+    assert release_config["provenance"] is False
+    assert "cache-to" not in release_config
 
 
 def assert_closed_rust_dispatch(script: str) -> None:

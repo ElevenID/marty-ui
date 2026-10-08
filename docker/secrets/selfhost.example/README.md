@@ -35,6 +35,10 @@ Required files:
 - `applicant_workload_client_key`
 - `verification_workload_client_cert`
 - `verification_workload_client_key`
+- `deployment_profile_workload_client_cert`
+- `deployment_profile_workload_client_key`
+- `compliance_profile_workload_client_cert`
+- `compliance_profile_workload_client_key`
 - `flow_application_event_hmac_key`
 - `flow_webhook_secret`
 - `token_hmac_key`

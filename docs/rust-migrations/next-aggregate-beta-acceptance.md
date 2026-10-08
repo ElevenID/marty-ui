@@ -100,25 +100,33 @@ The final beta release must come from the source after Python passport deletion.
    `scripts/run-passport-beta-aggregate-deploy.ps1` from a clean released
    worktree. Supply the signed stack manifest and the attested fence,
    maintenance, and native migration receipts. Supply an absolute
-   `-ApplicationFile` outside protected source with the pilot organization's
-   `organization_id`, managed `issuer_did`, `application_template_id`,
-   `credential_template_id`, and `delivery_destination_profile_id`. The
+   `-ApplicationFile` as an absolute output path outside protected source. The
+   operator creates and verifies the pilot organization's Credential Template,
+   Application Template, and physical destination through staged Gateway while
+   the passport write fence remains `fully_fenced`, then durably writes the
+   selected IDs and managed issuer DID to that file. The
    operator also needs `-IssuerChainFile` and `-IssuerCeremonyFile` with the
    selected managed CSCA/DSC identities and exact certificate request, plus
    distinct `-CscaSessionFile` and `-DscSessionFile` cookies with the grants
    described above. The selected DIDs must be local path-scoped
    `did:web:beta.elevenidllc.com:orgs:...` identities. The operator checks
    the staged Signing Keys `PUBLIC_DOMAIN` before sealing the ceremony intent.
-   The operator creates the profiles and certificates through normal Gateway
+   The operator creates the DSC issuer profile before the Credential Template,
+   then completes the CSCA/DSC certificate ceremony through normal Gateway
    authorization while the public edge remains closed.
-   The operator also needs an absolute `-FlowFile` with the pilot organization's
-   active physical `flow_definition_id` and matching issuer DID, and an
+   Supply `-FlowFile` as an absolute output path outside protected source. After
+   the Rust owner transition, the operator creates and activates the physical
+   Flow through staged Gateway and durably writes its ID. It also needs an
    absolute `-SessionFile` containing a governed beta operator Cookie value
-   with `flow-definition:view`, `credential-template:view`,
+   with Credential Template, Application Template, and destination create/view/
+   activate grants, `flow-definition:create`, `flow-definition:activate`,
+   `flow-definition:view`, `credential-template:view`,
    `flow-instance:start`, and `flow-instance:view` permissions. Keep
-   all private inputs outside protected source. Start signed Gateway on its
-   verified loopback listener while the public edge is stopped, and validate
-   the live Flow definition, references and issuer before the transition.
+   all private inputs and generated outputs outside protected source. Start
+   signed Gateway on its verified loopback listener while the public edge is
+   stopped. Durable reference intents prevent replaying an uncertain creation
+   or activation POST; unresolved writes keep ingress closed. Validate the live
+   Flow definition, references and issuer after the transition.
    After the transition, create a synthetic DRAFT job through signed Rust
    issuance and a physical Flow through private Gateway, then match both
    responses to durable Flow and encrypted job rows. Durable attempt and
