@@ -6228,6 +6228,9 @@ accepted. Ruff and 134 focused Canvas/client-auth tests passed, including
 new direct private-field and nested/PEM rejection cases. This closes one
 specific JSON ingress; other JSON-bearing writes and assembled row-level
 inspection remain open K10 work.
+Follow-up commit `5d29f4b` also detects JSON-encoded private JWKs in JWKS
+extension strings, bounds recursive inspection, and preserves ordinary public
+extensions. Ruff and the same 134 focused tests passed after that correction.
 The device-registration write path calls Core's
 `validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
 rejects other DER shapes, and binds the claimed key identifier to its public
