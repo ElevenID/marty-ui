@@ -6172,15 +6172,28 @@ selected `marty-crypto` JWK vector integration test passed all five tests at
 the pinned fork head; this is a targeted regression gate, not yet the complete Core PR
 matrix or published-artifact proof.
 The post-repin Core workspace test selection (all crates except the native ZKP
-and bindings lanes, with `test-fixtures`) is running against `584a0d1` and
-the merged current-main CI selector; record its result before claiming an
-assembled local Core regression matrix.
+and bindings lanes, with `test-fixtures`) ran against `584a0d1` and the merged
+current-main CI selector. Its first run exposed the test-only JWK boundary
+case described below.
 That first full selection found one `marty-oid4vci` test still deserializing
 a private-shaped JWK to then assert batch-input rejection. The hardened fork
 now rejects it at deserialization, so the test now asserts that earlier
 fail-closed boundary while retaining its positive public JWK input assertions.
-The correction is Core commit `d56c3fe`; its focused test passes. The full
-workspace rerun log contains no reported failure and reaches the final test
-targets, but its process exit was lost across session recovery; repeat or
-otherwise capture an authoritative successful exit before claiming the broad
-Core workspace matrix. No production signing or fallback behavior was restored.
+The correction is Core commit `d56c3fe`; its focused test passes. The exact
+full workspace selection was repeated with a captured process exit of 0 and
+no reported failures in
+`artifacts/kms-core-584a-workspace-final-2026-10-08.log`. Native ZKP and
+bindings remain separate qualification lanes. No production signing or
+fallback behavior was restored.
+
+2026-10-08 K10 assembled source inventory: across current UI Rust service SQL
+and migration sources, the key-named persisted tables found are
+`device_registration_service.device_registration_keys` (public DER, public
+key identifier, version/state) and `organization_service.api_keys` (prefix,
+SHA-256 hash, scopes/state). The notification webhook schema contains a
+Transit ciphertext envelope and four-character hint, not a private key.
+No private-key or JWK-bearing column was found in the currently enumerated
+native service DDL. This is source-level evidence only. The assembled fresh
+PostgreSQL database, every legacy initialization entrypoint, JSON payload
+writes and shipped release artifacts still need K10 qualification before
+calling the product database free of private-key storage.
