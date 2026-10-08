@@ -12,6 +12,14 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_selfhost_native_owner_compose.py"))
 
 
+def test_selfhost_openbao_requires_transactional_raft_storage():
+    config = (ROOT / "docker/openbao-selfhost.hcl").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "docker/openbao-selfhost-init.sh").read_text(encoding="utf-8")
+    assert 'storage "raft" {' in config
+    assert 'storage "file" {' not in config
+    assert "bao operator raft list-peers" in bootstrap
+
+
 def test_reference_identity_and_descriptor_closure():
     GATE["assert_input_inventory"]()
     data = (ROOT / GATE["FROZEN"]).read_text(encoding="utf-8").encode()
@@ -54,10 +62,36 @@ def models():
                 "environment": {"ISSUANCE_GRPC_TARGET": "issuance:9005"},
                 "secrets": [],
             },
+            "signing-keys": {
+                "environment": {
+                    "BAO_TOKEN_FILE": "/run/secrets/openbao_service_token"
+                },
+                "secrets": [
+                    {
+                        "source": "openbao_service_token",
+                        "target": "/run/secrets/openbao_service_token",
+                    }
+                ],
+            },
+        },
+        "secrets": {
+            "openbao_service_token": {"file": "/synthetic/openbao_service_token"}
         },
         "volumes": {"preserved": {}},
     }
     after = deepcopy(before)
+    after["secrets"]["signing_keys_openbao_token"] = {
+        "file": "/synthetic/signing_keys_openbao_token"
+    }
+    after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
+        "/run/secrets/signing_keys_openbao_token"
+    )
+    after["services"]["signing-keys"]["secrets"] = [
+        {
+            "source": "signing_keys_openbao_token",
+            "target": "/run/secrets/signing_keys_openbao_token",
+        }
+    ]
     after["services"]["flow"]["environment"].update(
         ISSUANCE_GRPC_TARGET="issuance-native:9005",
         ISSUANCE_API_KEY_FILE="/run/secrets/issuance_api_key",
@@ -74,6 +108,13 @@ def models():
         **GATE["PUBLICATION_SETTINGS"],
     }
     after["services"]["issuance"]["environment"].update(GATE["SHARED_ADDITIONS"])
+    after["services"]["issuance"]["environment"].update(
+        DIDCOMM_DELIVERY_OWNER="native",
+        ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
+    )
+    after["services"]["issuance"]["depends_on"] = {
+        "issuance-native": {"condition": "service_healthy", "required": True}
+    }
     after["services"]["gateway"]["environment"].update(
         ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
         GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
@@ -218,6 +259,25 @@ def test_siblings_resources_and_secret_boundary_are_closed(models, fault):
         )
     else:
         after["x-issuance-application-env"]["BAO_ADDR"] = "legacy"
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize("fault", ["file", "binding", "mount"])
+def test_signing_keys_has_a_dedicated_openbao_token(models, fault):
+    before, after = models
+    if fault == "file":
+        after["secrets"]["signing_keys_openbao_token"]["file"] = (
+            "/synthetic/openbao_service_token"
+        )
+    elif fault == "binding":
+        after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
+            "/run/secrets/openbao_service_token"
+        )
+    else:
+        after["services"]["signing-keys"]["secrets"][0]["source"] = (
+            "openbao_service_token"
+        )
     with pytest.raises(AssertionError):
         GATE["assert_models"](before, after)
 

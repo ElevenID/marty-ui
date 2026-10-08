@@ -3063,6 +3063,22 @@ passed. The focused 388-test Python configuration/security matrix, Ruff, and
 diff checks passed. These repairs remain within the broad UI feature PR and
 do not constitute release or hosted CI qualification.
 
+2026-10-07 pre-PR local matrix continuation: `cargo +1.95.0 check --locked
+--workspace -j 1` passed against the broad dirty UI source and reviewed Core
+pin. The current Go DIDComm plugin image rebuilt from source; its Docker build
+includes `go test ./...` and `go vet ./...` and reused the matching local build
+cache. The base native Compose mutation fixture was missing the synthetic
+OpenBao/plugin image now required by authcrypt; the self-host mutation fixture
+was missing the dedicated Signing Keys token. Both fixtures now exercise their
+negative assertions again, including wrong token file, binding and mount:
+132 combined base/self-host tests passed. A further 182 targeted Python tests
+and 188 subtests passed. The changed UI tests passed 16/16, ESLint reported zero
+errors (166 pre-existing/general warnings), and the TypeScript/Vite bundle built
+with `DISABLE_PRERENDER=1`. The normal local prerender failed only because the
+pinned Puppeteer Chrome binary is absent from this Windows host; it still needs
+the standard release build in CI. The full Rust `--workspace --no-run` test
+target build is running; do not claim it passed until its process exits zero.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
