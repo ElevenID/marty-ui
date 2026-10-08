@@ -6266,7 +6266,9 @@ remote-issuer test script, then failed linking a `marty-bindings` test binary
 with undefined CPython symbols. The script used the package's default
 `extension-module` feature for three ignored binding tests. Commit `f85592b`
 adds `--no-default-features` to those test invocations, matching the separate
-CI bindings lane and retaining the same test bodies. Shell syntax, formatting
+CI bindings lane and retaining the same test bodies. Follow-up local commit
+`9b15904` also selects `kms-only` on those three calls; the exact binding
+test target compiles with that feature profile on Windows. Shell syntax, formatting
 and diff checks pass; the hosted native lanes must pass on the updated PR
 head before this finding is closed. The correction remains local until the
 other in-flight PR checks finish, so it can be pushed as one batched update.
