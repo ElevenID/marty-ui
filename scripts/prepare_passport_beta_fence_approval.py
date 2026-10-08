@@ -10,11 +10,15 @@ import re
 from typing import Any, Callable
 
 try:
-    from .check_passport_beta_fence_authority import file_sha256, manifest_source
+    from .check_passport_beta_fence_authority import (
+        file_sha256, manifest_source, merged_deletion_pr,
+    )
     from .probe_passport_beta_fence_target import observe
     from .probe_passport_beta_host import HostProbeError, run
 except ImportError:
-    from check_passport_beta_fence_authority import file_sha256, manifest_source
+    from check_passport_beta_fence_authority import (
+        file_sha256, manifest_source, merged_deletion_pr,
+    )
     from probe_passport_beta_fence_target import observe
     from probe_passport_beta_host import HostProbeError, run
 
@@ -43,15 +47,7 @@ def prepare(
     require(len(ui) == 1 and isinstance(ui[0].get("commit"), str),
             "Signed beta baseline source is ambiguous")
     baseline = source(baseline_path, ui[0]["commit"])
-    deletion = json.loads(runner([
-        "gh", "pr", "view", "305", "--repo", "ElevenID/marty-credentials",
-        "--json", "state,isDraft,headRefOid",
-    ]))
-    require(isinstance(deletion, dict) and deletion.get("state") == "OPEN"
-            and deletion.get("isDraft") is True
-            and isinstance(deletion.get("headRefOid"), str)
-            and re.fullmatch(r"[0-9a-f]{40}", deletion["headRefOid"]) is not None,
-            "Python deletion PR is not an exact open draft")
+    deletion_head, _ = merged_deletion_pr(runner)
     target = observer()
     require(isinstance(target, dict), "Live beta target is invalid")
     docker = target.get("docker")
@@ -92,7 +88,7 @@ def prepare(
             target["production_attachments_sha256"],
         "postgres_system_identifier": beta["postgres_system_identifier"],
         "database_oid": beta["database_oid"],
-        "credentials_deletion_head": deletion["headRefOid"],
+        "credentials_deletion_head": deletion_head,
         "beta_baseline_source_commit": baseline["source_commit"],
         "beta_baseline_manifest_sha256": file_sha256(baseline_path),
     }
