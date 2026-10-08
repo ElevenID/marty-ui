@@ -6768,3 +6768,13 @@ container-recovery check now use the same DIDComm token mount. All 24
 `marty-selfhost-bundle` tests pass with the pinned renderer; the focused
 Canvas container-recovery test passes. These are source/fixture checks, not
 the still-required shipped-image and assembled-runtime qualification.
+
+2026-10-08 Canvas acceptance fixture cleanup: the base runtime renderer's
+closed input set and the renewal/Kubernetes test specs no longer require or
+inject `INTEGRATION_SECRET_MASTER_KEY`. The Kubernetes fixture's synthetic
+secret map likewise no longer provisions that retired local key. The base
+Compose model gate passes all 12 selected models plus required-directory
+negatives, and the Canvas acceptance target recompiles and passes its focused
+container-recovery test. The Linux-only rendered renewal and published-image
+runtime acceptance cases remain release gates; this Windows compile and
+configuration proof does not substitute for them.
