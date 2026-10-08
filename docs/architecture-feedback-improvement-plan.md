@@ -1675,6 +1675,26 @@ missing image roles, authenticate a complete release image map, or prove a
 fresh installed bundle. The example still needs a qualified issuance digest;
 PKG02/PKG08 remain open, and no CI speedup is claimed from these slices.
 
+PKG02 migrations-role candidate (2026-10-08): the stack release and self-host
+`db-migrate` both use `services/Dockerfile.migrations`, but source identity did
+not prove runtime compatibility. A reviewed draft adds a release-only,
+exact-digest disposable probe for the actual migration entrypoint with
+PostgreSQL, Redis, and OpenBao on an internal project network. Local execution
+against the public v1.1.231 `migrations@sha256:c6098b6291e45c8a7b8de4c52771830767dc7893c7d95a66b0293a32d82757ba`
+completed twice under `selfhost-production` and `ENVIRONMENT=production`,
+retaining the native Notification head `20260808_0002`, Redis KMS registry,
+and non-exportable OpenBao envelope key; owned disposable resources were
+removed. The first probe attempt exposed a field-output delimiter defect in
+the probe itself, corrected before this passing run. Self-review also found
+that production-mode `db-migrate` lacked the native Notification migrator's
+dedicated OpenBao token file in both Compose and the Oracle Kubernetes Job;
+the draft wires the already-defined dedicated secret in both places. This
+establishes compatibility of that released digest with the isolated profile,
+not a published self-host image lock, least-privilege OpenBao policy, full
+bundle install, or general release qualification. No ordinary PR lane is
+removed and no current CI speedup is claimed. The draft still requires PR and
+protected combined-head validation before merge.
+
 The [#1161 protected run](https://github.com/ElevenID/marty-ui/actions/runs/37719253068)
 measured 7m14s for reusable Rust test compilation, followed serially by
 8m15s building the public self-host image, 1m58s for published-worker
