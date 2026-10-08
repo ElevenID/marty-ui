@@ -6248,3 +6248,39 @@ the draft does not waive the plan's complete-review or final-head merge gate.
 Initial hosted policy, license metadata/inventory, workflow quality and
 Python/actions CodeQL jobs passed; other jobs were still running at this
 checkpoint.
+
+2026-10-08 Core PR #355 first hosted findings (immutable failed job logs in
+`artifacts/kms-core-pr355-verification-aarch64-fail.log`,
+`artifacts/kms-core-pr355-zkp-native-fail.log`, and
+`artifacts/kms-core-pr355-preflight-fail.log`): the aarch64 Python
+verification wheel failed because `marty_crypto::ocsp::build_ocsp_request`
+had been removed while the public OCSP Python binding still called it.
+The unsigned request builder remained, so local Core commit `f85592b`
+restores the thin public-data wrapper and tests that it matches the builder
+using public certificate vectors. The exact Python wheel feature profile
+compiles, the local Python verification wheel builds, the focused OCSP test
+passes, and warnings-denied Clippy passes for the wheel profile. This is a
+feature-preservation fix, not a private-key signing exception.
+Both Fast Rust Preflight and Native ZKP Security Boundary reached the live
+remote-issuer test script, then failed linking a `marty-bindings` test binary
+with undefined CPython symbols. The script used the package's default
+`extension-module` feature for three ignored binding tests. Commit `f85592b`
+adds `--no-default-features` to those test invocations, matching the separate
+CI bindings lane and retaining the same test bodies. Shell syntax, formatting
+and diff checks pass; the hosted native lanes must pass on the updated PR
+head before this finding is closed. The correction remains local until the
+other in-flight PR checks finish, so it can be pushed as one batched update.
+
+2026-10-08 Credentials consumer qualification at Core candidate 0.2: local
+Windows Core `marty_rs` and `marty_verification_py` wheels built and loaded
+from an isolated target, not from globally installed 0.1.60 extensions.
+The full Credentials Python suite then passed 1,750 tests with three failures;
+one was the global Starlette 1.0.0 falling below the declared `>=1.7.0`
+transport contract. With Starlette 1.7.0 installed only in that isolated
+target, the exact suite passed 1,751 tests with two failures, 29 skips and
+200 passing subtests. Both remaining failures assert that published release
+dependency metadata and CI still point to the earlier Core release commit.
+Do not change those expectations or claim release qualification before
+reviewed Core artifacts are actually published and pinned. The second
+suite log is
+`artifacts/kms-credentials-core02-python-suite-qualified-env-2026-10-08.log`.
