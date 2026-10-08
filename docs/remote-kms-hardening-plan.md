@@ -6339,6 +6339,13 @@ loopback origin at the signing request. The five live status tests passed
 again with that construction. Keep the alert open until a new hosted
 analysis verifies resolution; the second run's Fast Rust Preflight and
 Native ZKP Security Boundary were still running at this checkpoint.
+Later on the same `6fbe674` hosted run, Native ZKP Security Boundary,
+Affected Rust Tests, all four per-language CodeQL analyses, all four
+aarch64 Python wheel jobs, and the other required completed jobs passed.
+Only Fast Rust Preflight remained in progress at the live disposable
+OpenBao step; the aggregate CodeQL check still failed on alert #260.
+The literal-HTTPS follow-up is local Core commit `f5ca93c` and has not
+triggered another hosted run yet, so no CodeQL resolution is claimed.
 
 2026-10-08 Credentials consumer qualification at Core candidate 0.2: local
 Windows Core `marty_rs` and `marty_verification_py` wheels built and loaded
