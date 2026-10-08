@@ -39,7 +39,7 @@ python scripts/build_selfhost_image_lock.py \
   --source-sha "$SOURCE_SHA" --claim-run-id "$CLAIM_RUN_ID" \
   --selfhost-images selfhost-images.json \
   --external-services external-services.json \
-  --output qualified-images.json
+  --output prepared-selfhost-images.json
 ```
 
 The generated `marty.selfhost-image-lock/v1` JSON has exactly the fields the
