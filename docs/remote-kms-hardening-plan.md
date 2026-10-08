@@ -2933,6 +2933,19 @@ targeted Clippy with warnings denied, Rustfmt and diff checks passed. Core
 commit: `457237e`. Reordered valid results, cryptographic signature faults,
 assembly failures and scheduler behavior still use local signing fixtures
 pending live remote replacements. No hosted CI or PR was triggered.
+2026-10-07 Core batch backend/panic fixture retirement: the serial backend
+failure test now simulates one accepted KMS call followed by a redacted backend
+error using public metadata and synthetic pre-validation bytes. It still checks
+the failing ordinal, exactly two calls with no retry, no partial output, and
+secret redaction. Concurrent caller/spawned-worker panic tests likewise use
+public metadata and synthetic peer results; they still assert panic payload,
+worker joining, completed peer, active/peak calls and no duplicate jobs.
+Neither fixture constructs or stores a private key. All 25 batch tests passed
+in the KMS-only feature set; targeted Clippy with warnings denied, Rustfmt and
+diff checks passed. Recording, signature-validation, assembly and concurrency
+scheduler tests still have local test signing and require separate replacement.
+This is local progress within the grouped Core feature branch, not live KMS
+custody or hosted CI evidence. Core commit: `bc4efc8`.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
