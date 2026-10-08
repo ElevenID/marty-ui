@@ -2685,6 +2685,25 @@ feature and dependency-pin cases. This gate catches feature resolution drift
 in the UI workspace; it does not yet inspect compiled release binaries or the
 Credentials wheel.
 
+2026-10-07 Core remote holder-binding checkpoint: the ignored live Rust target
+now makes distinct non-exportable ES256 OpenBao holder and issuer keys. The
+production wallet prepares a proof JWT, the holder signs it through Transit,
+and Core verifies its fresh nonce and signature before remotely signing a W3C
+SD-JWT with only the holder's public JWK in `cnf`. A wrong nonce and a
+tampered holder signature both fail while the issuer sign-call log is empty.
+The assembled credential verifies with the remote issuer public JWK, retains
+the selectively disclosed claim and public-only binding, and records exactly
+one issuer sign call. Both live tests passed against a newly provisioned
+disposable OpenBao 2.5.5; the container was removed. The exact KMS-only target
+compiled with the wallet feature, targeted Clippy with `-D warnings`,
+Rustfmt, shell syntax and diff checks passed. Core commit: `8f6706a`.
+This covers the positive P-256 holder path but the old `scalar_sd_jwt_holder_binding`
+and `issuer.rs` test-only private-key paths still carry other IETF, did:key,
+non-SD-JWT and issuer engine assertions. Port those assertions through public
+preparation and remote signing, then remove the local issuer and holder
+fixtures. Hosted CI, PRs and exact release artifact qualification remain
+pending.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
