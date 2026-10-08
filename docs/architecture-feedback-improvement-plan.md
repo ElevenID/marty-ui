@@ -2135,6 +2135,43 @@ versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
 
+## A5 REST fresh-run provenance boundary (2026-10-08 candidate)
+
+[UI #1186](https://github.com/ElevenID/marty-ui/pull/1186) merged the
+132-case JSON-consumer timing labels without changing its frozen corpus or
+qualification. [UI #1187](https://github.com/ElevenID/marty-ui/pull/1187)
+remains in protected validation at this checkpoint; it moves the unchanged
+published worker target into `marty-canvas-worker-acceptance`. Core
+[#354](https://github.com/ElevenID/marty-core/pull/354) merged as `fe8de9eec`
+with source-backed Verification JWK fixture selection; no Core CI speedup is
+claimed from that ownership guard. Neither change closes historical REST
+capture inputs.
+
+The four-observation `canvas-worker-rest-oracle.json` contains installed worker
+and route source hashes, not hashes of its Python capture scripts and scenario
+inputs. The ten-file `canvas-worker-rest-current-inputs.json` guards the
+*current checkout*, including the mounted preparer and worker trust hook, and
+explicitly disclaims original-capture provenance.
+The unchanged REST producer is imported by many other worker producers and its
+bytes are pinned in the body-timeout and lease-expiry capture maps, so changing
+it merely to decorate the REST oracle would disturb independent references.
+
+This candidate instead emits `canvas-rest-fresh-run.json` only after the
+published REST JSON equals all four frozen observations and the owned database
+and probe have closed. The record is restricted to a scheduled or manually
+dispatched full run on checked-out `main`; it binds run/attempt/SHA/job, exact
+current input hashes, script graph, corpus, pinned image fixture, migration
+revision, and test executable. Upload is allowed only after the Canvas job
+succeeds, with fourteen-day retention and a missing-file failure. A fresh
+matching capture proves reproducibility under those present inputs, **not**
+the inputs used for the original historical capture, permission to reuse
+qualification, or authority to skip any live case. All existing process,
+PostgreSQL, historical replay, and release gates remain in force. The original
+147 package-migrated worker identities remain required; three additive Rust
+tests check input drift and evidence-constructor refusal. The first hosted
+full-main record is still required before calling this evidence achieved;
+local source tests only validate fail-closed construction.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

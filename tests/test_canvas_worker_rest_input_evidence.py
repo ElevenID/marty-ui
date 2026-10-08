@@ -14,6 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 GRAPH = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
 EVIDENCE = ROOT / "contracts/canvas-worker-rest-current-inputs.json"
 REST = "run_canvas_worker_rest_oracle.py"
+MOUNTED_INPUTS = frozenset(
+    {
+        "scripts/prepare_canvas_published_schema.py",
+        "contracts/fixtures/canvas_worker_test_trust.py",
+    }
+)
 
 
 def _assert_rest_inputs(evidence: dict, graph: dict, root: Path) -> None:
@@ -25,6 +31,7 @@ def _assert_rest_inputs(evidence: dict, graph: dict, root: Path) -> None:
         schema="marty.canvas-worker-rest-current-inputs/v1",
         label="REST",
         disclaimer="do not attest historical REST or downstream corpora",
+        additional_inputs=MOUNTED_INPUTS,
     )
 
 
@@ -32,7 +39,8 @@ def test_current_rest_capture_inputs_match_explicit_hashes() -> None:
     graph = json.loads(GRAPH.read_text(encoding="utf-8"))
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
     _assert_rest_inputs(evidence, graph, ROOT)
-    assert len(evidence["sha256"]) == 8
+    assert len(evidence["sha256"]) == 10
+    assert MOUNTED_INPUTS <= set(evidence["sha256"])
     assert graph["direct_imports"][REST] == [
         "canvas_worker_https_fixture.py",
         "run_canvas_worker_startup_oracle.py",
@@ -54,6 +62,15 @@ def test_each_rest_input_change_invalidates_evidence(tmp_path: Path, name: str) 
     target.write_bytes(target.read_bytes() + b"\n# changed\n")
     with pytest.raises(AssertionError, match="REST input drift"):
         _assert_rest_inputs(evidence, graph, tmp_path)
+
+
+@pytest.mark.parametrize("name", sorted(MOUNTED_INPUTS))
+def test_mounted_rest_runtime_pin_cannot_disappear(name: str) -> None:
+    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
+    del evidence["sha256"][name]
+    with pytest.raises(AssertionError, match="need input review"):
+        _assert_rest_inputs(evidence, graph, ROOT)
 
 
 def test_new_rest_helper_requires_input_review() -> None:
