@@ -6240,6 +6240,15 @@ private-existing negative test passed; the full signing-keys library passed
 135 tests with 8 ignored, and warnings-denied Clippy passed on Rust 1.97.1.
 This is a local uncommitted UI candidate paired with the broader document/
 HTTP change; live leased-Redis and assembled artifact qualification remain.
+2026-10-08 Core PR #355 third-run CodeQL timing: the hosted Rust `Analyze`
+job passed on head `f5ca93c`, and code-scanning alert #260 now reports its
+most recent instance as `fixed`. The separate aggregate `CodeQL` check run
+113532936281 failed at 20:45:49 UTC before Rust analysis finished (about
+20:53 UTC), retaining the previous high-alert annotation. Treat the PR check
+as failing until a refreshed aggregate check passes; once the remaining
+hosted jobs complete, request a targeted refresh if available or batch a
+follow-up head update with other required corrections. Do not dismiss the
+alert or treat current analysis as a passing PR check.
 The device-registration write path calls Core's
 `validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
 rejects other DER shapes, and binds the claimed key identifier to its public
