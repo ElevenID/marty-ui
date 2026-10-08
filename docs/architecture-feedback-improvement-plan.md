@@ -1716,7 +1716,17 @@ manual/weekly qualification, and releases always execute the complete Python
 suite and image/oracle steps. It is not a release test removal, nor a measured
 speedup until the guarded path passes hosted CI. Local owning validation passed
 158 tests with one Windows symlink skip; independent review and protected CI
-remain required.
+passed in #1163. A planner-only follow-up PR is needed to measure the guarded
+path itself.
+
+The next planner-only A3 candidate checks that the same exact document remains
+declared once in the bundle's source asset manifest before reporting narrow
+Rust ownership. An unreadable or symlinked descriptor, invalid JSON, or a
+missing/duplicate document declaration falls back to the full workspace.
+Other Compose/configuration assets retain the broad fallback because their
+non-Cargo runtime and test consumers are not
+fully mapped. This only strengthens shadow evidence; it does not change a
+required check or establish a Canvas acceptance skip.
 
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
