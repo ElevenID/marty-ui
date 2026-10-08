@@ -2704,6 +2704,19 @@ preparation and remote signing, then remove the local issuer and holder
 fixtures. Hosted CI, PRs and exact release artifact qualification remain
 pending.
 
+2026-10-07 Core remote mDoc holder-binding checkpoint: the same disposable
+OpenBao live target now takes the P-256 holder public JWK from the verified
+wallet proof, prepares an mDoc with that exact device key, signs the COSE
+Sig_structure through the non-exportable issuer key, and verifies the signed
+IssuerSigned payload has the expected public-only `deviceKeyInfo.deviceKey`.
+It also checks the remote sign bytes, returned signature and absence of extra
+device key authorizations. Both live tests passed after this addition, the
+disposable container was removed, and the exact target compiled and passed
+targeted Clippy with `-D warnings`, Rustfmt and diff checks. Core commit:
+`e0c7ab3`. The old `issuer.rs` mDoc fixture still has test-only private-key
+branches and other protocol assertions to port or retire before deleting the
+local issuer signing API. No hosted CI or PR was triggered for this checkpoint.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
