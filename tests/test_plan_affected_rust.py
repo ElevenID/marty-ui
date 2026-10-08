@@ -1000,6 +1000,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             encoding="utf-8"
                         )
                         self.assertIn(edge[marker], source_text)
+                if producer == "marty-credential-template":
+                    source_text = (ROOT / edge["request_evidence"]).read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertNotIn("resolve_template_http", source_text)
                 self.assertNotIn(
                     producer,
                     {

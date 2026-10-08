@@ -2956,7 +2956,7 @@ mod tests {
         assert_eq!(canonical_lf(b"first\r\nsecond\n"), b"first\nsecond\n");
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_ADMISSION))),
-            "8acbdaab9db036a65d32c377debb69e4415bacf61d417b5fa2b43dc6f5388c1b"
+            "8eb5135252e7c809f9805636e0e9a1726c2295faa299389355fe8ec17e49da81"
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_SIGNING))),

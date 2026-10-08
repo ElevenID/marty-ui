@@ -232,7 +232,6 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "connection_marker": "templates: CredentialTemplateServiceClient::new(channel(",
             "request_marker": ".get_template(self.grpc_request(GetTemplateRequest {",
             "response_marker": "template_from_grpc(template_id, response.into_inner())",
-            "fallback_marker": "self.resolve_template_http(template_id).await",
             "provider_evidence": "rust/services/credential-template/src/grpc_service.rs",
             "provider_marker": ".get_template_for_internal_service(&request.get_ref().template_id)",
         },
