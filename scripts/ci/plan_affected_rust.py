@@ -739,6 +739,19 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
             "rust/Cargo.lock"
         ):
             return full(f"workspace manifest or lock: {path}")
+        if path == PurePosixPath("SELFHOST_BUNDLE.md"):
+            # This exact root document is copied into the customer bundle by
+            # marty-selfhost-bundle. Keep the Cargo reverse consumers (notably
+            # Canvas acceptance); an absent/deleted input stays fail-closed.
+            asset = root / path
+            if (
+                not asset.is_file()
+                or asset.is_symlink()
+                or "marty-selfhost-bundle" not in names
+            ):
+                return full(f"missing known package asset: {path}")
+            direct.add("marty-selfhost-bundle")
+            continue
         if not path.parts or path.parts[0] != "rust":
             # Protocol corpora, workflows, Dockerfiles, scripts, release inputs,
             # and undeclared consumers are not represented by Cargo metadata.

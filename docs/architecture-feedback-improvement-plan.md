@@ -1661,28 +1661,47 @@ issuance contract, then release-bound clean-install proof; changing the
 namespace string alone would not satisfy it. PKG02 remains the first-use
 blocker for this workstream.
 
-The next reviewed PKG02 local candidate closes all 40 Compose secret-template
-references: six missing `change-me` files are added, the example environment
-declares both formerly missing required settings, and its default Flow callback
-matches the internal Auth URL and organization ID. Source-derived tests guard
-template closure, required setting declarations, and callback alignment.
-The example still requires an operator-supplied, qualified issuance image
-digest. A real Compose render with a synthetic digest, 154 focused tests,
-Ruff, and diff checks passed; independent review found no blocker after
-correcting an initial HTTPS-only instruction that conflicted with the
-internal-network HTTP callback. Hosted PR/protected qualification and the
-release image/bundle/install repair remain outstanding; this is not a CI
-speedup claim.
+PKG02 implementation has merged three bounded, independently reviewed slices.
+[#1158](https://github.com/ElevenID/marty-ui/pull/1158) closed all 40
+Compose secret-template references and added the required example settings and
+internal Flow callback. [#1159](https://github.com/ElevenID/marty-ui/pull/1159)
+baked the self-host static source, runtime-config entrypoint and secret loader
+into a dedicated UI image target without changing the default public target.
+[#1161](https://github.com/ElevenID/marty-ui/pull/1161) added opt-in exact-digest
+binding for every rendered bundle service image and a Linux Compose semantic
+round-trip test; the unpinned packager mode is unchanged. Each passed full PR
+and protected combined-head CI. This still does not publish the bundle's
+missing image roles, authenticate a complete release image map, or prove a
+fresh installed bundle. The example still needs a qualified issuance digest;
+PKG02/PKG08 remain open, and no CI speedup is claimed from these slices.
 
-PKG02 implementation is staged in bounded slices. The secret/template closure
-slice is under PR #1158 and must clear its protected merge queue. The next
-slice makes the self-host UI image independently runnable: its static source,
-runtime-config entrypoint and secret loader are baked into a dedicated image
-target, and the manual registry builder selects that target and the SPA Nginx
-config. A local image build and container startup smoke check validate the
-source/runtime contract. This does not yet establish published image parity,
-release-transaction coverage, a fresh bundle installation, or a CI speedup;
-those remain PKG02/PKG08 qualification requirements.
+The [#1161 protected run](https://github.com/ElevenID/marty-ui/actions/runs/37719253068)
+measured 7m14s for reusable Rust test compilation, followed serially by
+8m15s building the public self-host image, 1m58s for published-worker
+preflight, and 6m13s for isolated database contracts in the Canvas lane. The
+image build is a candidate for reuse or independent qualification without
+dropping packaged-image acceptance; these are one run's stage durations, not
+a speedup estimate. The next release slice must reconcile the published OSS
+`services`/`migrations` digests with the bundle's `services`/`db-migrate`
+roles, publish/attest the missing `ui-selfhost` and `cloudflared-wrapper`
+roles, bind the issuance and third-party images, and qualify the exact
+digest-pinned extracted bundle before any support claim.
+The current stack transaction has exactly three mandatory roles and already
+attests `services` and `migrations`; adding self-host-only builds to every
+ordinary stack release would increase that release's work. Investigate a
+separate self-host release transaction that consumes the qualified stack
+digests, builds only the missing self-host-specific roles from the same source
+revision, verifies all upstream and third-party references, and emits the
+packager's exact service-image lock. This is a candidate architecture, not a
+qualified producer or permission to omit installed-artifact acceptance.
+
+For A3/A6, the exact `SELFHOST_BUNDLE.md` input is a shipped asset of
+`marty-selfhost-bundle`; the Rust shadow planner now records that package and
+its `marty-canvas-acceptance` Cargo consumer for a packager-plus-document
+change. Unknown root documents and a missing named asset still select the
+entire workspace. This is observational only: PR, merge-group, and release
+checks are unchanged. Further Canvas case ownership and run-bound parity are
+required before using this plan to skip any PR test.
 
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track

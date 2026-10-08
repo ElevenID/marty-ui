@@ -165,6 +165,62 @@ class AffectedRustPlannerTests(unittest.TestCase):
             )
             self.assertEqual(result["packages"], ["nested"])
 
+    def test_selfhost_bundle_document_keeps_rust_consumers_in_shadow_plan(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["SELFHOST_BUNDLE.md", "rust/crates/selfhost-bundle/src/lib.rs"],
+            metadata,
+            ROOT,
+        )
+        self.assertFalse(result["all"])
+        self.assertEqual(result["direct"], ["marty-selfhost-bundle"])
+        self.assertIn("marty-canvas-acceptance", result["packages"])
+        self.assertIn("marty-selfhost-bundle", result["packages"])
+
+    def test_selfhost_bundle_document_requires_existing_owned_asset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root)
+            result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(result["all"])
+            self.assertIn("missing known package asset", result["reason"])
+
+    def test_unknown_root_document_still_selects_every_package(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(["OTHER_SELFHOST_BUNDLE.md"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertIn("external or unknown input", result["reason"])
+
+    def test_known_document_does_not_mask_unknown_root_input(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["SELFHOST_BUNDLE.md", "OTHER_SELFHOST_BUNDLE.md"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertIn("external or unknown input", result["reason"])
+
+    def test_symlinked_known_document_stays_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "source.md"
+            target.write_text("test", encoding="utf-8")
+            try:
+                (root / "SELFHOST_BUNDLE.md").symlink_to(target)
+            except OSError:
+                self.skipTest("This host cannot create file symlinks")
+            metadata = self.metadata(root)
+            bundle = {
+                "id": "marty-selfhost-bundle",
+                "name": "marty-selfhost-bundle",
+                "manifest_path": str(root / "rust/crates/selfhost-bundle/Cargo.toml"),
+                "dependencies": [],
+            }
+            metadata["packages"].append(bundle)
+            metadata["workspace_members"].append(bundle["id"])
+            result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(result["all"])
+            self.assertIn("missing known package asset", result["reason"])
+
     def test_service_runtime_consumers_fail_closed_beyond_cargo(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
