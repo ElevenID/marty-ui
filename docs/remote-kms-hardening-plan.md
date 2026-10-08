@@ -6270,8 +6270,8 @@ CI bindings lane and retaining the same test bodies. Follow-up local commit
 `9b15904` also selects `kms-only` on those three calls; the exact binding
 test target compiles with that feature profile on Windows. Shell syntax, formatting
 and diff checks pass; the hosted native lanes must pass on the updated PR
-head before this finding is closed. The correction remains local until the
-other in-flight PR checks finish, so it can be pushed as one batched update.
+head before this finding is closed. These corrections were batched with the
+subsequent TLS finding before the next hosted run.
 
 2026-10-08 Core PR #355 first full hosted run finished: Affected Rust Tests,
 all four per-language CodeQL analyses, and the other listed passing jobs
