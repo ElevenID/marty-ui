@@ -285,11 +285,15 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "tracked": True, "custom_filter": False,
         "tag_object": TAG_OBJECT, "tag_type": "tag", "tag_commit": HEAD,
         "published_tag_object": TAG_OBJECT, "published_tag_commit": HEAD,
-        "deletion_state": "OPEN", "deletion_draft": True,
+        "deletion_state": "CLOSED", "deletion_merged": True,
+        "deletion_merge_commit": "7" * 40,
+        "credentials_main_head": "8" * 40,
+        "credentials_main_protected": True,
         "deletion_head": DELETION_HEAD,
         "deletion_history": [DELETION_HEAD], "deletion_base": "main",
         "deletion_repo": authority.DELETION_REPOSITORY,
         "deletion_merge_base": DELETION_HEAD,
+        "signed_image_merge_base": "7" * 40,
         "baseline": baseline,
         "release_files": {
             relative: "\n".join(markers)
@@ -338,21 +342,32 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-credentials/pulls/305"]:
             return json.dumps({
                 "number": 305, "state": values["deletion_state"].lower(),
-                "draft": values["deletion_draft"],
+                "merged": values["deletion_merged"],
+                "merged_at": "2026-10-08T00:00:00Z",
+                "merge_commit_sha": values["deletion_merge_commit"],
                 "base": {"ref": values["deletion_base"], "repo": {
                     "full_name": values["deletion_repo"]}},
                 "head": {"sha": values["deletion_head"], "repo": {
                     "full_name": values["deletion_repo"]}},
             })
+        if command[:3] == ["gh", "api", "repos/ElevenID/marty-credentials/branches/main"]:
+            return json.dumps({"protected": values["credentials_main_protected"],
+                               "commit": {"sha": values["credentials_main_head"]}})
         if command[:3] == ["gh", "api", "--paginate"]:
             return "\n".join(values["deletion_history"])
         if command[:2] == ["gh", "api"] and "/compare/" in command[2]:
             approved, current = command[2].rsplit("/", 1)[-1].split("...")
+            merge_base = (values["signed_image_merge_base"]
+                          if approved == values["deletion_merge_commit"]
+                          and current == "3" * 40
+                          else values["deletion_merge_commit"]
+                          if approved == values["deletion_merge_commit"]
+                          else values["deletion_merge_base"])
             return json.dumps({
                 "status": "identical" if approved == current else "ahead",
                 "behind_by": 0,
                 "base_commit": {"sha": approved},
-                "merge_base_commit": {"sha": values["deletion_merge_base"]},
+                "merge_base_commit": {"sha": merge_base},
             })
         raise AssertionError(command)
 
@@ -490,7 +505,9 @@ def test_hidden_worktree_change_cannot_replace_verifier(
     ("tracked", False), ("custom_filter", True),
     ("published_tag_object", "2" * 40),
     ("published_tag_commit", "2" * 40), ("deletion_head", "2" * 40),
-    ("deletion_draft", False),
+    ("deletion_merged", False),
+    ("credentials_main_protected", False),
+    ("signed_image_merge_base", "2" * 40),
 ])
 def test_authority_rejects_unapproved_source_or_deletion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object,
