@@ -6253,6 +6253,11 @@ document Redis tests passed against a disposable Redis 7 container removed
 afterward. The existing CI Redis lane now includes those two ignored tests.
 These are local UI candidate changes; hosted CI and assembled release
 qualification remain.
+The next consumer check ran the native `marty-issuance-service --lib`
+selection on Rust 1.97.1 with no default features: 564 passed, 8 ignored,
+0 failed. This confirms the current local signing-keys boundary does not
+break issuance's library-level behavior; integration, packaged-process and
+database evidence remain separate gates.
 2026-10-08 Core PR #355 third-run CodeQL timing: the hosted Rust `Analyze`
 job passed on head `f5ca93c`, and code-scanning alert #260 now reports its
 most recent instance as `fixed`. The separate aggregate `CodeQL` check run
