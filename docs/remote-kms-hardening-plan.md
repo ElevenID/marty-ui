@@ -6781,3 +6781,20 @@ configuration proof does not substitute for them.
 The two renderer/renewal obligation Python suites also pass (101 tests) with
 the retired input removed. The machine's default Python lacks pytest, so this
 run used an isolated `uv` invocation with pinned pytest and PyYAML.
+
+2026-10-08 K10 Credential Template JSON-store correction: its template,
+wallet-registry and delivery-destination JSON columns were not checked at the
+repository boundary. The PostgreSQL store now applies the shared Rust
+private-material classifier to serialized JSON before writes, including
+`compliance_profile` and `claim_projection_policy`, and to raw JSON read from
+rows before typed deserialization can discard an unknown private field. The
+package suite, package formatting and all-target warnings-denied Clippy pass.
+The live repository contract passed against a fresh disposable PostgreSQL 16
+database: a nested private JWK was rejected before a template row existed,
+while normal template, wallet and destination round trips succeeded. Direct
+schema inspection found four `credential_template_service` tables
+(`credential_templates`, `delivery_destinations`, `wallet_registry`, and
+`rust_schema_versions`) and no table or column named for private-key storage.
+The disposable database was removed. This is one service's clean-install
+evidence; assembled platform schema, other JSON stores and exact release
+artifacts remain K10 gates.
