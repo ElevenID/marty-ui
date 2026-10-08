@@ -270,6 +270,37 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-issuance-service": [
         {
+            # Applicant resolves application templates from native Issuance
+            # over HTTP; it has no Cargo dependency on the provider.
+            "package": "marty-applicant",
+            "evidence": "rust/services/applicant/src/main.rs",
+            "binding": 'env::var("ISSUANCE_NATIVE_SERVICE_URL").ok()',
+            "runtime_marker": "HttpTemplateProvider::new(",
+            "request_evidence": "rust/services/applicant/src/providers.rs",
+            "request_call_marker": ".get(format!(",
+            "request_marker": '"{}/v1/application-templates/{id}"',
+            "provider_evidence": "rust/services/issuance/src/application_template_http.rs",
+            "provider_marker": '"/v1/application-templates/{template_id}"',
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
+        },
+        {
+            # The base runtime's Presentation Policy resolver looks up
+            # credential status at the native Issuance HTTP endpoint.
+            "package": "marty-presentation-policy",
+            "evidence": "rust/services/presentation-policy/src/config.rs",
+            "binding": 'value(&values, "ISSUANCE_NATIVE_SERVICE_URL")',
+            "status_marker": "{issuance_url}/v1/issuance/credentials/{{credential_id}}/status",
+            "runtime_evidence": "rust/services/presentation-policy/src/main.rs",
+            "runtime_marker": "&config.credential_status_url_template,",
+            "request_evidence": "rust/services/presentation-policy/src/control_plane.rs",
+            "request_marker": "self.http.get(endpoint)",
+            "provider_evidence": "rust/services/issuance/src/http.rs",
+            "provider_marker": '"/v1/issuance/credentials/{credential_id}/status"',
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
+        },
+        {
             "package": "marty-auth",
             "evidence": "rust/services/auth/src/config.rs",
             "binding": "ISSUANCE_NATIVE_SERVICE_URL",
