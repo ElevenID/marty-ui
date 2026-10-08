@@ -6217,3 +6217,13 @@ because the local MSVC environment lacks OpenSSL and zstd headers; this is
 recorded in `artifacts/kms-core-584a-clippy-2026-10-08.log`. The required
 Linux ZKP/bindings lanes and hosted Core CI remain to be qualified on the
 final broad PR head.
+The Core advisory/yank gate also passed locally with
+`cargo deny --locked --all-features check advisories --deny yanked`.
+Regression review of removed signer-based CAVP integration tests found that
+public-only ECDSA verification tests now cover P-256, P-384 and P-521,
+including wrong-key/cross-curve cases; public-only RSA vectors cover all
+supported PKCS#1 and PSS hash combinations, tampering, wrong key and
+cross-scheme rejection. The exact selected workspace test pass exercised
+these replacements. The local-signing round trips were intentionally
+retired, not restored as production APIs. Continue the full assembled
+regression/security/quality review before publishing Core's grouped PR.
