@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from scripts import prepare_passport_beta_aggregate_compose as compose
 from scripts import verify_passport_beta_rust_owner as rust_owner
@@ -15,6 +16,18 @@ from scripts.prepare_passport_beta_aggregate_compose import (
     BETA_ORIGIN, ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
     SIGNED_APPLICATIONS, NEW_SERVICES, prepare,
 )
+
+
+def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
+    handoff, *_ = candidate()
+    services = yaml.safe_load(
+        compose.image_override(handoff).replace("!reset null", "null")
+    )["services"]
+    for name in ("issuance", "issuance-native"):
+        environment = services[name]["environment"]
+        assert environment["ENVIRONMENT"] == "beta"
+        assert environment["GRPC_INSECURE_ALLOWED"] == "true"
+
 
 
 def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):

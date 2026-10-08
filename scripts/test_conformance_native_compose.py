@@ -156,8 +156,6 @@ def assert_beta_shared_setting_repairs(previous, actual, inputs=None):
     expected = deepcopy(previous)
     before = expected["services"]["issuance-native"]["environment"]
     legacy = expected["services"]["issuance"]["environment"]
-    before["ENVIRONMENT"] = "beta"
-    before["GRPC_INSECURE_ALLOWED"] = "true"
     for setting in SHARED_SETTING_REPAIRS:
         assert setting in legacy
         selected = legacy[setting]
