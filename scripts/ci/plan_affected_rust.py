@@ -742,12 +742,29 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
         if path == PurePosixPath("SELFHOST_BUNDLE.md"):
             # This exact root document is copied into the customer bundle by
             # marty-selfhost-bundle. Keep the Cargo reverse consumers (notably
-            # Canvas acceptance); an absent/deleted input stays fail-closed.
+            # Canvas acceptance). Its ownership must remain declared by the
+            # bundle descriptor; an absent/deleted or unowned input fails closed.
             asset = root / path
+            descriptor = root / "deploy-config/bundles/selfhost.json"
             if (
                 not asset.is_file()
                 or asset.is_symlink()
+                or not descriptor.is_file()
+                or descriptor.is_symlink()
+                or descriptor.parent.is_symlink()
+                or descriptor.parent.parent.is_symlink()
                 or "marty-selfhost-bundle" not in names
+            ):
+                return full(f"missing known package asset: {path}")
+            try:
+                declared_assets = json.loads(descriptor.read_text(encoding="utf-8"))[
+                    "assets"
+                ]
+            except (OSError, UnicodeError, ValueError, KeyError, TypeError):
+                declared_assets = None
+            if (
+                not isinstance(declared_assets, list)
+                or declared_assets.count(path.as_posix()) != 1
             ):
                 return full(f"missing known package asset: {path}")
             direct.add("marty-selfhost-bundle")

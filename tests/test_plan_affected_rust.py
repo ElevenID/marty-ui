@@ -185,6 +185,58 @@ class AffectedRustPlannerTests(unittest.TestCase):
             self.assertTrue(result["all"])
             self.assertIn("missing known package asset", result["reason"])
 
+    def test_selfhost_document_owner_must_remain_in_bundle_descriptor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root)
+            bundle = {
+                "id": "marty-selfhost-bundle",
+                "name": "marty-selfhost-bundle",
+                "manifest_path": str(root / "rust/crates/selfhost-bundle/Cargo.toml"),
+                "dependencies": [],
+            }
+            metadata["packages"].append(bundle)
+            metadata["workspace_members"].append(bundle["id"])
+            (root / "SELFHOST_BUNDLE.md").write_text("test", encoding="utf-8")
+            descriptor = root / "deploy-config/bundles/selfhost.json"
+            descriptor.parent.mkdir(parents=True)
+
+            descriptor.write_text(
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"]}), encoding="utf-8"
+            )
+            owned = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertFalse(owned["all"])
+            self.assertEqual(owned["direct"], ["marty-selfhost-bundle"])
+
+            for content in (
+                json.dumps({"assets": []}),
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"] * 2}),
+                json.dumps({"assets": "SELFHOST_BUNDLE.md"}),
+                "not JSON",
+            ):
+                with self.subTest(content=content):
+                    descriptor.write_text(content, encoding="utf-8")
+                    result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+                    self.assertTrue(result["all"])
+                    self.assertIn("missing known package asset", result["reason"])
+
+            descriptor.unlink()
+            missing = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(missing["all"])
+            self.assertIn("missing known package asset", missing["reason"])
+
+            target = root / "alternate-descriptor.json"
+            target.write_text(
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"]}), encoding="utf-8"
+            )
+            try:
+                descriptor.symlink_to(target)
+            except OSError:
+                return  # File symlinks are unavailable on this Windows host.
+            linked = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
+            self.assertTrue(linked["all"])
+            self.assertIn("missing known package asset", linked["reason"])
+
     def test_unknown_root_document_still_selects_every_package(self) -> None:
         metadata = planner.cargo_metadata()
         result = planner.plan(["OTHER_SELFHOST_BUNDLE.md"], metadata, ROOT)
@@ -217,6 +269,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
             }
             metadata["packages"].append(bundle)
             metadata["workspace_members"].append(bundle["id"])
+            descriptor = root / "deploy-config/bundles/selfhost.json"
+            descriptor.parent.mkdir(parents=True)
+            descriptor.write_text(
+                json.dumps({"assets": ["SELFHOST_BUNDLE.md"]}), encoding="utf-8"
+            )
             result = planner.plan(["SELFHOST_BUNDLE.md"], metadata, root)
             self.assertTrue(result["all"])
             self.assertIn("missing known package asset", result["reason"])
