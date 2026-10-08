@@ -2800,6 +2800,24 @@ still generates a local private key and needs a live remote replacement on a
 host with the real Longfellow dependencies. No hosted CI or PR was triggered
 for this checkpoint.
 
+2026-10-07 Core ZK mDoc remote signer checkpoint: the remaining
+`TestP256Signer` in `formats/zk_mdoc.rs` and its locally generated private JWK
+are removed. Unit tests now exercise the shared predicate validator with
+public/key-free inputs. An opt-in ZK-feature case in the disposable OpenBao
+target signs a ZK-enabled mDoc with a non-exportable ES256 Transit key and
+checks the predicate binding, proof-type metadata, issued boolean claim,
+credential ID, exact remote signing bytes and returned COSE signature. All
+four live cases passed with real OpenBao on this Windows host; the local ZK
+native dependency was compiled in debug mock mode only, so this proves remote
+issuer custody and ZK envelope wiring, not real Longfellow behavior. Four
+focused key-free ZK validator tests passed, as did targeted Clippy with
+`-D warnings` for the ZK and base feature sets, Rustfmt, shell syntax, CI
+YAML parsing and diff checks. The disposable container was removed. The
+existing Linux `zkp-native-security` job now runs the same live test with
+`zk_mdoc` enabled after installing native OpenSSL dependencies, without mock
+mode; its hosted result remains pending. Core commit: `7f0cf8c`. No PR or
+hosted CI run was triggered at this checkpoint.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
