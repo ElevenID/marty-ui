@@ -6350,6 +6350,13 @@ The literal-HTTPS follow-up is local Core commit `f5ca93c` and has not
 triggered another hosted run yet, so no CodeQL resolution is claimed.
 Fast Rust Preflight's disposable non-exportable OpenBao signing step then
 completed successfully on `6fbe674`; its Clippy step was still running.
+Fast Rust Preflight subsequently passed, including strict Clippy, the
+OID4VCI WASM serial fallback contract and EUDI trusted-list client. Thus
+the second hosted head's only failing required check was aggregate CodeQL
+alert #260. After all other checks finished, the local literal-HTTPS
+correction `f5ca93c` was pushed as the next single Core PR #355 update.
+CodeQL resolution and all required checks remain to be requalified on
+that exact new head; no earlier green check is attributed to it.
 
 2026-10-08 Credentials consumer qualification at Core candidate 0.2: local
 Windows Core `marty_rs` and `marty_verification_py` wheels built and loaded
