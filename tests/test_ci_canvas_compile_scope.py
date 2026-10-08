@@ -51,11 +51,20 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     assert canvas_branch.count("--message-format=json") == 4
     # Test packages resolve together. Real binaries keep their independently
     # resolved features; preserve every exact target/profile/artifact flag.
-    commands = [
+    timed_commands = [
         shlex.split(line.strip())
         for line in canvas_branch.replace("\\\n", " ").splitlines()
-        if line.strip().startswith(("cargo test ", "cargo build "))
+        if line.strip().startswith(
+            ("run_cargo_phase ", "cargo test ", "cargo build ")
+        )
     ]
+    assert [command[:2] for command in timed_commands] == [
+        ["run_cargo_phase", "tests"],
+        ["run_cargo_phase", "issuance_binaries"],
+        ["run_cargo_phase", "gateway_binary"],
+        ["run_cargo_phase", "flow_binary"],
+    ]
+    commands = [command[2:] for command in timed_commands]
     assert commands == [
         [
             "cargo",
