@@ -184,6 +184,8 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
     assert sum("psql" in args for args in calls) == 2
+    assert all("printf '\\n'" in " ".join(args) for args in calls
+               if "bao read" in " ".join(args))
     assert any("down" in args and "--volumes" in args for args in calls)
 
 

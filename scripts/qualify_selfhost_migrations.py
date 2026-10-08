@@ -274,6 +274,7 @@ def qualify(images: dict[str, str], *,
                     "BAO_TOKEN=$(cat /run/secrets/bao_root_token); export BAO_TOKEN; "
                     "bao read -field=type "
                     "transit/keys/notification-webhook-envelope-marty-aes256 && "
+                    "printf '\\n' && "
                     "bao read -field=exportable "
                     "transit/keys/notification-webhook-envelope-marty-aes256",
                 ], environment), "OpenBao notification key verification failed").strip()
