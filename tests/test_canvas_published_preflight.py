@@ -1388,17 +1388,23 @@ def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, mis
     assert all(call[3:] == ["--list"] for call in calls if call[0] == "child")
 
 
-def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_full_gate():
+def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate():
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     )
     steps = workflow["jobs"]["test-rust-services"]["steps"]
     names = [step.get("name") for step in steps]
-    prepare = names.index("Prepare database contract executables")
+    rendered = names.index("Prepare required rendered base executable acceptance")
     preflight = names.index("Preflight published worker parity in two isolated groups")
+    image = names.index("Build public selfhost image")
+    loader = names.index("Prepare public selfhost image loader acceptance")
+    passport = names.index("Verify default passport test-mode boundary")
+    prepare = names.index("Prepare database contract executables")
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
-    assert prepare + 1 == preflight < databases < full
+    assert names.count("Preflight published worker parity in two isolated groups") == 1
+    assert rendered + 1 == preflight < image < loader < passport < full
+    assert prepare < databases < full
     assert steps[preflight]["working-directory"] == "rust"
     assert steps[preflight]["shell"] == "bash"
     assert (
