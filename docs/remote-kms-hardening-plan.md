@@ -6849,3 +6849,11 @@ all current hosted checks green; Credentials is locally committed at
 `ab0e3e8` and has no PR yet. The UI commit is local only, with no UI PR or
 hosted CI run yet. This checkpoint makes the broad change reviewable but does
 not close K8/K9/K10 or the release-artifact gates.
+
+2026-10-08 UI PR checkpoint: the grouped UI branch was pushed and draft
+ElevenID/marty-ui#1192 opened against `main` at head `e7bf0cb55` (the broad
+feature commit is `2b8198fc2`; the later commit records its local evidence).
+The PR is open and review-required. The first GitHub read returned no checks
+yet, so hosted CI has not been counted as passing. Keep corrections in this
+same broad PR and batch local fixes before its next hosted run to limit CI
+cost. Core #355 is the upstream dependency; Credentials has no PR yet.
