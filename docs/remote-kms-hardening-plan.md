@@ -6247,7 +6247,9 @@ payloads were changed to require rejection while retaining their positive
 public-key/relationship assertions. The full signing-keys library suite
 passes 134 tests with eight ignored; an additional ignored document-storage
 test passed against disposable Redis 7 on loopback DB 13, covering public
-write/read and private write/read rejection. This change is local in the
+write/read and private write/read rejection. Warnings-denied Clippy for
+`marty-signing-keys --lib --no-default-features` also passed on Rust 1.97.1.
+This change is local in the
 large UI feature branch and not yet an assembled product/release proof.
 
 2026-10-08 Core local quality gate: `cargo +1.97.1 fmt --all -- --check`
