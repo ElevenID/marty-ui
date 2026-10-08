@@ -2162,7 +2162,8 @@ The unchanged REST producer is imported by many other worker producers and its
 bytes are pinned in the body-timeout and lease-expiry capture maps, so changing
 it merely to decorate the REST oracle would disturb independent references.
 
-This candidate instead emits `canvas-rest-fresh-run.json` only after the
+Merged [UI #1189](https://github.com/ElevenID/marty-ui/pull/1189) emits
+`canvas-rest-fresh-run.json` only after the
 published REST JSON equals all four frozen observations and the owned database
 and probe have closed. The record is restricted to a scheduled or manually
 dispatched full run on checked-out `main`; it binds run/attempt/SHA/job, exact
@@ -2176,8 +2177,32 @@ qualification, or authority to skip any live case. All existing process,
 PostgreSQL, historical replay, and release gates remain in force. The original
 147 package-migrated worker identities remain required; three additive Rust
 tests check input drift and evidence-constructor refusal. The first hosted
-full-main record is still required before calling this evidence achieved;
-local source tests only validate fail-closed construction.
+full-main record must be checked before calling this evidence achieved.
+The manual [run 37842597081](https://github.com/ElevenID/marty-ui/actions/runs/37842597081)
+targets merge commit `916c75aed`; require its completed workflow result and
+both artifacts before admitting its record. A separate #1188 release-lock
+change advanced `main` while it ran, so this run cannot qualify the new tip for
+an exact-current-main release claim. Local source tests only validate
+fail-closed construction.
+
+## A5 JSON-depth current-input guard (2026-10-08 reviewed candidate)
+
+The pinned JSON-depth published-producer diagnostic remains a routine Canvas
+case; its preceding protected timing recorded about 125 seconds for the whole
+probe, including migration, seed, and producer execution. The two native
+provider/credential-route depth cases are separate guarantees. The new
+`canvas-json-depth-current-inputs.json` records twelve current-checkout inputs:
+the Rust probe constructor, mounted preparer/depth runner and static local
+helpers, depth and shared scenario data, pinned image/PostgreSQL fixture, and
+test-only recovery overlay. A release-collected guard checks their normalized
+bytes, selector and mount structure, fixed image identities, static imports,
+and transitive JSON references. Focused guard plus REST tests passed 38 cases;
+an independent reviewer cleared the additive two-file delta. This inventory
+does **not** prove original capture provenance, downstream image contents, or
+complete host/environment closure. It changes no tier, skip, gate, or release
+rule and establishes no speedup. Historical depth selection remains required
+until a stronger exact-probe closure invariant and change-triggered full
+qualification are implemented and reviewed; protected merge groups retain it.
 
 ## Design references
 
