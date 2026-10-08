@@ -7,6 +7,7 @@ from pathlib import Path
 import runpy
 import shutil
 import subprocess
+import tempfile
 
 import pytest
 
@@ -38,6 +39,8 @@ def synthetic_base():
         "future_field": {"preserved": True},
         "build": {"context": ".", "args": {"SERVICE_NAME": "unchanged"}},
     }
+
+
     services = {
         name: deepcopy(common)
         for name in (
@@ -58,23 +61,64 @@ def synthetic_base():
 
 
 @pytest.mark.parametrize("mode", ["local", "official"])
+def test_beta_without_native_passport_keeps_python_issuance(gate, mode):
+    case = gate["inputs"](mode)
+    case["rust_issuance"] = False
+    with tempfile.TemporaryDirectory() as directory:
+        report = gate["exercise"](Path(directory), [case])[0]
+    assert not report["caught"]
+    alias = next(row for row in report["plan"] if row["service"] == "issuance")
+    assert alias["artifact_role"] == "issuance"
+    assert alias["image_expression"] == "${MARTY_ISSUANCE_IMAGE}"
+    assert alias["effective_reference"] == gate["ISSUANCE_IMAGE"]
+    assert alias["build_eligible"] is False
+    assert not any("issuance-migrations:" in line for line in report["lines"])
+    assert not any("marty-issuance-service" in line for line in report["lines"])
+
+
+@pytest.mark.parametrize("mode", ["local", "official"])
 def test_expected_projection_preserves_all_nonselection_fields(gate, mode):
     base = synthetic_base()
     names = [name for name in base["services"] if name != "issuance-migrations"]
     actual = gate["expected_model"](base, names, mode)
     assert base == synthetic_base()
-    assert (
-        actual["services"]["issuance-migrations"]
-        == base["services"]["issuance-migrations"]
+    migrator = deepcopy(base["services"]["issuance-migrations"])
+    migrator["image"] = actual["services"]["issuance"]["image"]
+    migrator.pop("build")
+    migrator["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
+    migrator["command"] = ["migrate"]
+    migrator["environment"].update(
+        SERVICE_NAME="issuance_native",
+        DATABASE_URL="postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty",
     )
+    migrator["depends_on"].update({
+        "organization": {"condition": "service_healthy", "required": True},
+        "credential-template": {"condition": "service_healthy", "required": True},
+    })
+    assert actual["services"]["issuance-migrations"] == migrator
     for name in names:
         original = deepcopy(base["services"][name])
         projected = deepcopy(actual["services"][name])
         del original["image"], projected["image"]
+        if name == "issuance":
+            if mode == "official":
+                assert "build" not in projected
+                original.pop("build")
+            else:
+                assert projected["build"] == {
+                    "context": ".",
+                    "dockerfile": "services/Dockerfile",
+                    "args": {"SERVICE_NAME": "issuance-native"},
+                }
+                projected["build"] = original["build"]
+            projected["entrypoint"] = original["entrypoint"]
+            projected["command"] = original["command"]
+            assert projected["environment"].pop("SERVICE_NAME") == "issuance_native"
+            assert projected["environment"].pop("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+            assert projected["environment"].pop("CANVAS_MIRROR_WORKER_ENABLED") == "false"
         if mode == "official" and name not in gate["EXTERNAL"]:
-            assert projected["environment"].pop("SERVICE_NAME") == name.replace(
-                "-", "_"
-            )
+            if name != "issuance":
+                assert projected["environment"].pop("SERVICE_NAME") == name.replace("-", "_")
         assert projected == original
 
 
@@ -174,17 +218,12 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
     assert len(names) == len(set(names)) == 19
     assert {item["service"] for item in report["plan"]} == set(names)
     native = set(names) - gate["EXTERNAL"]
-    assert len(native) == 18
-    assert gate["EXTERNAL"] == {"issuance"}
+    assert len(native) == 19
+    assert gate["EXTERNAL"] == set()
     assert "canvas-sync-worker" in native
     assert set(report["build_services"]) == (native if mode == "local" else set())
     for item in report["plan"]:
-        external = item["service"] in gate["EXTERNAL"]
-        if external:
-            assert item["image_expression"] == "${MARTY_ISSUANCE_IMAGE}"
-            assert item["effective_reference"] == gate["ISSUANCE_IMAGE"]
-            assert item["artifact_role"] == "issuance"
-        elif mode == "official":
+        if mode == "official":
             assert item["image_expression"] == "${MARTY_SERVICES_IMAGE}"
             assert item["effective_reference"] == gate["SERVICES_IMAGE"]
             assert item["artifact_role"] == "services"
@@ -195,17 +234,15 @@ def test_actual_plan_covers_inventory_builds_selectors_and_evidence(
             )
             assert item["image_expression"] == item["effective_reference"]
             assert item["artifact_role"] == "local"
-        has_selector = mode == "official" and not external
+        has_selector = mode == "official"
         assert item["selector_present"] is has_selector
         assert item["selector"] == (
-            item["service"].replace("-", "_") if has_selector else None
+            ("issuance_native" if item["service"] == "issuance"
+             else item["service"].replace("-", "_")) if has_selector else None
         )
-        assert item["build_eligible"] is (mode == "local" and not external)
+        assert item["build_eligible"] is (mode == "local")
         assert item["known_digest"] == (
-            gate["ISSUANCE_DIGEST"]
-            if external and mode == "official"
-            else gate["SERVICES_DIGEST"]
-            if mode == "official"
+            gate["SERVICES_DIGEST"] if mode == "official"
             else None
         )
     assert set(report["digests"]) == set(names)
@@ -269,9 +306,6 @@ def test_independent_projection_rejects_retagged_evidence_and_missing_build(
     [
         ("release", "release\nsynthetic-private-value"),
         ("release", "release:synthetic-private-value"),
-        ("issuance_reference", "synthetic.invalid/issuance:latest"),
-        ("issuance_reference", "synthetic.invalid/issuance@sha256:" + "f" * 64),
-        ("issuance_digest", "sha256:" + "f" * 64),
         ("services_reference", "synthetic.invalid/services:latest"),
         ("services_digest", "sha256:" + "f" * 64),
         (

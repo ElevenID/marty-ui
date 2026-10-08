@@ -613,7 +613,11 @@ impl CredentialIssuanceService {
         apply_issuer_context(&mut transaction, &issuer);
         let proof_jwt = proof_jwt(request).ok_or(CredentialIssuanceError::ProofRequired)?;
         let proof_claims = unverified_proof_claims(proof_jwt)?;
-        validate_audience(&proof_claims, &transaction.organization_id)?;
+        validate_audience(
+            &proof_claims,
+            &transaction.organization_id,
+            &self.issuer_base_url,
+        )?;
         let nonce = proof_claims
             .get("nonce")
             .and_then(Value::as_str)
@@ -1162,19 +1166,14 @@ fn allowed_audience_paths(organization_id: &str) -> [String; 4] {
 fn validate_audience(
     claims: &Map<String, Value>,
     organization_id: &str,
+    issuer_base_url: &str,
 ) -> Result<(), CredentialIssuanceError> {
     let audience = claims.get("aud").and_then(Value::as_str).unwrap_or("");
-    let path = if audience.contains("://") {
-        url::Url::parse(audience)
-            .map_err(|_| CredentialIssuanceError::MalformedProof)?
-            .path()
-            .trim_end_matches('/')
-            .to_owned()
-    } else {
-        audience.trim_end_matches('/').to_owned()
-    };
     let allowed = allowed_audience_paths(organization_id);
-    if !allowed.iter().any(|candidate| candidate == &path) {
+    if !allowed
+        .iter()
+        .any(|path| audience == format!("{issuer_base_url}{path}"))
+    {
         return Err(CredentialIssuanceError::AudienceMismatch {
             allowed,
             actual: audience.to_owned(),
@@ -1938,11 +1937,21 @@ mod tests {
     }
 
     #[test]
-    fn tenant_audience_requires_the_exact_normalized_path() {
+    fn tenant_audience_requires_the_exact_configured_url() {
         let valid = json!({"aud": "https://issuer.example/org/org-a"});
-        assert!(validate_audience(valid.as_object().expect("object"), "org-a").is_ok());
+        assert!(validate_audience(
+            valid.as_object().expect("object"),
+            "org-a",
+            "https://issuer.example"
+        )
+        .is_ok());
         let prefixed = json!({"aud": "https://issuer.example/evil/org/org-a"});
-        assert!(validate_audience(prefixed.as_object().expect("object"), "org-a").is_err());
+        assert!(validate_audience(
+            prefixed.as_object().expect("object"),
+            "org-a",
+            "https://issuer.example"
+        )
+        .is_err());
     }
 
     #[test]

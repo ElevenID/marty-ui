@@ -610,7 +610,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         credential_admission["schema"] == "marty.issuance-credential-admission/v1"
             && credential_admission["cases"]
                 .as_array()
-                .is_some_and(|cases| cases.len() == 21)
+                .is_some_and(|cases| cases.len() == 26)
             && credential_admission["inputs"]["path"] == "/v1/issuance/credential",
         "unexpected credential admission behavior contract",
     )?;
@@ -2006,8 +2006,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "DIDCOMM_TLS_CA_FILE",
                 "DIDCOMM_UNIVERSAL_RESOLVER_URL",
                 "ENVIRONMENT",
+                "GRPC_CA_CERT",
                 "GRPC_SERVICE_TOKEN",
                 "GRPC_SERVICE_TOKEN_FILE",
+                "GRPC_TLS_CA_CERT",
                 "INTEGRATION_SECRET_MASTER_KEY_ENV",
                 "ISSUANCE_GRPC_ENABLED",
                 "ISSUANCE_GRPC_PORT",
@@ -2047,6 +2049,9 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     "CANVAS_MIRROR_WORKER_RETRY_FAILED",
                     "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
                     "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+                    "GRPC_INSECURE_ALLOWED",
+                    "GRPC_TLS_CLIENT_CERT",
+                    "GRPC_TLS_CLIENT_KEY",
                 ]
             && coverage
                 .native_environment_variables
@@ -2082,8 +2087,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "issuance runtime mode coverage is incomplete",
     )?;
     require(
-        coverage.deployment == "beta-path-split",
-        "incomplete issuance host must remain beta-path-split",
+        coverage.deployment == "beta-rust-only-candidate",
+        "issuance candidate deployment selector differs",
     )?;
 
     Ok(CoverageSummary {
@@ -2951,7 +2956,7 @@ mod tests {
         assert_eq!(canonical_lf(b"first\r\nsecond\n"), b"first\nsecond\n");
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_ADMISSION))),
-            "8acbdaab9db036a65d32c377debb69e4415bacf61d417b5fa2b43dc6f5388c1b"
+            "8eb5135252e7c809f9805636e0e9a1726c2295faa299389355fe8ec17e49da81"
         );
         assert_eq!(
             format!("{:x}", Sha256::digest(canonical_lf(CREDENTIAL_SIGNING))),

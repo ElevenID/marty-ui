@@ -208,7 +208,29 @@ def image_override(handoff: dict[str, Any]) -> str:
         rows.extend((f"  {name}:", "    image: ${MARTY_SERVICES_IMAGE}",
                      "    environment:",
                      f"      SERVICE_NAME: {name.replace('-', '_')}"))
-    rows.extend(("  issuance:", "    image: ${MARTY_ISSUANCE_IMAGE}"))
+        if name == "issuance-native":
+            rows.extend(("      ENVIRONMENT: beta",
+                         "      GRPC_INSECURE_ALLOWED: 'true'"))
+    # The final protected overlay replaces the default Python alias and its
+    # Alembic job together. Both use the same signed Rust services artifact.
+    rows.extend(("  issuance:", "    image: ${MARTY_SERVICES_IMAGE}",
+                 "    build: !reset null",
+                 "    entrypoint: [/usr/local/bin/marty-issuance-service]",
+                 "    command: []", "    environment:",
+                 "      SERVICE_NAME: issuance_native",
+                 "      ENVIRONMENT: beta",
+                 "      GRPC_INSECURE_ALLOWED: 'true'",
+                 "      MARTY_SCHEMA_STARTUP_MODE: validate",
+                 "      CANVAS_MIRROR_WORKER_ENABLED: 'false'",
+                 "  issuance-migrations:",
+                 "    image: ${MARTY_SERVICES_IMAGE}", "    build: !reset null",
+                 "    entrypoint: [/usr/local/bin/marty-issuance-service]",
+                 "    command: [migrate]", "    environment:",
+                 "      SERVICE_NAME: issuance_native",
+                 "      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty",
+                 "    depends_on:",
+                 "      organization: {condition: service_healthy}",
+                 "      credential-template: {condition: service_healthy}"))
     require(handoff.get("services_image") and handoff.get("issuance_image"),
             "Signed aggregate image references are absent")
     return "\n".join(rows) + "\n"
@@ -434,8 +456,28 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             "Canvas worker command differs")
     issuance = services.get("issuance")
     require(isinstance(issuance, dict)
-            and issuance.get("image") == handoff["issuance_image"],
-            "Rendered beta issuance image differs from signed release")
+            and issuance.get("image") == handoff["services_image"]
+            and issuance.get("entrypoint")
+                == ["/usr/local/bin/marty-issuance-service"]
+            and issuance.get("command") == []
+            and environment(issuance).get("SERVICE_NAME") == "issuance_native"
+            and environment(issuance).get("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+            and environment(issuance).get("CANVAS_MIRROR_WORKER_ENABLED") == "false",
+            "Rendered beta issuance image differs from signed Rust release")
+    migrations = services.get("issuance-migrations")
+    require(isinstance(migrations, dict)
+            and migrations.get("image") == handoff["services_image"]
+            and migrations.get("entrypoint")
+                == ["/usr/local/bin/marty-issuance-service"]
+            and migrations.get("command") == ["migrate"]
+            and environment(migrations).get("SERVICE_NAME") == "issuance_native"
+            and str(environment(migrations).get("DATABASE_URL", "")).startswith(
+                "postgresql://")
+            and migrations.get("depends_on", {}).get("organization", {}).get("condition")
+                == "service_healthy"
+            and migrations.get("depends_on", {}).get("credential-template", {}).get("condition")
+                == "service_healthy",
+            "Rendered beta issuance migrator differs from signed Rust release")
     for name in ("passport-provider-ingress", "passport-callback-signer-supported"):
         require(name not in services,
                 "External physical provider profile entered synthetic beta Compose")
@@ -738,8 +780,7 @@ def verify_resume_plan(
                     require(state.get("Running") is False,
                             "Stopped old beta application restarted during resume")
                 else:
-                    expected = (recorded["issuance_image"] if service == "issuance"
-                                else recorded["services_image"])
+                    expected = recorded["services_image"]
                     config = container.get("Config")
                     require(isinstance(config, dict)
                             and config.get("Image") == expected,

@@ -43,7 +43,7 @@ def test_exact_runtime_remainder_stays_on_python_without_hiding_migrated_routes(
     assert coverage["remaining"]["grpc"] == 0
 
 
-def test_default_compose_selects_native_and_keeps_only_the_explicit_legacy_owner() -> (
+def test_default_compose_selects_native_and_retains_python_passport_alias() -> (
     None
 ):
     model = yaml.safe_load(
@@ -59,7 +59,15 @@ def test_default_compose_selects_native_and_keeps_only_the_explicit_legacy_owner
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
         "issuance-native:9005"
     )
+    assert "MARTY_ISSUANCE_IMAGE" in services["issuance"]["image"]
     assert services["issuance"]["environment"]["DIDCOMM_DELIVERY_OWNER"] == "native"
+    assert "entrypoint" not in services["issuance"]
+    assert CONTRACT["beta_candidate"] == {
+        "issuance_alias_runtime": "rust/services/issuance",
+        "passport_runtime_owner": "issuance-native",
+        "passport_contract": "contracts/issuance-physical-passport-native.json",
+        "acceptance_required_before_python_deletion": True,
+    }
 
 
 def test_default_conformance_kubernetes_and_envoy_select_native() -> None:

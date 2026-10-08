@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from scripts import prepare_passport_beta_aggregate_compose as compose
 from scripts import verify_passport_beta_rust_owner as rust_owner
@@ -15,6 +16,36 @@ from scripts.prepare_passport_beta_aggregate_compose import (
     BETA_ORIGIN, ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
     SIGNED_APPLICATIONS, NEW_SERVICES, prepare,
 )
+
+
+def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
+    handoff, *_ = candidate()
+    override = compose.image_override(handoff)
+    document = yaml.compose(override)
+    services_node = next(value for key, value in document.value
+                         if key.value == "services")
+    names = [key.value for key, _ in services_node.value]
+    assert len(names) == len(set(names))
+    services = yaml.safe_load(override.replace("!reset null", "null"))["services"]
+    for name in ("issuance", "issuance-native"):
+        environment = services[name]["environment"]
+        assert environment["ENVIRONMENT"] == "beta"
+        assert environment["GRPC_INSECURE_ALLOWED"] == "true"
+
+
+def test_live_operator_binds_all_signed_image_interpolation_inputs():
+    source = (Path(__file__).resolve().parents[1]
+              / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(
+                  encoding="utf-8")
+    for variable, field in (
+        ("MARTY_SERVICES_IMAGE", "services_image"),
+        ("MARTY_ISSUANCE_IMAGE", "issuance_image"),
+        ("MARTY_UI_RELEASE_IMAGE", "ui_image"),
+    ):
+        binding = f"$env:{variable} = [string]$script:plan.{field}"
+        assert source.count(binding) == 1
+        assert source.index(binding) < source.index("Invoke-SignedIssuanceMigration\n")
+
 
 
 def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
@@ -123,7 +154,24 @@ def candidate():
         "marty-network": None, "passport-callback-signing": None}
     services["passport-beta-bureau"]["networks"] = {
         "marty-network": None, "passport-callback-signing": None}
-    services["issuance"] = {"image": issuance_image}
+    services["issuance"] = {
+        "image": services_image,
+        "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": [],
+    }
+    services["issuance-migrations"] = {
+        "image": services_image,
+        "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": ["migrate"],
+        "environment": {
+            "SERVICE_NAME": "issuance_native",
+            "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
+        },
+        "depends_on": {
+            "organization": {"condition": "service_healthy"},
+            "credential-template": {"condition": "service_healthy"},
+        },
+    }
     services["auth"]["environment"].update({
         "UI_BASE_URL": BETA_ORIGIN,
         "UI_ADDITIONAL_BASE_URLS": "",
@@ -138,7 +186,12 @@ def candidate():
         BETA_ORIGIN + ",http://localhost:9080,http://localhost:3000,http://localhost:5173")
     services["flow"]["environment"]["PUBLIC_BASE_URL"] = BETA_ORIGIN
     services["signing-keys"]["environment"]["PUBLIC_DOMAIN"] = "beta.elevenidllc.com"
-    services["issuance"]["environment"] = {"ISSUER_BASE_URL": BETA_ORIGIN}
+    services["issuance"]["environment"] = {
+        "ISSUER_BASE_URL": BETA_ORIGIN,
+        "SERVICE_NAME": "issuance_native",
+        "MARTY_SCHEMA_STARTUP_MODE": "validate",
+        "CANVAS_MIRROR_WORKER_ENABLED": "false",
+    }
     services["keycloak"]["environment"] = {
         "KC_HOSTNAME": BETA_ORIGIN, "PUBLIC_DOMAIN": "beta.elevenidllc.com",
         "UI_BASE_URL": BETA_ORIGIN,

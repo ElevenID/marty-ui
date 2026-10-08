@@ -293,7 +293,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "deletion_history": [DELETION_HEAD], "deletion_base": "main",
         "deletion_repo": authority.DELETION_REPOSITORY,
         "deletion_merge_base": DELETION_HEAD,
-        "signed_image_merge_base": "7" * 40,
+        "signed_image_merge_base": "3" * 40,
         "baseline": baseline,
         "release_files": {
             relative: "\n".join(markers)
@@ -358,13 +358,14 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         if command[:2] == ["gh", "api"] and "/compare/" in command[2]:
             approved, current = command[2].rsplit("/", 1)[-1].split("...")
             merge_base = (values["signed_image_merge_base"]
-                          if approved == values["deletion_merge_commit"]
-                          and current == "3" * 40
+                          if approved == "3" * 40
+                          and current == values["deletion_merge_commit"]
                           else values["deletion_merge_commit"]
                           if approved == values["deletion_merge_commit"]
                           else values["deletion_merge_base"])
             return json.dumps({
                 "status": "identical" if approved == current else "ahead",
+                "ahead_by": 0 if approved == current else 1,
                 "behind_by": 0,
                 "base_commit": {"sha": approved},
                 "merge_base_commit": {"sha": merge_base},
@@ -507,6 +508,7 @@ def test_hidden_worktree_change_cannot_replace_verifier(
     ("published_tag_commit", "2" * 40), ("deletion_head", "2" * 40),
     ("deletion_merged", False),
     ("credentials_main_protected", False),
+    ("deletion_merge_commit", "3" * 40),
     ("signed_image_merge_base", "2" * 40),
 ])
 def test_authority_rejects_unapproved_source_or_deletion(

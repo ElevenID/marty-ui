@@ -554,7 +554,7 @@ def test_beta_compose_uses_the_generated_database_password_without_source_overla
         base.count(
             "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
         )
-        == 14
+        == 13
     )
     assert "./services/gateway/routes/signing_keys.py" not in tunnel
 
@@ -861,18 +861,31 @@ def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     assert '"dev-only-token"' not in script
 
 
-def test_beta_runner_preserves_the_pinned_external_issuance_image_role() -> None:
+def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
     helper = text("scripts/beta-application-image-plan.ps1")
-    assert '$externalIssuance = $service -eq "issuance"' in helper
-    assert "'${MARTY_ISSUANCE_IMAGE}'" in helper
-    assert (
-        'Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)'
-        in script
-    )
+    assert 'if ($service -eq "issuance") { "issuance_native" }' in helper
+    assert "'${MARTY_SERVICES_IMAGE}'" in helper
+    assert 'UseRustIssuance = [bool]$EnablePassportNative' in script
+    assert 'if (-not $EnablePassportNative)' in script
+    assert '"pull", $env:MARTY_ISSUANCE_IMAGE' in script
     assert "$imageRef = [string]$imageEvidence.inspect_reference" in script
     assert '"elevenid-local/issuance:${releaseVersion}"' not in script
+
+
+def test_beta_off_keeps_python_migration_upgrade_then_current() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+    assert 'UseRustIssuance = [bool]$EnablePassportNative' in script
+    assert '"postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty"' in script
+    assert '"postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty"' in script
+    for prefix, verify_name in (("rehearsal", "$rehearsalIssuanceVerify"),
+                                ("live", "$liveIssuanceVerify")):
+        upgrade_log = script.index(f'"issuance-migration-{prefix}.log"')
+        verify_args = script.index(f"-Arguments {verify_name}", upgrade_log)
+        verify_log = script.index(f'"issuance-migration-{prefix}-verify.log"', verify_args)
+        assert upgrade_log < verify_args < verify_log
+    assert script.count('@("python", "manage_migrations.py", "current")') == 2
 
 
 def test_beta_runner_proves_the_split_native_issuance_runtime() -> None:

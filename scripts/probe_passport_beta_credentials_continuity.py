@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove the signed beta Credentials replacement retired passport HTTP routes.
+"""Prove signed beta Rust issuance serves passport and persists unrelated writes.
 
 The private OID4VCI nonce request is a bounded, unrelated issuance database
 write. It does not issue a credential or claim broader issuance parity.
@@ -29,23 +29,12 @@ except ImportError:
 CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 NONCE = re.compile(r"[A-Za-z0-9_-]{32,128}\Z")
-PASSPORT_ROUTES = frozenset({
-    ("POST", "/v1/passport/applications"),
-    ("POST", "/v1/passport/applications/{application_id}/activate"),
-    ("POST", "/v1/passport/applications/{application_id}/generate-data-groups"),
-    ("POST", "/v1/passport/applications/{application_id}/generate-sod"),
-    ("GET", "/v1/passport/applications/{application_id}/production-status"),
-    ("POST", "/v1/passport/applications/{application_id}/quality-verify"),
-    ("POST", "/v1/passport/applications/{application_id}/submit-personalization"),
-    ("GET", "/v1/passport/capabilities"),
-    ("POST", "/v1/passport/webhooks/personalization"),
-})
-IMAGE_PREFIX = "ghcr.io/elevenid/marty-credentials-issuance@sha256:"
+IMAGE_PREFIX = "ghcr.io/elevenid/marty-ui-oss/services@sha256:"
 PRETRANSITION_FIELDS = frozenset({
     "schema", "verified", "source_commit", "postgres_container_id",
     "postgres_system_identifier", "database_oid", "fence_epoch",
     "migration_set_sha256", "issuance_container_id", "issuance_image",
-    "fence_verify_sql_sha256", "removed_python_passport_routes_absent",
+    "fence_verify_sql_sha256", "rust_passport_capabilities_verified",
     "unrelated_issuance_nonce_write_verified", "nonce_sha256",
     "receipt_sha256",
 })
@@ -79,42 +68,22 @@ def private_json(container: str, method: str, path: str,
     return value
 
 
-def packaged_routes(container: str, runner: Callable[[list[str]], str]) -> set[tuple[str, str]]:
-    # FastAPI's OpenAPI omits routes declared with include_in_schema=False.
-    # Inspect the same packaged app registry without running its lifespan.
-    code = (
-        "from issuance.main import app; import json; "
-        "print(json.dumps([{'path': route.path, 'methods': sorted(route.methods)} "
-        "for route in app.routes if getattr(route, 'methods', None)]))"
-    )
-    try:
-        value = json.loads(runner(["docker", "exec", container,
-                                   "python", "-c", code]))
-    except ValueError as exc:
-        raise HostProbeError("Packaged Credentials route registry is invalid") from exc
-    require(isinstance(value, list) and all(isinstance(item, dict)
-            and isinstance(item.get("path"), str)
-            and isinstance(item.get("methods"), list)
-            and all(isinstance(method, str) for method in item["methods"])
-            for item in value),
-            "Packaged Credentials route registry is invalid")
-    return {(method, item["path"]) for item in value
-            for method in item["methods"]}
-
-
 def replacement(plan: dict[str, Any], runner: Callable[[list[str]], str], *,
-                allow_running_ingress: bool = False) -> str:
+                allow_running_ingress: bool = False,
+                service: str = "issuance") -> str:
+    require(service in {"issuance", "issuance-native"},
+            "Rust issuance service selection is invalid")
     require(plan.get("schema") == "marty.passport-beta-aggregate-compose-plan/v1"
             and isinstance(plan.get("old_container_ids_by_service"), dict)
             and isinstance(plan.get("service_config_hashes"), dict),
             "Private Credentials plan is invalid")
-    expected_image = plan.get("issuance_image")
+    expected_image = plan.get("services_image")
     require(isinstance(expected_image, str)
             and expected_image.startswith(IMAGE_PREFIX)
             and DIGEST.fullmatch(expected_image[len(IMAGE_PREFIX):]) is not None,
             "Private Credentials image is not digest pinned")
-    old_id = plan["old_container_ids_by_service"].get("issuance")
-    expected_hash = plan["service_config_hashes"].get("issuance")
+    old_id = plan["old_container_ids_by_service"].get(service)
+    expected_hash = plan["service_config_hashes"].get(service)
     require(isinstance(old_id, str) and CONTAINER.fullmatch(old_id) is not None
             and isinstance(expected_hash, str)
             and DIGEST.fullmatch(expected_hash) is not None,
@@ -148,14 +117,14 @@ def replacement(plan: dict[str, Any], runner: Callable[[list[str]], str], *,
         if name in ingress and not allow_running_ingress:
             require(state.get("Running") is False,
                     "Public beta ingress is running during private Credentials proof")
-        if name != "issuance":
+        if name != service:
             continue
         container = record.get("Id")
         require(isinstance(container, str) and CONTAINER.fullmatch(container) is not None,
                 "Private Credentials container identity is invalid")
         if container == old_id:
             require(state.get("Running") is False,
-                    "Old Python issuance writer is still running")
+                    "Old issuance writer is still running")
             continue
         require(state.get("Running") is True and state.get("Status") == "running"
                 and config.get("Image") == expected_image
@@ -186,35 +155,24 @@ def replacement(plan: dict[str, Any], runner: Callable[[list[str]], str], *,
 
 
 def live_route_and_nonce_checks(plan: dict[str, Any], container: str,
-                                runner: Callable[[list[str]], str]) -> str:
-    """Apply identical private route and persisted-write checks in both phases."""
-    spec = private_json(container, "GET", "/openapi.json", runner)
-    paths = spec.get("paths")
-    require(isinstance(paths, dict), "Private Credentials route inventory is invalid")
-    routes = {(method.upper(), path)
-              for path, methods in paths.items() if isinstance(path, str)
-              and isinstance(methods, dict)
-              for method in methods if method.lower() in {"get", "post", "put", "patch", "delete"}}
-    require(not PASSPORT_ROUTES & routes
-            and not any(path == "/v1/passport" or path.startswith("/v1/passport/")
-                        for path in paths),
-            "Removed Python passport route remains registered")
-    actual_routes = packaged_routes(container, runner)
-    require(not PASSPORT_ROUTES & actual_routes
-            and not any(path == "/v1/passport" or path.startswith("/v1/passport/")
-                        for _method, path in actual_routes),
-            "Removed Python passport route remains in packaged ASGI registry")
-    require(("POST", "/v1/issuance/nonce") in routes
-            and ("POST", "/v1/issuance/credential") in routes
-            and ("POST", "/v1/issuance/nonce") in actual_routes
-            and ("POST", "/v1/issuance/credential") in actual_routes,
-            "Unrelated issuance routes are missing")
-    private_json(container, "GET", "/v1/passport/capabilities", runner,
-                 expected_status="404")
+                                runner: Callable[[list[str]], str], *,
+                                allow_running_ingress: bool = False) -> str:
+    """Exercise the signed Rust container through its real HTTP listener."""
+    native = replacement(plan, runner, service="issuance-native",
+                         allow_running_ingress=allow_running_ingress)
+    capabilities = private_json(native, "GET", "/v1/passport/capabilities", runner)
+    require(capabilities.get("supported") is True
+            and capabilities.get("encrypted_artifact_store") is True
+            and capabilities.get("bureau_configured") is True
+            and isinstance(capabilities.get("signer"), dict)
+            and capabilities["signer"].get("configured") is True
+            and capabilities["signer"].get("mode") == "MANAGED_ISSUER_PROFILE"
+            and capabilities.get("blockers") == [],
+            "Rust passport capabilities are unavailable")
     ready = private_json(container, "GET", "/ready", runner)
     require(ready.get("status") == "ready"
             and ready.get("service") == "issuance-service",
-            "Replacement Credentials readiness differs")
+            "Replacement Rust issuance readiness differs")
     written = private_json(container, "POST", "/v1/issuance/nonce", runner)
     nonce = written.get("c_nonce")
     require(isinstance(nonce, str) and NONCE.fullmatch(nonce) is not None,
@@ -304,9 +262,9 @@ def probe_pretransition(
         "verified": True,
         **before,
         "issuance_container_id": container,
-        "issuance_image": plan["issuance_image"],
+        "issuance_image": plan["services_image"],
         "fence_verify_sql_sha256": plan["fence_verify_sql_sha256"],
-        "removed_python_passport_routes_absent": True,
+        "rust_passport_capabilities_verified": True,
         "unrelated_issuance_nonce_write_verified": True,
         "nonce_sha256": nonce_digest,
     }
@@ -346,7 +304,7 @@ def verify_pretransition_receipt(
             and receipt.get("schema")
                 == "marty.passport-beta-credentials-pretransition/v1"
             and receipt.get("verified") is True
-            and receipt.get("removed_python_passport_routes_absent") is True
+            and receipt.get("rust_passport_capabilities_verified") is True
             and receipt.get("unrelated_issuance_nonce_write_verified") is True
             and CONTAINER.fullmatch(str(receipt.get("issuance_container_id")))
                 is not None
@@ -369,7 +327,7 @@ def verify_pretransition_receipt(
             and str(receipt["database_oid"]) == str(plan.get("database_oid"))
             and str(receipt["fence_epoch"]) == str(plan.get("fence_epoch"))
             and receipt["migration_set_sha256"] == plan.get("migration_set_sha256")
-            and receipt["issuance_image"] == plan.get("issuance_image")
+            and receipt["issuance_image"] == plan.get("services_image")
             and receipt["fence_verify_sql_sha256"]
                 == plan.get("fence_verify_sql_sha256"),
             "Pretransition Credentials receipt differs from signed plan")
@@ -402,8 +360,8 @@ def probe(plan: dict[str, Any], *, runner: Callable[[list[str]], str] = run,
                 and prior_receipt.get("source_commit") == plan.get("source_commit")
                 and str(prior_receipt.get("transition_txid"))
                     == str(owner.get("transition_txid"))
-                and prior_receipt.get("issuance_image") == plan.get("issuance_image")
-                and prior_receipt.get("removed_python_passport_routes_absent") is True
+                and prior_receipt.get("issuance_image") == plan.get("services_image")
+                and prior_receipt.get("rust_passport_capabilities_verified") is True
                 and prior_receipt.get("unrelated_issuance_nonce_write_verified") is True
                 and DIGEST.fullmatch(str(prior_receipt.get("nonce_sha256"))) is not None
                 and CONTAINER.fullmatch(str(prior_receipt.get("issuance_container_id")))
@@ -414,7 +372,8 @@ def probe(plan: dict[str, Any], *, runner: Callable[[list[str]], str] = run,
     require(prior_receipt is None
             or prior_receipt["issuance_container_id"] == container,
             "Prior Credentials container differs from running replacement")
-    nonce_digest = live_route_and_nonce_checks(plan, container, runner)
+    nonce_digest = live_route_and_nonce_checks(
+        plan, container, runner, allow_running_ingress=prior_receipt is not None)
     refreshed = owner_verifier(plan, runner=runner)
     require(refreshed == owner, "Rust owner changed during Credentials continuity proof")
     return {
@@ -423,8 +382,8 @@ def probe(plan: dict[str, Any], *, runner: Callable[[list[str]], str] = run,
         "source_commit": plan["source_commit"],
         "transition_txid": owner["transition_txid"],
         "issuance_container_id": container,
-        "issuance_image": plan["issuance_image"],
-        "removed_python_passport_routes_absent": True,
+        "issuance_image": plan["services_image"],
+        "rust_passport_capabilities_verified": True,
         "unrelated_issuance_nonce_write_verified": True,
         "nonce_sha256": nonce_digest,
     }
@@ -453,7 +412,7 @@ def verify_resume(plan: dict[str, Any], prior_bytes: bytes, *,
         "transition_txid": current["transition_txid"],
         "issuance_container_id": current["issuance_container_id"],
         "issuance_image": current["issuance_image"],
-        "removed_python_passport_routes_absent": True,
+        "rust_passport_capabilities_verified": True,
         "unrelated_issuance_nonce_write_verified": True,
         "fresh_nonce_sha256": current["nonce_sha256"],
     }

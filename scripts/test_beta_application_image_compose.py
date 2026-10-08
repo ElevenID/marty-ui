@@ -26,7 +26,7 @@ VERIFICATION_DIGEST = "sha256:" + "c" * 64
 RETAGGED_VERIFICATION_DIGEST = "sha256:" + "d" * 64
 ISSUANCE_IMAGE = "synthetic.invalid/issuance@" + ISSUANCE_DIGEST
 SERVICES_IMAGE = "synthetic.invalid/services@" + SERVICES_DIGEST
-EXTERNAL = frozenset({"issuance"})
+EXTERNAL = frozenset()
 
 HARNESS = r"""
 param([string]$Source, [string]$Runner, [string]$InputPath)
@@ -65,7 +65,7 @@ foreach ($case in $cases) {
         $plan=@(New-BetaApplicationImagePlan -Services $selectedServices -ReleaseVersion $case.release `
             -OfficialStackRelease $case.official -IssuanceReference $case.issuance_reference `
             -IssuanceDigest $case.issuance_digest -ServicesReference $case.services_reference `
-            -ServicesDigest $case.services_digest)
+            -ServicesDigest $case.services_digest -UseRustIssuance $case.rust_issuance)
         # The serializer and evidence owner consume a persisted plan, not an
         # accidental live PowerShell array/dictionary implementation detail.
         $plan=ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @($plan) -Depth 20 -Compress)
@@ -111,6 +111,7 @@ def inputs(mode):
         "verification_digest": VERIFICATION_DIGEST,
         "retagged_verification_digest": RETAGGED_VERIFICATION_DIGEST,
         "synthetic_inspect_digest": "sha256:" + "e" * 64,
+        "rust_issuance": True,
     }
 
 
@@ -162,18 +163,53 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
     expected = deepcopy(base)
     for name in names:
         service = expected["services"][name]
-        if name in EXTERNAL:
-            service["image"] = ISSUANCE_IMAGE if bound else "${MARTY_ISSUANCE_IMAGE}"
-        elif mode == "official":
+        if mode == "official":
             service["image"] = SERVICES_IMAGE if bound else "${MARTY_SERVICES_IMAGE}"
             owner = runpy.run_path(
                 str(ROOT / "scripts/test_canvas_worker_compose_render.py")
             )
             environment = owner["environment_mapping"](service.get("environment", {}))
-            environment["SERVICE_NAME"] = name.replace("-", "_")
+            environment["SERVICE_NAME"] = (
+                "issuance_native" if name == "issuance" else name.replace("-", "_")
+            )
             service["environment"] = environment
         else:
             service["image"] = f"elevenid-local/{name}:{RELEASE}"
+    if "issuance" in names:
+        alias = expected["services"]["issuance"]
+        alias["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
+        alias["command"] = []
+        if mode == "local":
+            alias["build"] = {
+                "context": ".",
+                "dockerfile": "services/Dockerfile",
+                "args": {"SERVICE_NAME": "issuance-native"},
+            }
+        else:
+            alias.pop("build", None)
+        owner = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
+        alias_env = owner["environment_mapping"](alias.get("environment", {}))
+        alias_env["SERVICE_NAME"] = "issuance_native"
+        alias_env["MARTY_SCHEMA_STARTUP_MODE"] = "validate"
+        alias_env["CANVAS_MIRROR_WORKER_ENABLED"] = "false"
+        alias["environment"] = alias_env
+        migrator = expected["services"].setdefault("issuance-migrations", {})
+        migrator["image"] = expected["services"]["issuance"]["image"]
+        migrator.pop("build", None)
+        migrator["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
+        migrator["command"] = ["migrate"]
+        migrator_env = owner["environment_mapping"](migrator.get("environment", {}))
+        migrator_env.update(
+            SERVICE_NAME="issuance_native",
+            DATABASE_URL=("postgresql://marty:marty_dev_password@postgres:5432/marty"
+                          if bound else
+                          "postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty"),
+        )
+        migrator["environment"] = migrator_env
+        migrator.setdefault("depends_on", {}).update(
+            organization={"condition": "service_healthy", "required": True},
+            **{"credential-template": {"condition": "service_healthy", "required": True}},
+        )
     if pinned:
         if mode != "local":
             raise AssertionError("Unexpected official verification override")
@@ -210,37 +246,20 @@ def assert_report(report, mode):
         raise AssertionError("Review changed application image inventory")
     expected = []
     for name in names:
-        external = name in EXTERNAL
-        selector_present = mode == "official" and not external
-        image = (
-            "${MARTY_ISSUANCE_IMAGE}"
-            if external
-            else (
-                "${MARTY_SERVICES_IMAGE}"
-                if mode == "official"
-                else f"elevenid-local/{name}:{RELEASE}"
-            )
-        )
+        selector_present = mode == "official"
+        image = ("${MARTY_SERVICES_IMAGE}" if mode == "official"
+                 else f"elevenid-local/{name}:{RELEASE}")
         expected.append(
             {
                 "service": name,
                 "image_expression": image,
-                "effective_reference": ISSUANCE_IMAGE
-                if external
-                else SERVICES_IMAGE
-                if mode == "official"
-                else image,
-                "artifact_role": "issuance"
-                if external
-                else "services"
-                if mode == "official"
-                else "local",
+                "effective_reference": SERVICES_IMAGE if mode == "official" else image,
+                "artifact_role": "services" if mode == "official" else "local",
                 "selector_present": selector_present,
-                "selector": name.replace("-", "_") if selector_present else None,
-                "build_eligible": mode == "local" and not external,
-                "known_digest": (ISSUANCE_DIGEST if external else SERVICES_DIGEST)
-                if mode == "official"
-                else None,
+                "selector": ("issuance_native" if name == "issuance"
+                             else name.replace("-", "_")) if selector_present else None,
+                "build_eligible": mode == "local",
+                "known_digest": SERVICES_DIGEST if mode == "official" else None,
             }
         )
     if report["plan"] != expected:
@@ -361,7 +380,7 @@ def run(compose_command=None, powershell=None):
             if (
                 len(names) != 19
                 or len(set(names)) != 19
-                or len(set(names) - EXTERNAL) != 18
+                or len(set(names) - EXTERNAL) != 19
             ):
                 raise AssertionError("Review changed application image inventory")
             overlay = directory / f"{mode}-images.yml"
@@ -393,6 +412,11 @@ def run(compose_command=None, powershell=None):
                     }
                     for name in names
                 }
+            }
+            synthetic["services"]["issuance-migrations"] = {
+                "image": ISSUANCE_IMAGE,
+                "command": ["synthetic-never-run"],
+                "environment": {"UNCHANGED": "preserve"},
             }
             synthetic_path = directory / "synthetic.json"
             synthetic_path.write_text(json.dumps(synthetic), encoding="utf-8")

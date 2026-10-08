@@ -1,4 +1,315 @@
+use serde_json::Value;
 use sqlx::{PgPool, Row};
+
+const ALEMBIC_FINAL_HEAD: &str = "issuance_event_owner";
+const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v1";
+const BASE_CATALOG: &str = include_str!("../migrations/0000_issuance_service_catalog.json");
+const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
+    (
+        "0001_oid4vci_public_protocol",
+        include_str!("../migrations/0001_oid4vci_public_protocol.sql"),
+    ),
+    (
+        "0002_physical_document_jobs",
+        include_str!("../migrations/0002_physical_document_jobs.sql"),
+    ),
+    (
+        "0003_passport_bureau_provider_binding",
+        include_str!("../migrations/0003_passport_bureau_provider_binding.sql"),
+    ),
+    (
+        "0004_passport_submission_intent",
+        include_str!("../migrations/0004_passport_submission_intent.sql"),
+    ),
+    (
+        "0005_passport_submission_provenance",
+        include_str!("../migrations/0005_passport_submission_provenance.sql"),
+    ),
+    (
+        "0006_passport_beta_batch_identity",
+        include_str!("../migrations/0006_passport_beta_batch_identity.sql"),
+    ),
+    (
+        "0007_passport_beta_batch_provenance",
+        include_str!("../migrations/0007_passport_beta_batch_provenance.sql"),
+    ),
+    (
+        "0008_passport_beta_batch_wire_evidence",
+        include_str!("../migrations/0008_passport_beta_batch_wire_evidence.sql"),
+    ),
+];
+const BASE_TABLES: &[&str] = &[
+    "application_templates",
+    "applications",
+    "authorization_sessions",
+    "canvas_award_candidates",
+    "canvas_candidate_observations",
+    "canvas_event_receipts",
+    "canvas_evidence_sync_jobs",
+    "canvas_evidence_sync_targets",
+    "canvas_learner_identities",
+    "canvas_lti_launch_states",
+    "canvas_oauth_authorizations",
+    "canvas_oauth_connections",
+    "canvas_platform_state_backups",
+    "canvas_platforms",
+    "canvas_program_binding_requirement_backups",
+    "canvas_program_bindings",
+    "canvas_worker_heartbeats",
+    "credential_delivery_records",
+    "evidence_fact_heads",
+    "evidence_facts",
+    "evidence_policy_reviews",
+    "issuance_events",
+    "issuance_transactions",
+    "issued_credentials",
+    "oid4vci_client_assertions",
+    "oid4vci_ephemeral_capabilities",
+    "oid4vci_registered_clients",
+    "organization_integration_secrets",
+    "physical_document_jobs",
+];
+
+/// Claim the final issuance schema under one database lock. A fresh database
+/// receives the checked-in baseline; an existing database must have completed
+/// the exact published Alembic head before Rust can take ownership.
+pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_schema_owner_v1', 0))")
+        .execute(&mut *transaction)
+        .await?;
+
+    let has_schema: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'issuance_service')",
+    )
+    .fetch_one(&mut *transaction)
+    .await?;
+    // The shared db-migrate job pre-creates service namespaces before this
+    // owner runs. An otherwise empty namespace is still a fresh database.
+    let empty_schema: bool = if has_schema {
+        sqlx::query_scalar(
+            "SELECT NOT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'issuance_service')
+                 AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'issuance_service')
+                 AND NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'issuance_service')",
+        )
+        .fetch_one(&mut *transaction)
+        .await?
+    } else {
+        true
+    };
+    if empty_schema {
+        sqlx::raw_sql(include_str!(
+            "../migrations/0000_issuance_service_baseline.sql"
+        ))
+        .execute(&mut *transaction)
+        .await?;
+        crate::migration_seed::seed_marty_application_templates(&mut transaction).await?;
+    } else {
+        let has_alembic: bool = sqlx::query_scalar(
+            "SELECT to_regclass('issuance_service.alembic_version') IS NOT NULL",
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        let has_ledger: bool = sqlx::query_scalar(
+            "SELECT to_regclass('issuance_service.rust_schema_migrations') IS NOT NULL",
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        if has_alembic {
+            let heads: Vec<String> =
+                sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
+                    .fetch_all(&mut *transaction)
+                    .await?;
+            if heads.as_slice() != [ALEMBIC_FINAL_HEAD] {
+                return Err(sqlx::Error::Protocol(format!(
+                    "issuance Alembic head must be exactly {ALEMBIC_FINAL_HEAD}; observed {heads:?}"
+                )));
+            }
+        } else if !has_ledger {
+            return Err(sqlx::Error::Protocol(
+                "issuance schema has neither the final Alembic head nor a Rust ledger".into(),
+            ));
+        } else {
+            let baseline_claimed: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM issuance_service.rust_schema_migrations
+                 WHERE version = $1)",
+            )
+            .bind(RUST_BASELINE_VERSION)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if !baseline_claimed {
+                return Err(sqlx::Error::Protocol(
+                    "issuance Rust ledger has no baseline claim".into(),
+                ));
+            }
+        }
+    }
+
+    validate_base_tables(&mut transaction).await?;
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS issuance_service.rust_schema_migrations (
+            version TEXT PRIMARY KEY,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )",
+    )
+    .execute(&mut *transaction)
+    .await?;
+    let existing_versions: Vec<String> =
+        sqlx::query_scalar("SELECT version FROM issuance_service.rust_schema_migrations")
+            .fetch_all(&mut *transaction)
+            .await?;
+    if existing_versions.iter().any(|version| {
+        version != RUST_BASELINE_VERSION
+            && !NATIVE_MIGRATIONS.iter().any(|(known, _)| version == known)
+    }) {
+        return Err(sqlx::Error::Protocol(format!(
+            "unknown issuance Rust schema versions: {existing_versions:?}"
+        )));
+    }
+    sqlx::query(
+        "INSERT INTO issuance_service.rust_schema_migrations (version)
+         VALUES ($1) ON CONFLICT (version) DO NOTHING",
+    )
+    .bind(RUST_BASELINE_VERSION)
+    .execute(&mut *transaction)
+    .await?;
+
+    for &(version, migration) in NATIVE_MIGRATIONS {
+        if existing_versions.iter().any(|applied| applied == version) {
+            continue;
+        }
+        sqlx::raw_sql(migration).execute(&mut *transaction).await?;
+        sqlx::query("INSERT INTO issuance_service.rust_schema_migrations (version) VALUES ($1)")
+            .bind(version)
+            .execute(&mut *transaction)
+            .await?;
+    }
+    validate_oid4vci(&mut transaction).await?;
+    validate_passport_connection(&mut transaction).await?;
+    transaction.commit().await
+}
+
+async fn validate_base_tables(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    let actual: Vec<String> =
+        sqlx::query_scalar("SELECT tablename FROM pg_tables WHERE schemaname = 'issuance_service'")
+            .fetch_all(&mut *connection)
+            .await?;
+    for table in BASE_TABLES {
+        if !actual.iter().any(|name| name == table) {
+            return Err(sqlx::Error::Protocol(format!(
+                "issuance baseline table {table} is missing"
+            )));
+        }
+    }
+    validate_base_catalog(connection).await?;
+    Ok(())
+}
+
+async fn validate_base_catalog(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    let expected: Value = serde_json::from_str(BASE_CATALOG)
+        .map_err(|error| sqlx::Error::Protocol(format!("invalid issuance catalog: {error}")))?;
+    let actual: Value = sqlx::query_scalar(
+        r#"WITH columns AS (
+            SELECT jsonb_agg(jsonb_build_object(
+                'table', table_name, 'name', column_name, 'udt', udt_name,
+                'nullable', is_nullable, 'default', column_default,
+                'length', character_maximum_length,
+                'precision', numeric_precision, 'scale', numeric_scale
+            )) AS value
+            FROM information_schema.columns
+            WHERE table_schema = 'issuance_service'
+              AND table_name NOT IN ('alembic_version', 'rust_schema_migrations')
+        ), constraints AS (
+            SELECT jsonb_agg(jsonb_build_object(
+                'table', t.relname, 'name', c.conname, 'type', c.contype,
+                'validated', c.convalidated, 'deferrable', c.condeferrable,
+                'definition', pg_get_constraintdef(c.oid)
+            )) AS value
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = 'issuance_service'
+              AND t.relname NOT IN ('alembic_version', 'rust_schema_migrations')
+        ), indexes AS (
+            SELECT jsonb_agg(jsonb_build_object(
+                'table', t.relname, 'name', i.relname, 'unique', x.indisunique,
+                'valid', x.indisvalid, 'ready', x.indisready,
+                'primary', x.indisprimary, 'key_count', x.indnkeyatts,
+                'definition', CASE WHEN i.relname = 'ux_canvas_sync_jobs_one_active_target'
+                    THEN NULL ELSE pg_get_indexdef(i.oid) END
+            )) AS value
+            FROM pg_index x
+            JOIN pg_class i ON i.oid = x.indexrelid
+            JOIN pg_class t ON t.oid = x.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = 'issuance_service'
+              AND t.relname NOT IN ('alembic_version', 'rust_schema_migrations')
+        )
+        SELECT jsonb_build_object(
+            'columns', columns.value, 'constraints', constraints.value,
+            'indexes', indexes.value
+        ) FROM columns, constraints, indexes"#,
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    for group in ["columns", "constraints", "indexes"] {
+        let required = expected[group].as_array().ok_or_else(|| {
+            sqlx::Error::Protocol(format!("issuance baseline catalog {group} is invalid"))
+        })?;
+        let found = actual[group].as_array().ok_or_else(|| {
+            sqlx::Error::Protocol(format!("issuance database catalog {group} is missing"))
+        })?;
+        for object in required {
+            let alternate = object.get("alternate_definition").cloned();
+            let mut canonical = object.clone();
+            if let Some(map) = canonical.as_object_mut() {
+                map.remove("alternate_definition");
+            }
+            let present = found.iter().any(|candidate| {
+                candidate["table"] == object["table"]
+                    && candidate["name"] == object["name"]
+                    && (candidate == &canonical
+                        || alternate.as_ref().is_some_and(|definition| {
+                            let mut variant = canonical.clone();
+                            variant["definition"] = definition.clone();
+                            candidate == &variant
+                        }))
+            });
+            if !present {
+                return Err(sqlx::Error::Protocol(format!(
+                    "issuance baseline {group} object changed or is missing: {}.{}",
+                    object["table"], object["name"]
+                )));
+            }
+        }
+    }
+    validate_canvas_sync_index(connection).await
+}
+
+async fn validate_canvas_sync_index(
+    connection: &mut sqlx::PgConnection,
+) -> Result<(), sqlx::Error> {
+    let index: Option<(String, String)> = sqlx::query_as(
+        "SELECT pg_get_indexdef(x.indexrelid, 1, false),
+                pg_get_expr(x.indpred, x.indrelid)
+         FROM pg_index x JOIN pg_class i ON i.oid = x.indexrelid
+         WHERE i.oid = to_regclass('issuance_service.ux_canvas_sync_jobs_one_active_target')",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    let accepted_predicates = [
+        "((status)::text = ANY ((ARRAY['queued'::character varying, 'leased'::character varying, 'retry'::character varying])::text[]))",
+        "((status)::text = ANY (ARRAY[('queued'::character varying)::text, ('leased'::character varying)::text, ('retry'::character varying)::text]))",
+    ];
+    if !index.is_some_and(|(key, predicate)| {
+        key == "target_id" && accepted_predicates.contains(&predicate.as_str())
+    }) {
+        return Err(sqlx::Error::Protocol(
+            "Canvas sync one-active-target index changed".into(),
+        ));
+    }
+    Ok(())
+}
 
 const REQUIRED_COLUMNS: &[(&str, &str)] = &[
     ("issuance_transactions", "access_token_expires_at"),

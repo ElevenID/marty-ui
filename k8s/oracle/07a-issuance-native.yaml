@@ -45,6 +45,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: ENVIRONMENT
+            - name: GRPC_INSECURE_ALLOWED
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: GRPC_INSECURE_ALLOWED
             - name: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
               valueFrom:
                 configMapKeyRef:

@@ -41,6 +41,13 @@ CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUNTIME_KEYS = {"container_id", "image_id", "configured_image", "started_at",
                 "config_hash", "networks"}
+ISSUANCE_MIGRATION_VERSIONS = sorted((
+    "issuance_service_baseline_v1", "0001_oid4vci_public_protocol",
+    "0002_physical_document_jobs", "0003_passport_bureau_provider_binding",
+    "0004_passport_submission_intent", "0005_passport_submission_provenance",
+    "0006_passport_beta_batch_identity", "0007_passport_beta_batch_provenance",
+    "0008_passport_beta_batch_wire_evidence",
+))
 
 
 def _probe_native_marker(plan: dict[str, Any], intent: dict[str, Any]) -> None:
@@ -56,6 +63,13 @@ def _probe_native_marker(plan: dict[str, Any], intent: dict[str, Any]) -> None:
                 f"{plan['migration_set_sha256']}|true|false")
     require(beta_psql(sql, host_run, plan["postgres_container_id"]) == expected,
             "Aggregate beta native migration marker or role state differs")
+    ledger = beta_psql(
+        "SELECT string_agg(version, ',' ORDER BY version) "
+        "FROM issuance_service.rust_schema_migrations",
+        host_run, plan["postgres_container_id"],
+    )
+    require(ledger == ",".join(ISSUANCE_MIGRATION_VERSIONS),
+            "Aggregate beta Rust issuance migration ledger differs")
     verify_fence(intent, host_run)
 
 
@@ -207,6 +221,34 @@ def collect_aggregate(
             and isinstance(plan.get("production_attachments_sha256"), str)
             and SHA256.fullmatch(plan["production_attachments_sha256"]) is not None,
             "Aggregate beta receipt, plan or source differs")
+    migration_path = artifact_dir / "aggregate-deployment.json.issuance-migration.json"
+    migration = read_json(migration_path)
+    require(receipt.get("issuance_migration_receipt_sha256")
+                == digest_file(migration_path).removeprefix("sha256:")
+            and migration.get("schema") == "marty.passport-beta-issuance-migration/v1"
+            and migration.get("source_commit") == source
+            and migration.get("services_image") == plan.get("services_image")
+            and migration.get("postgres_container_id")
+                == plan.get("postgres_container_id")
+            and migration.get("versions") == ISSUANCE_MIGRATION_VERSIONS,
+            "Aggregate beta Rust issuance migration receipt differs")
+    dependency_path = artifact_dir / "aggregate-deployment.json.issuance-dependency.json"
+    dependency = read_json(dependency_path)
+    recorded_runtime = receipt.get("beta_runtime")
+    recorded_issuance = (recorded_runtime.get("issuance")
+                         if isinstance(recorded_runtime, dict) else None)
+    require(receipt.get("issuance_dependency_receipt_sha256")
+                == digest_file(dependency_path).removeprefix("sha256:")
+            and dependency.get("schema") == "marty.passport-beta-issuance-dependency/v1"
+            and dependency.get("verified") is True
+            and dependency.get("source_commit") == source
+            and dependency.get("services_image") == plan.get("services_image")
+            and dependency.get("postgres_container_id")
+                == plan.get("postgres_container_id")
+            and dependency.get("issuance_container_id")
+                == (recorded_issuance.get("container_id")
+                    if isinstance(recorded_issuance, dict) else None),
+            "Aggregate beta Rust issuance dependency receipt differs")
     require(attest is not None,
             "Aggregate beta acceptance requires signed release attestations")
     require(isinstance(api_key, str) and len(api_key) >= 32,
@@ -337,7 +379,7 @@ def collect_aggregate(
     require(isinstance(hashes, dict) and recreate.issubset(runtime),
             "Aggregate beta signed application set is incomplete")
     for name in recreate:
-        image = plan["issuance_image"] if name == "issuance" else plan["services_image"]
+        image = plan["services_image"]
         require(observed[name]["oci_reference"] == image
                 and isinstance(hashes.get(name), str)
                 and SHA256.fullmatch(hashes[name]) is not None

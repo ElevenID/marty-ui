@@ -109,12 +109,20 @@ def fixture(tmp_path: Path, monkeypatch):
     plan_path = tmp_path / "aggregate-deployment.json.plan.json"
     plan["native_receipt_sha256"] = digest(native_path)
     write(plan_path, plan)
+    migration_path = tmp_path / "aggregate-deployment.json.issuance-migration.json"
+    write(migration_path, {
+        "schema": "marty.passport-beta-issuance-migration/v1",
+        "source_commit": COMMIT,
+        "services_image": SERVICES_IMAGE,
+        "postgres_container_id": postgres_id,
+        "versions": aggregate.ISSUANCE_MIGRATION_VERSIONS,
+    })
+    dependency_path = tmp_path / "aggregate-deployment.json.issuance-dependency.json"
     identities = {}
     live = {}
     for index, name in enumerate((*sorted(ALL_APPS), "postgres"), 1):
         container_id = format(index, "x").rjust(64, "0")
-        image = ("postgres:15" if name == "postgres" else
-                 signed["issuance_image"] if name == "issuance" else SERVICES_IMAGE)
+        image = "postgres:15" if name == "postgres" else SERVICES_IMAGE
         identity = {"container_id": container_id,
                     "image_id": "sha256:" + "3" * 64,
                     "configured_image": image,
@@ -133,6 +141,12 @@ def fixture(tmp_path: Path, monkeypatch):
                       "StartedAt": identity["started_at"]},
             "NetworkSettings": {"Networks": {NETWORK: {}}},
         }
+    write(dependency_path, {
+        "schema": "marty.passport-beta-issuance-dependency/v1",
+        "source_commit": COMMIT, "services_image": SERVICES_IMAGE,
+        "issuance_container_id": identities["issuance"]["container_id"],
+        "postgres_container_id": postgres_id, "verified": True,
+    })
     ui_id = "9" * 64
     ui_identity = {"container_id": ui_id,
                    "image_id": "sha256:" + "4" * 64,
@@ -194,6 +208,8 @@ def fixture(tmp_path: Path, monkeypatch):
         "beta_origin": "https://beta.elevenidllc.com",
         "source_commit": COMMIT, "plan_sha256": digest(plan_path),
         "native_receipt_sha256": plan["native_receipt_sha256"],
+        "issuance_migration_receipt_sha256": digest(migration_path),
+        "issuance_dependency_receipt_sha256": digest(dependency_path),
         "production_snapshot_sha256": plan["production_snapshot_sha256"],
         "beta_services": sorted(identities), "beta_runtime": identities,
         "ui_container_id": ui_id, "ui_runtime": ui_identity,
@@ -342,6 +358,46 @@ def test_rejects_missing_native_receipt_even_with_matching_plan(tmp_path, monkey
                 probe=probe, attest=lambda *_: True,
                 list_ids=lambda project: listed(live, project),
                 probe_native=lambda *_: None)
+
+
+def test_rejects_changed_issuance_migration_receipt(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    path = tmp_path / "aggregate-deployment.json.issuance-migration.json"
+    migration = json.loads(path.read_text(encoding="utf-8"))
+    migration["versions"].pop()
+    write(path, migration)
+    with pytest.raises(EvidenceError, match="Rust issuance migration receipt differs"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+def test_rejects_changed_issuance_dependency_receipt(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    path = tmp_path / "aggregate-deployment.json.issuance-dependency.json"
+    dependency = json.loads(path.read_text(encoding="utf-8"))
+    dependency["verified"] = False
+    write(path, dependency)
+    with pytest.raises(EvidenceError, match="Rust issuance dependency receipt differs"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+def test_rejects_live_issuance_migration_ledger_drift(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    calls = iter([
+        "7|" + COMMIT + "|" + "5" * 64 + "|true|false",
+        "issuance_service_baseline_v1",
+    ])
+    monkeypatch.setattr(aggregate, "beta_psql", lambda *_: next(calls))
+    with pytest.raises(EvidenceError, match="Rust issuance migration ledger differs"):
+        aggregate.collect_aggregate(
+            tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+            probe=probe, attest=lambda *_: True,
+            list_ids=lambda project: listed(live, project))
 
 
 def test_rejects_live_native_marker_drift(tmp_path, monkeypatch):
