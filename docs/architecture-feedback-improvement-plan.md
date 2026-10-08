@@ -2235,6 +2235,29 @@ timing evidence. Only then consider a separate fail-closed worker-test-only PR
 selector, with protected full qualification preserved and changes to shared
 fixture/support inputs excluded until their dependency closure is proven.
 
+A6 diagnostic follow-up (2026-10-08 local draft): a maintainer adds the
+`ci-worker-diagnostic` label **before a subsequent PR-head push**; that
+`synchronize` event adds a third, worker-only Rust matrix lane. Labeling an
+already-open PR alone does not start this workflow, and unrelated label
+changes must not restart full CI. The diagnostic lane runs alongside the
+existing Canvas and contracts lanes and aggregate gate. Its
+Bookworm compile selects only the worker acceptance target and real sync-worker
+binary; worker-only artifact verification precedes the unchanged pinned-process
+preflights and worker suite. A merge group never selects the diagnostic lane
+and retains the full two-lane plan. Three exact worker test-source files are
+excluded from the four root-Dockerignore release builders; the two dedicated
+Rust-image Dockerignores already exclude their test directories. A six-context
+guard requires every exclusion, the exact Cargo target/support inventory, and
+continued production-source inclusion. This is preparation for hosted
+measurement, not a measured speedup or authority to skip any ordinary job.
+The classifier's existing `--emit-verified-leaves` proof does not execute this
+new worker guard or emit worker paths; extending that proof belongs to the
+separate selective-validation pilot, after live diagnostic evidence.
+The first labeled hosted PR must prove live case counts, run-bound preflight
+digest, pinned image/process/database and cleanup evidence. A later distinct
+test-source-only pilot is required before considering selective PR CI; the
+workspace-wide Clippy and release-policy jobs remain possible bottlenecks.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

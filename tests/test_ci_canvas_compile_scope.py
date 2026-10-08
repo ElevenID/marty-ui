@@ -23,6 +23,25 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     by_name = {step.get("name"): step for step in steps}
     compile_step = by_name["Compile reusable Rust test executables"]
     compile_run = compile_step["run"]
+    worker_branch = compile_run.split(
+        'if [[ "${{ matrix.lane }}" == worker ]]; then', 1
+    )[1].split('elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1)[0]
+    assert worker_branch.count("--message-format=json") == 2
+    assert "-p marty-canvas-worker-acceptance" in worker_branch
+    assert "--test canvas_published_worker_contract" in worker_branch
+    assert "-p marty-issuance-service" in worker_branch
+    assert "--bin marty-canvas-sync-worker" in worker_branch
+    assert '--worker-only "$artifacts" target' in worker_branch
+    assert "rust:1\\.95-bookworm@sha256:" in worker_branch
+    assert "docker run --rm --network none --read-only" in worker_branch
+    for unrelated in (
+        "marty-canvas-acceptance",
+        "canvas_published_schema_contract",
+        "marty-gateway",
+        "marty-flow",
+        "marty-issuance-service --bin marty-issuance-service",
+    ):
+        assert unrelated not in worker_branch
     contracts_branch, canvas_branch = compile_run.split("else\n", 1)
     assert '[[ "${{ matrix.lane }}" == contracts ]]' in contracts_branch
     assert "cargo test --locked --workspace --no-run" in contracts_branch
@@ -127,11 +146,13 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     assert by_name["Prepare database contract executables"]["if"] == (
         "matrix.lane == 'contracts'"
     )
+    group_run = by_name["Run isolated database contract suites concurrently"]["run"]
+    assert "run-db-contract-groups.py worker-preflights" in group_run
+    assert "run-db-contract-groups.py worker-canvas" in group_run
     assert (
-        by_name["Run isolated database contract suites concurrently"]["run"]
-        == "python3 ../scripts/ci/run-db-contract-groups.py "
+        "run-db-contract-groups.py "
         "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
-    )
+    ) in group_run
     assert "if" not in by_name["Run isolated database contract suites concurrently"]
     assert (
         "cargo test --locked --workspace"
@@ -145,9 +166,12 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     )
     job = workflow["jobs"]["test-rust-services"]
     assert job["if"] == "needs.changes.outputs.rust == 'true'"
-    assert job["strategy"]["matrix"] == {
-        "lane": "${{ fromJSON(needs.changes.outputs.rust_matrix) }}"
-    }
+    matrix = job["strategy"]["matrix"]["lane"]
+    assert "github.event_name == 'pull_request'" in matrix
+    assert "ci-worker-diagnostic" in matrix
+    assert "needs.changes.outputs.rust_runtime == 'true'" in matrix
+    assert '\'["canvas","contracts","worker"]\'' in matrix
+    assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     changes = workflow["jobs"]["changes"]
     assert (
         changes["outputs"]["rust_matrix"] == "${{ steps.classify.outputs.rust_matrix }}"
