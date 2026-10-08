@@ -415,7 +415,9 @@ exec /usr/bin/grep "$@"
 set -euo pipefail
 name="${0##*/}"
 [[ "$MARTY_CANVAS_WORKER_TEST_BINARY" == "$TEST_WORKER_BINARY" ]] || exit 91
-[[ "$MARTY_ISSUANCE_TEST_BINARY" == "$TEST_ISSUANCE_BINARY" ]] || exit 91
+if [[ "${TEST_WORKER_ONLY_MODE:-0}" != 1 ]]; then
+  [[ "$MARTY_ISSUANCE_TEST_BINARY" == "$TEST_ISSUANCE_BINARY" ]] || exit 91
+fi
 record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
@@ -614,6 +616,9 @@ fi
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
+                "TEST_WORKER_ONLY_MODE": "1"
+                if arguments and arguments[0].startswith("worker-")
+                else "0",
                 "CONTRACT_SOURCE": SCRIPT.as_posix(),
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
@@ -717,8 +722,9 @@ def test_caller_cannot_override_native_validation_tier(
 @pytest.mark.parametrize(
     "row", ["missing", "duplicate", "ignored", "failed", "substituted"]
 )
-def test_canvas_fast_owner_must_actually_pass_once(shell_case, row):
-    result, calls = shell_case(["full"], fast_owner_row=row)
+@pytest.mark.parametrize("mode", ["full", "worker-full"])
+def test_canvas_fast_owner_must_actually_pass_once(shell_case, row, mode):
+    result, calls = shell_case([mode], fast_owner_row=row)
     assert result.returncode != 0
     assert any(call[0] == "child" and call[1] == "worker-contract" for call in calls)
     assert "fast owner did not execute exactly once and pass" in result.stderr
@@ -906,6 +912,112 @@ def test_worker_preflight_does_not_claim_rendered_config_completion(shell_case):
     result, calls = shell_case(["timeout-preflight"], config_marker="missing")
     assert result.returncode == 0, result.stderr
     assert not any("--test-threads=4" in call for call in calls)
+
+
+def test_opt_in_worker_full_keeps_exact_worker_owner_without_composition(shell_case):
+    result, calls = shell_case(["worker-full"])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    assert all(call[1] == "worker-contract" for call in children)
+    assert children[0] == ["child", "worker-contract", "1", "--list"]
+    assert any("--test-threads=1" in call for call in children)
+    assert any("--test-threads=4" in call for call in children)
+    assert [call for call in calls if call[0] == "docker"] == [
+        ["docker", "pull", pin] for pin in PINS
+    ]
+    assert (
+        "Canvas tier inventory: exact compiled worker selection confirmed"
+        in result.stdout
+    )
+
+
+@pytest.mark.parametrize("name,target", PREFLIGHTS)
+def test_opt_in_worker_preflight_needs_only_its_owned_target(
+    shell_case, name: str, target: str
+):
+    result, calls = shell_case([f"worker-{name}"])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    assert children == [
+        ["child", "worker-contract", "1", "--list"],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            target,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+    ]
+    assert not any(
+        call[1:3] == ["-r", "--arg"] and "canvas_published_schema_contract" in call
+        for call in calls
+    )
+
+
+def test_opt_in_worker_reuse_requires_exact_run_bound_proof_before_image_pull(
+    shell_case, tmp_path
+):
+    evidence = tmp_path / "canvas-published-preflights.sha256"
+    result, calls = shell_case(["worker-full-after-preflights"])
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+    evidence.write_text(
+        hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+        + "\n12345\n1\ntest-rust-services\n0\n",
+        newline="\n",
+    )
+    result, calls = shell_case(["worker-full-after-preflights"])
+    assert result.returncode == 0, result.stderr
+    worker_full = next(
+        call
+        for call in calls
+        if call[:2] == ["child", "worker-contract"] and "--test-threads=4" in call
+    )
+    assert [
+        worker_full[index + 1]
+        for index, item in enumerate(worker_full[:-1])
+        if item == "--skip"
+    ] == [
+        "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        *FAST_MODE_SKIPS,
+    ]
+    assert not any(call[:2] == ["child", "contract"] for call in calls)
+    mismatched, mismatched_calls = shell_case(
+        ["worker-full-after-preflights"], run_id="other-run"
+    )
+    assert mismatched.returncode != 0
+    assert not any(call[0] == "docker" for call in mismatched_calls)
+
+
+def test_opt_in_worker_failure_propagates_and_removes_owned_log(shell_case, tmp_path):
+    result, calls = shell_case(["worker-full"], failure="worker-contract-full")
+    assert result.returncode != 0
+    assert any("--test-threads=4" in call for call in calls)
+    assert not list(tmp_path.glob("canvas-worker-only.*"))
+
+
+def test_opt_in_worker_missing_case_fails_before_image_pull(shell_case):
+    cases = [
+        f"{name}: test"
+        for name in sorted(set(required_registrations()) | set(MIGRATED_CASES))
+        if name != TIMEOUT_TARGET
+    ]
+    result, calls = shell_case(["worker-full"], registrations=cases)
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+
+
+def test_opt_in_worker_same_count_substitution_fails_before_image_pull(shell_case):
+    names = sorted(set(required_registrations()) | set(MIGRATED_CASES))
+    cases = [
+        f"{('substituted_worker_timeout' if name == TIMEOUT_TARGET else name)}: test"
+        for name in names
+    ]
+    result, calls = shell_case(["worker-full"], registrations=cases)
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
 
 
 @pytest.mark.parametrize("arguments", [[], ["full"]])
@@ -1573,7 +1685,8 @@ def test_preflight_digest_selects_worker_owner_not_stale_packages(
                 artifact("marty-issuance-service", stale),
                 artifact("marty-canvas-acceptance", old_acceptance),
             )
-        ) + "\n",
+        )
+        + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="exactly one Canvas worker contract"):
