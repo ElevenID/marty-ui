@@ -2716,6 +2716,12 @@ targeted Clippy with `-D warnings`, Rustfmt and diff checks. Core commit:
 `e0c7ab3`. The old `issuer.rs` mDoc fixture still has test-only private-key
 branches and other protocol assertions to port or retire before deleting the
 local issuer signing API. No hosted CI or PR was triggered for this checkpoint.
+The next holder-proof gap is concrete: production
+`WalletEngine::prepare_proof_jwt` accepts only P-256/ES256, while the old
+scalar binding test covers Ed25519 `did:key` proof binding for IETF SD-JWT.
+Extend the public-only prepared proof API to EdDSA with algorithm-bound
+signature verification and a public-only Ed25519 `did:key` derivation, prove
+it against a remote OpenBao holder key, then retire that local fixture.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
