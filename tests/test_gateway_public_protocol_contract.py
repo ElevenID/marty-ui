@@ -194,7 +194,7 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
         ('rust_matrix=\'["canvas","contracts"]\'', "rust_matrix='[\"canvas\"]'"),
         ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
         (
-            "cargo test --locked --workspace --exclude marty-canvas-acceptance",
+            "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance",
             "cargo test --locked -p marty-canvas-acceptance",
         ),
         (

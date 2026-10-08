@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 TEST_TARGETS = (
-    ("marty-canvas-acceptance", "canvas_published_worker_contract", "test"),
+    ("marty-canvas-worker-acceptance", "canvas_published_worker_contract", "test"),
     ("marty-canvas-acceptance", "canvas_published_schema_contract", "test"),
     ("marty-issuance-service", "canvas_oauth_behavior", "test"),
     ("marty-issuance-service", "issuance-behavior", "test"),

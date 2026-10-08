@@ -14,12 +14,16 @@ from scripts.ci.check_canvas_tier_obligations import (
     listed_test_names,
     validate,
     validate_fast_owner_execution,
+    validate_package_migration,
     validate_selection,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = json.loads(
     (ROOT / "contracts/canvas-worker-tier-obligations.json").read_text(encoding="utf-8")
+)
+MIGRATION = json.loads(
+    (ROOT / "contracts/canvas-worker-package-migration.json").read_text(encoding="utf-8")
 )
 RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 
@@ -35,6 +39,7 @@ RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 def test_ci_inventory_is_not_copied_into_service_images(ignore_file: str) -> None:
     lines = (ROOT / ignore_file).read_text(encoding="utf-8").splitlines()
     assert "contracts/canvas-worker-tier-obligations.json" in lines
+    assert "contracts/canvas-worker-package-migration.json" in lines
 
 
 def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
@@ -44,6 +49,25 @@ def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
             assert "canvas-worker-tier-obligations.json" not in source.read_text(
                 encoding="utf-8"
             ), source.relative_to(ROOT)
+            assert "canvas-worker-package-migration.json" not in source.read_text(
+                encoding="utf-8"
+            ), source.relative_to(ROOT)
+
+
+def test_worker_package_migration_accounts_for_all_original_case_ids() -> None:
+    names = set(MIGRATION["case_ids"])
+    assert len(names) == 147
+    assert discovered() <= names
+    validate_package_migration(MIGRATION, names)
+
+
+def test_worker_package_migration_rejects_same_count_substitution() -> None:
+    names = set(MIGRATION["case_ids"])
+    names.remove("worker_repository_root_is_independent_of_cargo_package_depth")
+    names.add("worker_same_count_substitute")
+    assert len(names) == 147
+    with pytest.raises(ValueError, match="missing a compiled case"):
+        validate_package_migration(MIGRATION, names)
 
 
 def discovered() -> set[str]:

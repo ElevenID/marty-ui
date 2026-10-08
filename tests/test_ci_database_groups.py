@@ -114,7 +114,7 @@ def test_preflight_evidence_requires_both_successes_and_same_executable(
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "path+file:///checkout/rust/crates/canvas-acceptance#marty-canvas-acceptance@0.1.0",
+                "package_id": "path+file:///checkout/rust/crates/canvas-worker-acceptance#marty-canvas-worker-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
@@ -418,7 +418,7 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
     ).read_text(encoding="utf-8")
     worker = (
-        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     fixed_names = support.split("const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[", 1)[
         1
@@ -456,7 +456,7 @@ def test_repository_matrix_timing_labels_have_exact_rust_owners() -> None:
         ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
     ).read_text(encoding="utf-8")
     worker = (
-        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     labels = re.findall(
         r'RepositoryMatrix::(?:RosterMetadata|RosterExpiredBeforeWrite|RosterExpiredDuringLock|ResourceRace|Validation) => "([a-z_]+)"',

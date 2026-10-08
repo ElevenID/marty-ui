@@ -939,7 +939,7 @@ jobs:
                  }
                 # Resolve shared test features once; the Canvas library is an
                 # empty ownership marker guarded separately from real targets.
-                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-issuance-service \
+                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-issuance-service \
                   --lib \
                   --test canvas_published_worker_contract \
                   --test canvas_published_schema_contract \
@@ -1416,7 +1416,7 @@ jobs:
             set +e
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
-              cargo test --locked --workspace --exclude marty-canvas-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+              cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")

@@ -4291,6 +4291,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-canvas-worker-acceptance"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "ed25519-dalek",
+ "futures-util",
+ "hex",
+ "hmac 0.12.1",
+ "http-body-util",
+ "hyper",
+ "marty-issuance-service",
+ "percent-encoding",
+ "prost",
+ "redis",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "zip",
+]
+
+[[package]]
 name = "marty-compliance-profile"
 version = "0.1.0"
 dependencies = [
