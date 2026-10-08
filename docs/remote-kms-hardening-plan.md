@@ -6930,3 +6930,12 @@ Docker inspect found no `8005/tcp` mapping after the test container exited.
 The smoke harness needs to report an early container exit, and the packaged
 runtime failure needs local reproduction or captured logs before the next
 hosted run. This is separate from the CodeQL transport finding.
+
+2026-10-08 UI image-job local reproduction: Docker built the exact current
+Issuance target (`rust/services/Dockerfile.ci`, `marty-issuance:kms-local`) and
+the packaged-image smoke script passed twice against disposable PostgreSQL
+and the synthetic remote-secret service. The first hosted failure therefore
+has no locally reproduced service-startup cause. The smoke harness now waits
+briefly for the published port mapping and prints Issuance and remote-service
+logs if the container exits or never receives one; this makes a remaining
+hosted-only failure diagnosable. It has not yet passed on the new PR head.

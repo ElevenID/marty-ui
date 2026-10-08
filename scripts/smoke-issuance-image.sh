@@ -84,8 +84,18 @@ docker run --detach \
   --publish 127.0.0.1::8005 \
   "$image" \
   >/dev/null
-port_mapping="$(docker port "$service" 8005/tcp 2>/dev/null || true)"
-port="${port_mapping##*:}"
+port=""
+for attempt in {1..60}; do
+  port_mapping="$(docker port "$service" 8005/tcp 2>/dev/null || true)"
+  port="${port_mapping##*:}"
+  if [[ -n "$port_mapping" && "$port" =~ ^[0-9]+$ ]]; then
+    break
+  fi
+  if [[ "$(docker inspect --format '{{.State.Running}}' "$service")" != true ]]; then
+    break
+  fi
+  sleep 0.25
+done
 if [[ -z "$port_mapping" || ! "$port" =~ ^[0-9]+$ ]]; then
   docker inspect --format 'Issuance container state: {{.State.Status}}' "$service" || true
   docker logs "$service" || true
