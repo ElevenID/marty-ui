@@ -824,6 +824,20 @@ Consolidate final pin updates and release preparation after dependency heads are
 stable. Split a group only when dependency ordering, reviewability, or rollback
 safety provides a concrete reason, and record that reason here.
 
+2026-10-07 batching decision: keep the Core SD-JWT format-test retirement and
+wallet verified-presentation fixture migration in the *same Core feature PR*.
+The wallet suite still imports the test-only `sign_sd_jwt(IssuerKey, ...)`
+helper, retains issuer and holder private JWKs, and re-signs mutated JWTs.
+Deleting that helper first breaks the Core test build; deleting wallet tests
+would lose positive presentation and adversarial verification assertions.
+Replace credential construction and mutation re-signing with disposable
+OpenBao operations, and preserve wallet/device-key coverage only where it is
+an explicitly supported holder capability. Then remove the helper, local
+issuer-key fixtures and any redundant unit cases together. Keep this local
+until the whole Core feature diff passes its regression, security and quality
+review; pin it in UI once, then qualify the grouped Core, UI and Credentials
+PRs in dependency order. Corrections to each group stay in its feature PR.
+
 ## Work tracker
 
 | ID | Work and exit evidence | Status |
@@ -2821,6 +2835,15 @@ The live target now also checks that the issuer-signed `age_over_18` item is
 the CBOR boolean `true`, rather than merely checking its name. All four live
 cases passed again against a fresh disposable OpenBao and Rustfmt/diff checks
 passed; the container was removed. Core follow-up commit: `078800a`.
+Core remote SD-JWT coverage now checks the `vc+sd-jwt` header, selective
+presentation of one of two disclosures, rejection of an unknown disclosure,
+and signing an IETF numeric expiration beyond the VCDM calendar range with a
+non-exportable ES256 key. The three live tests passed against a fresh marked
+loopback OpenBao; Rustfmt and diff checks passed, and the container was
+removed. Core commit: `9b03621`. The attempted local `IssuerKey` fixture
+removal was reverted after the wallet verified-presentation test dependency
+surfaced. That wallet suite is the next assertion-preserving migration in the
+same Core feature PR. No hosted CI or PR was triggered for this checkpoint.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
