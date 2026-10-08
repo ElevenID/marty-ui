@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; Credentials commit `ab0e3e8` pins its Rust graph and CI wheel checkout to Core `d41d87c`. A locally built pair of exact-revision Windows wheels passed the qualified Python suite (1756 passed, 29 skipped, two expected published-manifest gate tests deselected); actual published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All current hosted checks, including CodeQL, Fast Rust Preflight and CI Gate, pass; the PR remains draft with review required. UI and Credentials PRs, exact artifacts and deployment cutover remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy and Compliance Profile storage records. Focused tests and disposable PostgreSQL checks pass for earlier stores; the three recently guarded profile/policy packages pass tests and strict Clippy. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy, Compliance Profile and Flow record boundaries. Focused tests and disposable PostgreSQL checks pass for earlier stores; the recently guarded packages pass tests and strict Clippy. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
 
 ### First execution steps
 
@@ -6691,3 +6691,19 @@ reference remains accepted. The Compliance Profile package passes five
 library and eight integration tests; all-target Clippy passes with warnings
 denied on Rust 1.95. This remains part of the uncommitted broad UI candidate;
 an assembled fresh-database and shipped-artifact proof is still required.
+
+2026-10-08 K10 Flow JSON-boundary correction: Flow's key-name-only context
+check missed private JWK parameters such as `d` and JSON-encoded private
+fields. It now retains its precise path errors for known names and applies
+the shared Rust policy as a fallback. PostgreSQL's common definition,
+instance and artifact validators and row decoders apply the same policy;
+callback payloads and application-event plans are checked on write/read.
+The in-memory repository also checks direct definition, instance, artifact,
+finalization callback and planned-event writes through one shared helper.
+A direct PostgreSQL repository test rejects a private JWK before connection;
+in-memory tests prove rejected context and artifact payloads are not stored.
+The Flow package's full library/integration test run passed, and focused
+tests plus all-target warnings-denied Clippy passed after the shared-helper
+and callback changes on Rust 1.95. This remains uncommitted in the broad UI
+feature candidate. Other persisted JSON fields and an assembled database
+inspection remain open.
