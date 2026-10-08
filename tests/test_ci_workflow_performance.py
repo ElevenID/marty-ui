@@ -400,10 +400,12 @@ def _classify_changed_paths(
     event: str = "pull_request",
     include_rust_plan: bool = False,
     include_planner_plan: bool = False,
+    include_rollback_plan: bool = False,
     include_shadow: bool = False,
     proof_failure: bool = False,
     fetch_failure: bool = False,
     missing_base: bool = False,
+    working_directory: Path | None = None,
 ) -> list[dict[str, str]]:
     """Exercise the real Bash classifier against synthetic diffs."""
     _, document = _workflow(CI_PATH)
@@ -512,6 +514,7 @@ done < "$SYNTHETIC_PATHS_FILE"
         # failure evidence; no ownership or full-plan fallback is relaxed.
         timeout=30,
         env=environment,
+        cwd=working_directory or ROOT,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
@@ -524,6 +527,7 @@ done < "$SYNTHETIC_PATHS_FILE"
             if (
                 (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
                 and (include_planner_plan or key != "planner_only")
+                and (include_rollback_plan or key != "rollback_test_only")
             )
         }
         for output in (
@@ -817,6 +821,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust_runtime",
         "rust_matrix",
         "planner_only",
+        "rollback_test_only",
         "release",
         "verification",
         "security",
@@ -925,6 +930,9 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     for key, flag in selections.items():
         assert gate["env"][key] == f"${{{{ needs.changes.outputs.{flag} }}}}"
     assert gate["env"]["RUST_MATRIX"] == "${{ needs.changes.outputs.rust_matrix }}"
+    assert gate["env"]["ROLLBACK_TEST_ONLY"] == (
+        "${{ needs.changes.outputs.rollback_test_only }}"
+    )
     bash = "bash"
     if os.name == "nt":
         git = shutil.which("git")
@@ -962,6 +970,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             }
         )
         environment.update(selection_overrides or {})
+        environment.setdefault("ROLLBACK_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
             '["contracts"]' if leaf_only else '["canvas","contracts"]'
         )
@@ -1024,6 +1033,34 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=17).returncode != 0
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
+    assert (
+        exercise(
+            ("release", "security"),
+            selection_overrides={"ROLLBACK_TEST_ONLY": "true"},
+        ).returncode
+        == 0
+    )
+    assert (
+        exercise(
+            ("release",), selection_overrides={"ROLLBACK_TEST_ONLY": "true"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            tuple(selections.values()),
+            event="merge_group",
+            selection_overrides={"ROLLBACK_TEST_ONLY": "true"},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("release", "security"),
+            selection_overrides={"ROLLBACK_TEST_ONLY": "missing"},
+        ).returncode
+        != 0
+    )
     assert exercise(("rust",), event="merge_group", leaf_only=True).returncode != 0
     assert (
         exercise(
@@ -1750,8 +1787,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
-        # command, and the mutually exclusive planner-only PR invocation.
-        expected_refs = 3 if path == "tests/test_ci_workflow_performance.py" else 1
+        # command, and two mutually exclusive test-source-only PR invocations.
+        expected_refs = 4 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -2084,9 +2121,11 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     planner_command = steps["Run planner-owned PR checks"]["run"]
     assert "tests/test_plan_affected_rust.py" in planner_command
     assert "tests/test_ci_workflow_performance.py" in planner_command
-    assert steps["Run repository release checks"]["if"] == (
-        "needs.changes.outputs.planner_only != 'true'"
+    complete_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true'"
     )
+    assert steps["Run repository release checks"]["if"] == complete_only
     assert steps["Run repository release checks"]["run"] == (
         "python -m pytest tests -v --tb=short"
     )
@@ -2099,9 +2138,138 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
         "Require a compatible Credentials image for native DIDComm consumers",
         "Require the event-owner migration for native retention",
     ):
-        assert steps[name]["if"] == "needs.changes.outputs.planner_only != 'true'"
+        assert steps[name]["if"] == complete_only
     assert steps["Report affected Rust packages in shadow mode"]["if"] == (
         "github.event_name == 'pull_request'"
+    )
+
+
+def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    source = "tests/test_beta_worker_launch_rollback.py"
+    assert workflow["jobs"]["changes"]["outputs"]["rollback_test_only"] == (
+        "${{ steps.classify.outputs.rollback_test_only }}"
+    )
+
+    def classify(paths, **kwargs):
+        return _classify_changed_paths(
+            paths,
+            tmp_path,
+            combined=True,
+            include_rust_plan=True,
+            include_planner_plan=True,
+            include_rollback_plan=True,
+            **kwargs,
+        )[0]
+
+    exact = classify([source])
+    assert exact == {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "rust_runtime": "false",
+        "rust_matrix": '["canvas","contracts"]',
+        "planner_only": "false",
+        "rollback_test_only": "true",
+        "release": "true",
+        "verification": "false",
+        "security": "true",
+    }
+    assert classify([])["rollback_test_only"] == "false"
+    for other in (
+        "docs/architecture-feedback-improvement-plan.md",
+        "scripts/beta-worker-launch-contract.ps1",
+        "scripts/deploy-local-beta-release.ps1",
+        "scripts/restore-local-beta-release.ps1",
+        ".github/workflows/ci.yml",
+        "tests/test_beta_worker_launch_rollback_helper.py",
+        "tests/package-lock.json",
+        "rust/services/issuance/src/main.rs",
+        "unrecognized/rollback-input.bin",
+        "renamed/rollback-contract.py",
+    ):
+        mixed = classify([source, other])
+        assert mixed["rollback_test_only"] == "false", other
+        assert mixed["all"] == "true", other
+    assert classify([source, source])["all"] == "true"
+    no_base = classify([source], missing_base=True)
+    assert no_base["all"] == "true"
+    assert no_base["rollback_test_only"] == "false"
+    protected = classify([source], event="merge_group")
+    assert protected["all"] == "true"
+    assert protected["rollback_test_only"] == "false"
+    assert classify([source], event="push")["rollback_test_only"] == "false"
+    with pytest.raises(AssertionError):
+        classify([source], fetch_failure=True)
+
+    # A deleted or symlinked source is not the reviewed test-only leaf.
+    absent = tmp_path / "absent-source"
+    (absent / "tests").mkdir(parents=True)
+    assert classify([source], working_directory=absent)["all"] == "true"
+    linked = tmp_path / "linked-source"
+    (linked / "tests").mkdir(parents=True)
+    try:
+        (linked / source).symlink_to(ROOT / source)
+    except (OSError, NotImplementedError):
+        pass  # Windows without symlink privilege; the Linux CI case executes it.
+    else:
+        assert classify([source], working_directory=linked)["all"] == "true"
+
+    release = workflow["jobs"]["test-release-contracts"]
+    steps = {step.get("name"): step for step in release["steps"]}
+    bounded = steps["Run rollback-test-owned PR checks"]
+    assert bounded["if"] == "needs.changes.outputs.rollback_test_only == 'true'"
+    assert bounded["run"].split() == [
+        "python",
+        "-m",
+        "pytest",
+        source,
+        "tests/test_ci_workflow_performance.py",
+        "-v",
+        "--tb=short",
+    ]
+    assert steps["Run repository release checks"]["run"] == (
+        "python -m pytest tests -v --tb=short"
+    )
+    full_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true'"
+    )
+    for name in (
+        "Replay Canvas mirror oracle in exact Credentials release image",
+        "Run repository release checks",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+        "Require a compatible Credentials image for native DIDComm consumers",
+        "Require the event-owner migration for native retention",
+    ):
+        assert steps[name]["if"] == full_only
+        assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Install released test dependencies",
+        "Verify released mdoc binding evidence contract",
+        "Enforce OSS commerce boundary",
+        "Require workflow policy test collection",
+    ):
+        assert "if" not in steps[name]
+    assert steps["Report affected Rust packages in shadow mode"]["if"] == (
+        "github.event_name == 'pull_request'"
+    )
+    assert workflow["jobs"]["security"]["if"] == (
+        "needs.changes.outputs.security == 'true'"
+    )
+    for dockerfile in ("services/Dockerfile", "docker/ui.Dockerfile"):
+        assert "COPY tests" not in (ROOT / dockerfile).read_text(encoding="utf-8")
+    gate = workflow["jobs"]["ci-gate"]
+    assert {"security", "test-release-contracts"} <= set(gate["needs"])
+    assert (
+        'require_selected security "$SECURITY_RESULT" "$SECURITY_SELECTED"'
+        in (gate["steps"][0]["run"])
     )
 
 
