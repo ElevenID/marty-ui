@@ -43,11 +43,11 @@ $writePath = $output + '.rust-write.json'
 $writeIntentPath = $output + '.rust-write-intent.json'
 $flowWritePath = $output + '.rust-flow.json'
 $flowWriteIntentPath = $output + '.rust-flow-intent.json'
+$referenceIntentPath = $output + '.reference-intents'
 $continuityPath = $output + '.credentials-continuity.json'
 $applicationPath = [IO.Path]::GetFullPath($ApplicationFile)
-if (-not [IO.Path]::IsPathRooted($ApplicationFile) -or
-    -not (Test-Path -LiteralPath $applicationPath -PathType Leaf)) {
-    throw 'Private Rust passport application file is unavailable'
+if (-not [IO.Path]::IsPathRooted($ApplicationFile)) {
+    throw 'Private Rust passport application path must be absolute'
 }
 if ($applicationPath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
         [StringComparison]::OrdinalIgnoreCase)) {
@@ -85,13 +85,36 @@ if (-not [IO.Path]::IsPathRooted($FlowFile) -or
     throw 'Private Rust Flow inputs must be absolute files'
 }
 foreach ($privatePath in @($flowPath, $sessionPath)) {
-    if (-not (Test-Path -LiteralPath $privatePath -PathType Leaf) -or
-        $privatePath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
+    if ($privatePath.StartsWith($root + [IO.Path]::DirectorySeparatorChar,
             [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Private Rust Flow input must be an absolute file outside protected source'
     }
 }
+if (-not (Test-Path -LiteralPath $sessionPath -PathType Leaf)) {
+    throw 'Private Rust Flow session is unavailable'
+}
 $intentPath = [IO.Path]::GetFullPath($MaintenanceReceipt) + '.intent.json'
+$reservedPaths = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase)
+foreach ($path in @(
+    $output, $planPath, $productionPostflightPath, $productionRecoveryPath,
+    $fenceRecheckPath, $credentialsPretransitionPath, $ceremonyIntentPath,
+    $ceremonyPath, $kmsPretransitionPath, $transitionPath, $writePath,
+    $writeIntentPath, $flowWritePath, $flowWriteIntentPath, $referenceIntentPath,
+    $continuityPath, ($output + '.fence-receipt.json'),
+    ($output + '.maintenance-receipt.json'), ($output + '.maintenance-intent.json'),
+    ($output + '.native-receipt.json'), $intentPath,
+    ([IO.Path]::GetFullPath($StackManifest)),
+    ([IO.Path]::GetFullPath($FenceReceipt)),
+    ([IO.Path]::GetFullPath($MaintenanceReceipt)),
+    ([IO.Path]::GetFullPath($NativeReceipt)), $issuerChainPath,
+    $issuerCeremonyPath, $cscaSessionPath, $dscSessionPath, $sessionPath,
+    $applicationPath, $flowPath
+)) {
+    if (-not $reservedPaths.Add($path)) {
+        throw "Aggregate beta input/output paths must be distinct: $path"
+    }
+}
 . (Join-Path $PSScriptRoot 'beta-deployment-lock.ps1')
 . (Join-Path $PSScriptRoot 'beta-passport-fence-legacy-boundary.ps1')
 
@@ -739,6 +762,17 @@ try {
         [string]$script:intent.postgres_container_id) {
         throw 'Aggregate beta database identity differs from maintenance intent'
     }
+    $referenceOutputPreflight = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--preflight-outputs', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath, '--flow-file', $flowPath)
+    if ($referenceOutputPreflight.schema -cne
+        'marty.passport-beta-reference-output-preflight/v1' -or
+        $referenceOutputPreflight.verified -ne $true) {
+        throw 'Beta passport reference outputs failed preflight'
+    }
     $loginBefore = @(Invoke-BetaPsql -Sql `
         "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty';")
     if ($loginBefore.Count -ne 1 -or $loginBefore[0] -notin @('t', 'f')) {
@@ -786,15 +820,6 @@ try {
     $script:productionRecoveryDigest = [string]$recoveryBaseline.baseline_sha256
     $script:productionRecoveryReady = $true
     $null = Assert-ProductionContinuity
-    $applicationProof = Invoke-Plan -Arguments @(
-        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_write.py'),
-        '--plan', $planPath, '--application-file', $applicationPath,
-        '--validate-only')
-    if ($applicationProof.schema -cne 'marty.passport-beta-rust-owner-input/v1' -or
-        $applicationProof.source_commit -cne $script:plan.source_commit -or
-        [string]$applicationProof.application_file_sha256 -notmatch '^[0-9a-f]{64}$') {
-        throw 'Private Rust passport probe input is invalid'
-    }
     $env:MARTY_SERVICES_IMAGE = [string]$script:plan.services_image
     $env:MARTY_ISSUANCE_IMAGE = [string]$script:plan.issuance_image
     $env:MARTY_UI_RELEASE_IMAGE = [string]$script:plan.ui_image
@@ -866,20 +891,30 @@ try {
     $resumingAfterContinuity = Test-Path -LiteralPath $continuityPath
     Assert-ForwardGeneration -RequireIngressClosed:(-not $resumingAfterContinuity) |
         Out-Null
-    $flowReferences = Invoke-Plan -Arguments @(
-        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_flow.py'),
-        '--plan', $planPath, '--flow-file', $flowPath,
-        '--application-file', $applicationPath,
-        '--session-file', $sessionPath, '--validate-only')
-    if ($flowReferences.schema -cne 'marty.passport-beta-rust-owner-flow-references/v1' -or
-        $flowReferences.verified -ne $true -or
-        $flowReferences.source_commit -cne $script:plan.source_commit -or
-        [string]$flowReferences.application_file_sha256 -cne
-            [string]$applicationProof.application_file_sha256 -or
-        [string]$flowReferences.flow_file_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        [string]$flowReferences.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
-        [string]$flowReferences.flow_container_id -cnotmatch '^[0-9a-f]{64}$') {
-        throw 'Live private Flow references differ from beta application input'
+    $references = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--phase', 'references', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--session-file', $sessionPath, '--dsc-session-file', $dscSessionPath,
+        '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath)
+    if ($references.schema -cne 'marty.passport-beta-reference-provision/v1' -or
+        $references.phase -cne 'references' -or
+        $references.verified -ne $true -or
+        $references.source_commit -cne $script:plan.source_commit -or
+        [string]$references.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$references.application_file_sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Pilot beta passport references were not provisioned by staged Gateway'
+    }
+    $applicationProof = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_write.py'),
+        '--plan', $planPath, '--application-file', $applicationPath,
+        '--validate-only')
+    if ($applicationProof.schema -cne 'marty.passport-beta-rust-owner-input/v1' -or
+        $applicationProof.source_commit -cne $script:plan.source_commit -or
+        [string]$applicationProof.application_file_sha256 -cne
+            [string]$references.application_file_sha256) {
+        throw 'Private Rust passport probe input differs from staged references'
     }
     $phaseBeforeTransition = @(Invoke-BetaPsql -Sql `
         "SELECT phase FROM passport_cutover.state WHERE singleton=true;")
@@ -1043,6 +1078,38 @@ try {
     }
     Assert-ForwardGeneration -RequireIngressClosed:(-not $resumingAfterContinuity) |
         Out-Null
+    $flowProvision = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--phase', 'flow', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--session-file', $sessionPath, '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath, '--flow-file', $flowPath)
+    if ($flowProvision.schema -cne 'marty.passport-beta-reference-provision/v1' -or
+        $flowProvision.phase -cne 'flow' -or
+        $flowProvision.verified -ne $true -or
+        $flowProvision.source_commit -cne $script:plan.source_commit -or
+        [string]$flowProvision.gateway_container_id -cne
+            [string]$references.gateway_container_id -or
+        [string]$flowProvision.application_file_sha256 -cne
+            [string]$applicationProof.application_file_sha256 -or
+        [string]$flowProvision.flow_file_sha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Pilot beta physical Flow was not provisioned by staged Gateway'
+    }
+    $flowReferences = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_rust_owner_flow.py'),
+        '--plan', $planPath, '--flow-file', $flowPath,
+        '--application-file', $applicationPath,
+        '--session-file', $sessionPath, '--validate-only')
+    if ($flowReferences.schema -cne 'marty.passport-beta-rust-owner-flow-references/v1' -or
+        $flowReferences.verified -ne $true -or
+        $flowReferences.source_commit -cne $script:plan.source_commit -or
+        [string]$flowReferences.application_file_sha256 -cne
+            [string]$applicationProof.application_file_sha256 -or
+        [string]$flowReferences.flow_file_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$flowReferences.gateway_container_id -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$flowReferences.flow_container_id -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Live private Flow references differ from beta application input'
+    }
     $firstFlowAttempt = -not (Test-Path -LiteralPath $flowWriteIntentPath)
     if ($firstFlowAttempt) {
         $flowWriteIntent = [ordered]@{

@@ -680,6 +680,8 @@ mod tests {
         catalog_result(Ok(Some(CredentialTemplateValidationView {
             organization_id: "org-a".to_owned(),
             status: "ACTIVE".to_owned(),
+            credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+            issuance_protocol: "OID4VCI".to_owned(),
             revocation_profile_id: Some("revocation-profile-1".to_owned()),
             claims: BTreeSet::new(),
         })))
@@ -870,6 +872,44 @@ mod tests {
             .expect("deprecate");
         assert_eq!(deprecated.status, ApplicationTemplateStatus::Deprecated);
         assert_eq!(deprecated.version, 3);
+    }
+
+    #[tokio::test]
+    async fn physical_passport_template_activates_without_digital_revocation_profile() {
+        let repository = Arc::new(MemoryRepository::default());
+        let catalog = catalog_result(Ok(Some(CredentialTemplateValidationView {
+            organization_id: "org-a".to_owned(),
+            status: "ACTIVE".to_owned(),
+            credential_payload_format: "icao_emrtd".to_owned(),
+            issuance_protocol: "PHYSICAL_DOCUMENT".to_owned(),
+            revocation_profile_id: None,
+            claims: BTreeSet::new(),
+        })));
+        let service = service(repository, catalog, Some("secret"));
+        let created = service
+            .create(
+                Some("secret"),
+                Some("org-a"),
+                Some("passport-key"),
+                request(),
+            )
+            .await
+            .expect("create");
+        assert!(
+            service
+                .validate(Some("secret"), Some("org-a"), &created.id)
+                .await
+                .expect("validate")
+                .valid
+        );
+        assert_eq!(
+            service
+                .activate(Some("secret"), Some("org-a"), &created.id)
+                .await
+                .expect("activate")
+                .status,
+            ApplicationTemplateStatus::Active
+        );
     }
 
     #[tokio::test]

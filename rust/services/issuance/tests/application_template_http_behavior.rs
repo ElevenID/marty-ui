@@ -193,6 +193,8 @@ impl ApplicationTemplateCatalog for ValidCatalog {
             (template_id == "credential-template-1").then(|| CredentialTemplateValidationView {
                 organization_id: "org-123".to_owned(),
                 status: "ACTIVE".to_owned(),
+                credential_payload_format: "W3C_VCDM_V2_SD_JWT".to_owned(),
+                issuance_protocol: "OID4VCI".to_owned(),
                 revocation_profile_id: Some("revocation-profile-1".to_owned()),
                 claims: ["membership_number".to_owned()].into_iter().collect(),
             }),

@@ -16,6 +16,7 @@ struct Contract {
     payload_aliases: Vec<PayloadAliasCase>,
     issuance_protocols: Vec<IssuanceProtocolCase>,
     format_protocol_pairs: Vec<FormatProtocolPairCase>,
+    revocation_profile_policy: RevocationProfilePolicy,
     protocol_requirements: Vec<ProtocolRequirementCase>,
     inner_uris: Vec<InnerUriCase>,
     wallet_links: Vec<WalletLinkCase>,
@@ -53,6 +54,12 @@ struct FormatProtocolPairCase {
     format: String,
     protocol: String,
     accepted: bool,
+}
+
+#[derive(Deserialize)]
+struct RevocationProfilePolicy {
+    physical_document: String,
+    digital_credential: String,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +151,14 @@ fn credential_format_and_protocol_aliases_are_canonical() {
 #[test]
 fn protocol_requirements_fail_closed() {
     let contract = contract();
+    assert_eq!(
+        contract.revocation_profile_policy.physical_document,
+        "no digital revocation profile"
+    );
+    assert_eq!(
+        contract.revocation_profile_policy.digital_credential,
+        "active organization-owned revocation profile required at activation"
+    );
     for case in contract.format_protocol_pairs {
         let format = CredentialFormat::parse(&case.format).expect("fixture format");
         let protocol = IssuanceProtocol::parse(Some(&case.protocol)).expect("fixture protocol");
