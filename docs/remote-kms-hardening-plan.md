@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; Credentials commit `ab0e3e8` pins its Rust graph and CI wheel checkout to Core `d41d87c`. A locally built pair of exact-revision Windows wheels passed the qualified Python suite (1756 passed, 29 skipped, two expected published-manifest gate tests deselected); actual published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All current hosted checks, including CodeQL, Fast Rust Preflight and CI Gate, pass; the PR remains draft with review required. UI and Credentials PRs, exact artifacts and deployment cutover remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy, Compliance Profile and Flow record boundaries. Focused tests and disposable PostgreSQL checks pass for earlier stores; the recently guarded packages pass tests and strict Clippy. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy, Compliance Profile, Flow and Notification JSON boundaries. Focused tests and disposable PostgreSQL checks pass for earlier stores; the recently guarded packages pass tests and strict Clippy. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
 
 ### First execution steps
 
@@ -6724,3 +6724,16 @@ policy metadata/document columns and no private-key-named table or column.
 The disposable PostgreSQL server was removed. This is per-service schema and
 runtime evidence, not the required assembled cross-repository schema or
 published-artifact proof.
+
+2026-10-08 K10 Notification JSON-store correction: notifications' `data`,
+subscriptions' `filter_config` and webhook outbox `payload` could persist
+caller-controlled JSON. One shared Rust repository guard now rejects private
+material before in-memory and PostgreSQL writes, including direct repository
+calls. PostgreSQL row readers check the raw JSON before converting it, so a
+poisoned field cannot be silently discarded. A direct repository test proves
+a nested private JWK is rejected before database access and a remote
+reference remains accepted. The Notification package suite and focused
+outbox tests pass; all-target warnings-denied Clippy passes on Rust 1.95.
+This remains part of the uncommitted broad UI candidate. Notification's
+disposable PostgreSQL contract and the assembled database/artifact checks
+are still separate gates.
