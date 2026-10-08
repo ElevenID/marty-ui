@@ -1913,6 +1913,16 @@ two value-shape cases into fast unit tests; the real lease-expiry fences remain.
 The #1174 queue run is a full-gate outcome, not evidence that the new
 helper-only PR selector has been exercised on GitHub.
 
+A3 next shadow observation (2026-10-08): Auth constructs its internal
+`credential-verified` callback URL and submits it in the Flow gRPC verification
+request. Flow conditionally selects the organization-allowlisted URL, creates a
+callback outbox message on verification submission, and its configured worker
+POSTs to Auth's registered internal route. The base Compose Auth URL and Flow
+destination/secret bindings agree. The planner records Auth-to-Flow as an
+observed non-Cargo runtime consumer with source-backed regression markers;
+Auth changes still select the full Rust workspace. This observation neither
+establishes complete runtime graph closure nor narrows a required CI gate.
+
 Next measured compiler-reuse investigation (2026-10-08): #1174's PR and
 protected Canvas jobs spent 10m01s and 10m32s respectively in `Compile reusable
 Rust test executables`. That step starts with an empty host-visible `rust/target`
