@@ -6418,3 +6418,11 @@ Python source scan found no remaining `KeyPair`/`KeyAlgorithm` consumers or
 private-key-shaped adapter/port parameters. Twenty-two focused port/custody/
 native-boundary tests, Ruff, and diff checks pass. This does not replace the
 remaining full consumer and final artifact qualification.
+The complete Credentials Python suite was then repeated with the isolated
+Core 0.2 wheels and qualified Starlette 1.7.0 target after commit `2076e52`:
+1,751 passed, 29 skipped and 200 subtests passed. The same two release
+metadata assertions failed because the published Core release metadata and
+CI revision have not yet been updated to the final artifact. No new failure
+or import regression appeared from removing `KeyPair` and the dead wallet
+methods. The immutable log is
+`artifacts/kms-credentials-core02-python-suite-no-raw-wallet-2026-10-08.log`.
