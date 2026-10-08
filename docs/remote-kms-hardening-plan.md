@@ -1228,7 +1228,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `f5ca93c`. Its Rust CodeQL analysis fixed alert #260, but an earlier aggregate CodeQL check is still failed and Fast Rust Preflight remains in progress; other third-run checks have passed or been skipped by policy. UI and Credentials PRs, final hosted checks, exact artifacts and deployment cutover remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All functional jobs on the prior source head passed, Rust analysis fixed alert #260, and the new head refreshes a stale failing aggregate CodeQL check; its hosted result is pending. UI and Credentials PRs, final hosted checks, exact artifacts and deployment cutover remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; the Credentials candidate has removed both `keys` ORM models/key-manager paths, historical `issuer_signing_keys` create/drop revisions, a duplicate wallet ORM, and an unused `selective_disclosure_keys` JSON column. Its 46-revision graph, 14 focused tests, fresh ORM schema and disposable PostgreSQL issuance schema pass. Core now rejects private material on direct Open Badge public-key writes; its 50 active storage tests pass. Cross-repository/assembled schema inventory, runtime data-flow review and release-artifact proof remain. |
 
 ### First execution steps
@@ -6252,6 +6252,12 @@ alert or treat current analysis as a passing PR check.
 The targeted GitHub check-run rerequest endpoint returned HTTP 404 for this
 CodeQL check, so it did not refresh. A later Core head update is still needed
 to produce a new aggregate check once the remaining jobs have been reviewed.
+All remaining third-run functional jobs, including Fast Rust Preflight,
+Affected Rust Tests, Native ZKP and the aarch64 wheels, then passed. With
+alert #260 already fixed by the Rust analysis, an empty Core head update
+`d41d87c` was pushed solely to obtain a fresh aggregate CodeQL check; no
+source correction was batched because the reviewed third-run source had no
+other failing required check. The new hosted result remains pending.
 The device-registration write path calls Core's
 `validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
 rejects other DER shapes, and binds the claimed key identifier to its public
@@ -6481,6 +6487,31 @@ verify replacement. Retire those Python private-key fixtures using public
 negative vectors and an opaque unit signer, and add a disposable real
 OpenBao-backed LTI assertion-sign/verify acceptance proof before calling
 test-side custody and Canvas behavior fully preserved.
+2026-10-08 K7 follow-up: Credentials commit `496926d` removes RSA key
+generation and local signing from the Canvas route test fixture. The unit
+double now binds the dynamic JWT input, public key identifier and a public
+key marker without pretending to prove RS256. Its malformed-private-JWK
+negative vectors contain only a rejection marker, not usable private key
+parameters. Eighty focused Canvas tests passed and Ruff's F rules passed;
+the file has unrelated pre-existing Ruff E402/UP017 findings. The UI
+candidate's existing disposable OpenBao RSA test now also signs a Canvas-
+shaped compact-JWT input remotely, verifies it against the provider's public
+JWK, and rejects a tampered input. That exact ignored test passed against a
+scoped-token disposable OpenBao 2.5.2 container, which was removed after the
+probe. It is added to the existing OpenBao CI lane. This establishes real
+cryptography plus separate route-binding coverage, while a packaged Canvas
+route-to-OpenBao end-to-end proof and release artifact qualification remain.
+The complete Credentials Python suite initially exposed three review-gate
+failures caused by the shared private-JWK constant move and source line shifts
+in the frozen issuance-surface manifest, in addition to the two known Core
+release-pin failures. Commit `bcba5a4` updates the language-neutral Canvas
+forbidden-field contract to the shared policy, changes the test to inspect
+that policy directly, and regenerates the surface manifest. The old and new
+surface contracts are identical after removing only source `line` metadata;
+route count remains 95. The full suite then passed 1,751 tests, skipped 29,
+and passed 200 subtests with only the two known release-artifact tests
+deselected. Those tests still need the final published Core pin and remain
+explicitly unresolved, not waived.
 The broad Credentials retirement candidate was checkpointed locally as
 `4051dd4` on `security/remote-kms-retirement-20261007`: 69 files changed,
 including local issuer-key adapter/test removal, no-private-key clean-install
