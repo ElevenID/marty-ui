@@ -49,7 +49,8 @@ def _response(
 
 def _credential_template(
     result: dict[str, Any], organization_id: str, name: str,
-    issuer_did: str, status: str, expected_id: str | None = None,
+    issuer_did: str, status: str, compliance_profile_id: str,
+    expected_id: str | None = None,
 ) -> str:
     identifier = _uuid(result.get("id"))
     _require(expected_id is None or identifier == expected_id,
@@ -61,6 +62,7 @@ def _credential_template(
              and result.get("credential_payload_format") == "ICAO_EMRTD"
              and result.get("issuance_protocol") == "PHYSICAL_DOCUMENT"
              and result.get("doctype") == "TD3"
+             and result.get("compliance_profile_id") == compliance_profile_id
              and result.get("revocation_profile_id") is None
              and result.get("issuer_did") == issuer_did,
              "Credential template binding drifted")
@@ -105,13 +107,15 @@ def _destination(
     return identifier
 
 
-def provision_physical_passport_references(
+def _provision_physical_passport_references(
     request: Request, organization_id: str, name_prefix: str,
-    issuer_did: str, idempotency_key: str,
+    issuer_did: str, idempotency_key: str, compliance_profile_id: str,
+    *, resume: bool = False,
 ) -> dict[str, str]:
-    """Provision and read back owned references; caller destroys the project."""
-    _require(organization_id == DISPOSABLE_ORGANIZATION_ID
-             and isinstance(name_prefix, str) and name_prefix.strip()
+    """Provision and read back tenant-owned physical passport references."""
+    _uuid(organization_id)
+    _uuid(compliance_profile_id)
+    _require(isinstance(name_prefix, str) and name_prefix.strip()
              and isinstance(issuer_did, str) and issuer_did.startswith("did:")
              and isinstance(idempotency_key, str) and idempotency_key.strip(),
              "Disposable reference context is invalid")
@@ -128,25 +132,30 @@ def provision_physical_passport_references(
         "supported_formats": ["ICAO_EMRTD"],
         "credential_payload_format": "ICAO_EMRTD",
         "issuance_protocol": "PHYSICAL_DOCUMENT",
-        "compliance_profile_id": PASSPORT_COMPLIANCE_PROFILE_ID,
+        "compliance_profile_id": compliance_profile_id,
         "issuer_did": issuer_did,
     }, operation="POST /v1/credential-templates")
+    credential_status = credential.get("status") if resume else "DRAFT"
+    _require(credential_status in ("DRAFT", "ACTIVE"),
+             "Credential template status is invalid")
     credential_id = _credential_template(
-        credential, organization_id, credential_name, issuer_did, "DRAFT",
+        credential, organization_id, credential_name, issuer_did, credential_status,
+        compliance_profile_id,
     )
     credential_path = f"/v1/credential-templates/{credential_id}"
     _credential_template(_response(request, "GET", credential_path,
                                    operation="GET /v1/credential-templates/{id}"),
-                         organization_id, credential_name, issuer_did, "DRAFT",
-                         credential_id)
-    _credential_template(_response(request, "POST", f"{credential_path}/activate",
-                                   operation="POST /v1/credential-templates/{id}/activate"),
-                         organization_id, credential_name, issuer_did, "ACTIVE",
-                         credential_id)
+                         organization_id, credential_name, issuer_did, credential_status,
+                         compliance_profile_id, credential_id)
+    if credential_status == "DRAFT":
+        _credential_template(_response(request, "POST", f"{credential_path}/activate",
+                                       operation="POST /v1/credential-templates/{id}/activate"),
+                             organization_id, credential_name, issuer_did, "ACTIVE",
+                             compliance_profile_id, credential_id)
     _credential_template(_response(request, "GET", credential_path,
                                    operation="GET /v1/credential-templates/{id}"),
                          organization_id, credential_name, issuer_did, "ACTIVE",
-                         credential_id)
+                         compliance_profile_id, credential_id)
 
     application = _response(
         request, "POST", "/v1/application-templates", {
@@ -161,22 +170,26 @@ def provision_physical_passport_references(
         }, {"idempotency-key": idempotency_key},
         operation="POST /v1/application-templates",
     )
+    application_status = application.get("status") if resume else "DRAFT"
+    _require(application_status in ("DRAFT", "ACTIVE"),
+             "Application template status is invalid")
     application_id = _application_template(
-        application, organization_id, application_name, credential_id, "DRAFT",
+        application, organization_id, application_name, credential_id, application_status,
     )
     application_path = f"/v1/application-templates/{application_id}"
     _application_template(_response(request, "GET", application_path,
                                     operation="GET /v1/application-templates/{id}"),
-                          organization_id, application_name, credential_id, "DRAFT",
+                          organization_id, application_name, credential_id, application_status,
                           application_id)
     validation = _response(request, "POST", f"{application_path}/validate",
                            operation="POST /v1/application-templates/{id}/validate")
     _require(validation.get("valid") is True and validation.get("errors") == [],
              "Application template validation failed")
-    _application_template(_response(request, "POST", f"{application_path}/activate",
-                                    operation="POST /v1/application-templates/{id}/activate"),
-                          organization_id, application_name, credential_id, "ACTIVE",
-                          application_id)
+    if application_status == "DRAFT":
+        _application_template(_response(request, "POST", f"{application_path}/activate",
+                                        operation="POST /v1/application-templates/{id}/activate"),
+                              organization_id, application_name, credential_id, "ACTIVE",
+                              application_id)
     _application_template(_response(request, "GET", application_path,
                                     operation="GET /v1/application-templates/{id}"),
                           organization_id, application_name, credential_id, "ACTIVE",
@@ -204,3 +217,27 @@ def provision_physical_passport_references(
         "application_template_id": application_id,
         "delivery_destination_profile_id": destination_id,
     }
+
+
+def provision_physical_passport_references(
+    request: Request, organization_id: str, name_prefix: str,
+    issuer_did: str, idempotency_key: str,
+) -> dict[str, str]:
+    """Preserve the disposable model's fixed organization and profile."""
+    _require(organization_id == DISPOSABLE_ORGANIZATION_ID,
+             "Disposable reference context is invalid")
+    return _provision_physical_passport_references(
+        request, organization_id, name_prefix, issuer_did, idempotency_key,
+        PASSPORT_COMPLIANCE_PROFILE_ID,
+    )
+
+
+def provision_beta_physical_passport_references(
+    request: Request, organization_id: str, name_prefix: str,
+    issuer_did: str, idempotency_key: str, compliance_profile_id: str,
+) -> dict[str, str]:
+    """Use the same reference contract for a selected beta pilot tenant."""
+    return _provision_physical_passport_references(
+        request, organization_id, name_prefix, issuer_did, idempotency_key,
+        compliance_profile_id, resume=True,
+    )
