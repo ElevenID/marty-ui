@@ -263,6 +263,14 @@ def assert_models(
         "source": "issuance_api_key",
         "target": "/run/secrets/issuance_api_key",
     }
+    migration = preserved["services"]["db-migrate"]
+    assert migration["environment"].pop("NOTIFICATION_OPENBAO_TOKEN_FILE") == (
+        "/run/secrets/notification_openbao_token"
+    )
+    assert migration["secrets"].pop() == {
+        "source": "notification_openbao_token",
+        "target": "/run/secrets/notification_openbao_token",
+    }
     assert preserved == before, "Unowned self-host model change"
     legacy = before["services"]["issuance"]
     environment = {

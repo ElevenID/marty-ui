@@ -46,6 +46,8 @@ spec:
                   key: MARTY_DB_PASSWORD
             - name: OPENBAO_SERVICE_TOKEN_FILE
               value: /run/secrets/openbao_service_token
+            - name: NOTIFICATION_OPENBAO_TOKEN_FILE
+              value: /run/secrets/notification_openbao_token
           volumeMounts:
             - name: selfhost-secret-files
               mountPath: /run/secrets
@@ -64,3 +66,5 @@ spec:
             items:
               - key: OPENBAO_SERVICE_TOKEN
                 path: openbao_service_token
+              - key: NOTIFICATION_OPENBAO_TOKEN
+                path: notification_openbao_token
