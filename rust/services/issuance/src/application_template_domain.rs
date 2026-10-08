@@ -617,6 +617,14 @@ pub fn validate_application_template(
                 .credential_payload_format
                 .eq_ignore_ascii_case("icao_emrtd")
                 && value.issuance_protocol == "PHYSICAL_DOCUMENT";
+            if physical_passport && value.revocation_profile_id.is_some() {
+                add(
+                    "credential_template",
+                    "credential_template_id".to_owned(),
+                    "REVOCATION_PROFILE_FORBIDDEN",
+                    "Physical Credential Template must not reference a digital Revocation Profile.",
+                );
+            }
             if !physical_passport
                 && value
                     .revocation_profile_id
@@ -1289,6 +1297,24 @@ mod tests {
                 requires_profile,
                 "{format}/{protocol}"
             );
+        }
+        for profile in ["revocation-profile-1", "  "] {
+            let view = CredentialTemplateValidationView {
+                organization_id: record.organization_id.clone(),
+                status: "ACTIVE".to_owned(),
+                credential_payload_format: "ICAO_EMRTD".to_owned(),
+                issuance_protocol: "PHYSICAL_DOCUMENT".to_owned(),
+                revocation_profile_id: Some(profile.to_owned()),
+                claims: BTreeSet::new(),
+            };
+            let errors = validate_application_template(
+                &record,
+                &CredentialTemplateValidationState::Found(view),
+                &ApprovalPolicyValidationState::NotRequested,
+            );
+            assert!(errors
+                .iter()
+                .any(|error| error.code == "REVOCATION_PROFILE_FORBIDDEN"));
         }
     }
 

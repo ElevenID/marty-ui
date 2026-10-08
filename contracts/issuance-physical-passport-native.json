@@ -1,5 +1,10 @@
 {
   "schema": "elevenid.issuance-physical-passport-native/v1",
+  "application_template_native_extension": {
+    "frozen_python_dependency": "contracts/issuance-application-templates.json",
+    "physical_credential_template": "An ACTIVE ICAO_EMRTD template with PHYSICAL_DOCUMENT issuance requires no digital revocation profile; an attached digital revocation profile is invalid",
+    "digital_credential_template": "The frozen non-empty revocation_profile_id requirement remains"
+  },
   "python_reference": {
     "repository": "ElevenID/marty-credentials",
     "protected_main_commit": "bd701403e7eae9f495fc3a8c4fea1945785b425a",
