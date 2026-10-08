@@ -6400,3 +6400,14 @@ boundary tests passed with Python 3.12 immediately before the commit. This
 is a local candidate, not a qualified PR or release artifact; its Core pin
 still needs the final reviewed Core head, full coverage mapping, and
 published release metadata before the known two metadata assertions can pass.
+The committed retirement source scan then found a remaining exported
+`KeyPair(jwk_json)` type and dead wallet/adapter methods accepting that raw
+holder key, plus a disabled mDoc method accepting `device_key_pem`.
+Credentials commit `2076e52` removes those obsolete contracts, exports and
+forwarders while preserving credential storage, verification helpers and
+mDoc disclosure-request presets; supported holder presentation and offer
+redemption remain owned by the canonical native wallet flows. A repository
+Python source scan found no remaining `KeyPair`/`KeyAlgorithm` consumers or
+private-key-shaped adapter/port parameters. Twenty-two focused port/custody/
+native-boundary tests, Ruff, and diff checks pass. This does not replace the
+remaining full consumer and final artifact qualification.
