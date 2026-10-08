@@ -1224,9 +1224,9 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; the UI candidate now pins all eight production Core crates to grouped PR #355 head `d41d87c`. Six no-default-feature native library suites pass (969 active tests, 17 ignored), and those services compile locked on CI Rust 1.95. The actual locked metadata passes the Core KMS feature/source verifier and contains no older Core revision. Core remains draft/review-required; ignored live tests, consumer packaging, Credentials adoption and release artifacts remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; UI and Credentials candidates now pin grouped Core PR #355 head `d41d87c`. Six UI no-default-feature native library suites pass (969 active tests, 17 ignored) and compile locked on CI Rust 1.95. Credentials' locked graph verifier and focused Rust/Python tests pass at that pin. Core remains draft/review-required; ignored live tests, full consumer packaging and published release artifacts remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
-| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
+| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; Credentials commit `ab0e3e8` pins its Rust graph and CI wheel checkout to Core `d41d87c`. A locally built pair of exact-revision Windows wheels passed the qualified Python suite (1756 passed, 29 skipped, two expected published-manifest gate tests deselected); actual published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All current hosted checks, including CodeQL, Fast Rust Preflight and CI Gate, pass; the PR remains draft with review required. UI and Credentials PRs, exact artifacts and deployment cutover remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses a shared private-material policy for signing-key documents, Organization settings/audit JSON and Trust Profile repository records. Focused tests and disposable PostgreSQL checks pass. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
@@ -6622,5 +6622,36 @@ Verification and Trust Profile) pass 969 active tests with 17 ignored;
 those six packages also pass locked `cargo +1.95.0 check` on the CI toolchain.
 This is a local, broad UI candidate pin to a green draft PR head, not a
 merged Core release or final shipped-artifact qualification. Credentials
-still pins the earlier candidate until Core review/merge and its release
-metadata are reconciled.
+has since advanced to the same Core candidate revision; its published
+release metadata is still unreconciled.
+
+2026-10-08 K5/K7 Credentials exact-Core adoption: commit `ab0e3e8` changes
+all five direct workspace Core dependencies, six resolved lockfile Core
+packages, both CI Core checkouts and the locked-graph verifier to PR #355
+head `d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82`. The mdoc digest
+semantics integration test now declares its actual `python` feature
+requirement, so a no-default-feature test run skips it and the default run
+passes all three cases. The actual full locked Cargo metadata passes the
+Core KMS graph verifier; 21 focused release-workflow tests pass with the
+published-manifest assertion deselected. Diff whitespace review passes.
+
+Two locally built Windows ABI3 wheels from that exact Core worktree were
+installed into an isolated Python target for Credentials qualification:
+`marty_rs-0.2.0-cp311-abi3-win_amd64.whl` (SHA-256
+`47aca5146506774245b8b619196ab2fc48620fa470a2383c75252092ab156743`)
+and `marty_verification_py-0.2.0-cp311-abi3-win_amd64.whl` (SHA-256
+`db68a9af91a8a713c5e461f4d3d61efcd67a8758db52d038d68859adbaf481bf`).
+The first full Python run produced 1755 passed, 29 skipped, three failures
+and 200 subtests passed. Two failures correctly show the still-published
+`release/dependencies.json` points at older Core artifacts; the third was a
+Canvas LTI sync-status assertion (`queued` versus observed `succeeded`) that
+passed in isolation. A full rerun excluding only the two release-manifest
+gate tests passed 1756 tests, skipped 29, deselected two and passed 200
+subtests. Preserve both logs at
+`artifacts/kms-credentials-d41-python-suite-2026-10-08.log` and
+`artifacts/kms-credentials-d41-python-suite-qualified-2026-10-08.log`.
+This qualifies the local Windows wheel pair for the tested Python behavior;
+it does not establish published wheel provenance, Linux image behavior or
+the release-manifest boundary. Keep the manifest gate failing until exact
+reviewed artifacts are published and pinned. Investigate the Canvas timing
+flakiness if it recurs in hosted CI.
