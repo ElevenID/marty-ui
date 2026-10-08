@@ -54,41 +54,116 @@ def validate_images(images: dict[str, str]) -> None:
                 f"{role} must use its reviewed repository and an exact digest")
 
 
-def validate_model(model: dict, images: dict[str, str], secret_dir: Path) -> None:
+def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
+                   project: str) -> None:
     """Fail before startup if Compose can escape the disposable dependency set."""
-    require(isinstance(model, dict) and set(model.get("services", {})) ==
+    require(isinstance(model, dict)
+            and set(model) == {"name", "services", "networks", "secrets", "configs"}
+            and model["name"] == project
+            and set(model.get("services", {})) ==
             {"postgres", "redis", "openbao", "db-migrate"},
             "Disposable service set changed")
     services = model["services"]
+    service_keys = {
+        "postgres": {"command", "entrypoint", "environment", "healthcheck",
+                     "image", "networks", "secrets"},
+        "redis": {"command", "entrypoint", "healthcheck", "image", "networks"},
+        "openbao": {"command", "configs", "entrypoint", "healthcheck",
+                    "image", "networks", "secrets"},
+        "db-migrate": {"command", "depends_on", "entrypoint", "environment",
+                       "image", "networks", "restart", "secrets"},
+    }
     for name, role in (("postgres", "postgres"), ("redis", "redis"),
                        ("openbao", "openbao"), ("db-migrate", "migrations")):
         service = services[name]
-        require(service.get("image") == images[role]
-                and "build" not in service and "ports" not in service
-                and "network_mode" not in service and "privileged" not in service
-                and "volumes" not in service
+        require(set(service) == service_keys[name]
+                and service.get("image") == images[role]
                 and service.get("networks") == {"private": None},
                 f"{name} is not isolated to the pinned disposable image")
+    require(services["postgres"]["environment"] == {
+                "POSTGRES_DB": "marty", "POSTGRES_USER": "marty",
+                "POSTGRES_PASSWORD_FILE": "/run/secrets/marty_db_password"}
+            and services["postgres"]["command"] is None
+            and services["postgres"]["entrypoint"] is None
+            and services["postgres"]["healthcheck"] == {
+                "test": ["CMD-SHELL", "pg_isready -U marty -d marty"],
+                "interval": "2s", "retries": 30}
+            and services["postgres"]["secrets"] == [{
+                "source": "marty_db_password",
+                "target": "/run/secrets/marty_db_password"}]
+            and services["redis"]["command"] is None
+            and services["redis"]["entrypoint"] is None
+            and services["redis"]["healthcheck"] == {
+                "test": ["CMD", "redis-cli", "ping"],
+                "interval": "2s", "retries": 30}
+            and services["openbao"]["command"] is None
+            and services["openbao"]["entrypoint"] == [
+                "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"]
+            and services["openbao"]["healthcheck"] == {
+                "test": ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"],
+                "interval": "2s", "retries": 30}
+            and services["openbao"]["secrets"] == [{
+                "source": "bao_root_token", "target": "/run/secrets/bao_root_token"}]
+            and services["openbao"]["configs"] == [{
+                "source": "openbao_start",
+                "target": "/usr/local/bin/passport-supported-openbao-start"}],
+            "Disposable dependency wiring changed")
     migration = services["db-migrate"]
     env = migration.get("environment", {})
-    require(env.get("MARTY_MIGRATION_PROFILE") == "selfhost-production"
+    require(set(env) == {
+                "ENVIRONMENT", "MARTY_DB_PASSWORD_FILE", "DATABASE_URL_TEMPLATE",
+                "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ID", "MARTY_ORG_SLUG",
+                "MARTY_MIGRATION_PROFILE", "MARTY_KMS_BOOTSTRAP_ENABLED",
+                "REDIS_URL", "REDIS_DB_GATEWAY", "BAO_ADDR", "BAO_TOKEN_FILE",
+                "NOTIFICATION_OPENBAO_TOKEN_FILE", "PUBLIC_DOMAIN",
+                "PUBLIC_API_URL", "ISSUER_BASE_URL"}
+            and env.get("ENVIRONMENT") == "production"
+            and env.get("MARTY_MIGRATION_PROFILE") == "selfhost-production"
             and env.get("MARTY_KMS_BOOTSTRAP_ENABLED") == "true"
             and env.get("REDIS_DB_GATEWAY") == "2"
             and env.get("MARTY_DB_PASSWORD_FILE") == "/run/secrets/marty_db_password"
             and env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_root_token"
+            and env.get("NOTIFICATION_OPENBAO_TOKEN_FILE") ==
+            "/run/secrets/notification_openbao_token"
             and env.get("BAO_ADDR") == "http://openbao:8200"
             and env.get("DATABASE_URL_TEMPLATE") ==
             "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
+            and env.get("REDIS_URL") == "redis://redis:6379"
+            and env.get("MARTY_ORG_ID") == ORG_ID
+            and env.get("MARTY_ORG_ADMIN_EMAIL") == "probe@migration.invalid"
+            and env.get("MARTY_ORG_SLUG") == "marty"
+            and env.get("PUBLIC_DOMAIN") == "migration.invalid"
+            and env.get("PUBLIC_API_URL") == "https://migration.invalid"
+            and env.get("ISSUER_BASE_URL") == "https://migration.invalid"
             and migration.get("entrypoint") is None
-            and migration.get("command") is None,
+            and migration.get("command") is None
+            and migration.get("restart") == "no"
+            and migration.get("secrets") == [
+                {"source": "marty_db_password",
+                 "target": "/run/secrets/marty_db_password"},
+                {"source": "bao_root_token",
+                 "target": "/run/secrets/bao_root_token"},
+                {"source": "notification_openbao_token",
+                 "target": "/run/secrets/notification_openbao_token"}]
+            and migration.get("depends_on") == {
+                name: {"condition": "service_healthy", "required": True}
+                for name in ("postgres", "redis", "openbao")},
             "Self-host migration entrypoint, profile or dependencies changed")
-    require(model.get("networks", {}).get("private", {}).get("internal") is True,
+    require(model.get("networks") == {"private": {
+                "name": f"{project}_private", "ipam": {}, "internal": True}},
             "Disposable network is not internal")
     secret_paths = model.get("secrets", {})
-    require(set(secret_paths) == {"marty_db_password", "bao_root_token"}
-            and all(Path(value["file"]).resolve() == (secret_dir / name).resolve()
+    require(set(secret_paths) == {"marty_db_password", "bao_root_token",
+                                  "notification_openbao_token"}
+            and all(set(value) == {"name", "file"}
+                    and value["name"] == f"{project}_{name}"
+                    and Path(value["file"]).resolve() == (secret_dir / name).resolve()
                     for name, value in secret_paths.items()),
             "Disposable secrets escape the owned directory")
+    require(model.get("configs") == {"openbao_start": {
+                "name": f"{project}_openbao_start",
+                "file": str((ROOT / "scripts/passport_supported_openbao_start.sh").resolve())}},
+            "Disposable OpenBao launch config changed")
 
 
 def command(args: list[str], environment: dict[str, str], timeout: int = 90
@@ -139,9 +214,15 @@ def qualify(images: dict[str, str], *,
         secret_dir = Path(temporary)
         if os.name == "posix":
             secret_dir.chmod(0o700)
-        for name in ("marty_db_password", "bao_root_token"):
+        root_token = secrets.token_hex(32)
+        for name in ("marty_db_password", "bao_root_token",
+                     "notification_openbao_token"):
             path = secret_dir / name
-            path.write_text(secrets.token_hex(32), encoding="ascii")
+            # Two separate synthetic secret files exercise production's
+            # dedicated-token requirement. Least-privilege policy remains a
+            # separate release qualification, not a claim of this probe.
+            value = root_token if name != "marty_db_password" else secrets.token_hex(32)
+            path.write_text(value, encoding="ascii")
             if os.name == "posix":
                 path.chmod(0o600)
         environment = os.environ.copy()
@@ -158,7 +239,7 @@ def qualify(images: dict[str, str], *,
         rendered = _checked(run([*compose, "config", "--format", "json"], environment),
                             "Disposable Compose model is invalid")
         try:
-            validate_model(json.loads(rendered), images, secret_dir)
+            validate_model(json.loads(rendered), images, secret_dir, project)
         except (TypeError, ValueError, KeyError) as exc:
             raise QualificationError("Disposable Compose model is invalid") from exc
         _empty_project(project, environment, run)

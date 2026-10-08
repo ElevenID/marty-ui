@@ -35,6 +35,7 @@ services:
   db-migrate:
     image: ${PROBE_MIGRATIONS_IMAGE:?pin released migrations image by digest}
     environment:
+      ENVIRONMENT: production
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
       MARTY_ORG_ADMIN_EMAIL: probe@migration.invalid
@@ -46,10 +47,11 @@ services:
       REDIS_DB_GATEWAY: "2"
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_root_token
+      NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
       PUBLIC_DOMAIN: migration.invalid
       PUBLIC_API_URL: https://migration.invalid
       ISSUER_BASE_URL: https://migration.invalid
-    secrets: [marty_db_password, bao_root_token]
+    secrets: [marty_db_password, bao_root_token, notification_openbao_token]
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -61,6 +63,8 @@ secrets:
     file: ${PROBE_SECRET_DIR:?use disposable secret directory}/marty_db_password
   bao_root_token:
     file: ${PROBE_SECRET_DIR:?use disposable secret directory}/bao_root_token
+  notification_openbao_token:
+    file: ${PROBE_SECRET_DIR:?use disposable secret directory}/notification_openbao_token
 configs:
   openbao_start:
     file: ./scripts/passport_supported_openbao_start.sh
