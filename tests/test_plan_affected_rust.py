@@ -1484,6 +1484,56 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     edge["runtime_marker"],
                     (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
                 )
+                if provider == "marty-issuance-service":
+                    markers = (
+                        ("startup_marker", "runtime_evidence"),
+                        ("request_marker", "request_evidence"),
+                        ("request_method_marker", "request_evidence"),
+                        ("request_auth_marker", "request_evidence"),
+                        ("callsite_route_marker", "callsite_evidence"),
+                        ("callsite_marker", "callsite_evidence"),
+                        ("provider_condition_marker", "provider_evidence"),
+                        ("provider_marker", "provider_evidence"),
+                    )
+                    sources = {
+                        path: (ROOT / path).read_text(encoding="utf-8")
+                        for path in {edge[source] for _, source in markers}
+                    }
+
+                    def assert_markers() -> None:
+                        for marker, source in markers:
+                            self.assertIn(edge[marker], sources[edge[source]])
+
+                    assert_markers()
+                    for marker, source in markers:
+                        path = edge[source]
+                        original = sources[path]
+                        sources[path] = original.replace(
+                            edge[marker], "removed-runtime-contract-marker"
+                        )
+                        with self.subTest(marker=marker), self.assertRaises(
+                            AssertionError
+                        ):
+                            assert_markers()
+                        sources[path] = original
+                    assert_markers()
+                    compose = (ROOT / edge["deployment_evidence"]).read_text(
+                        encoding="utf-8"
+                    )
+                    auth_tail = compose.split("\n  auth:\n", 1)[1]
+                    next_service = re.search(
+                        r"(?m)^  [a-z][a-z0-9_-]*:\s*$", auth_tail
+                    )
+                    self.assertIsNotNone(next_service)
+                    auth_service = auth_tail[: next_service.start()]
+                    self.assertIn(edge["deployment_marker"], auth_service)
+                    with self.assertRaises(AssertionError):
+                        self.assertIn(
+                            edge["deployment_marker"],
+                            auth_service.replace(
+                                edge["deployment_marker"], "removed-runtime-binding"
+                            ),
+                        )
 
     def test_shared_and_unowned_inputs_request_full_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

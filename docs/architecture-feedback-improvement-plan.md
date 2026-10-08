@@ -1938,6 +1938,17 @@ observed non-Cargo runtime consumer with source-backed regression markers;
 Auth changes still select the full Rust workspace. This observation neither
 establishes complete runtime graph closure nor narrows a required CI gate.
 
+A0/A3 next observed edge (2026-10-08 candidate): Auth's Canvas LTI finalize
+route uses a bearer-authenticated GET to native Issuance's current experience
+session endpoint. The Issuance route is conditionally registered, and the base
+Compose Auth service supplies its native-Issuance URL. Record startup, request,
+callsite, conditional provider, and scoped deployment markers on the existing
+Issuance-to-Auth non-Cargo edge; keep its marker-mutation policy test and
+full-workspace fallback. Auth and Issuance have separate local behavior owners
+for the request and route. These source observations do not prove the route is
+enabled in every deployment, establish complete runtime closure, or authorize
+selective CI for service changes.
+
 Next measured compiler-reuse investigation (2026-10-08): #1174's PR and
 protected Canvas jobs spent 10m01s and 10m32s respectively in `Compile reusable
 Rust test executables`. That step starts with an empty host-visible `rust/target`
