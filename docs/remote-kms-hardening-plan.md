@@ -1228,7 +1228,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. On that head, CodeQL analysis and its aggregate check pass with no open alerts after security review of a test-only false positive; all other completed checks pass, while Fast Rust Preflight is still running. UI and Credentials PRs, final hosted checks, exact artifacts and deployment cutover remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All current hosted checks, including CodeQL, Fast Rust Preflight and CI Gate, pass; the PR remains draft with review required. UI and Credentials PRs, exact artifacts and deployment cutover remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; the Credentials candidate has removed both `keys` ORM models/key-manager paths, historical `issuer_signing_keys` create/drop revisions, a duplicate wallet ORM, and an unused `selective_disclosure_keys` JSON column. Its 46-revision graph, 14 focused tests, fresh ORM schema and disposable PostgreSQL issuance schema pass. Core now rejects private material on direct Open Badge public-key writes; its 50 active storage tests pass. Cross-repository/assembled schema inventory, runtime data-flow review and release-artifact proof remain. |
 
 ### First execution steps
@@ -6571,5 +6571,20 @@ scoped token has sign-only policy. This is not a cleartext transmission. Alert
 #261 was dismissed as a false positive with that rationale; the prior alert
 #260 remains fixed, the aggregate CodeQL check `113540624614` now passes,
 and the PR head has no open code-scanning alerts. Fast Rust Preflight job
-`113540261467` was still live in Clippy when checked. Its result and final
-required-check status remain pending; no Core merge or release claim yet.
+`113540261467` subsequently passed, as did CI Gate. All current hosted
+checks on the Core PR head pass, but the PR is still draft and requires review;
+there is no Core merge or release claim yet.
+
+2026-10-08 K10 Organization JSON-store review found that the internal
+settings patch accepted arbitrary JSON and `save_organization_on` persisted
+it directly to `organizations.settings`. The UI candidate now moves the
+bounded private-material detector from signing-keys into one shared Rust
+crate, reuses it in signing-keys, rejects private JWK/PEM and encoded/nested
+material in Organization application updates and direct PostgreSQL writes,
+and fails closed when reading a poisoned settings row. Public JWKs and remote
+key references remain accepted. The shared, Organization and signing-keys
+package suites passed with no failures; warnings-denied all-target Clippy
+passed. A disposable PostgreSQL 16 repository round trip proved the rejected
+write leaves the prior settings unchanged. The container was removed. This
+is part of the broad uncommitted UI feature candidate; audit metadata and
+other generic JSON stores still need review, as do assembled schema/artifacts.
