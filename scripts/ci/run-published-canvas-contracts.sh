@@ -237,6 +237,8 @@ printf '%s\n' "$all_test_names" | grep -Fx 'worker_provider_resource_race_native
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_resource_race_repository_preserves_stale_write_fences: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_effect_transaction_obeys_real_database_lease_expiry: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_reconciliation_preserves_current_fields_and_fences: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences: test'
+printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_dispatch_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_matches_frozen_published_process: test'

@@ -1913,6 +1913,21 @@ two value-shape cases into fast unit tests; the real lease-expiry fences remain.
 The #1174 queue run is a full-gate outcome, not evidence that the new
 helper-only PR selector has been exercised on GitHub.
 
+A4 next roster-expiry overlap candidate (2026-10-08): the remaining published
+PostgreSQL roster matrix has six short cases and two natural 30-second lease
+expiry cases. Keep the exact eight-case obligation roster, all frozen
+assertions, real database clocks, and row-lock wait; give each expiry case its
+own required test, pristine cloned database, owned published PostgreSQL
+container, and verified cleanup. The existing four-thread worker test runner
+can then overlap those independent waits. A local Docker pilot passed the
+six-case matrix. The two expiry tests passed concurrently in 39.24 seconds,
+with both exact cleanup checks. Focused owner/inventory tests
+passed, but the full preflight Python file was not completed locally. The
+extra containers could offset savings or add load on hosted runners; require
+PR and protected Linux CI with per-case/group timings before claiming a
+speedup. No production lease interval, PostgreSQL limit, or required case is
+changed.
+
 A3 next shadow observation (2026-10-08): Auth constructs its internal
 `credential-verified` callback URL and submits it in the Flow gRPC verification
 request. Flow conditionally selects the organization-allowlisted URL, creates a

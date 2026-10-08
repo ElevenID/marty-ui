@@ -592,6 +592,15 @@ const ROSTER_DATABASE_CASES: &[&str] = &[
     "expired_before_write",
     "expired_during_lock",
 ];
+const ROSTER_FAST_DATABASE_CASES: &[&str] = &[
+    "absent",
+    "preexisting",
+    "explicit_null",
+    "stale_target_generation",
+    "wrong_owner",
+    "wrong_attempt",
+];
+const ROSTER_EXPIRY_DATABASE_CASES: &[&str] = &["expired_before_write", "expired_during_lock"];
 
 #[test]
 fn roster_case_ownership_matches_frozen_obligations() {
@@ -628,6 +637,8 @@ fn roster_case_ownership_matches_frozen_obligations() {
     assert_eq!(database, ROSTER_DATABASE_CASES);
     assert_eq!(database.len(), 8);
     assert_eq!(fast.len(), 5);
+    assert_eq!(ROSTER_FAST_DATABASE_CASES, &ROSTER_DATABASE_CASES[..6]);
+    assert_eq!(ROSTER_EXPIRY_DATABASE_CASES, &ROSTER_DATABASE_CASES[6..]);
 }
 
 #[tokio::test]
@@ -642,7 +653,7 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
         .await
         .unwrap();
     let admin = published_template_admin(&owned).await;
-    for case in ROSTER_DATABASE_CASES {
+    for case in ROSTER_FAST_DATABASE_CASES {
         let (database_name, pool) = clone_published_case(&owned, &admin, case).await;
         canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
         close_published_case(&admin, database_name, pool).await;
@@ -650,6 +661,44 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
     admin.close().await;
     owned.close_verified().unwrap();
     timing.success();
+}
+
+async fn run_roster_expiry_case(case: &str, matrix: canvas_published_database::RepositoryMatrix) {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    assert!(ROSTER_EXPIRY_DATABASE_CASES.contains(&case));
+    let timing = canvas_published_database::repository_matrix_timer(matrix);
+    // Each expiry test owns its published tmpfs container and pristine clone.
+    // Neither test changes the 30-second lease or the database clock.
+    let owned = canvas_published_database::PublishedDatabase::start()
+        .await
+        .unwrap();
+    let admin = published_template_admin(&owned).await;
+    let (database_name, pool) = clone_published_case(&owned, &admin, case).await;
+    canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
+    close_published_case(&admin, database_name, pool).await;
+    admin.close().await;
+    owned.close_verified().unwrap();
+    timing.success();
+}
+
+#[tokio::test]
+async fn worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences() {
+    run_roster_expiry_case(
+        "expired_before_write",
+        canvas_published_database::RepositoryMatrix::RosterExpiredBeforeWrite,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences() {
+    run_roster_expiry_case(
+        "expired_during_lock",
+        canvas_published_database::RepositoryMatrix::RosterExpiredDuringLock,
+    )
+    .await;
 }
 
 #[path = "../../../services/issuance/tests/support/canvas_worker_mixed_roster_replay.rs"]

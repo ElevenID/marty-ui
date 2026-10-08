@@ -96,6 +96,8 @@ SCENARIO_NAMES = REST_SCENARIOS | frozenset(
 REPOSITORY_MATRIX_NAMES = frozenset(
     {
         "repository_roster_metadata",
+        "repository_roster_expired_before_write",
+        "repository_roster_expired_during_lock",
         "repository_resource_race",
         "repository_validation",
     }
