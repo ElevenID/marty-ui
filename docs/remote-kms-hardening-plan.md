@@ -2764,6 +2764,26 @@ Other crate-internal `IssuerKey` signing paths remain and need the same
 assertion-preserving retirement before Core is PR-ready. No hosted CI or PR
 was triggered for this checkpoint.
 
+2026-10-07 Core issuer engine local-path retirement: the `IssuanceEngine`
+test-only `issue_credential` / `issue_credential_in_format` methods and the
+standalone private-JWK `create_verifiable_credential`, key-generation and
+algorithm-detection helpers are removed. `IssuerConfig` no longer gains a
+private `IssuerKey` field under `cfg(test)`, so its stateless protocol tests
+use the same key-free configuration shape as production. The redundant
+test-only `formats::sign_credential` dispatcher and now-dead local mDoc
+holder-key helper were removed. Offer, token, authorization, PKCE and metadata
+tests remain; mDoc metadata's ES256 holder-proof constraint remains in a
+key-free test. Positive JWT-VC, SD-JWT, mDoc, holder binding, proof failures,
+remote signer metadata mismatches and x5chain assertions are covered by the
+existing KMS-only boundary and disposable OpenBao targets described above.
+The KMS-only issuer/wallet library suite passed (309 passed, one ignored),
+the six-test public-only remote issuer metadata boundary passed, and a
+`marty-bindings` KMS-only production build passed with the revised config.
+Targeted Clippy with `-D warnings`, Rustfmt and diff checks passed. Core
+commit: `4e7b774`. This removes the issuer engine's local test signing path,
+but other crate-internal `IssuerKey` format and wallet fixtures still remain.
+No hosted CI or PR was triggered for this checkpoint.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
