@@ -6092,10 +6092,13 @@ named for private-key storage. The exact Alembic output is in
 `artifacts/kms-k10-credentials-fresh-alembic-2026-10-08.log`; the disposable
 database was removed. The separate fresh SQLAlchemy metadata test creates
 exactly the five remaining wallet/verification tables in SQLite and no `keys`
-table. The two other Credentials adapter ORM modules each define only a
-`credentials` table; neither defines a key table. Their duplicate credential
-models each created only `credentials` in separate in-memory SQLite probes;
-they need DRY review in the broader compatibility-retirement PR. Full
+table. The remaining Credentials wallet adapter ORM defines only a
+`credentials` table. Self-review found a nested adapter duplicating the same
+`CredentialModel` and `SQLAlchemyCredentialWallet`; the current Credentials
+candidate now re-exports the canonical adapter instead. The nested and
+canonical paths share identical `Base`, model and wallet class objects, and
+the 14 focused migration/custody tests plus Ruff pass. The separate broader
+five-table `models.py` metadata still needs data-flow and DRY review. Full
 assembled platform migrations, row-level payload
 review and release-artifact introspection remain K10 acceptance gates.
 
