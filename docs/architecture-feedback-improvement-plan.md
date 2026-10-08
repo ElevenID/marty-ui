@@ -1695,6 +1695,14 @@ revision, verifies all upstream and third-party references, and emits the
 packager's exact service-image lock. This is a candidate architecture, not a
 qualified producer or permission to omit installed-artifact acceptance.
 
+For A3/A6, the exact `SELFHOST_BUNDLE.md` input is a shipped asset of
+`marty-selfhost-bundle`; the Rust shadow planner now records that package and
+its `marty-canvas-acceptance` Cargo consumer for a packager-plus-document
+change. Unknown root documents and a missing named asset still select the
+entire workspace. This is observational only: PR, merge-group, and release
+checks are unchanged. Further Canvas case ownership and run-bound parity are
+required before using this plan to skip any PR test.
+
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
 assignee, issue/PR, dependency state, exact candidate evidence and next action
