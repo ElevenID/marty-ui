@@ -244,6 +244,10 @@ impl CredentialTemplateApplication {
             command.vct.as_deref(),
             command.doctype.as_deref(),
         )?;
+        validate_revocation_profile_policy(
+            issuance_protocol,
+            command.revocation_profile_id.as_deref(),
+        )?;
         let issuer = self
             .control_plane
             .resolve_active_issuer(
@@ -357,6 +361,10 @@ impl CredentialTemplateApplication {
             Some(&candidate.vct),
             candidate.doctype.as_deref(),
         )?;
+        validate_revocation_profile_policy(
+            issuance_protocol,
+            candidate.revocation_profile_id.as_deref(),
+        )?;
         let issuer = self
             .control_plane
             .resolve_active_issuer(
@@ -393,12 +401,20 @@ impl CredentialTemplateApplication {
             Some(&template.vct),
             template.doctype.as_deref(),
         )?;
-        self.control_plane
-            .require_active_revocation_profile(
-                &template.organization_id,
-                template.revocation_profile_id.as_deref(),
-            )
-            .await?;
+        validate_revocation_profile_policy(
+            issuance_protocol,
+            template.revocation_profile_id.as_deref(),
+        )?;
+        // Physical documents do not use the digital credential status-list
+        // profiles. Their lifecycle is governed by the passport job and Flow.
+        if issuance_protocol != IssuanceProtocol::PhysicalDocument {
+            self.control_plane
+                .require_active_revocation_profile(
+                    &template.organization_id,
+                    template.revocation_profile_id.as_deref(),
+                )
+                .await?;
+        }
         let issuer = self
             .control_plane
             .resolve_active_issuer(
@@ -601,6 +617,20 @@ fn validate_create_command(
     Ok(())
 }
 
+fn validate_revocation_profile_policy(
+    issuance_protocol: IssuanceProtocol,
+    revocation_profile_id: Option<&str>,
+) -> Result<(), CredentialTemplateApplicationError> {
+    if issuance_protocol == IssuanceProtocol::PhysicalDocument
+        && revocation_profile_id.is_some_and(|value| !value.trim().is_empty())
+    {
+        return Err(CredentialTemplateApplicationError::InvalidCommand(
+            "physical documents cannot bind a digital revocation profile",
+        ));
+    }
+    Ok(())
+}
+
 fn oid4vci_configuration(
     template: &CredentialTemplate,
 ) -> Result<Option<(String, Value)>, CredentialTemplateApplicationError> {
@@ -736,7 +766,7 @@ fn apply_update(
         template.trust_profile_id = Some(value);
     }
     if let Some(value) = patch.revocation_profile_id {
-        template.revocation_profile_id = Some(value);
+        template.revocation_profile_id = (!value.trim().is_empty()).then_some(value);
     }
     if let Some(value) = patch.issuer_did {
         template.issuer_did = Some(value);

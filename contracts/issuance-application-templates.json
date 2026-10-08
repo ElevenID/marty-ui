@@ -159,7 +159,7 @@
       "default_target": "credential-template:9003",
       "not_found": {"section": "credential_template", "field": "credential_template_id", "code": "NOT_FOUND", "message": "Credential Template was not found."},
       "unavailable": {"section": "credential_template", "field": "credential_template_id", "code": "UNAVAILABLE", "message": "Credential Template validation is unavailable."},
-      "requirements": ["same organization", "ACTIVE status", "non-empty revocation_profile_id"]
+      "requirements": ["same organization", "ACTIVE status", "non-empty revocation_profile_id for digital credentials", "ICAO_EMRTD with PHYSICAL_DOCUMENT has no digital revocation profile"]
     },
     "form_field_rules": [
       "at least one form field",

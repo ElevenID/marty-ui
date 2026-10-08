@@ -7,7 +7,7 @@ from copy import deepcopy
 import pytest
 
 from scripts.passport_supported_flow_references import (
-    DISPOSABLE_REVOCATION_PROFILE_ID, PASSPORT_COMPLIANCE_PROFILE_ID,
+    PASSPORT_COMPLIANCE_PROFILE_ID,
     FlowReferenceError,
     provision_physical_passport_references,
 )
@@ -27,7 +27,7 @@ def responses() -> list[tuple[int, dict]]:
         "name": PREFIX + " credential", "status": "DRAFT",
         "credential_type": "Passport", "credential_payload_format": "ICAO_EMRTD",
         "issuance_protocol": "PHYSICAL_DOCUMENT", "doctype": "TD3",
-        "revocation_profile_id": DISPOSABLE_REVOCATION_PROFILE_ID,
+        "revocation_profile_id": None,
         "issuer_did": ISSUER,
     }
     application = {
@@ -75,7 +75,7 @@ def test_reference_setup_uses_real_activated_tenant_resources() -> None:
     assert calls[0][0:2] == ("POST", "/v1/credential-templates")
     assert calls[0][2]["supported_formats"] == ["ICAO_EMRTD"]
     assert calls[0][2]["issuer_did"] == ISSUER
-    assert calls[0][2]["revocation_profile_id"] == DISPOSABLE_REVOCATION_PROFILE_ID
+    assert "revocation_profile_id" not in calls[0][2]
     assert calls[0][2]["compliance_profile_id"] == PASSPORT_COMPLIANCE_PROFILE_ID
     assert calls[4][2]["form_fields"][0]["claim_mapping"] == "document_number"
     assert calls[6][0:2] == ("POST", f"/v1/application-templates/{APPLICATION}/validate")

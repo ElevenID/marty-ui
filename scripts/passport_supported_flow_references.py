@@ -10,7 +10,6 @@ from uuid import UUID
 Request = Callable[[str, str, dict[str, Any] | None, dict[str, str]],
                    tuple[int, dict[str, Any]]]
 DISPOSABLE_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001"
-DISPOSABLE_REVOCATION_PROFILE_ID = "70000000-0000-0000-0000-000000000001"
 PASSPORT_COMPLIANCE_PROFILE_ID = "10000000-0000-0000-0000-000000000005"
 
 
@@ -62,7 +61,7 @@ def _credential_template(
              and result.get("credential_payload_format") == "ICAO_EMRTD"
              and result.get("issuance_protocol") == "PHYSICAL_DOCUMENT"
              and result.get("doctype") == "TD3"
-             and result.get("revocation_profile_id") == DISPOSABLE_REVOCATION_PROFILE_ID
+             and result.get("revocation_profile_id") is None
              and result.get("issuer_did") == issuer_did,
              "Credential template binding drifted")
     return identifier
@@ -130,7 +129,6 @@ def provision_physical_passport_references(
         "credential_payload_format": "ICAO_EMRTD",
         "issuance_protocol": "PHYSICAL_DOCUMENT",
         "compliance_profile_id": PASSPORT_COMPLIANCE_PROFILE_ID,
-        "revocation_profile_id": DISPOSABLE_REVOCATION_PROFILE_ID,
         "issuer_did": issuer_did,
     }, operation="POST /v1/credential-templates")
     credential_id = _credential_template(

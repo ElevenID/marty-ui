@@ -172,6 +172,8 @@ pub async fn reconcile_credential_template_data(
     let missing_active_revocation: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM credential_template_service.credential_templates
          WHERE lower(status)='active'
+           AND NOT (upper(credential_payload_format)='ICAO_EMRTD'
+                    AND issuance_protocol='PHYSICAL_DOCUMENT')
            AND nullif(trim(revocation_profile_id),'') IS NULL",
     )
     .fetch_one(&mut *transaction)
@@ -194,6 +196,8 @@ pub async fn reconcile_credential_template_data(
              FROM sole_active_profile AS profile
              WHERE template.organization_id=profile.organization_id
                AND lower(template.status)='active'
+               AND NOT (upper(template.credential_payload_format)='ICAO_EMRTD'
+                        AND template.issuance_protocol='PHYSICAL_DOCUMENT')
                AND nullif(trim(template.revocation_profile_id),'') IS NULL",
         )
         .execute(&mut *transaction)
@@ -204,6 +208,8 @@ pub async fn reconcile_credential_template_data(
         "UPDATE credential_template_service.credential_templates
          SET status='deprecated',updated_at=now()
          WHERE lower(status)='active'
+           AND NOT (upper(credential_payload_format)='ICAO_EMRTD'
+                    AND issuance_protocol='PHYSICAL_DOCUMENT')
            AND nullif(trim(revocation_profile_id),'') IS NULL",
     )
     .execute(&mut *transaction)
