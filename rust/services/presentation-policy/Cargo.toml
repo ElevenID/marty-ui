@@ -15,6 +15,7 @@ base64.workspace = true
 chrono.workspace = true
 hex.workspace = true
 marty-crypto.workspace = true
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-oid4vci = { workspace = true, features = ["verifier", "sd_jwt"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-verification.workspace = true

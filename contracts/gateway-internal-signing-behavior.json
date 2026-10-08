@@ -1,8 +1,6 @@
 {
   "schema_version": 1,
   "routes": [
-    {"method": "POST", "path": "/internal/signing-keys/flow-key-envelopes/unwrap", "operation": "flow_envelope_unwrap"},
-    {"method": "POST", "path": "/internal/signing-keys/flow-key-envelopes/wrap", "operation": "flow_envelope_wrap"},
     {"method": "POST", "path": "/internal/signing-keys/integration-secrets/encrypt", "operation": "integration_secret_encrypt"},
     {"method": "POST", "path": "/internal/signing-keys/integration-secrets/decrypt", "operation": "integration_secret_decrypt"},
     {"method": "GET", "path": "/internal/signing-keys/issuer-context", "operation": "issuer_context"},

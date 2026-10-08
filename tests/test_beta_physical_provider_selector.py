@@ -32,7 +32,7 @@ def model(tmp_path: Path) -> dict:
     secret_root = tmp_path / "elevenid-beta-passport-physical"
     secret_root.mkdir()
     secret_names = (
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
         "marty_db_password",
         "flow_workload_client_cert", "flow_workload_client_key",
@@ -41,7 +41,7 @@ def model(tmp_path: Path) -> dict:
     )
     secrets = {}
     for index, name in enumerate(secret_names):
-        parent = secret_root if index < 5 else tmp_path / "beta-workload"
+        parent = secret_root if index < 4 else tmp_path / "beta-workload"
         parent.mkdir(exist_ok=True)
         path = parent / name
         path.write_text("beta-physical-secret-" + str(index) * 40, encoding="utf-8")
@@ -78,15 +78,12 @@ def model(tmp_path: Path) -> dict:
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
-            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
             "PERSONALIZATION_BUREAU_URL": "https://bureau.physical-provider.net/jobs",
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "physical-provider-marty-001",
             "PERSONALIZATION_BUREAU_API_KEY": "",
             "PERSONALIZATION_BUREAU_API_KEY_FILE":
                 "/run/secrets/passport_physical_provider_api_key",
-            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "",
-            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE": "",
-            "DATABASE_URL": "postgresql+asyncpg://marty:beta-physical-secret-4444444444444444444444444444444444444444@postgres:5432/marty",
+            "DATABASE_URL": "postgresql+asyncpg://marty:beta-physical-secret-3333333333333333333333333333333333333333@postgres:5432/marty",
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
         }, "secrets": ["passport_physical_provider_api_key"]},
@@ -102,13 +99,12 @@ def model(tmp_path: Path) -> dict:
         "passport-callback-signer-supported": {"image": IMAGE,
             "networks": {"passport-provider-signing": {}},
             "environment": {
-                "SERVICE_NAME": "passport_callback_signer",
-                "ENVIRONMENT": "beta",
-                "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
-                "SIGNING_KEYS_INTERNAL_API_KEY": "",
-                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "SERVICE_NAME": "passport_callback_signer_supported",
+                "ENVIRONMENT": "production",
+                "PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED": "true",
+                "PASSPORT_CALLBACK_SIGNER_API_KEY_FILE":
                     "/run/secrets/passport_callback_signer_api_key",
-                "BAO_TOKEN": "", "BAO_TOKEN_FILE":
+                "PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE":
                     "/run/secrets/passport_callback_signer_bao_token",
                 "BAO_ADDR": "http://openbao:8200",
             }, "secrets": ["passport_callback_signer_api_key",
@@ -124,10 +120,9 @@ def model(tmp_path: Path) -> dict:
                 "PASSPORT_PROVIDER_NATIVE_CALLBACK_URL": VALIDATOR["PRIVATE_CALLBACK_URL"],
                 "PASSPORT_PROVIDER_SIGNER_API_KEY_FILE":
                     "/run/secrets/passport_callback_signer_api_key",
-                "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE":
-                    "/run/secrets/passport_provider_webhook_secret",
+                "PASSPORT_PROVIDER_HMAC_KEY_VERSION": "1",
             }, "secrets": ["passport_callback_signer_api_key",
-                            "passport_provider_webhook_secret", "marty_db_password"]},
+                            "marty_db_password"]},
     }}
 
 
@@ -187,9 +182,11 @@ def test_physical_mode_is_separate_and_default_off(tmp_path: Path) -> None:
     candidate = model(tmp_path)
     validate(candidate)
     physical = yaml.safe_load((ROOT / PROFILES[1]).read_text(encoding="utf-8"))
+    base = yaml.safe_load((ROOT / PROFILES[0]).read_text(encoding="utf-8"))
     assert "passport-beta-bureau" not in physical["services"]
-    assert physical["services"]["passport-callback-signer-supported"]["environment"][
-        "SERVICE_NAME"] == "passport_callback_signer"
+    assert "passport-callback-signer-supported" not in physical["services"]
+    assert base["services"]["passport-callback-signer-supported"]["environment"][
+        "SERVICE_NAME"] == "passport_callback_signer_supported"
     with pytest.raises(VALIDATOR["PassportConfigurationError"]):
         VALIDATOR["validate_model"](candidate, passport_enabled=False,
                                     files=PROFILES, physical_provider=True)
@@ -248,7 +245,11 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
     lambda candidate: candidate["services"]["passport-callback-signer-supported"][
         "secrets"].remove("passport_callback_signer_bao_token"),
     lambda candidate: candidate["services"]["passport-provider-ingress"][
-        "secrets"].remove("passport_provider_webhook_secret"),
+        "environment"].update(PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE="/run/secrets/old"),
+    lambda candidate: candidate["services"]["passport-provider-ingress"][
+        "environment"].update(PASSPORT_PROVIDER_HMAC_SOURCE_FILE=""),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "environment"].update(PASSPORT_PROVIDER_HMAC_SOURCE_FILE=""),
     lambda candidate: candidate.update(name="marty-selfhost-prod"),
     lambda candidate: candidate["networks"]["passport-provider-signing"].update(
         internal=False),
@@ -364,10 +365,11 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "PASSPORT_PROVIDER_SECRET_DIR": str(tmp_path / "elevenid-beta-passport-physical"),
         "PASSPORT_PHYSICAL_PROVIDER_URL": "https://bureau.physical-provider.net/jobs",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "physical-provider-marty-001",
+        "PASSPORT_PROVIDER_HMAC_KEY_VERSION": "1",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": CSCA,
         "MARTY_NETWORK_NAME": "elevenid-beta-network",
-        "MARTY_DB_PASSWORD": "beta-physical-secret-" + "4" * 40,
+        "MARTY_DB_PASSWORD": "beta-physical-secret-" + "3" * 40,
         "MARTY_SERVICES_IMAGE": IMAGE,
         "MARTY_ISSUANCE_IMAGE": IMAGE,
         "MARTY_DOCS_IMAGE": "sha256:" + "a" * 64,

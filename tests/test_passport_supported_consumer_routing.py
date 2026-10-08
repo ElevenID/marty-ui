@@ -70,7 +70,7 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
         )
         assert gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
         if file == "docker-compose.selfhost.prod.yml":
-            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == CONTRACT["consumers"]["selfhost_compose"]["native_url_passthrough_default"]
+            assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == CONTRACT["consumers"]["selfhost_compose"]["native_url_default"]
             assert all(
                 env["GRPC_SERVICE_TOKEN_FILE"] == "/run/secrets/grpc_service_token"
                 for env in (gateway, flow, owner)
@@ -83,9 +83,9 @@ def test_compose_consumers_keep_selectors_off_and_share_token_source() -> None:
             assert all(env["GRPC_SERVICE_TOKEN"] == "${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}" for env in (gateway, flow, owner))
 
 
-def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() -> None:
+def test_selfhost_flow_uses_native_owner_while_passport_routes_remain_opt_in() -> None:
     flow = compose_environment("docker-compose.selfhost.prod.yml", "flow")
-    assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
+    assert flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert flow["PASSPORT_NATIVE_FLOW_ENABLED"] == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     for profile in ("docker-compose.profile.passport-native-beta.yml",
@@ -106,7 +106,7 @@ def test_selfhost_flow_keeps_legacy_default_until_beta_profile_selects_native() 
 @pytest.mark.parametrize(
     ("native_url", "enabled", "expected"),
     [
-        (None, "false", "http://issuance:8005"),
+        (None, "false", "http://issuance-native:8005"),
         ("http://issuance-native:8005", "true", "http://issuance-native:8005"),
     ],
 )

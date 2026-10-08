@@ -19,6 +19,7 @@ axum.workspace = true
 chrono.workspace = true
 marty-credential-template = { path = "../credential-template" }
 marty-flow = { path = "../flow" }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 mmf-core.workspace = true
 mmf-platform.workspace = true
 mmf-runtime.workspace = true

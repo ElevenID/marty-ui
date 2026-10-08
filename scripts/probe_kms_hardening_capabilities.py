@@ -15,7 +15,7 @@ import uuid
 
 IMAGE = (
     "quay.io/openbao/openbao@sha256:"
-    "6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"
+    "6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452"
 )
 
 

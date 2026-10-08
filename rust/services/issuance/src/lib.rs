@@ -70,6 +70,7 @@ pub mod canvas_provider_http;
 pub mod canvas_readiness;
 pub mod canvas_readiness_runtime;
 mod canvas_response_text;
+pub mod didcomm_remote_kms;
 mod signing_error_detail;
 mod signing_http_response;
 pub use signing_http_response::SigningResponseFailure;
@@ -145,6 +146,8 @@ pub mod passport_http;
 pub mod passport_provider_ingress;
 pub mod passport_repository;
 pub mod passport_signer;
+#[cfg(test)]
+pub(crate) mod passport_test_vectors;
 pub mod proof_nonce;
 pub mod resource_owner;
 pub mod resource_owner_postgres;

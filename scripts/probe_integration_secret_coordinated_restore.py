@@ -625,6 +625,33 @@ def run() -> None:
             root = read_volume_file(state, "root.token")
             unseal = read_volume_file(state, "unseal.key")
             token = read_volume_file(runtime, "signing_keys_openbao_token")
+            didcomm_token = read_volume_file(runtime, "didcomm_issuance_openbao_token")
+            bootstrap_bao(bao_name, state, runtime)
+            if read_volume_file(runtime, "didcomm_issuance_openbao_token") != didcomm_token:
+                raise RuntimeError("Idempotent OpenBao bootstrap replaced the DIDComm Issuance token")
+            version = "0" * 32
+            expected_capabilities = {
+                f"didcomm/keys/synthetic/issuer/versions/{version}": ["read"],
+                f"didcomm/pack/synthetic/issuer/{version}": ["update"],
+                "didcomm/keys/synthetic/issuer": ["deny"],
+                "didcomm/keys/synthetic/issuer/rotate": ["deny"],
+                "didcomm/haip/keys/synthetic": ["deny"],
+            }
+            status, capabilities = request(
+                bao_url,
+                "POST",
+                "sys/capabilities",
+                {"token": didcomm_token, "paths": list(expected_capabilities)},
+                root,
+            )
+            if status != 200 or any(
+                capabilities.get("data", {}).get(path) != allowed
+                for path, allowed in expected_capabilities.items()
+            ):
+                raise RuntimeError(
+                    f"DIDComm Issuance token capabilities differ: status={status}, "
+                    f"actual={capabilities.get('data', {})!r}"
+                )
             haip_token_file = temp / "haip-kms.token"
             haip_token_file.write_text(
                 read_volume_file(runtime, "haip-kms.token"), encoding="utf-8"

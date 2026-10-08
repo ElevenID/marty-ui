@@ -551,14 +551,15 @@ services:
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
       CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
-      INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
+      DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
     secrets:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
-      - integration_secret_master_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
@@ -569,15 +570,18 @@ services:
         condition: service_completed_successfully
       issuance-migrations:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
+        required: true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8005/ready"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
     restart: unless-stopped
 
-  # Native owner for selected routes; legacy siblings remain on issuance.
+  # Native issuance owner; remaining Python routes are being retired.
   issuance-native:
     extends:
       file: docker-compose.service.issuance-native-runtime.yml
@@ -587,6 +591,8 @@ services:
     environment:
       <<: *issuance-application-env
       SERVICE_NAME: issuance_native
+      DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
+      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
       ISSUANCE_GRPC_ENABLED: "true"
       RP_GRPC_TARGET: revocation-profile:9013
       CANVAS_MIRROR_WORKER_ENABLED: ${CANVAS_MIRROR_WORKER_ENABLED:-false}
@@ -609,18 +615,16 @@ services:
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       ICAO_DOCUMENT_SIGNER_API_KEY: ${ICAO_DOCUMENT_SIGNER_API_KEY:-}
-      PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: ${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY: ${PHYSICAL_DOCUMENT_ARTIFACT_KEY:-}
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       PERSONALIZATION_BUREAU_API_KEY: ${PERSONALIZATION_BUREAU_API_KEY:-}
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}
     secrets:
       - marty_db_password
       - issuance_api_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
+      - didcomm_issuance_openbao_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -890,12 +894,15 @@ services:
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       BAO_ADDR: ${BAO_ADDR:-}
-      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
+      HAIP_KMS_TOKEN_FILE: /run/secrets/haip_kms_token
       RUST_LOG: info
     secrets:
       - issuance_api_key
-      - openbao_service_token
+      - signing_keys_openbao_token
+      - haip_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -931,7 +938,7 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
-      ISSUANCE_NATIVE_SERVICE_URL: ${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_FLOW_ENABLED: ${PASSPORT_NATIVE_FLOW_ENABLED:-false}
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: ${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}
       PASSPORT_TENANT_API_KEYS: ${PASSPORT_TENANT_API_KEYS:-}
@@ -1262,14 +1269,18 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   flow_application_event_hmac_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_application_event_hmac_key
-  integration_secret_master_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/token_hmac_key
   canvas_credentials_shared_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_shared_secret
   openbao_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_service_token
+  signing_keys_openbao_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_openbao_token
+  didcomm_issuance_openbao_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/didcomm_issuance_openbao_token
+  haip_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/haip_kms_token
   notification_openbao_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_openbao_token
   cloudflare_tunnel_token:

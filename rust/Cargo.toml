@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/canvas-acceptance", "crates/oid4vp-contract", "crates/passport-auth", "crates/platform-clock", "crates/release-evidence", "crates/response-compat", "crates/schema-startup", "crates/service-acceptance", "crates/selfhost-bundle", "services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/deployment-profile", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/issuance", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
+members = ["crates/canvas-acceptance", "crates/key-material-policy", "crates/oid4vp-contract", "crates/passport-auth", "crates/platform-clock", "crates/release-evidence", "crates/response-compat", "crates/schema-startup", "crates/service-acceptance", "crates/selfhost-bundle", "services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/deployment-profile", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/issuance", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
 resolver = "2"
 
 [workspace.package]
@@ -17,12 +17,12 @@ aws-sdk-kms = { version = "1.114.0", default-features = false, features = ["defa
 aws-smithy-http-client = "1.3.0"
 base64 = "0.22"
 bytes = "1"
+affinidi-messaging-didcomm = "=0.14.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 const-oid = "0.9.6"
 der = { version = "0.7.10", features = ["pem"] }
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 fancy-regex = "0.19.2"
-fernet = { version = "0.2.2", default-features = false, features = ["rustcrypto"] }
 flate2 = "1.1.9"
 futures-core = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
@@ -37,13 +37,13 @@ jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 log = "0.4"
 num-bigint = "0.4"
 num-traits = "0.2"
-marty-crypto = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false, features = ["ecdsa", "jwk", "x509-parsing"] }
-marty-didcomm = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
-marty-iso18013 = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
-marty-oid4vci = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
-marty-verification = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68", default-features = false }
-marty-canonical-digest = { version = "0.2", git = "https://github.com/ElevenID/marty-core", rev = "a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7" }
-marty-status = { version = "=0.1.62", git = "https://github.com/ElevenID/marty-core", rev = "bdbd1510ab6ad650e4d408a93dac22b57eb67e68" }
+marty-crypto = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "ecdsa-verification", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only"] }
+marty-iso18013 = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false }
+marty-oid4vci = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only"] }
+marty-verification = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only"] }
+marty-canonical-digest = { version = "0.2", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
+marty-status = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
 mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
 mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
 mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
@@ -103,5 +103,4 @@ inherits = "dev"
 debug = "full"
 
 [patch.crates-io]
-isomdl = { git = "https://github.com/ElevenID/isomdl-elevenid", rev = "671044c9495aec101bf0cd381669d5ed6f64dd11" }
 ssi-jwt = { path = "third_party/ssi-jwt" }

@@ -7,6 +7,17 @@ use std::{collections::BTreeMap, fmt};
 use mmf_core::constant_time_secret_eq;
 use serde::de::{MapAccess, Visitor};
 
+/// Canonical provider-profile identifier accepted by physical callback routing
+/// and its profile-scoped Transit key reference.
+#[must_use]
+pub fn valid_provider_profile_id(value: &str) -> bool {
+    (8..=128).contains(&value.len())
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+}
+
 #[derive(Clone, Eq, PartialEq)]
 pub struct PassportTenantKeyring {
     keys: BTreeMap<String, Box<str>>,

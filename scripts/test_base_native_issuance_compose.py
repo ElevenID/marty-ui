@@ -88,11 +88,16 @@ FILE_SELECTORS = frozenset(
         "CANVAS_CREDENTIALS_API_TOKEN_FILE",
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
-        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
-        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
     }
 )
 NATIVE_CONFIG_META = frozenset({"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"})
+FORBIDDEN_LOCAL_CUSTODY_INPUTS = frozenset({
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
+})
 
 
 def source(path):
@@ -197,7 +202,9 @@ def assert_sources(base, profile, runtime):
         | EXPLICIT_MOUNTS
         | FILE_SELECTORS
         | NATIVE_CONFIG_META
+        | FORBIDDEN_LOCAL_CUSTODY_INPUTS
     )
+    assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (set(env) | set(legacy))
     actual_omitted = inputs - set(env)
     assert actual_omitted == omitted, (
         "Update the exhaustive native configuration inventory: "

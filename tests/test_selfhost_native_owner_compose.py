@@ -83,6 +83,9 @@ def models():
     after["secrets"]["signing_keys_openbao_token"] = {
         "file": "/synthetic/signing_keys_openbao_token"
     }
+    after["secrets"]["didcomm_issuance_openbao_token"] = {
+        "file": "/synthetic/didcomm_issuance_openbao_token"
+    }
     after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
         "/run/secrets/signing_keys_openbao_token"
     )
@@ -139,11 +142,19 @@ def models():
             **GATE["SHARED_SETTINGS"],
             **GATE["PUBLICATION_SETTINGS"],
             "SERVICE_NAME": "issuance_native",
+            "DIDCOMM_KMS_ADDR": "${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}",
+            "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm_issuance_openbao_token",
             "ISSUANCE_GRPC_ENABLED": "true",
             "RP_GRPC_TARGET": "revocation-profile:9013",
             **GATE["NATIVE_ADDITIVE"],
         },
-        "secrets": [{"source": "token"}],
+        "secrets": [
+            {"source": "token"},
+            {
+                "source": "didcomm_issuance_openbao_token",
+                "target": "/run/secrets/didcomm_issuance_openbao_token",
+            },
+        ],
         "depends_on": {
             name: {"condition": condition, "required": True}
             for name, condition in [

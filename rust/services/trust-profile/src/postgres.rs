@@ -36,6 +36,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         framework: &TrustFramework,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(framework)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.trust_frameworks
              (id,code,display_name,description,pkd_endpoints,default_algorithms,default_formats,
@@ -105,6 +106,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         profile: &OrganizationTrustProfile,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(profile)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.organization_trust_profiles
              (id,organization_id,framework_id,name,display_name,description,enabled,use_case_tags,
@@ -199,6 +201,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         entry: &crate::TrustRegistryEntry,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(entry)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.trust_registry_entries
              (id,anchor_type,operation,country_code,certificate_pem,subject_key_id,not_before,
@@ -304,6 +307,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         profile: &TrustProfile,
         expected_updated_at: Option<DateTime<Utc>>,
     ) -> Result<bool, TrustProfileRepositoryError> {
+        reject_private_record(profile)?;
         let record = TrustProfileRecord::try_from(profile).map_err(|_| invalid("trust_profile"))?;
         if let Some(expected) = expected_updated_at {
             return Ok(sqlx::query(
@@ -429,6 +433,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         issuer: &IssuerEntity,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(issuer)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.issuer_entities
              (id,organization_id,issuer_id,issuer_type,display_name,description,is_system_issuer,
@@ -544,6 +549,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         link: &TrustProfileIssuer,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(link)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.trust_profile_issuers
              (id,trust_profile_id,issuer_id,trust_level,relationship_status,
@@ -637,6 +643,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         source: &RegistryImportSource,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(source)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.trust_registry_sources
              (id,trust_profile_id,registry_type,registry_name,registry_url,enabled,sync_enabled,
@@ -732,6 +739,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
         &self,
         issuer: &RegistryImportedIssuer,
     ) -> Result<(), TrustProfileRepositoryError> {
+        reject_private_record(issuer)?;
         sqlx::query(
             "INSERT INTO trust_profile_service.trust_registry_issuers
              (id,registry_source_id,trust_profile_id,issuer_did,issuer_name,country_code,
@@ -818,7 +826,7 @@ impl TrustProfileRepository for PostgresTrustProfileRepository {
 }
 
 fn framework_from_row(row: &PgRow) -> Result<TrustFramework, TrustProfileRepositoryError> {
-    Ok(TrustFramework {
+    checked_public_record(TrustFramework {
         id: uuid(row, "id")?,
         code: get(row, "code")?,
         display_name: get(row, "display_name")?,
@@ -837,7 +845,7 @@ fn framework_from_row(row: &PgRow) -> Result<TrustFramework, TrustProfileReposit
 fn organization_profile_from_row(
     row: &PgRow,
 ) -> Result<OrganizationTrustProfile, TrustProfileRepositoryError> {
-    Ok(OrganizationTrustProfile {
+    checked_public_record(OrganizationTrustProfile {
         id: uuid(row, "id")?,
         organization_id: get(row, "organization_id")?,
         framework_id: uuid(row, "framework_id")?,
@@ -864,7 +872,7 @@ fn organization_profile_from_row(
 fn registry_entry_from_row(
     row: &PgRow,
 ) -> Result<crate::TrustRegistryEntry, TrustProfileRepositoryError> {
-    Ok(crate::TrustRegistryEntry {
+    checked_public_record(crate::TrustRegistryEntry {
         id: uuid(row, "id")?,
         anchor_type: enum_get(row, "anchor_type")?,
         operation: enum_get::<RegistryOperation>(row, "operation")?,
@@ -901,10 +909,11 @@ fn profile_from_row(row: &PgRow) -> Result<TrustProfile, TrustProfileRepositoryE
         updated_at: get(row, "updated_at")?,
     })
     .map_err(|_| invalid("trust_profile"))
+    .and_then(checked_public_record)
 }
 
 fn issuer_from_row(row: &PgRow) -> Result<IssuerEntity, TrustProfileRepositoryError> {
-    Ok(IssuerEntity {
+    checked_public_record(IssuerEntity {
         id: uuid(row, "id")?,
         organization_id: get(row, "organization_id")?,
         issuer_id: get(row, "issuer_id")?,
@@ -930,7 +939,7 @@ fn issuer_from_row(row: &PgRow) -> Result<IssuerEntity, TrustProfileRepositoryEr
 
 fn profile_issuer_from_row(row: &PgRow) -> Result<TrustProfileIssuer, TrustProfileRepositoryError> {
     let trust_level: i32 = get(row, "trust_level")?;
-    Ok(TrustProfileIssuer {
+    checked_public_record(TrustProfileIssuer {
         id: uuid(row, "id")?,
         trust_profile_id: uuid(row, "trust_profile_id")?,
         issuer_id: uuid(row, "issuer_id")?,
@@ -947,7 +956,7 @@ fn registry_import_source_from_row(
     row: &PgRow,
 ) -> Result<RegistryImportSource, TrustProfileRepositoryError> {
     let sync_interval_hours: i32 = get(row, "sync_interval_hours")?;
-    Ok(RegistryImportSource {
+    checked_public_record(RegistryImportSource {
         id: uuid(row, "id")?,
         trust_profile_id: uuid(row, "trust_profile_id")?,
         registry_type: enum_get(row, "registry_type")?,
@@ -969,7 +978,7 @@ fn registry_import_source_from_row(
 fn registry_imported_issuer_from_row(
     row: &PgRow,
 ) -> Result<RegistryImportedIssuer, TrustProfileRepositoryError> {
-    Ok(RegistryImportedIssuer {
+    checked_public_record(RegistryImportedIssuer {
         id: uuid(row, "id")?,
         registry_source_id: uuid(row, "registry_source_id")?,
         trust_profile_id: uuid(row, "trust_profile_id")?,
@@ -994,6 +1003,19 @@ fn database(error: sqlx::Error) -> TrustProfileRepositoryError {
 
 fn invalid(field: &'static str) -> TrustProfileRepositoryError {
     TrustProfileRepositoryError::InvalidData(field)
+}
+
+fn reject_private_record<T: Serialize>(record: &T) -> Result<(), TrustProfileRepositoryError> {
+    let value = serde_json::to_value(record).map_err(|_| invalid("record"))?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(invalid("private_key_material"));
+    }
+    Ok(())
+}
+
+fn checked_public_record<T: Serialize>(record: T) -> Result<T, TrustProfileRepositoryError> {
+    reject_private_record(&record)?;
+    Ok(record)
 }
 
 fn get<T>(row: &PgRow, field: &'static str) -> Result<T, TrustProfileRepositoryError>
@@ -1061,4 +1083,48 @@ fn usize_from_i64(value: i64, field: &'static str) -> Result<usize, TrustProfile
 
 fn u64_from_i32(value: i32, field: &'static str) -> Result<u64, TrustProfileRepositoryError> {
     u64::try_from(value).map_err(|_| invalid(field))
+}
+
+#[cfg(test)]
+mod private_material_tests {
+    use super::*;
+    use serde_json::json;
+    use sqlx::postgres::PgPoolOptions;
+
+    #[tokio::test]
+    async fn imported_issuer_rejects_private_verification_key_before_database_access() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let repository = PostgresTrustProfileRepository::new(pool);
+        let now = Utc::now();
+        let issuer = RegistryImportedIssuer {
+            id: Uuid::new_v4(),
+            registry_source_id: Uuid::new_v4(),
+            trust_profile_id: Uuid::new_v4(),
+            issuer_did: "did:web:issuer.example".into(),
+            issuer_name: None,
+            country_code: None,
+            issuer_type: None,
+            verification_keys: vec![json!({"kty": "EC", "d": "synthetic-private"})],
+            credential_templates: vec![],
+            status: "active".into(),
+            imported_at: now,
+            valid_from: None,
+            valid_until: None,
+            created_at: now,
+            updated_at: now,
+        };
+        assert_eq!(
+            repository.save_registry_imported_issuer(&issuer).await,
+            Err(TrustProfileRepositoryError::InvalidData(
+                "private_key_material"
+            ))
+        );
+        assert!(reject_private_record(&json!({
+            "verification_keys": [{"kty": "EC", "x": "public", "y": "public"}],
+            "key_reference": "transit/keys/issuer-v4"
+        }))
+        .is_ok());
+    }
 }

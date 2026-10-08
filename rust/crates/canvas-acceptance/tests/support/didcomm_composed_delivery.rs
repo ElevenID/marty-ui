@@ -54,7 +54,11 @@ use tokio::{
 use tower::ServiceExt;
 
 use super::{
-    didcomm_test_fixtures::authcrypt_parties_with_ids, didcomm_wallet_fixture::WalletFixture,
+    didcomm_test_fixtures::{
+        document_with_public, holder_with_id, SYNTHETIC_SENDER_X25519_PUBLIC_X,
+    },
+    didcomm_wallet_fixture::WalletFixture,
+    remote_didcomm_sender::RemoteSenderFixture,
 };
 
 const ISSUER: &str = "did:web:fixture.example:issuer";
@@ -85,7 +89,7 @@ impl IssuerContextResolver for ControlledIssuer {
     ) -> Result<IssuerContext, CredentialIssuanceError> {
         assert_eq!(transaction.organization_id, ORGANIZATION);
         assert_eq!(format, "dc+sd-jwt");
-        let public_jwk = json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(ed25519_dalek::SigningKey::from_bytes(&[11;32]).verifying_key().to_bytes())});
+        let public_jwk = json!({"kty":"OKP","crv":"Ed25519","x":super::didcomm_test_fixtures::SYNTHETIC_SIGNING_PUBLIC_X});
         Ok(IssuerContext {
             issuer_profile_id: "didcomm-profile".into(),
             issuer_did: ISSUER.into(),
@@ -612,18 +616,17 @@ fn decrypt_capture(
     sender: &DidDocument,
 ) -> marty_didcomm::types::DidcommMessage {
     let plaintext = if authenticated {
-        let decrypted = marty_didcomm::decrypt_authenticated_jwe(
+        let decrypted = super::didcomm_test_fixtures::holder_decrypt_authcrypt(
             encrypted,
             recipient_secret,
             recipient,
             sender,
-        )
-        .unwrap();
+        );
         assert_eq!(decrypted.sender_kid, format!("{ISSUER}#key-1"));
         assert_eq!(decrypted.recipient_kid, format!("{HOLDER}#key-1"));
         decrypted.plaintext
     } else {
-        marty_didcomm::decrypt_jwe(encrypted, recipient_secret).unwrap()
+        super::didcomm_test_fixtures::holder_decrypt_anoncrypt(encrypted, recipient_secret)
     };
     let message = marty_didcomm::unpack_didcomm_message(&plaintext).unwrap();
     assert_eq!(message.from.as_deref(), Some(ISSUER));
@@ -680,8 +683,22 @@ impl DeliveryGraph {
             200
         });
         let endpoint = format!("{}/inbox", wallet.origin);
-        let (sender_document, sender_secret, mut recipient_document, recipient_secret) =
-            authcrypt_parties_with_ids(ISSUER, HOLDER);
+        let (mut recipient_document, recipient_secret) = holder_with_id(HOLDER);
+        let remote_sender = if authenticated {
+            Some(
+                RemoteSenderFixture::create(wallet.ca_file.parent().unwrap(), ISSUER, ORGANIZATION)
+                    .await,
+            )
+        } else {
+            None
+        };
+        let sender_public = remote_sender
+            .as_ref()
+            .filter(|_| fault != Some(Fault::WrongSenderKey))
+            .map_or(SYNTHETIC_SENDER_X25519_PUBLIC_X, |sender| {
+                sender.public_key.as_str()
+            });
+        let sender_document = document_with_public(ISSUER, sender_public);
         recipient_document.service.push(
             serde_json::from_value::<ServiceEntry>(
                 json!({"id":"#didcomm","type":"DIDCommMessaging","serviceEndpoint":endpoint}),
@@ -711,7 +728,7 @@ impl DeliveryGraph {
             .unwrap()
             .join("operator-reload-ca.pem");
         let mode = if authenticated {
-            json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(if fault == Some(Fault::WrongSenderKey) { [8_u8;32] } else { sender_secret })})
+            json!({"mode":"authcrypt","sender_key_ref":remote_sender.as_ref().unwrap().reference})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -756,11 +773,15 @@ impl DeliveryGraph {
                     issuer_resolver: issuer.clone(),
                     builder: builder.clone(),
                     lifecycle: Arc::new(lifecycle),
-                    envelope: Arc::new(NativeDidcommEnvelope::new(
-                        None,
-                        Some(&peers.origin),
-                        policy.to_str(),
-                    )),
+                    envelope: Arc::new({
+                        let envelope =
+                            NativeDidcommEnvelope::new(None, Some(&peers.origin), policy.to_str());
+                        if let Some(sender) = &remote_sender {
+                            envelope.with_remote_kms(sender.client())
+                        } else {
+                            envelope
+                        }
+                    }),
                     endpoints: Arc::new(DidcommEndpointValidator::new(true)),
                     transport: Arc::new(
                         DidcommTransport::with_timeout(

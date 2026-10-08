@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fs, net::SocketAddr};
+use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf};
 
 const DEFAULT_HTTP_PORT: u16 = 8017;
 const DEVELOPMENT_INTERNAL_API_KEY: &str = "dev-signing-keys-internal-api-key";
@@ -15,6 +15,7 @@ pub struct Config {
     pub registry_redis_url: String,
     pub bao_addr: Option<String>,
     pub bao_token: Option<String>,
+    pub haip_kms_token_file: Option<PathBuf>,
     pub public_domain: Option<String>,
 }
 
@@ -92,6 +93,7 @@ impl Config {
         let bao_addr = value(values, "BAO_ADDR");
         let bao_token =
             secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
+        let haip_kms_token_file = value(values, "HAIP_KMS_TOKEN_FILE").map(PathBuf::from);
         if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
                 name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
@@ -121,6 +123,9 @@ impl Config {
                     .into(),
             );
         }
+        if haip_kms_token_file.is_some() && bao_addr.is_none() {
+            return Err("HAIP_KMS_TOKEN_FILE requires BAO_ADDR".into());
+        }
         Ok(Self {
             http_addr: SocketAddr::from(([0, 0, 0, 0], port)),
             release_version,
@@ -133,6 +138,7 @@ impl Config {
                 .unwrap_or_else(|| "redis://localhost:6379/2".into()),
             bao_addr,
             bao_token,
+            haip_kms_token_file,
             public_domain: value(values, "PUBLIC_DOMAIN"),
         })
     }

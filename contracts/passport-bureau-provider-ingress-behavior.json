@@ -1,6 +1,6 @@
 {
   "schema": "marty.passport-bureau-provider-ingress/v1",
-  "scope": "Trusted ingress for a configured physical personalization bureau using the released Python raw-body HMAC callback. This does not select a provider or enable a public route.",
+  "scope": "Trusted ingress for a configured physical personalization bureau using a provider-profile-scoped, remotely verified raw-body HMAC callback. This does not select a provider or enable a public route.",
   "sources": [
     "marty-credentials/contracts/physical-passport-provider-reference.json:webhook",
     "marty-credentials/services/issuance/infrastructure/adapters/personalization_bureau_client.py:verify_webhook_signature",
@@ -16,11 +16,11 @@
   },
   "provider_authentication": {
     "profile_selection": "Resolve exactly one provider profile from a trusted deployment binding or a trusted route binding before verifying the MAC. Never select a profile by callback JSON, query string, or caller-supplied header.",
-    "profile": "The selected provider profile supplies the bureau webhook secret reference and provider_profile_id; neither value is accepted from callback JSON.",
-    "algorithm": "HMAC-SHA256 over the exact HTTP body bytes, with the provider's UTF-8 shared secret",
+    "profile": "The selected provider profile supplies provider_profile_id and an imported OpenBao HMAC key version; neither value is accepted from callback JSON.",
+    "algorithm": "HMAC-SHA256 over the exact HTTP body bytes, verified by OpenBao Transit with an imported non-exportable provider key",
     "signature_encoding": "64 lowercase ASCII hexadecimal characters without a prefix",
-    "comparison": "constant-time comparison of decoded MAC bytes",
-    "empty_secret": "reject",
+    "comparison": "Convert decoded MAC bytes to a vault:vN standard-base64 HMAC and use Transit verify; no application process receives the provider key",
+    "missing_key": "fail closed as KMS unavailable",
     "invalid_or_missing_signature": "reject before JSON parsing or database lookup",
     "raw_body_reencoding": "forbidden before provider HMAC verification"
   },
@@ -36,7 +36,7 @@
     "tenant_source": "Read organization_id only from the uniquely matched durable job after provider HMAC verification.",
     "zero_or_multiple_matches": "Fail closed without requesting KMS signing or changing any job.",
     "provider_mismatch": "Fail closed without revealing a foreign organization_id or whether another provider owns the bureau_job_id.",
-    "native_recheck": "Provider ingress events must include provider_profile_id inside the KMS-signed internal body. The native repository must match signed organization_id, provider_profile_id, and bureau_job_id, rejecting zero or multiple matches. Existing beta or legacy callbacks without provider_profile_id retain the current organization_id plus bureau_job_id lookup and fail closed on ambiguity within that tenant."
+    "native_recheck": "Provider ingress events must include provider_profile_id inside the KMS-signed internal body. The native repository must match signed organization_id, provider_profile_id, and bureau_job_id, rejecting zero or multiple matches. Beta callbacks without provider_profile_id use the organization_id plus bureau_job_id lookup and fail closed on ambiguity within that tenant."
   },
   "internal_handoff": {
     "body": "Construct a new JSON callback from the trusted durable organization_id, authenticated provider_profile_id, signed bureau_job_id, status, and allowed metadata. The exact newly serialized bytes must be used for both KMS signing and native delivery.",
@@ -56,12 +56,12 @@
     "default": "No physical bureau ingress or production-mode callback signer is enabled by this contract."
   },
   "supported_signer_runtime": {
-    "process": "A separate production-mode binary calls the same shared Rust isolated_signer_router as the beta-only process; the beta binary remains ENVIRONMENT=beta guarded.",
+    "process": "A separate production-mode binary uses the shared Rust callback signer plus the supported provider verification route; the beta binary remains ENVIRONMENT=beta guarded and has no provider verification route.",
     "enablement": "Require ENVIRONMENT=production and PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED=true exactly; absent or any other value fails before binding a listener.",
-    "credential": "Require a dedicated at-least-32-character signer API credential supplied only to the trusted ingress and signer. It must differ from the ordinary signing-keys service credential and all provider secrets.",
-    "kms": "Require a dedicated OpenBao token whose only transit capability is create/update on transit/hmac/passport-bureau-callback-marty-hmac. The signer has no export or generic transit permission.",
+    "credential": "Require a dedicated at-least-32-character signer API credential supplied only to the trusted ingress and signer. It must differ from the ordinary signing-keys service credential.",
+    "kms": "Require a dedicated OpenBao token with create/update on transit/hmac/passport-bureau-callback-marty-hmac and transit/verify/passport-provider-callback-*. The signer has no provider HMAC generation, key read/export or generic transit permission.",
     "network": "Publish no host port or public gateway sign route. Place only the trusted ingress, signer, and KMS peer on the isolated signing network; keep the OpenBao token out of ingress.",
-    "rollback": "Disable signer and provider ingress together and route supported consumers back to the existing Python owner until the full physical-provider cutover gate passes."
+    "rollback": "Disable signer and provider ingress together; do not re-enable a local-secret or Python callback owner."
   },
   "response_boundary": {
     "unauthenticated": "Never parse or look up a job; return no tenant or job details.",
@@ -71,7 +71,6 @@
   },
   "frozen_reference": {
     "provider_profile_id": "provider-reference",
-    "webhook_secret": "synthetic-webhook-secret",
     "raw_body_utf8": "{\"bureau_job_id\":\"bureau-reference\",\"status\":\"SHIPPED\",\"tracking_number\":\"TRACK-42\"}",
     "raw_body_hmac_sha256_hex": "7f4da6eec292c1326528a3445cb1311e79f88f8266a9ff489f3c0df080b8360c",
     "durable_match": {"provider_profile_id": "provider-reference", "bureau_job_id": "bureau-reference", "organization_id": "org-reference"},

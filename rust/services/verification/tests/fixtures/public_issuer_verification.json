@@ -1,0 +1,37 @@
+{
+  "vcdm": {
+    "credential": {
+      "@context": ["https://www.w3.org/ns/credentials/v2"],
+      "id": "urn:uuid:org-resolved-vcdm",
+      "type": ["VerifiableCredential"],
+      "credentialSubject": {"id": "did:example:holder"},
+      "issuer": "did:web:issuer.example",
+      "validFrom": "2026-08-31T00:00:00Z",
+      "proof": {
+        "type": "DataIntegrityProof",
+        "cryptosuite": "eddsa-rdfc-2022",
+        "created": "2026-10-08T13:05:25.382Z",
+        "verificationMethod": "did:web:issuer.example#key-1",
+        "proofPurpose": "assertionMethod",
+        "proofValue": "z16XoeR63oGqMetntcsvBjQJpfZWhjSyRnBtyA1QZKFenBRg1Au1zDXaiJsWjGnKxi1ozg9UA3SrHjbDHwydN4CG"
+      }
+    },
+    "public_jwk": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "6kpsY-KcUgq-9VB7Ey7F-ZVHdq6-vnuSQh7qaRRG0iw",
+      "kid": "did:web:issuer.example#key-1",
+      "alg": "EdDSA"
+    }
+  },
+  "vds_nc": {
+    "barcode": "DC03AUS~{\"_vds\":{\"version\":\"1.0\",\"documentType\":\"CMC\",\"issuerId\":\"issuer-1\",\"keyId\":\"issuer-1#key-1\",\"algorithm\":\"ES256\"},\"dateOfBirth\":\"19900102\",\"dateOfExpiry\":\"20300101\",\"dateOfIssue\":\"20260101\",\"docType\":\"CMC\",\"documentNumber\":\"X123456\",\"gender\":\"F\",\"givenNames\":\"ADA\",\"issuingCountry\":\"AUS\",\"nationality\":\"AUS\",\"surname\":\"EXAMPLE\"}~lsiSw07e9jadXuHbR6kMfonVNuQaGhmYxegc0nVFd2o7fOtfCKOR6EYja58Z/KdJ+yHtYWh78lYs8dxxR5H9JA==",
+    "public_jwk": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "cTX6T9k6Cdzpi79oG0v89Q58DWNU5ir7C_8qNClheGU",
+      "y": "7UwfAt25Aj7lalV-UV1qncZsEfIglg3llDNN9Yh3ZyQ",
+      "alg": "ES256"
+    }
+  }
+}

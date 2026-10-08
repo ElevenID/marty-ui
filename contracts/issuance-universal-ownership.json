@@ -23,10 +23,11 @@
   },
   "direct_client_boundary": "gateway",
   "production_composition": "docker-compose.selfhost.prod.yml",
-  "production_unchanged": true,
+  "production_unchanged": false,
   "production_http_owner": {
     "consumers": ["auth", "applicant", "presentation-policy", "flow"],
-    "selected_environment_variable": "ISSUANCE_SERVICE_URL",
+    "native_selected_consumers": ["flow"],
+    "retained_http_consumers": ["auth", "applicant", "presentation-policy"],
     "runtime_precedence": [
       "ISSUANCE_NATIVE_SERVICE_URL",
       "ISSUANCE_SERVICE_URL",

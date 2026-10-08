@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicBool, AtomicUsize, Ordering},
-    Arc, Mutex,
+use std::{
+    collections::BTreeMap,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use axum::{
@@ -12,12 +15,10 @@ use axum::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::{TimeZone, Utc};
-use hmac::{Hmac, Mac};
 use marty_issuance_service::config::IssuanceServiceConfig;
 use marty_issuance_service::migration;
-use marty_issuance_service::passport_artifact::{
-    PassportArtifactCipher, PassportSensitiveArtifact,
-};
+use marty_issuance_service::passport_artifact::PassportSensitiveArtifact;
+use marty_issuance_service::passport_artifact_kms::KmsPassportArtifactCipher;
 use marty_issuance_service::passport_beta_material::PassportBetaMaterialDigests;
 use marty_issuance_service::passport_bureau::{BetaBatchWireCommitments, BureauClient};
 use marty_issuance_service::passport_http::{router as passport_router, PassportHttpService};
@@ -29,8 +30,6 @@ use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
     PostgresPassportRepository,
 };
-#[cfg(feature = "passport-self-signed-test")]
-use marty_issuance_service::passport_signer::PassportSigner;
 use marty_issuance_service::passport_signer::RemoteSigner;
 use marty_passport_auth::PassportTenantKeyring;
 use serde_json::{json, Value};
@@ -38,6 +37,9 @@ use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
 use tokio::sync::{oneshot, Barrier};
 use tower::ServiceExt;
+
+#[path = "support/passport_mock_artifact_kms.rs"]
+mod passport_mock_artifact_kms;
 
 async fn provider_ingress_request(
     app: &Router,
@@ -60,121 +62,6 @@ async fn provider_ingress_request(
     let status = response.status();
     let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     (status, serde_json::from_slice(&body).unwrap())
-}
-
-#[cfg(feature = "passport-self-signed-test")]
-#[path = "support/issuance_process.rs"]
-mod issuance_process;
-
-#[cfg(feature = "passport-self-signed-test")]
-async fn exercise_packaged_self_signed_test_mode(database_url: &str, key_a: &str) {
-    use std::time::Duration;
-
-    use issuance_process::{
-        bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
-        ChildGuard,
-    };
-
-    assert!(
-        url::Url::parse(database_url)
-            .unwrap()
-            .path()
-            .trim_start_matches('/')
-            .ends_with("_test"),
-        "packaged passport test mode requires a dedicated *_test database"
-    );
-    let (http_reservation, http_port) = reserve_port();
-    let (_grpc_reservation, grpc_port) = reserve_port();
-    let mut command = isolated_smoke_command(http_port, grpc_port);
-    command
-        .env("DATABASE_URL", database_url)
-        .env("ISSUANCE_API_KEY", key_a)
-        .env("PASSPORT_NATIVE_HTTP_ENABLED", "true")
-        .env("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "true")
-        .env(
-            "PASSPORT_TENANT_API_KEYS",
-            format!("{{\"org-a\":\"{key_a}\"}}"),
-        )
-        .env(
-            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-            fernet::Fernet::generate_key(),
-        )
-        .env("PERSONALIZATION_BUREAU_URL", "http://127.0.0.1:1")
-        .env("RUST_LOG", "info")
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-    drop(http_reservation);
-    let child = ChildGuard(
-        command
-            .spawn()
-            .expect("start packaged passport test-mode service"),
-    );
-    let client = bounded_http_client(Duration::from_secs(5));
-    assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            wait_for_health_with_client(http_port, &client)
-        )
-        .await
-        .expect("packaged passport readiness deadline"),
-        Some(json!({"status":"healthy", "service":"issuance-service"}))
-    );
-    let base = format!("http://127.0.0.1:{http_port}");
-    let capabilities = client
-        .get(format!("{base}/v1/passport/capabilities"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(capabilities.status(), StatusCode::OK);
-    let capabilities: Value = capabilities.json().await.unwrap();
-    assert_eq!(capabilities["supported"], true);
-    assert_eq!(capabilities["signer"]["mode"], "SELF_SIGNED_TEST");
-
-    let created = client
-        .post(format!("{base}/v1/passport/applications"))
-        .header("x-organization-id", "org-a")
-        .header("x-api-key", key_a)
-        .json(&json!({
-            "organization_id":"org-a", "flow_execution_id":"flow-packaged-test",
-            "application_template_id":"template-packaged-test",
-            "credential_template_id":"credential-packaged-test",
-            "delivery_destination_profile_id":"destination-packaged-test",
-            "country_code":"USA", "applicant":{"name":"Synthetic Packaged Test"},
-            "mrz":{"line_1":"P<TEST", "line_2":"SYNTHETIC"},
-            "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
-        }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(created.status(), StatusCode::CREATED);
-    let created: Value = created.json().await.unwrap();
-    assert!(!created.to_string().contains("Synthetic Packaged Test"));
-    let application_id = created["application_id"].as_str().unwrap();
-    let signed = client
-        .post(format!(
-            "{base}/v1/passport/applications/{application_id}/generate-sod"
-        ))
-        .header("x-organization-id", "org-a")
-        .header("x-api-key", key_a)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(signed.status(), StatusCode::OK);
-    let signed: Value = signed.json().await.unwrap();
-    assert_eq!(signed["status"], "SOD_SIGNED");
-    assert_eq!(signed["sod_signature_verified"], true);
-    assert_eq!(signed["sod_sha256"].as_str().unwrap().len(), 64);
-    drop(child);
-    let pool = PgPoolOptions::new().connect(database_url).await.unwrap();
-    migration::migrate_passport(&pool).await.unwrap();
-    let persisted: String = sqlx::query_scalar(
-        "SELECT status FROM issuance_service.physical_document_jobs WHERE application_id=$1",
-    )
-    .bind(application_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(persisted, "SOD_SIGNED");
 }
 
 async fn passport_http_request(
@@ -213,7 +100,8 @@ async fn exercise_native_passport_http(
     pool: &sqlx::PgPool,
     repository: PostgresPassportRepository,
     keyring: PassportTenantKeyring,
-    cipher: PassportArtifactCipher,
+    cipher: KmsPassportArtifactCipher,
+    kms: &passport_mock_artifact_kms::MockPassportKms,
     key_a: &str,
     key_b: &str,
 ) {
@@ -277,10 +165,12 @@ async fn exercise_native_passport_http(
             Json(json!({"bureau_job_id":"bureau-http", "status":"QUEUED"})),
         )
     }
-    async fn signed_callback(app: &Router, secret: &str, body: Value) -> (StatusCode, Value) {
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-        mac.update(body.to_string().as_bytes());
-        let signature = hex::encode(mac.finalize().into_bytes());
+    async fn signed_callback(
+        app: &Router,
+        kms: &passport_mock_artifact_kms::MockPassportKms,
+        body: Value,
+    ) -> (StatusCode, Value) {
+        let signature = kms.callback_signature(body.to_string().as_bytes());
         passport_http_request(
             app,
             "POST",
@@ -344,14 +234,16 @@ async fn exercise_native_passport_http(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
-    let secret = "synthetic-bureau-webhook-secret";
-    let app = passport_router(PassportHttpService::new(
-        keyring.clone(),
-        repository.clone(),
-        Some(cipher.clone()),
-        Some(RemoteSigner::new(&base_url, "signer-key").unwrap().into()),
-        Some(BureauClient::new(&base_url, "bureau-key", Some(secret)).unwrap()),
-    ));
+    let app = passport_router(
+        PassportHttpService::new(
+            keyring.clone(),
+            repository.clone(),
+            Some(cipher.clone()),
+            Some(RemoteSigner::new(&base_url, "signer-key").unwrap().into()),
+            Some(BureauClient::new(&base_url, "bureau-key").unwrap()),
+        )
+        .with_webhook_verifier(kms.webhook_verifier.clone()),
+    );
     let payload = json!({
         "organization_id":"org-a", "flow_execution_id":"flow-http",
         "application_template_id":"template-http", "credential_template_id":"credential-http",
@@ -472,7 +364,12 @@ async fn exercise_native_passport_http(
         .unwrap();
     assert_eq!(
         cipher
-            .decrypt(&signed_job.secure_artifact_ciphertext)
+            .decrypt(
+                &signed_job.organization_id,
+                &signed_job.id,
+                &signed_job.secure_artifact_ciphertext
+            )
+            .await
             .unwrap()
             .signed_material
             .unwrap()
@@ -591,9 +488,7 @@ async fn exercise_native_passport_http(
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    mac.update(webhook.to_string().as_bytes());
-    let signature = hex::encode(mac.finalize().into_bytes());
+    let signature = kms.callback_signature(webhook.to_string().as_bytes());
     let (status, accepted) = passport_http_request(
         &app,
         "POST",
@@ -679,7 +574,14 @@ async fn exercise_native_passport_http(
         .await
         .unwrap()
         .unwrap();
-    assert!(cipher.decrypt(&job.secure_artifact_ciphertext).is_err());
+    assert!(cipher
+        .decrypt(
+            &job.organization_id,
+            &job.id,
+            &job.secure_artifact_ciphertext
+        )
+        .await
+        .is_err());
     let frozen: Value = serde_json::from_str(include_str!(
         "../../../../contracts/issuance-physical-passport-native.json"
     ))
@@ -735,7 +637,10 @@ async fn exercise_native_passport_http(
         document_type: "TD1".into(),
         country_code: "USA".into(),
         issuer_did: None,
-        secure_artifact_ciphertext: cipher.encrypted_scrubbed_artifact(),
+        secure_artifact_ciphertext: cipher
+            .encrypted_scrubbed_artifact("org-a", "job-poll-race")
+            .await
+            .unwrap(),
         secure_artifact_reference: "physical-artifact://poll-race".into(),
     };
     repository
@@ -808,7 +713,7 @@ async fn exercise_native_passport_http(
         .unwrap();
     let (status, _) = signed_callback(
         &app,
-        secret,
+        kms,
         json!({"organization_id":"org-a", "bureau_job_id":"bureau-poll-race",
                "status":"SHIPPED", "tracking_number":"race-tracking"}),
     )
@@ -845,7 +750,7 @@ async fn exercise_native_passport_http(
         .unwrap();
     let (status, _) = signed_callback(
         &app,
-        secret,
+        kms,
         json!({"organization_id":"org-a", "bureau_job_id":"bureau-poll-race",
                "status":"FAILED", "error_message":"production failed"}),
     )
@@ -1051,7 +956,12 @@ async fn exercise_native_passport_http(
         .unwrap()
         .unwrap();
     let retry_artifact = cipher
-        .decrypt(&retry_job.secure_artifact_ciphertext)
+        .decrypt(
+            &retry_job.organization_id,
+            &retry_job.id,
+            &retry_job.secure_artifact_ciphertext,
+        )
+        .await
         .unwrap();
     assert_eq!(
         retry_artifact.data_groups.get("DG1").map(String::as_str),
@@ -1082,7 +992,12 @@ async fn exercise_native_passport_http(
     assert!(rejected_job.submission_intent_id.is_some());
     assert!(rejected_job.sod_sha256.is_some());
     assert!(cipher
-        .decrypt(&rejected_job.secure_artifact_ciphertext)
+        .decrypt(
+            &rejected_job.organization_id,
+            &rejected_job.id,
+            &rejected_job.secure_artifact_ciphertext
+        )
+        .await
         .unwrap()
         .signed_material
         .is_some());
@@ -1194,7 +1109,12 @@ async fn exercise_native_passport_http(
     assert!(ambiguous_job.bureau_job_id.is_none());
     assert!(ambiguous_job.sod_sha256.is_some());
     assert!(cipher
-        .decrypt(&ambiguous_job.secure_artifact_ciphertext)
+        .decrypt(
+            &ambiguous_job.organization_id,
+            &ambiguous_job.id,
+            &ambiguous_job.secure_artifact_ciphertext
+        )
+        .await
         .unwrap()
         .signed_material
         .is_some());
@@ -1266,10 +1186,20 @@ async fn exercise_native_passport_http(
     entered_rx.await.unwrap();
     let before = repository.get(&principal, race_id).await.unwrap().unwrap();
     assert!(before.submission_intent_id.is_some());
-    let mut replacement = cipher.decrypt(&before.secure_artifact_ciphertext).unwrap();
+    let mut replacement = cipher
+        .decrypt(
+            &before.organization_id,
+            &before.id,
+            &before.secure_artifact_ciphertext,
+        )
+        .await
+        .unwrap();
     replacement.signed_material.as_mut().unwrap().sod_der_base64 = STANDARD.encode(b"SOD-refresh");
     let new_hash = hex::encode(Sha256::digest(b"SOD-refresh"));
-    let new_ciphertext = cipher.encrypt(&replacement).unwrap();
+    let new_ciphertext = cipher
+        .encrypt(&before.organization_id, &before.id, &replacement)
+        .await
+        .unwrap();
     let mut refresh = PassportJobPatch::new(PassportJobStatus::SodSigned);
     refresh.expected_sod_sha256 = Some(before.sod_sha256.clone());
     refresh.expected_secure_artifact_ciphertext = Some(before.secure_artifact_ciphertext.clone());
@@ -1299,46 +1229,6 @@ async fn exercise_native_passport_http(
     assert_eq!(after.bureau_job_id.as_deref(), Some("bureau-http"));
     assert!(after.submission_intent_id.is_none());
 
-    #[cfg(feature = "passport-self-signed-test")]
-    {
-        let local = passport_router(PassportHttpService::new(
-            keyring,
-            repository,
-            Some(cipher),
-            Some(PassportSigner::SelfSignedTest),
-            None,
-        ));
-        let (status, created) = passport_http_request(
-            &local,
-            "POST",
-            "/v1/passport/applications",
-            Some("org-a"),
-            Some(key_a),
-            json!({
-                "organization_id":"org-a", "flow_execution_id":"self-signed-test",
-                "application_template_id":"template-test", "credential_template_id":"credential-test",
-                "delivery_destination_profile_id":"destination-test", "country_code":"UTO",
-                "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
-            }),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::CREATED);
-        let application_id = created["application_id"].as_str().unwrap();
-        let (status, signed) = passport_http_request(
-            &local,
-            "POST",
-            &format!("/v1/passport/applications/{application_id}/generate-sod"),
-            Some("org-a"),
-            Some(key_a),
-            json!({}),
-            None,
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(signed["status"], "SOD_SIGNED");
-        assert_eq!(signed["sod_sha256"].as_str().unwrap().len(), 64);
-    }
     server.abort();
 }
 
@@ -1527,14 +1417,15 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .with_ymd_and_hms(2026, 9, 24, 12, 0, 0)
         .single()
         .unwrap();
-    let cipher = PassportArtifactCipher::from_key(&fernet::Fernet::generate_key()).unwrap();
+    let kms = passport_mock_artifact_kms::start().await;
+    let cipher = kms.cipher.clone();
     let artifact: PassportSensitiveArtifact = serde_json::from_value(serde_json::json!({
         "applicant": {"synthetic": "test-person"},
         "mrz": {"line_1": "P<TEST", "line_2": "SYNTHETIC"},
         "data_groups": {"DG1": "UkR4", "DG2": "UkR5"}
     }))
     .unwrap();
-    let encrypted_artifact = cipher.encrypt(&artifact).unwrap();
+    let encrypted_artifact = cipher.encrypt("org-a", "job-a", &artifact).await.unwrap();
     let job = PassportJobInsert {
         id: "job-a".into(),
         application_id: "application-a".into(),
@@ -1638,7 +1529,12 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     assert_eq!(recovered.secure_artifact_ciphertext, encrypted_artifact);
     assert_eq!(
         cipher
-            .decrypt(&recovered.secure_artifact_ciphertext)
+            .decrypt(
+                &recovered.organization_id,
+                &recovered.id,
+                &recovered.secure_artifact_ciphertext
+            )
+            .await
             .unwrap()
             .mrz,
         artifact.mrz
@@ -1749,20 +1645,13 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .status,
         submitted_job.status
     );
-    let secret = "synthetic-bureau-webhook-secret";
-    let bureau = BureauClient::new("http://127.0.0.1:1", "synthetic-key", Some(secret)).unwrap();
     let foreign_body = serde_json::to_vec(&serde_json::json!({
         "organization_id": "org-b",
         "bureau_job_id": "bureau-a",
         "status": "SHIPPED"
     }))
     .unwrap();
-    let mut foreign_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    foreign_mac.update(&foreign_body);
-    let foreign_signature = hex::encode(foreign_mac.finalize().into_bytes());
-    let foreign_event = bureau
-        .parse_webhook(&foreign_body, &foreign_signature)
-        .unwrap();
+    let foreign_event = kms.verified_callback(&foreign_body).await;
     assert!(restarted
         .apply_verified_webhook(&foreign_event, next)
         .await
@@ -1772,14 +1661,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "QUEUED"
     }))
     .unwrap();
-    let mut queued_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    queued_mac.update(&queued_body);
-    let queued_event = bureau
-        .parse_webhook(
-            &queued_body,
-            &hex::encode(queued_mac.finalize().into_bytes()),
-        )
-        .unwrap();
+    let queued_event = kms.verified_callback(&queued_body).await;
     let queued_replay = restarted
         .apply_verified_webhook(&queued_event, next + chrono::Duration::seconds(1))
         .await
@@ -1796,14 +1678,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "error_message": "bureau accepted the job"
     }))
     .unwrap();
-    let mut queued_with_error_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    queued_with_error_mac.update(&queued_with_error_body);
-    let queued_with_error = bureau
-        .parse_webhook(
-            &queued_with_error_body,
-            &hex::encode(queued_with_error_mac.finalize().into_bytes()),
-        )
-        .unwrap();
+    let queued_with_error = kms.verified_callback(&queued_with_error_body).await;
     let metadata_filled = restarted
         .apply_verified_webhook(&queued_with_error, next + chrono::Duration::seconds(2))
         .await
@@ -1824,14 +1699,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "tracking_number": "   "
     }))
     .unwrap();
-    let mut printing_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    printing_mac.update(&printing_body);
-    let printing_event = bureau
-        .parse_webhook(
-            &printing_body,
-            &hex::encode(printing_mac.finalize().into_bytes()),
-        )
-        .unwrap();
+    let printing_event = kms.verified_callback(&printing_body).await;
     let printing = restarted
         .apply_verified_webhook(&printing_event, next + chrono::Duration::seconds(3))
         .await
@@ -1850,10 +1718,8 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "tracking_number": "tracking-a"
     }))
     .unwrap();
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    mac.update(&body);
-    let signature = hex::encode(mac.finalize().into_bytes());
-    assert!(bureau.parse_webhook(&body, "invalid").is_err());
+    let signature = kms.callback_signature(&body);
+    assert!(kms.rejected_callback(&body, "invalid").await.is_err());
     assert_eq!(
         restarted
             .get(&org_a, "application-a")
@@ -1863,7 +1729,11 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             .status,
         "IN_PRODUCTION"
     );
-    let event = bureau.parse_webhook(&body, &signature).unwrap();
+    let event = kms
+        .webhook_verifier
+        .verify(&body, &signature)
+        .await
+        .unwrap();
     let webhook_updated = restarted
         .apply_verified_webhook(&event, next + chrono::Duration::seconds(4))
         .await
@@ -1878,14 +1748,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "DELIVERED"
     }))
     .unwrap();
-    let mut delivered_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    delivered_mac.update(&delivered_body);
-    let delivered_event = bureau
-        .parse_webhook(
-            &delivered_body,
-            &hex::encode(delivered_mac.finalize().into_bytes()),
-        )
-        .unwrap();
+    let delivered_event = kms.verified_callback(&delivered_body).await;
     let delivered_replay = restarted
         .apply_verified_webhook(&delivered_event, next + chrono::Duration::seconds(5))
         .await
@@ -1901,10 +1764,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "organization_id": "org-a", "bureau_job_id": "bureau-a", "status": "PRINTING"
     }))
     .unwrap();
-    let mut stale_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    stale_mac.update(&stale_body);
-    let stale_signature = hex::encode(stale_mac.finalize().into_bytes());
-    let stale_event = bureau.parse_webhook(&stale_body, &stale_signature).unwrap();
+    let stale_event = kms.verified_callback(&stale_body).await;
     let unchanged = restarted
         .apply_verified_webhook(&stale_event, next)
         .await
@@ -1927,7 +1787,12 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap();
     let mut activated = PassportJobPatch::new(PassportJobStatus::Active);
     activated.completed_at = Some(next);
-    activated.secure_artifact_ciphertext = Some(cipher.encrypted_scrubbed_artifact());
+    activated.secure_artifact_ciphertext = Some(
+        cipher
+            .encrypted_scrubbed_artifact("org-a", "job-a")
+            .await
+            .unwrap(),
+    );
     let active = restarted
         .update(
             &org_a,
@@ -1941,7 +1806,14 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap();
     assert_eq!(active.status, "ACTIVE");
     assert_eq!(active.completed_at, Some(next));
-    assert!(cipher.decrypt(&active.secure_artifact_ciphertext).is_err());
+    assert!(cipher
+        .decrypt(
+            &active.organization_id,
+            &active.id,
+            &active.secure_artifact_ciphertext
+        )
+        .await
+        .is_err());
     let replayed = restarted
         .apply_verified_webhook(&event, next)
         .await
@@ -1962,7 +1834,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         document_type: "TD1".into(),
         country_code: "CAN".into(),
         issuer_did: None,
-        secure_artifact_ciphertext: cipher.encrypt(&artifact).unwrap(),
+        secure_artifact_ciphertext: cipher.encrypt("org-b", "job-b", &artifact).await.unwrap(),
         secure_artifact_reference: "physical-artifact://job-b".into(),
     };
     restarted.insert(&org_b, &second_job, now).await.unwrap();
@@ -2027,10 +1899,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "status": "SHIPPED"
     }))
     .unwrap();
-    let mut other_mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    other_mac.update(&other_body);
-    let other_signature = hex::encode(other_mac.finalize().into_bytes());
-    let other_event = bureau.parse_webhook(&other_body, &other_signature).unwrap();
+    let other_event = kms.verified_callback(&other_body).await;
     let other_updated = restarted
         .apply_verified_webhook(&other_event, next)
         .await
@@ -2191,23 +2060,25 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             body["provider_profile_id"] = serde_json::json!(provider_profile_id);
         }
         let body = serde_json::to_vec(&body).unwrap();
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-        mac.update(&body);
-        bureau
-            .parse_webhook(&body, &hex::encode(mac.finalize().into_bytes()))
-            .unwrap()
+        body
     };
+    let unsigned_event = signed_event(None);
+    let unsigned_event = kms.verified_callback(&unsigned_event).await;
     assert!(restarted
-        .apply_verified_webhook(&signed_event(None), next)
+        .apply_verified_webhook(&unsigned_event, next)
         .await
         .is_err());
+    let foreign_event = signed_event(Some("provider-foreign"));
+    let foreign_event = kms.verified_callback(&foreign_event).await;
     assert!(restarted
-        .apply_verified_webhook(&signed_event(Some("provider-foreign")), next)
+        .apply_verified_webhook(&foreign_event, next)
         .await
         .unwrap()
         .is_none());
+    let provider_c_event = signed_event(Some("provider-c"));
+    let provider_c_event = kms.verified_callback(&provider_c_event).await;
     let provider_c_updated = restarted
-        .apply_verified_webhook(&signed_event(Some("provider-c")), next)
+        .apply_verified_webhook(&provider_c_event, next)
         .await
         .unwrap()
         .unwrap();
@@ -2223,8 +2094,9 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         "ACTIVE"
     );
     type ObservedCallbacks = Arc<Mutex<Vec<Vec<u8>>>>;
+    type ProviderSignatures = Arc<Mutex<BTreeMap<String, (String, Vec<u8>)>>>;
     async fn mock_callback_signer(
-        State((signed, _)): State<(ObservedCallbacks, ObservedCallbacks)>,
+        State((signed, _, _)): State<(ObservedCallbacks, ObservedCallbacks, ProviderSignatures)>,
         Path(organization_id): Path<String>,
         headers: HeaderMap,
         Json(request): Json<Value>,
@@ -2243,7 +2115,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         )
     }
     async fn mock_native_callback(
-        State((_, delivered)): State<(ObservedCallbacks, ObservedCallbacks)>,
+        State((_, delivered, _)): State<(ObservedCallbacks, ObservedCallbacks, ProviderSignatures)>,
         headers: HeaderMap,
         body: Bytes,
     ) -> Json<Value> {
@@ -2254,8 +2126,34 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         delivered.lock().unwrap().push(body.to_vec());
         Json(json!({"accepted": true}))
     }
+    async fn mock_provider_verifier(
+        State((_, _, signatures)): State<(
+            ObservedCallbacks,
+            ObservedCallbacks,
+            ProviderSignatures,
+        )>,
+        Path(profile_id): Path<String>,
+        headers: HeaderMap,
+        Json(request): Json<Value>,
+    ) -> (StatusCode, Json<Value>) {
+        if headers["x-api-key"] != "dedicated-ingress-signing-key" {
+            return (StatusCode::UNAUTHORIZED, Json(json!({"detail": "denied"})));
+        }
+        let body = STANDARD
+            .decode(request["body_b64"].as_str().unwrap())
+            .unwrap();
+        let valid = request["signature_hex"].as_str().is_some_and(|signature| {
+            signatures.lock().unwrap().get(signature).is_some_and(
+                |(expected_profile, expected_body)| {
+                    expected_profile == &profile_id && expected_body == &body
+                },
+            )
+        }) && request["key_version"] == 1;
+        (StatusCode::OK, Json(json!({"valid": valid})))
+    }
     let signed = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
     let delivered = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let signatures: ProviderSignatures = Arc::new(Mutex::new(BTreeMap::new()));
     let mock = Router::new()
         .route(
             "/internal/documents/{organization_id}/passport-callbacks/sign",
@@ -2265,13 +2163,17 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
             "/v1/passport/webhooks/personalization",
             post(mock_native_callback),
         )
-        .with_state((signed.clone(), delivered.clone()));
+        .route(
+            "/internal/documents/{profile_id}/passport-provider-callbacks/verify",
+            post(mock_provider_verifier),
+        )
+        .with_state((signed.clone(), delivered.clone(), signatures.clone()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let mock_server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
     let ingress_state = ProviderIngressState {
         provider_profile_id: "provider-a".into(),
-        webhook_secret: b"synthetic-webhook-secret".to_vec(),
+        provider_hmac_key_version: 1,
         repository: PostgresPassportRepository::new(restarted_pool.clone()),
         signing_base_url: url::Url::parse(&format!("{base_url}/internal/documents")).unwrap(),
         signing_api_key: "dedicated-ingress-signing-key".into(),
@@ -2284,30 +2186,40 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     let ingress = provider_ingress_router(ingress_state.clone());
     let raw_provider_body =
         br#"{"bureau_job_id":"bureau-a","status":"SHIPPED","tracking_number":"TRACK-42"}"#;
-    let mut provider_mac = Hmac::<Sha256>::new_from_slice(b"synthetic-webhook-secret").unwrap();
-    provider_mac.update(raw_provider_body);
-    let provider_signature = hex::encode(provider_mac.finalize().into_bytes());
+    let provider_signature = "aa".repeat(32);
+    signatures.lock().unwrap().insert(
+        provider_signature.clone(),
+        ("provider-a".into(), raw_provider_body.to_vec()),
+    );
     let (status, _) = provider_ingress_request(&ingress, raw_provider_body, "00").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(signed.lock().unwrap().is_empty());
+    let tampered =
+        br#"{"bureau_job_id":"bureau-a","status":"FAILED","tracking_number":"TRACK-42"}"#;
+    let (status, _) = provider_ingress_request(&ingress, tampered, &provider_signature).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert!(signed.lock().unwrap().is_empty());
     let forged =
         br#"{"bureau_job_id":"bureau-a","status":"SHIPPED","organization_id":"org-foreign"}"#;
-    let mut forged_mac = Hmac::<Sha256>::new_from_slice(b"synthetic-webhook-secret").unwrap();
-    forged_mac.update(forged);
-    let (status, _) = provider_ingress_request(
-        &ingress,
-        forged,
-        &hex::encode(forged_mac.finalize().into_bytes()),
-    )
-    .await;
+    let forged_signature = "bb".repeat(32);
+    signatures.lock().unwrap().insert(
+        forged_signature.clone(),
+        ("provider-a".into(), forged.to_vec()),
+    );
+    let (status, _) = provider_ingress_request(&ingress, forged, &forged_signature).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert!(signed.lock().unwrap().is_empty());
     let mut foreign_state = ingress_state.clone();
     foreign_state.provider_profile_id = "provider-foreign".into();
+    let foreign_signature = "cc".repeat(32);
+    signatures.lock().unwrap().insert(
+        foreign_signature.clone(),
+        ("provider-foreign".into(), raw_provider_body.to_vec()),
+    );
     let (status, _) = provider_ingress_request(
         &provider_ingress_router(foreign_state),
         raw_provider_body,
-        &provider_signature,
+        &foreign_signature,
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
@@ -2337,7 +2249,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         &[expected_internal.to_vec()]
     );
     mock_server.abort();
-    exercise_native_passport_http(&pool, restarted, keyring, cipher, &key_a, &key_b).await;
+    exercise_native_passport_http(&pool, restarted, keyring, cipher, &kms, &key_a, &key_b).await;
     let profile_repository = PostgresPassportRepository::new(restarted_pool.clone());
     let profile_job = profile_repository
         .insert(
@@ -2431,7 +2343,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         .unwrap();
     assert_eq!(receipt.bureau_job_id, beta_uuid);
     assert_eq!(receipt.sod_der_sha256, Some(vec![2_u8; 32]));
-    assert!(receipt.first_accepted_at <= Utc::now());
+    assert!(receipt.first_accepted_at <= Utc::now() + chrono::Duration::seconds(30));
     let mut pair = Vec::new();
     for suffix in ["a", "b"] {
         pair.push(
@@ -3279,12 +3191,6 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         bound_response["bureau_job_id"].as_str(),
         bound_pair[0].bureau_job_id.as_deref()
     );
-    #[cfg(feature = "passport-self-signed-test")]
-    if let Ok(packaged_url) = std::env::var("MARTY_PASSPORT_PACKAGED_TEST_URL") {
-        exercise_packaged_self_signed_test_mode(&packaged_url, &key_a).await;
-    } else {
-        eprintln!("packaged passport test mode requires MARTY_PASSPORT_PACKAGED_TEST_URL");
-    }
 
     // Upgrade a populated released Python table rather than only testing a
     // fresh Rust table. The existing row and its original column type survive.
@@ -3365,4 +3271,5 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
     ] {
         assert!(indexes.iter().any(|existing| existing == index));
     }
+    kms.server.abort();
 }

@@ -482,13 +482,7 @@ fn valid_serial(value: &str) -> bool {
 fn forbidden_public_data(value: &Value) -> bool {
     match value {
         Value::Object(fields) => fields.iter().any(|(key, value)| {
-            [
-                "key_reference",
-                "service_config",
-                "auth_reference",
-                "token",
-            ]
-            .contains(&key.as_str())
+            ["key_reference", "service_config", "auth_reference", "token"].contains(&key.as_str())
                 || forbidden_public_data(value)
         }),
         Value::Array(items) => items.iter().any(forbidden_public_data),

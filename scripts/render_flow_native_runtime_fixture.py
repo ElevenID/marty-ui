@@ -137,6 +137,7 @@ def render(spec, command):
             passport_consumer_additive=SELFHOST["rendered_passport_consumer_additions"](
                 inputs
             ),
+            didcomm_kms_addr=inputs["BAO_ADDR"],
         )
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {

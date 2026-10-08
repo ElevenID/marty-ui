@@ -11,7 +11,7 @@ use std::{
 use serde_json::Value;
 
 #[path = "remote_integration_secret.rs"]
-mod remote_integration_secret;
+pub(super) mod remote_integration_secret;
 
 pub(super) struct ChildGuard(pub(super) Child);
 

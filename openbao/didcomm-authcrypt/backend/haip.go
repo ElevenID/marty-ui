@@ -185,6 +185,9 @@ func createHaipKey(ctx context.Context, req *logical.Request, d *framework.Field
 	if err != nil {
 		return logical.ErrorResponse("invalid HAIP key scope"), logical.ErrInvalidRequest
 	}
+	if err := requireTransactionalStorage(req.Storage); err != nil {
+		return nil, err
+	}
 	rollback, err := logical.StartTxStorage(ctx, req)
 	if err != nil {
 		return nil, err

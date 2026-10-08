@@ -4,7 +4,8 @@
 use std::{env, fs, net::SocketAddr};
 
 use marty_signing_keys::{
-    flow_envelope::OpenBaoEnvelopeProvider, passport_callback_hmac::isolated_signer_router,
+    flow_envelope::OpenBaoEnvelopeProvider,
+    passport_callback_hmac::isolated_supported_signer_router,
 };
 use tokio::net::TcpListener;
 
@@ -50,6 +51,9 @@ fn required_configuration() -> Result<(SocketAddr, String, String, String), Stri
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
         "ISSUANCE_API_KEY",
         "ISSUANCE_API_KEY_FILE",
+        "PASSPORT_PROVIDER_WEBHOOK_SECRET",
+        "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE",
+        "PASSPORT_PROVIDER_HMAC_SOURCE_FILE",
     ] {
         if env::var_os(ordinary_key).is_some() {
             return Err("ordinary service credentials are forbidden on callback signer".into());
@@ -68,6 +72,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (addr, bao_addr, token, key) = required_configuration()?;
     let provider = OpenBaoEnvelopeProvider::new(bao_addr, token)?;
     let listener = TcpListener::bind(addr).await?;
-    axum::serve(listener, isolated_signer_router(provider, key)).await?;
+    axum::serve(listener, isolated_supported_signer_router(provider, key)).await?;
     Ok(())
 }

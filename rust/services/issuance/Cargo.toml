@@ -12,8 +12,6 @@ autotests = false
 [features]
 default = []
 feature-regression-observer = []
-passport-self-signed-test = ["marty-verification/authority-issuance"]
-integration-secret-migration = ["dep:aes-gcm"]
 
 [[bin]]
 name = "marty-issuance-service"
@@ -26,12 +24,6 @@ path = "src/bin/canvas_sync_worker.rs"
 test = true
 
 [[bin]]
-name = "marty-integration-secret-migrate"
-path = "src/bin/integration_secret_migrate.rs"
-required-features = ["integration-secret-migration"]
-test = false
-
-[[bin]]
 name = "marty-passport-beta-bureau"
 path = "src/bin/passport_beta_bureau.rs"
 test = true
@@ -42,14 +34,12 @@ path = "src/bin/passport_provider_ingress.rs"
 test = true
 
 [dependencies]
-aes-gcm = { workspace = true, optional = true }
 axum.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 fancy-regex.workspace = true
-fernet.workspace = true
 futures-core.workspace = true
 # Keep the zlib-rs-only feature policy; the shared flate2 declaration retains
 # defaults for release evidence and self-host packaging.
@@ -68,11 +58,11 @@ mmf-config.workspace = true
 mmf-core.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
-marty-oid4vci = { workspace = true, features = ["lti"] }
-marty-didcomm = { workspace = true, features = ["did_web"] }
+marty-oid4vci = { workspace = true, features = ["issuer", "jwt_vc_json", "lti", "mso_mdoc", "sd_jwt"] }
+marty-didcomm = { workspace = true, features = ["did_web", "encrypted-envelope"] }
 marty-crypto.workspace = true
 marty-verification = { workspace = true, features = ["csca"] }
-marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "83cdaeb5657679a256b7b605178a222157e2d486" }
+marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
@@ -107,6 +97,8 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+affinidi-messaging-didcomm.workspace = true
+x25519-dalek = "2"
 const-oid.workspace = true
 der.workspace = true
 redis.workspace = true
@@ -263,6 +255,10 @@ path = "tests/credential_signing_behavior.rs"
 [[test]]
 name = "didcomm_delivery_atomicity"
 path = "tests/didcomm_delivery_atomicity.rs"
+
+[[test]]
+name = "didcomm_remote_kms_live"
+path = "tests/didcomm_remote_kms_live.rs"
 
 [[test]]
 name = "didcomm_delivery_behavior"

@@ -42,6 +42,7 @@ def render(
             "MARTY_SERVICES_IMAGE": IMAGE,
             "MARTY_ISSUANCE_IMAGE": IMAGE,
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "physical-provider-reference",
+            "PASSPORT_PROVIDER_HMAC_KEY_VERSION": "1",
             "PASSPORT_PROVIDER_INGRESS_SERVICE_URL": provider_ingress_url,
             "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": provider_ingress_enabled,
             "PASSPORT_PROVIDER_SECRET_DIR": "/tmp/passport-provider-contract",
@@ -94,15 +95,16 @@ def test_supported_compose_signing_boundary(consumer: str) -> None:
     assert ingress_env["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == (
         "physical-provider-reference"
     )
+    assert ingress_env["PASSPORT_PROVIDER_HMAC_KEY_VERSION"] == "1"
     assert "BAO_TOKEN" not in " ".join(ingress_env)
     assert "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE" not in signer_env
+    assert "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE" not in ingress_env
     assert "MARTY_DB_PASSWORD_FILE" not in signer_env
     assert {secret["source"] for secret in signer["secrets"]} == {
         "passport_callback_signer_api_key",
         "passport_callback_signer_bao_token",
     }
     assert {secret["source"] for secret in ingress["secrets"]} == {
-        "passport_provider_webhook_secret",
         "passport_callback_signer_api_key",
         "marty_db_password",
     }
@@ -144,7 +146,6 @@ def test_supported_compose_requires_explicit_selection_and_secrets(consumer: str
     overlay_model = yaml.safe_load((ROOT / overlay).read_text(encoding="utf-8"))
     assert overlay_model["services"]["gateway"]["environment"]["PASSPORT_PROVIDER_INGRESS_SERVICE_URL"] == "${PASSPORT_PROVIDER_INGRESS_SERVICE_URL:-}"
     assert set(overlay_model["secrets"]) == {
-        "passport_provider_webhook_secret",
         "passport_callback_signer_api_key",
         "passport_callback_signer_bao_token",
         "marty_db_password",

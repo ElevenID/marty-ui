@@ -1,6 +1,4 @@
-//! eMRTD signing for the native physical-document service. Production signing
-//! material remains remote; local single-use keys require an explicit
-//! non-default test-only build feature and runtime flag.
+//! eMRTD signing for the native physical-document service. Signing keys remain remote.
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -78,9 +76,7 @@ impl SignedMaterial {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SignerError {
-    #[error(
-        "Configure ICAO_DOCUMENT_SIGNER_URL. Self-signed document certificates are permitted only in explicit test mode."
-    )]
+    #[error("Configure a managed issuer profile or ICAO_DOCUMENT_SIGNER_URL")]
     NotConfigured,
     #[error("ICAO document signer URL is invalid")]
     InvalidUrl,
@@ -88,10 +84,6 @@ pub enum SignerError {
     Transport(#[from] reqwest::Error),
     #[error("ICAO document signer returned incomplete signing material")]
     IncompleteMaterial,
-    #[error("Explicit self-signed passport test mode is not compiled into this service")]
-    TestModeUnavailable,
-    #[error("Self-signed passport test signing failed")]
-    TestSigningFailed,
     #[error("A managed passport issuer DID is required")]
     MissingIssuerDid,
     #[error("Managed passport issuer signing is unavailable")]
@@ -106,8 +98,6 @@ pub enum SignerError {
 pub enum PassportSigner {
     Remote(RemoteSigner),
     Managed(Box<ManagedProfileSigner>),
-    #[cfg(feature = "passport-self-signed-test")]
-    SelfSignedTest,
 }
 
 impl From<RemoteSigner> for PassportSigner {
@@ -122,8 +112,6 @@ impl PassportSigner {
         match self {
             Self::Remote(_) => "REMOTE",
             Self::Managed(_) => "MANAGED_ISSUER_PROFILE",
-            #[cfg(feature = "passport-self-signed-test")]
-            Self::SelfSignedTest => "SELF_SIGNED_TEST",
         }
     }
 
@@ -156,59 +144,8 @@ impl PassportSigner {
                     )
                     .await
             }
-            #[cfg(feature = "passport-self-signed-test")]
-            Self::SelfSignedTest => {
-                let country_code = country_code.to_owned();
-                let organization = organization.to_owned();
-                let data_groups = data_groups.clone();
-                tokio::task::spawn_blocking(move || {
-                    self_signed_test_sign(&country_code, &organization, &data_groups)
-                })
-                .await
-                .map_err(|_| SignerError::TestSigningFailed)?
-            }
         }
     }
-}
-
-#[cfg(feature = "passport-self-signed-test")]
-fn self_signed_test_sign(
-    country_code: &str,
-    organization: &str,
-    data_groups: &BTreeMap<BigUint, String>,
-) -> Result<SignedMaterial, SignerError> {
-    use marty_verification::issuance::CscaAuthority;
-
-    let decoded_groups = data_groups
-        .iter()
-        .map(|(number, content)| {
-            let number = number.to_u8().ok_or(SignerError::TestSigningFailed)?;
-            let content = decode_python_validated_base64(content)
-                .map_err(|_| SignerError::TestSigningFailed)?;
-            Ok((number, content))
-        })
-        .collect::<Result<Vec<_>, SignerError>>()?;
-    let csca = CscaAuthority::new(country_code, organization, 3650)
-        .map_err(|_| SignerError::TestSigningFailed)?;
-    let dsc = csca
-        .issue_dsc(organization, 730)
-        .map_err(|_| SignerError::TestSigningFailed)?;
-    let mut personalizer = dsc.personalizer();
-    for (number, content) in decoded_groups {
-        personalizer = personalizer.set_data_group(number, content);
-    }
-    let passport = personalizer
-        .build()
-        .map_err(|_| SignerError::TestSigningFailed)?;
-    Ok(SignedMaterial {
-        sod_der_base64: STANDARD.encode(passport.sod_der),
-        dsc_cert_pem: dsc.cert_pem().map_err(|_| SignerError::TestSigningFailed)?,
-        csca_cert_pem: Some(
-            csca.cert_pem()
-                .map_err(|_| SignerError::TestSigningFailed)?,
-        ),
-        issuer_profile_id: None,
-    })
 }
 
 /// Uses the same DID-mediated signing client as other credentials. Only a
@@ -642,77 +579,51 @@ mod tests {
         routing::{get, post},
         Json, Router,
     };
-    use p256::{
-        ecdsa::{signature::Signer, Signature, SigningKey},
-        pkcs8::DecodePrivateKey,
-    };
-    use rcgen::{
-        BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
-        PKCS_ECDSA_P256_SHA256,
-    };
     use serde_json::{json, Value};
+    use sha2::Digest;
 
     use super::*;
-
-    fn synthetic_dsc_chain() -> (String, String, String, SigningKey) {
-        let mut csca = CertificateParams::default();
-        csca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        csca.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-        csca.distinguished_name
-            .push(DnType::CommonName, "Synthetic CSCA");
-        csca.distinguished_name.push(DnType::CountryName, "US");
-        let csca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let csca_certificate = csca.self_signed(&csca_key).unwrap();
-        let issuer = Issuer::from_params(&csca, &csca_key);
-
-        let mut dsc = CertificateParams::default();
-        dsc.is_ca = IsCa::ExplicitNoCa;
-        dsc.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-        dsc.distinguished_name
-            .push(DnType::CommonName, "Synthetic Passport DSC");
-        dsc.distinguished_name.push(DnType::CountryName, "US");
-        let dsc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let dsc_certificate = dsc.signed_by(&dsc_key, &issuer).unwrap();
-        let csca_b64 = STANDARD.encode(csca_certificate.der());
-        (
-            STANDARD.encode(dsc_certificate.der()),
-            csca_b64.clone(),
-            pem_certificate(&csca_b64),
-            SigningKey::from_pkcs8_der(dsc_key.serialized_der()).unwrap(),
-        )
-    }
+    use crate::passport_test_vectors::{certificate_pem, public_passport_vectors};
 
     #[test]
     fn cms_normalizes_jose_ecdsa_signatures_without_accepting_malformed_bytes() {
-        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-        let signer = SigningKey::from_pkcs8_der(key.serialized_der()).unwrap();
-        let signature: Signature = signer.sign(b"synthetic CMS attributes");
-        let der = signature.to_der();
+        // r=1, s=2 are public format vectors; this test converts encodings,
+        // so it does not need an issuer key or a locally generated signature.
+        let mut es256_raw = [0_u8; 64];
+        es256_raw[31] = 1;
+        es256_raw[63] = 2;
+        let der = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02];
         assert_eq!(
-            cms_signature(&signature.to_bytes(), SodSignatureAlgorithm::Es256).unwrap(),
-            der.as_bytes()
+            cms_signature(&es256_raw, SodSignatureAlgorithm::Es256).unwrap(),
+            der
         );
         assert_eq!(
-            cms_signature(der.as_bytes(), SodSignatureAlgorithm::Es256).unwrap(),
-            der.as_bytes()
+            cms_signature(&der, SodSignatureAlgorithm::Es256).unwrap(),
+            der
         );
-        let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
-        let signer = p384::ecdsa::SigningKey::from_pkcs8_der(key.serialized_der()).unwrap();
-        let signature: p384::ecdsa::Signature = signer.sign(b"synthetic CMS attributes");
+        let mut es384_raw = [0_u8; 96];
+        es384_raw[47] = 1;
+        es384_raw[95] = 2;
         assert_eq!(
-            cms_signature(&signature.to_bytes(), SodSignatureAlgorithm::Es384).unwrap(),
-            signature.to_der().as_bytes()
+            cms_signature(&es384_raw, SodSignatureAlgorithm::Es384).unwrap(),
+            der
         );
         assert!(matches!(
             cms_signature(&[1, 2, 3], SodSignatureAlgorithm::Es256),
+            Err(SignerError::InvalidManagedMaterial)
+        ));
+        assert!(matches!(
+            cms_signature(&[0; 64], SodSignatureAlgorithm::Es256),
             Err(SignerError::InvalidManagedMaterial)
         ));
     }
 
     #[test]
     fn managed_dsc_requires_a_matching_active_csca_and_chain() {
-        let (dsc_b64, csca_b64, csca_pem, _) = synthetic_dsc_chain();
-        let dsc = STANDARD.decode(dsc_b64).unwrap();
+        let [vector, _] = public_passport_vectors();
+        let dsc = STANDARD.decode(&vector.dsc_der_b64).unwrap();
+        let csca_b64 = vector.csca_der_b64;
+        let csca_pem = certificate_pem(&csca_b64);
         let active = ActiveCscaTrustAnchor {
             certificate_id: "csca-1".into(),
             certificate_data: csca_pem.clone(),
@@ -760,8 +671,9 @@ mod tests {
             next_dsc_b64: String,
             next_csca_b64: String,
             next_csca_pem: String,
-            signer: SigningKey,
-            rotated_signer: SigningKey,
+            signature_der_b64: String,
+            rotated_signature_der_b64: String,
+            signing_input_sha256: String,
             rotated: Arc<AtomicBool>,
             profile_rotated: Arc<AtomicBool>,
             requests: Arc<Mutex<Vec<Value>>>,
@@ -815,36 +727,39 @@ mod tests {
             let input = URL_SAFE_NO_PAD
                 .decode(request["payload_b64"].as_str().unwrap())
                 .unwrap();
-            let signing_key = if state.rotated.load(Ordering::SeqCst)
+            assert_eq!(
+                hex::encode(sha2::Sha256::digest(&input)),
+                state.signing_input_sha256
+            );
+            let signature_der_b64 = if state.rotated.load(Ordering::SeqCst)
                 || state.profile_rotated.load(Ordering::SeqCst)
             {
-                &state.rotated_signer
+                &state.rotated_signature_der_b64
             } else {
-                &state.signer
+                &state.signature_der_b64
             };
-            let signature: Signature = signing_key.sign(&input);
             Json(json!({
                 "ok": true,
                 "issuer_did": request["issuer_did"],
                 "algorithm": request["algorithm"],
                 "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
-                "signature_b64": URL_SAFE_NO_PAD.encode(signature.to_der().as_bytes()),
+                "signature_b64": URL_SAFE_NO_PAD.encode(STANDARD.decode(signature_der_b64).unwrap()),
                 // The VC/JOSE variant is deliberately wrong: CMS must choose
                 // the separate provider-native DER response above.
                 "signature_raw_b64": URL_SAFE_NO_PAD.encode([0_u8; 64])
             }))
         }
-        let (dsc_b64, csca_b64, csca_pem, signer) = synthetic_dsc_chain();
-        let (next_dsc_b64, next_csca_b64, next_csca_pem, rotated_signer) = synthetic_dsc_chain();
+        let [current, next] = public_passport_vectors();
         let state = ManagedMock {
-            dsc_b64,
-            csca_b64,
-            csca_pem,
-            next_dsc_b64,
-            next_csca_b64,
-            next_csca_pem,
-            signer,
-            rotated_signer,
+            csca_pem: certificate_pem(&current.csca_der_b64),
+            dsc_b64: current.dsc_der_b64,
+            csca_b64: current.csca_der_b64,
+            next_csca_pem: certificate_pem(&next.csca_der_b64),
+            next_dsc_b64: next.dsc_der_b64,
+            next_csca_b64: next.csca_der_b64,
+            signature_der_b64: current.signature_der_b64,
+            rotated_signature_der_b64: next.signature_der_b64,
+            signing_input_sha256: current.signing_input_sha256,
             rotated: Arc::new(AtomicBool::new(false)),
             profile_rotated: Arc::new(AtomicBool::new(false)),
             requests: Arc::new(Mutex::new(Vec::new())),
@@ -1075,37 +990,6 @@ mod tests {
             ));
             server.abort();
         }
-    }
-
-    #[cfg(feature = "passport-self-signed-test")]
-    #[tokio::test]
-    async fn explicit_self_signed_test_mode_issues_ephemeral_sod_and_dsc() {
-        let signer = PassportSigner::SelfSignedTest;
-        assert_eq!(signer.mode(), "SELF_SIGNED_TEST");
-        let groups = BTreeMap::from([
-            (BigUint::from(1u8), "YQ==".to_owned()),
-            (BigUint::from(2u8), "Yg==".to_owned()),
-        ]);
-        let signed = signer
-            .sign("UTO", "synthetic-test-issuer", &groups)
-            .await
-            .unwrap();
-        assert!(
-            !crate::passport_contract::decode_python_validated_base64(&signed.sod_der_base64)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(signed.dsc_cert_pem.contains("BEGIN CERTIFICATE"));
-        assert!(signed
-            .csca_cert_pem
-            .as_deref()
-            .unwrap()
-            .contains("BEGIN CERTIFICATE"));
-        let invalid = BTreeMap::from([(BigUint::from(256u16), "YQ==".to_owned())]);
-        assert!(matches!(
-            signer.sign("UTO", "synthetic-test-issuer", &invalid).await,
-            Err(SignerError::TestSigningFailed)
-        ));
     }
 
     #[test]

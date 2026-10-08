@@ -135,10 +135,10 @@ impl Provider {
     }
 
     fn signature_encoding(self, algorithm: &str) -> &'static str {
-        if algorithm == "EdDSA" {
-            "raw"
-        } else {
+        if matches!(algorithm, "ES256" | "ES384" | "ES512") {
             "der"
+        } else {
+            "raw"
         }
     }
 }
@@ -185,19 +185,22 @@ pub async fn public_key_existing(request: ProviderRequest) -> Result<Value, KmsE
     }
 }
 
-/// Read an existing managed key. Inventory must never provision a missing key.
-pub async fn managed_openbao_public_key_existing(
+/// Read an existing managed key's custody and public metadata. Inventory must
+/// never provision a missing key or admit an importable/exportable key.
+pub async fn managed_openbao_metadata_existing(
     endpoint: &str,
     key_reference: &str,
 ) -> Result<Value, KmsError> {
-    public_key_openbao(&json!({
-        "id": "managed-openbao-transit",
-        "service_type": "openbao-transit",
-        "endpoint": endpoint,
-        "mount": "transit",
-        "auth_mode": "service_token",
-        "key_reference": key_reference,
-    }))
+    read_managed_openbao(ProviderRequest {
+        service_config: json!({
+            "id": "managed-openbao-transit",
+            "service_type": "openbao-transit",
+            "endpoint": endpoint,
+            "mount": "transit",
+            "auth_mode": "service_token",
+            "key_reference": key_reference,
+        }),
+    })
     .await
 }
 
@@ -371,6 +374,26 @@ pub async fn verify(request: ProviderRequest) -> Result<CapabilityResult, KmsErr
 }
 
 async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
+    if string(config, "id") == Some("managed-openbao-transit") {
+        let metadata = read_managed_openbao(ProviderRequest {
+            service_config: config.clone(),
+        })
+        .await?;
+        if metadata.get("status").and_then(Value::as_str) != Some("active") {
+            return Err(KmsError::InvalidResponse(
+                "Managed OpenBao key is not under active non-exportable custody".into(),
+            ));
+        }
+        if metadata
+            .get("public_jwk")
+            .and_then(managed_public_key_algorithm)
+            != Some(string(config, "algorithm").unwrap_or("ES256"))
+        {
+            return Err(KmsError::InvalidResponse(
+                "Managed OpenBao key does not match the requested signing algorithm".into(),
+            ));
+        }
+    }
     let endpoint = required(
         config,
         "endpoint",
@@ -400,6 +423,17 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
     let mut body = json!({"input": input, "prehashed": prehashed});
     if let Some(hash_algorithm) = hash_algorithm {
         body["hash_algorithm"] = Value::String(hash_algorithm.to_string());
+    }
+    match algorithm {
+        "RS256" | "RS384" | "RS512" => {
+            body["signature_algorithm"] = json!("pkcs1v15");
+        }
+        "PS256" | "PS384" | "PS512" => {
+            body["signature_algorithm"] = json!("pss");
+            // JOSE PS* requires a hash-length salt; Transit defaults to maximum.
+            body["salt_length"] = json!("hash");
+        }
+        _ => {}
     }
     let url = format!(
         "{}/v1/{mount}/sign/{key_reference}",
@@ -504,12 +538,15 @@ fn openbao_jwk_from_data(config: &Value, data: &Value) -> Result<Value, KmsError
                 "OpenBao key '{key_reference}' returned an invalid public key"
             )));
         }
-        PublicJwk {
-            kty: "OKP".to_string(),
-            crv: Some("Ed25519".to_string()),
-            x: Some(URL_SAFE_NO_PAD.encode(raw)),
-            ..PublicJwk::default()
-        }
+        PublicJwk::from_json(
+            &serde_json::json!({"kty":"OKP","crv":"Ed25519","x":URL_SAFE_NO_PAD.encode(raw)})
+                .to_string(),
+        )
+        .map_err(|_| {
+            KmsError::InvalidResponse(format!(
+                "OpenBao key '{key_reference}' returned an invalid public key"
+            ))
+        })?
     } else {
         public_key_pem_to_jwk(material).map_err(|_| {
             KmsError::InvalidResponse(format!(
@@ -540,6 +577,29 @@ fn validate_managed_openbao(config: &Value) -> Result<(), KmsError> {
     Ok(())
 }
 
+fn managed_openbao_key_active(data: &Value) -> bool {
+    data.get("supports_signing").and_then(Value::as_bool) == Some(true)
+        && data.get("soft_deleted").and_then(Value::as_bool) == Some(false)
+        && data.get("exportable").and_then(Value::as_bool) == Some(false)
+        && data.get("allow_plaintext_backup").and_then(Value::as_bool) == Some(false)
+        && data.get("deletion_allowed").and_then(Value::as_bool) == Some(false)
+        && data.get("imported_key").and_then(Value::as_bool) == Some(false)
+}
+
+pub(crate) fn managed_public_key_algorithm(jwk: &Value) -> Option<&'static str> {
+    match (
+        jwk.get("kty").and_then(Value::as_str),
+        jwk.get("crv").and_then(Value::as_str),
+    ) {
+        (Some("EC"), Some("P-256")) => Some("ES256"),
+        (Some("EC"), Some("P-384")) => Some("ES384"),
+        (Some("EC"), Some("P-521")) => Some("ES512"),
+        (Some("RSA"), _) => Some("RS256"),
+        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
+        _ => None,
+    }
+}
+
 /// Read only public metadata for an existing managed Transit key.
 pub async fn read_managed_openbao(request: ProviderRequest) -> Result<Value, KmsError> {
     let config = &request.service_config;
@@ -556,8 +616,11 @@ pub async fn read_managed_openbao(request: ProviderRequest) -> Result<Value, Kms
         "public_jwk": public_jwk,
         "latest_version": latest_version,
         "created_at": latest_key.and_then(|key| key.get("creation_time")).cloned().unwrap_or(Value::Null),
-        "status": if data.get("supports_signing").and_then(Value::as_bool) == Some(true)
-            && data.get("soft_deleted").and_then(Value::as_bool) != Some(true) {"active"} else {"invalid"},
+        "type": data.get("type").cloned().unwrap_or(Value::Null),
+        "exportable": data.get("exportable").cloned().unwrap_or(Value::Null),
+        "allow_plaintext_backup": data.get("allow_plaintext_backup").cloned().unwrap_or(Value::Null),
+        "deletion_allowed": data.get("deletion_allowed").cloned().unwrap_or(Value::Null),
+        "status": if managed_openbao_key_active(&data) {"active"} else {"invalid"},
     }))
 }
 
@@ -1305,6 +1368,102 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_signing_key_requires_provider_generated_non_exportable_custody() {
+        let valid = json!({
+            "supports_signing": true,
+            "soft_deleted": false,
+            "exportable": false,
+            "allow_plaintext_backup": false,
+            "deletion_allowed": false,
+            "imported_key": false
+        });
+        assert!(managed_openbao_key_active(&valid));
+        for (field, unsafe_value) in [
+            ("supports_signing", json!(false)),
+            ("soft_deleted", json!(true)),
+            ("exportable", json!(true)),
+            ("allow_plaintext_backup", json!(true)),
+            ("deletion_allowed", json!(true)),
+            ("imported_key", json!(true)),
+        ] {
+            let mut changed = valid.clone();
+            changed[field] = unsafe_value;
+            assert!(!managed_openbao_key_active(&changed), "{field}");
+            changed.as_object_mut().unwrap().remove(field);
+            assert!(!managed_openbao_key_active(&changed), "missing {field}");
+        }
+    }
+
+    #[tokio::test]
+    async fn managed_sign_refuses_unsafe_custody_and_wrong_algorithm_before_transit_sign() {
+        use std::sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        };
+
+        const PUBLIC_KEY: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
+        let signs = Arc::new(AtomicUsize::new(0));
+        let exportable = Arc::new(AtomicBool::new(true));
+        let app = axum::Router::new()
+            .route(
+                "/v1/transit/keys/issuer-key",
+                axum::routing::get({
+                    let exportable = Arc::clone(&exportable);
+                    move || {
+                        let exportable = Arc::clone(&exportable);
+                        async move {
+                            axum::Json(json!({"data": {
+                                "latest_version": 1, "type": "ecdsa-p256",
+                                "supports_signing": true, "soft_deleted": false,
+                                "exportable": exportable.load(Ordering::SeqCst),
+                                "allow_plaintext_backup": false,
+                                "deletion_allowed": false, "imported_key": false,
+                                "keys": {"1": {"public_key": PUBLIC_KEY}}
+                            }}))
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/transit/sign/issuer-key",
+                axum::routing::post({
+                    let signs = Arc::clone(&signs);
+                    move || {
+                        let signs = Arc::clone(&signs);
+                        async move {
+                            signs.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut config = json!({
+            "id": "managed-openbao-transit", "service_type": "openbao-transit",
+            "endpoint": endpoint, "mount": "transit", "key_reference": "issuer-key",
+            "algorithm": "ES256", "auth_reference": "test-token"
+        });
+        let result = sign(SignRequest {
+            service_config: config.clone(),
+            payload_b64: "cGF5bG9hZA".into(),
+        })
+        .await;
+        assert!(matches!(result, Err(KmsError::InvalidResponse(_))));
+        exportable.store(false, Ordering::SeqCst);
+        config["algorithm"] = json!("EdDSA");
+        let result = sign(SignRequest {
+            service_config: config,
+            payload_b64: "cGF5bG9hZA".into(),
+        })
+        .await;
+        server.abort();
+        assert!(matches!(result, Err(KmsError::InvalidResponse(_))));
+        assert_eq!(signs.load(Ordering::SeqCst), 0);
+    }
 
     #[tokio::test]
     async fn transit_rotation_stays_in_kms_and_reports_public_version() {

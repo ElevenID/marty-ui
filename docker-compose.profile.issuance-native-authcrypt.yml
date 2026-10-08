@@ -1,9 +1,10 @@
-# Explicit paired compatibility policy; no CA/private-IP defaults or routing.
-# Unlike the historical short legacy mount, missing directories are not created.
-# Key custody migration remains DIDCOMM-KMS-001, outside this profile.
+# Explicit remote-authcrypt policy and OpenBao token are mounted read-only.
+# The policy directory must contain didcomm-encryption-policy.json and a scoped token file.
 x-native-issuance-policy: &native-issuance-policy
   environment:
     DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
+    DIDCOMM_KMS_ADDR: http://openbao:8200
+    DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm-authcrypt/openbao-token
   volumes:
     - type: bind
       source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}
@@ -12,5 +13,14 @@ x-native-issuance-policy: &native-issuance-policy
       bind:
         create_host_path: false
 services:
+  openbao:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    command: ["server", "-config=/bao/config/didcomm-plugin.hcl", "-dev"]
+    volumes:
+      - ./docker/openbao-didcomm-dev.hcl:/bao/config/didcomm-plugin.hcl:ro
+  openbao-init:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    environment:
+      DIDCOMM_KMS_PLUGIN_REQUIRED: "true"
   issuance: *native-issuance-policy
   issuance-native: *native-issuance-policy

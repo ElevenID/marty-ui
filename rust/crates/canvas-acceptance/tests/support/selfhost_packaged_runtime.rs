@@ -558,8 +558,8 @@ fn write_synthetic_secrets(directory: &Path, case: SecretCase) -> Result<Vec<Str
         ),
         ("issuance_api_key", MANAGEMENT_KEY),
         (
-            "integration_secret_master_key",
-            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            "didcomm_issuance_openbao_token",
+            "synthetic-selfhost-didcomm-openbao-token",
         ),
         ("token_hmac_key", HMAC),
         (

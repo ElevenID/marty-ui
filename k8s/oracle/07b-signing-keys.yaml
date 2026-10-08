@@ -41,6 +41,11 @@ spec:
                   key: SIGNING_KEYS_INTERNAL_API_KEY
             - name: SIGNING_KEYS_REDIS_URL
               value: redis://redis:6379/2
+            - name: ISSUER_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
             - name: BAO_ADDR
               valueFrom:
                 configMapKeyRef:
@@ -50,7 +55,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: OPENBAO_SERVICE_TOKEN
+                  key: SIGNING_KEYS_OPENBAO_TOKEN
             - name: PUBLIC_DOMAIN
               valueFrom:
                 configMapKeyRef:

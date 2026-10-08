@@ -36,6 +36,13 @@ def is_placeholder_value(value: str) -> bool:
     return not normalized or normalized.startswith("change-me") or normalized in {"changeme", "placeholder"}
 
 
+def validate_openbao_plugin_image(env_values: dict[str, str]) -> str:
+    reference = env_values.get("MARTY_OPENBAO_DIDCOMM_IMAGE", "").strip()
+    if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", reference):
+        raise CheckError("MARTY_OPENBAO_DIDCOMM_IMAGE must be a reviewed immutable image digest.")
+    return reference
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Prevent urllib from following redirects outside our control."""
 
@@ -1070,6 +1077,9 @@ def validate_protocol_routes_do_not_spa_fallback(env_values: dict[str, str]) -> 
 
 def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Path, compose_file: Path) -> str:
     read_required_secret(secret_dir / "openbao_service_token", "OpenBao service token")
+    read_required_secret(secret_dir / "signing_keys_openbao_token", "signing-keys OpenBao token")
+    read_required_secret(secret_dir / "didcomm_issuance_openbao_token", "DIDComm Issuance OpenBao token")
+    read_required_secret(secret_dir / "haip_kms_token", "HAIP OpenBao workload token")
     read_required_secret(
         secret_dir / "notification_openbao_token",
         "Notification OpenBao workload token",
@@ -1191,6 +1201,7 @@ def main() -> int:
     catalog = DeploymentCatalog.load(REPO_ROOT)
 
     compose_config_results = [
+        run_check("openbao-plugin-image", lambda: validate_openbao_plugin_image(env_values)),
         run_check("openbao-compose-config", lambda: (ensure_compose_config(env_file, openbao_compose_file) or openbao_compose_file.name)),
         run_check("prod-compose-config", lambda: (ensure_compose_config(env_file, prod_compose_file) or prod_compose_file.name)),
     ]

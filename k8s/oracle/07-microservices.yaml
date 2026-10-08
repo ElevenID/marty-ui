@@ -718,11 +718,6 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: TOKEN_HMAC_KEY
-            - name: INTEGRATION_SECRET_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: INTEGRATION_SECRET_MASTER_KEY
             - name: CANVAS_CREDENTIALS_SHARED_SECRET
               valueFrom:
                 secretKeyRef:
@@ -861,7 +856,7 @@ spec:
                   key: CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
                   optional: true
             - name: SIGNING_KEYS_INTERNAL_URL
-              value: "http://gateway:8000/internal/signing-keys"
+              value: "http://signing-keys:8017/internal"
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -1714,7 +1709,7 @@ spec:
             - name: FLOW_SERVICE_PORT
               value: "8011"
             - name: ISSUANCE_GRPC_TARGET
-              value: "issuance:9005"
+              value: "issuance-native:9005"
             - name: ISSUANCE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:

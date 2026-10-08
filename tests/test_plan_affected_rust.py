@@ -483,9 +483,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     self.assertIn(
                         edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
                     )
-                self.assertNotIn(
-                    producer,
-                    {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
+                direct_dependencies = {
+                    dep["name"] for dep in packages["marty-gateway"]["dependencies"]
+                }
+                self.assertEqual(
+                    producer == "marty-signing-keys", producer in direct_dependencies
                 )
 
     def test_organization_trust_profile_control_plane_is_observed(self) -> None:
@@ -956,17 +958,17 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("request_marker", "request_evidence"),
             ("sign_marker", "request_evidence"),
             ("response_marker", "request_evidence"),
-            ("wrap_marker", "request_evidence"),
-            ("unwrap_marker", "request_evidence"),
+            ("create_marker", "request_evidence"),
+            ("decrypt_marker", "request_evidence"),
             ("callsite_marker", "callsite_evidence"),
             ("envelope_callsite_marker", "callsite_evidence"),
             ("callback_marker", "callback_evidence"),
             ("provider_marker", "provider_evidence"),
             ("provider_handler_marker", "provider_evidence"),
-            ("provider_wrap_marker", "provider_evidence"),
-            ("provider_wrap_handler_marker", "provider_evidence"),
-            ("provider_unwrap_marker", "provider_evidence"),
-            ("provider_unwrap_handler_marker", "provider_evidence"),
+            ("provider_create_marker", "provider_evidence"),
+            ("provider_create_handler_marker", "provider_evidence"),
+            ("provider_decrypt_marker", "provider_evidence"),
+            ("provider_decrypt_handler_marker", "provider_evidence"),
         ):
             with self.subTest(marker=marker):
                 text = (ROOT / edge[source]).read_text(encoding="utf-8")

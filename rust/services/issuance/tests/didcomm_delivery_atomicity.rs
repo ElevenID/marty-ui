@@ -80,32 +80,18 @@ fn issuer() -> IssuerContext {
 fn recipient_document() -> DidDocument {
     let did = "did:example:holder";
     let key_id = format!("{did}#key-1");
-    DidDocument {
-        id: did.to_owned(),
-        context: serde_json::Value::Null,
-        authentication: Vec::new(),
-        assertion_method: Vec::new(),
-        key_agreement: vec![json!(key_id)],
-        verification_method: vec![VerificationMethod {
-            id: key_id,
-            r#type: "JsonWebKey2020".to_owned(),
-            controller: did.to_owned(),
-            public_key_jwk: Some(Jwk {
-                kty: "OKP".to_owned(),
-                crv: Some("X25519".to_owned()),
-                x: Some(URL_SAFE_NO_PAD.encode([7_u8; 32])),
-                y: None,
-                d: None,
-                kid: None,
-                additional_properties: Map::new(),
-            }),
-            public_key_multibase: None,
-            public_key_base58: None,
-            additional_properties: Map::new(),
-        }],
-        service: Vec::new(),
-        additional_properties: Map::new(),
-    }
+    let mut document = DidDocument::new(did);
+    document.set_key_agreements(vec![json!(key_id)]).unwrap();
+    let mut method = VerificationMethod::new(key_id, "JsonWebKey2020", did);
+    method.public_key_jwk = Some(Jwk::new_public(
+        "OKP",
+        Some("X25519".to_owned()),
+        Some(URL_SAFE_NO_PAD.encode([7_u8; 32])),
+        None,
+        None,
+    ));
+    document.verification_method = vec![method];
+    document
 }
 
 struct RepositoryState {
@@ -305,11 +291,12 @@ impl DidcommEnvelopePort for LocalEnvelope {
 
     async fn prepare_encryption(
         &self,
+        organization_id: &str,
         issuer_did: &str,
         recipient_document: DidDocument,
     ) -> Result<PreparedDidcommEncryption, NativeDidcommError> {
         self.native
-            .prepare_encryption(issuer_did, recipient_document)
+            .prepare_encryption(organization_id, issuer_did, recipient_document)
             .await
     }
 
@@ -332,12 +319,12 @@ impl DidcommEnvelopePort for LocalEnvelope {
         )
     }
 
-    fn encrypt_prepared(
+    async fn encrypt_prepared(
         &self,
         plaintext: &str,
         prepared: &PreparedDidcommEncryption,
     ) -> Result<String, NativeDidcommError> {
-        self.native.encrypt_prepared(plaintext, prepared)
+        self.native.encrypt_prepared(plaintext, prepared).await
     }
 }
 

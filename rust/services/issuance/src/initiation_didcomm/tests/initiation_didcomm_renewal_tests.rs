@@ -268,10 +268,38 @@ impl DidcommTransportPort for RenewalGraphTransport {
 #[tokio::test]
 async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
     // Real ingress/DB/Redis and HTTP transport are retained by the Canvas
-    // published-schema cases. These four cases isolate only our composition.
+    // published-schema cases. The remote-less authcrypt branch must refuse
+    // issuance; packaged Canvas and live OpenBao prove positive authcrypt.
     for authenticated in [false, true] {
         for allow_private_ips in [false, true] {
-            let (sender, sender_secret, _, recipient_secret) = authcrypt_parties();
+            let sender = shared_fixtures::document_with_public(
+                "did:web:issuer.example",
+                &URL_SAFE_NO_PAD.encode([1_u8; 32]),
+            );
+            let (_, recipient_secret) = shared_fixtures::holder_with_id("did:example:holder");
+            let policy_directory = tempfile::tempdir().unwrap();
+            let policy_path = policy_directory
+                .path()
+                .join("didcomm-encryption-policy.json");
+            let key_reference = format!("didcomm/keys/org-a/sender/versions/{}", "a".repeat(32));
+            let mode = if authenticated {
+                json!({"mode":"authcrypt","sender_key_ref":key_reference})
+            } else {
+                json!({"mode":"anoncrypt"})
+            };
+            std::fs::write(
+                &policy_path,
+                json!({"version":1,"issuers":{(sender.id.clone()):mode}}).to_string(),
+            )
+            .unwrap();
+            let policy_file = policy_path.to_str().unwrap();
+            assert_eq!(
+                matches!(
+                    load_active_policy(Some(&policy_path), &sender.id).unwrap(),
+                    ActiveEncryptionPolicy::Authcrypt(_)
+                ),
+                authenticated
+            );
             let service = json!({
                 "id": "#didcomm-1",
                 "type": "DIDCommMessaging",
@@ -314,18 +342,7 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
                 completed: AtomicUsize::new(0),
             });
             let transport = Arc::new(RenewalGraphTransport::default());
-            let (resolver_url, resolver) = if authenticated && allow_private_ips {
-                let (url, task) = serve_sender_document_once(&sender).await;
-                (Some(url), Some(task))
-            } else {
-                (None, None)
-            };
-            let policy = authenticated.then(|| authcrypt_policy_file(&sender.id, &sender_secret));
-            let envelope = NativeDidcommEnvelope::new(
-                None,
-                resolver_url.as_deref(),
-                policy.as_ref().map(|value| value.to_str().unwrap()),
-            );
+            let envelope = NativeDidcommEnvelope::new(None, None, Some(policy_file));
             let delivery = Arc::new(
                 NativeInitiationDidcommDelivery::new(
                     NativeInitiationDidcommPorts {
@@ -390,7 +407,7 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
                 Some(SOURCE_ID)
             );
             let messages = transport.messages.lock().unwrap().clone();
-            if allow_private_ips {
+            if allow_private_ips && !authenticated {
                 assert_eq!(
                     response.credential_offer_uris["didcomm"],
                     format!("didcomm://{ENDPOINT}")
@@ -402,26 +419,8 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
                     native_repository.delivery.lock().unwrap().as_ref(),
                     Some(InitiationDidcommDeliveryState::Delivered(_))
                 ));
-                let plaintext = if authenticated {
-                    let resolved_recipient = NativeDidcommEnvelope::new(None, None, None)
-                        .resolve_recipient(&holder_did)
-                        .await
-                        .unwrap();
-                    let decrypted = marty_didcomm::decrypt_authenticated_jwe(
-                        &messages[0],
-                        &recipient_secret,
-                        &resolved_recipient.document,
-                        &sender,
-                    )
-                    .unwrap();
-                    assert_eq!(decrypted.sender_kid, format!("{}#key-1", sender.id));
-                    assert!(decrypted
-                        .recipient_kid
-                        .starts_with(&format!("{holder_did}#")));
-                    decrypted.plaintext
-                } else {
-                    marty_didcomm::decrypt_jwe(&messages[0], &recipient_secret).unwrap()
-                };
+                let plaintext =
+                    shared_fixtures::holder_decrypt_anoncrypt(&messages[0], &recipient_secret);
                 let packed: Value = serde_json::from_str(&plaintext).unwrap();
                 assert_eq!(packed["to"], json!([holder_did]));
                 assert_eq!(packed["from"], sender.id);
@@ -437,7 +436,7 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
                 assert!(messages.is_empty());
                 assert!(
                     order.lock().unwrap().is_empty(),
-                    "private-IP refusal precedes claim/materialization"
+                    "denied delivery precedes claim/materialization"
                 );
                 assert_eq!(lifecycle.completed.load(Ordering::SeqCst), 0);
                 assert_eq!(native_repository.finalizations.load(Ordering::SeqCst), 0);
@@ -445,14 +444,8 @@ async fn renewal_private_ip_matrix_composes_real_didcomm_policy_and_crypto() {
                 assert_eq!(
                     *native_repository.transport_claim.lock().unwrap(),
                     HarnessTransportClaimState::Idle,
-                    "private-IP refusal must not acquire a send fence"
+                    "private-IP or missing remote KMS must not acquire a send fence"
                 );
-            }
-            if let Some(resolver) = resolver {
-                resolver.await.unwrap();
-            }
-            if let Some(policy) = policy {
-                std::fs::remove_file(policy).unwrap();
             }
         }
     }

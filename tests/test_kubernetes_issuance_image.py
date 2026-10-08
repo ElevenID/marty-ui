@@ -453,7 +453,7 @@ readonly -f kubectl checked_python envsubst synthetic_native_issuance
         expected_validations.append("native-validate")
     assert (tmp_path / "validations").read_text().splitlines() == expected_validations
     assert PRIVATE not in result.stdout + result.stderr
-    if case not in {"canonical", "mirror", "disabled-recovery"}:
+    if case not in {"canonical", "mirror"}:
         assert result.returncode != 0
         assert not (tmp_path / "writes").exists()
         assert not (tmp_path / "rendered").exists()
@@ -477,57 +477,6 @@ readonly -f kubectl checked_python envsubst synthetic_native_issuance
         for item in rendered
         if item.get("kind") == "Deployment" and item["metadata"]["name"] == "issuance"
     )
-    if case == "disabled-recovery":
-        assert not any(
-            item.get("kind") == "Deployment"
-            and item["metadata"]["name"] in {"issuance-native", "signing-keys"}
-            for item in rendered
-        )
-        rollouts = (tmp_path / "rollouts").read_text().splitlines()
-        assert "deployment/issuance-native" not in rollouts
-        assert "deployment/signing-keys" not in rollouts
-        common = next(
-            item
-            for item in rendered
-            if item.get("kind") == "ConfigMap"
-            and item["metadata"]["name"] == "marty-config"
-        )
-        assert common["data"]["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
-        assert (
-            common["data"]["ISSUANCE_NATIVE_SERVICE_URL"]
-            == common["data"]["ISSUANCE_SERVICE_URL"]
-        )
-        deployments = {
-            item["metadata"]["name"]: item
-            for item in rendered
-            if item.get("kind") == "Deployment"
-        }
-
-        def env_by_name(name):
-            return {
-                entry["name"]: entry
-                for entry in deployments[name]["spec"]["template"]["spec"][
-                    "containers"
-                ][0]["env"]
-            }
-
-        for name in ("auth", "applicant", "presentation-policy"):
-            assert (
-                env_by_name(name)["ISSUANCE_NATIVE_SERVICE_URL"]["valueFrom"][
-                    "configMapKeyRef"
-                ]["key"]
-                == "ISSUANCE_NATIVE_SERVICE_URL"
-            )
-        flow = env_by_name("flow")
-        assert flow["ISSUANCE_SERVICE_URL"]["valueFrom"]["configMapKeyRef"]["key"] == (
-            "ISSUANCE_SERVICE_URL"
-        )
-        assert (
-            flow["ISSUANCE_NATIVE_SERVICE_URL"]["valueFrom"]["configMapKeyRef"]["key"]
-            == "ISSUANCE_NATIVE_SERVICE_URL"
-        )
-        assert flow["ISSUANCE_GRPC_TARGET"]["value"] == "issuance:9005"
-        return
     native = next(
         item
         for item in rendered

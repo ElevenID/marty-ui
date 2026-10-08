@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
@@ -89,6 +89,7 @@ use marty_issuance_service::{
     credential_management_postgres::PostgresCredentialManagementRepository,
     credential_postgres::PostgresCredentialRepository,
     credential_renewal::CredentialRenewalService,
+    didcomm_remote_kms::RemoteDidcommKms,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
@@ -536,17 +537,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.dependency_timeout,
         canvas_guard_config.clone(),
     )?);
+    let mut didcomm_envelope = NativeDidcommEnvelope::new(
+        config.didcomm_universal_resolver_url.as_deref(),
+        config.didcomm_did_web_internal_base_url.as_deref(),
+        config.didcomm_encryption_policy_file.as_deref(),
+    );
+    let kms_addr = std::env::var("DIDCOMM_KMS_ADDR").ok();
+    let kms_token_file = std::env::var("DIDCOMM_KMS_TOKEN_FILE").ok();
+    match (kms_addr, kms_token_file) {
+        (Some(addr), Some(token_file)) if !addr.is_empty() && !token_file.is_empty() => {
+            didcomm_envelope = didcomm_envelope
+                .with_remote_kms(RemoteDidcommKms::new(&addr, PathBuf::from(token_file))?);
+        }
+        (None, None) => {}
+        _ => {
+            return Err(
+                "DIDCOMM_KMS_ADDR and DIDCOMM_KMS_TOKEN_FILE must be configured together".into(),
+            )
+        }
+    }
     let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
         NativeInitiationDidcommPorts {
             repository: credential_repository.clone(),
             issuer_resolver: issuer_resolver.clone(),
             builder: credential_builder.clone(),
             lifecycle: credential_lifecycle.clone(),
-            envelope: Arc::new(NativeDidcommEnvelope::new(
-                config.didcomm_universal_resolver_url.as_deref(),
-                config.didcomm_did_web_internal_base_url.as_deref(),
-                config.didcomm_encryption_policy_file.as_deref(),
-            )),
+            envelope: Arc::new(didcomm_envelope),
             endpoints: Arc::new(DidcommEndpointValidator::new(
                 config.didcomm_allow_private_ips,
             )),

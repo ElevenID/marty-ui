@@ -18,6 +18,7 @@ async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-verification.workspace = true
 prost.workspace = true
 rand.workspace = true

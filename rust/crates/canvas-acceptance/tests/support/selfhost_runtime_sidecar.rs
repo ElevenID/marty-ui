@@ -335,7 +335,7 @@ fn checked_recovery_native(
             [
                 "marty_db_password",
                 "issuance_api_key",
-                "integration_secret_master_key",
+                "didcomm_issuance_openbao_token",
                 "token_hmac_key",
                 "canvas_credentials_shared_secret",
                 "grpc_service_token",
@@ -890,7 +890,7 @@ mod recovery_tests {
         let names = [
             "marty_db_password",
             "issuance_api_key",
-            "integration_secret_master_key",
+            "didcomm_issuance_openbao_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
             "grpc_service_token",

@@ -3165,9 +3165,7 @@ async fn internal_signing_compatibility_handler(
     };
     if matches!(
         &operation,
-        SigningCompatibilityOperation::FlowEnvelopeWrap
-            | SigningCompatibilityOperation::FlowEnvelopeUnwrap
-            | SigningCompatibilityOperation::IntegrationSecretEncrypt
+        SigningCompatibilityOperation::IntegrationSecretEncrypt
             | SigningCompatibilityOperation::IntegrationSecretDecrypt
             | SigningCompatibilityOperation::PassportArtifactEncrypt
             | SigningCompatibilityOperation::PassportArtifactDecrypt
@@ -3439,14 +3437,6 @@ async fn forward_bound_envelope(
         _ => return detail_response(422, "Request body must be a JSON object."),
     };
     let path = match operation {
-        SigningCompatibilityOperation::FlowEnvelopeWrap => {
-            body["organization_id"] = Value::String(organization_id.into());
-            "/internal/flow-key-envelopes/wrap".to_owned()
-        }
-        SigningCompatibilityOperation::FlowEnvelopeUnwrap => {
-            body["organization_id"] = Value::String(organization_id.into());
-            "/internal/flow-key-envelopes/unwrap".to_owned()
-        }
         SigningCompatibilityOperation::IntegrationSecretEncrypt => {
             body["organization_id"] = Value::String(organization_id.into());
             "/internal/integration-secrets/encrypt".to_owned()
@@ -3965,9 +3955,34 @@ async fn vc_api_issue_handler(state: Arc<GatewayRuntimeState>, request: Request)
     else {
         return detail_response(502, "Marty issuance did not return a proof nonce");
     };
-    let proof = match marty_oid4vci::proof::create_proof_jwt(&issuer_url, &nonce) {
-        Ok(proof) => proof,
+    let proof_request = json!({
+        "organization_id": organization_id,
+        "issuer_url": issuer_url,
+        "nonce": nonce,
+    });
+    let proof_body = match serde_json::to_vec(&proof_request) {
+        Ok(body) => body,
         Err(_) => return detail_response(503, "could not generate OID4VCI holder proof"),
+    };
+    let proof_response = match signing_service_request(
+        &state,
+        HttpMethod::Post,
+        "/internal/vc-api/holder-proof",
+        Some(proof_body),
+    )
+    .await
+    {
+        Ok(response) if response.status_code == 200 => response,
+        _ => return detail_response(503, "could not generate OID4VCI holder proof"),
+    };
+    let Some(proof) = response_json(&proof_response)
+        .as_ref()
+        .and_then(|value| value.get("proof_jwt"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+    else {
+        return detail_response(503, "could not generate OID4VCI holder proof");
     };
     let issued = match execute_json_proxy(
         &state,
@@ -5156,22 +5171,6 @@ mod tests {
                 {
                     br#"{"deleted":"profile-1"}"#.to_vec()
                 }
-                "/internal/flow-key-envelopes/wrap" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("flow envelope body"),
-                    )
-                    .expect("flow envelope JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    br#"{"schema":"marty.flow-key-envelope/v1","flow_instance_id":"flow-1","ciphertext":"vault:v1:test"}"#.to_vec()
-                }
-                "/internal/flow-key-envelopes/unwrap" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("flow envelope body"),
-                    )
-                    .expect("flow envelope JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    br#"{"schema":"marty.flow-key-envelope/v1","flow_instance_id":"flow-1","plaintext_b64":"cHJpdmF0ZS1qd2s"}"#.to_vec()
-                }
                 "/internal/integration-secrets/encrypt" => {
                     let body: Value = serde_json::from_slice(
                         request.body.as_deref().expect("integration-secret body"),
@@ -5826,7 +5825,25 @@ mod tests {
                 }))
                 .expect("issued credential"),
                 "/v1/issuance/nonce" => br#"{"c_nonce":"nonce-1"}"#.to_vec(),
-                "/v1/issuance/credential" => serde_json::to_vec(&json!({
+                "/internal/vc-api/holder-proof" => {
+                    assert_eq!(instance.service_name, "signing-keys");
+                    let body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("holder proof request body"),
+                    )
+                    .expect("holder proof request JSON");
+                    assert_eq!(body["organization_id"], "org-1");
+                    assert_eq!(body["issuer_url"], "https://issuer.example/org/org-1");
+                    assert_eq!(body["nonce"], "nonce-1");
+                    assert!(body.get("key_reference").is_none());
+                    br#"{"proof_jwt":"remotely-signed-proof"}"#.to_vec()
+                }
+                "/v1/issuance/credential" => {
+                    let request_body: Value = serde_json::from_slice(
+                        request.body.as_deref().expect("credential request body"),
+                    )
+                    .expect("credential request JSON");
+                    assert_eq!(request_body["proofs"]["jwt"][0], "remotely-signed-proof");
+                    serde_json::to_vec(&json!({
                     "credentials": [{
                         "format": "ldp_vc",
                         "credential": {
@@ -5840,8 +5857,9 @@ mod tests {
                             }
                         }
                     }]
-                }))
-                .expect("credential"),
+                    }))
+                    .expect("credential")
+                }
                 _ => br#"{"ok":true}"#.to_vec(),
             };
             Ok(GatewayResponse {
@@ -6034,6 +6052,20 @@ mod tests {
         upstream: Arc<dyn UpstreamClient>,
         passport_native: bool,
     ) -> Arc<GatewayRuntimeState> {
+        runtime_state_with_upstream_and_signing_url(
+            event_streams,
+            upstream,
+            passport_native,
+            "http://signing-keys:8080",
+        )
+    }
+
+    fn runtime_state_with_upstream_and_signing_url(
+        event_streams: Arc<dyn EventStreamProvider>,
+        upstream: Arc<dyn UpstreamClient>,
+        passport_native: bool,
+        signing_url: &str,
+    ) -> Arc<GatewayRuntimeState> {
         let routes = GatewayContract::load()
             .expect("contract")
             .runtime_route_table_with_passport_native(passport_native)
@@ -6065,7 +6097,7 @@ mod tests {
                 "presentation-policies".into(),
                 "http://presentation-policies:8080".into(),
             ),
-            ("signing-keys".into(), "http://signing-keys:8080".into()),
+            ("signing-keys".into(), signing_url.into()),
             ("trust-profiles".into(), "http://trust-profiles:8000".into()),
             (
                 "revocation-profiles".into(),
@@ -7091,6 +7123,11 @@ mod tests {
             .runtime_route_table()
             .unwrap();
         for (method, path) in [
+            (HttpMethod::Patch, "/v1/signing-keys/config"),
+            (
+                HttpMethod::Put,
+                "/v1/signing-keys/issuer-identities/certificate",
+            ),
             (
                 HttpMethod::Put,
                 "/v1/signing-keys/issuer-identities/csca-certificate",
@@ -7186,6 +7223,197 @@ mod tests {
                 body
             );
         }
+    }
+
+    #[tokio::test]
+    async fn byok_registration_and_certificate_attachment_require_tenant_grant() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        for (method, path, body) in [
+            (
+                "PATCH",
+                "/v1/signing-keys/config",
+                json!({"services": [], "default_service_id": "service-a"}),
+            ),
+            (
+                "PUT",
+                "/v1/signing-keys/issuer-identities/certificate",
+                json!({
+                    "organization_id": "org-1",
+                    "issuer_did": "did:web:issuer.example:orgs:org-1",
+                    "key_purpose": "vc_jwt_issuer",
+                    "credential_format": "SD_JWT_VC",
+                    "algorithm": "ES256",
+                    "cert_pem": "public-certificate-only"
+                }),
+            ),
+        ] {
+            let request = |authenticated, forged_key, organization_id| {
+                let mut builder = Request::builder()
+                    .method(method)
+                    .uri(format!("{path}?organization_id={organization_id}"))
+                    .header("content-type", "application/json");
+                if authenticated {
+                    builder = builder.header("cookie", "sessionId=valid");
+                }
+                if forged_key {
+                    builder = builder.header("x-api-key", "attacker-key");
+                }
+                builder.body(Body::from(body.to_string())).unwrap()
+            };
+            let before = recorder.0.lock().unwrap().len();
+            let denied = router
+                .clone()
+                .oneshot(request(false, false, "org-other"))
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+            let forged = router
+                .clone()
+                .oneshot(request(true, true, "org-1"))
+                .await
+                .unwrap();
+            assert_eq!(forged.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+            let unauthorized_tenant = router
+                .clone()
+                .oneshot(request(true, false, "org-other"))
+                .await
+                .unwrap();
+            assert_eq!(unauthorized_tenant.status(), StatusCode::FORBIDDEN);
+            assert_eq!(recorder.0.lock().unwrap().len(), before);
+
+            let accepted = router
+                .clone()
+                .oneshot(request(true, false, "org-1"))
+                .await
+                .unwrap();
+            assert_eq!(accepted.status(), StatusCode::OK);
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), before + 1);
+            let (service, forwarded) = &calls[before];
+            assert_eq!(service, "signing-keys");
+            assert_eq!(forwarded.path, path);
+            assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert!(!forwarded.headers.contains_key("x-api-key"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
+                body
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires guarded disposable MARTY_TEST_REDIS_URL and nonce sentinel"]
+    async fn byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material() {
+        let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&redis_url).expect("disposable Redis URL syntax");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
+            .expect("disposable Redis sentinel value");
+        assert!(nonce.len() >= 16);
+        let registry = marty_signing_keys::registry::RegistryStore::connect(&redis_url)
+            .await
+            .expect("disposable Redis registry");
+        let mut connection = registry.connection();
+        let observed: Option<String> = redis::cmd("GET")
+            .arg("marty:tests:disposable-guard")
+            .query_async(&mut connection)
+            .await
+            .expect("disposable Redis sentinel read");
+        assert_eq!(observed.as_deref(), Some(nonce.as_str()));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("disposable signing-keys listener");
+        let signing_url = format!("http://{}", listener.local_addr().unwrap());
+        let signing_app = marty_signing_keys::http::router_with_dependencies(
+            "disposable-internal-key".into(),
+            Some(registry.clone()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let signing_task = tokio::spawn(async move {
+            axum::serve(listener, signing_app)
+                .await
+                .expect("disposable signing-keys server");
+        });
+        let gateway = gateway_router(runtime_state_with_upstream_and_signing_url(
+            Arc::new(NoOwner),
+            Arc::new(crate::transport::ReqwestUpstream::new(1_048_576).unwrap()),
+            false,
+            &signing_url,
+        ));
+        let organization_id = "org-1";
+        let request = |authenticated: bool, organization_id: &str, body: Value| {
+            let mut builder = Request::builder()
+                .method("PATCH")
+                .uri(format!(
+                    "/v1/signing-keys/config?organization_id={organization_id}"
+                ))
+                .header("content-type", "application/json");
+            if authenticated {
+                builder = builder.header("cookie", "sessionId=valid");
+            }
+            builder.body(Body::from(body.to_string())).unwrap()
+        };
+        let baseline = json!({"services": [], "default_service_id": null});
+        assert_eq!(
+            gateway
+                .clone()
+                .oneshot(request(false, organization_id, baseline.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            gateway
+                .clone()
+                .oneshot(request(true, "org-other", baseline.clone()))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let accepted = gateway
+            .clone()
+            .oneshot(request(true, organization_id, baseline))
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let before = registry
+            .load(organization_id)
+            .await
+            .expect("saved registry");
+
+        let rejected = gateway
+            .oneshot(request(
+                true,
+                organization_id,
+                json!({"services": [], "private_key_pem": "synthetic-secret"}),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let after = registry.load(organization_id).await.expect("registry read");
+        assert_eq!(after, before);
+        signing_task.abort();
     }
 
     #[tokio::test]
@@ -8818,55 +9046,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn flow_envelope_routes_replace_client_scope_with_trusted_scope() {
-        let wrapped = runtime_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(
-                        "/internal/signing-keys/flow-key-envelopes/wrap?organization_id=org-1",
-                    )
-                    .header("x-api-key", "internal-signing-key")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        br#"{"organization_id":"attacker-org","flow_instance_id":"flow-1","plaintext_b64":"cHJpdmF0ZS1qd2s"}"#
-                            .as_slice(),
-                    ))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(wrapped.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(
-            &to_bytes(wrapped.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+    async fn retired_flow_private_key_envelope_routes_are_unavailable() {
+        for action in ["wrap", "unwrap"] {
+            let response = runtime_router()
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!(
+                            "/internal/signing-keys/flow-key-envelopes/{action}?organization_id=org-1"
+                        ))
+                        .header("x-api-key", "internal-signing-key")
+                        .header("content-type", "application/json")
+                        .body(Body::from("{}"))
+                        .expect("request"),
+                )
                 .await
-                .expect("body"),
-        )
-        .expect("wrap JSON");
-        assert_eq!(body["ciphertext"], "vault:v1:test");
-
-        let unwrapped = runtime_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/signing-keys/flow-key-envelopes/unwrap?organization_id=org-1")
-                    .header("x-api-key", "internal-signing-key")
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        br#"{"flow_instance_id":"flow-1","ciphertext":"vault:v1:test"}"#.as_slice(),
-                    ))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(unwrapped.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(
-            &to_bytes(unwrapped.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-                .await
-                .expect("body"),
-        )
-        .expect("unwrap JSON");
-        assert_eq!(body["plaintext_b64"], "cHJpdmF0ZS1qd2s");
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
     }
 
     #[tokio::test]

@@ -518,6 +518,9 @@ mod didcomm_wallet_fixture;
 #[path = "../../../services/issuance/tests/support/didcomm_test_fixtures.rs"]
 mod didcomm_test_fixtures;
 
+#[path = "support/remote_didcomm_sender.rs"]
+mod remote_didcomm_sender;
+
 #[path = "support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;
 

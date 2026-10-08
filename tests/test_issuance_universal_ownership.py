@@ -137,19 +137,19 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     production = yaml.safe_load((ROOT / CONTRACT["production_composition"]).read_text())
     services = production["services"]
     issuance_environment = services["issuance"]["environment"]
-    assert "DIDCOMM_DELIVERY_OWNER" not in issuance_environment
-    assert "ISSUANCE_NATIVE_SERVICE_URL" not in issuance_environment
+    assert issuance_environment["DIDCOMM_DELIVERY_OWNER"] == "native"
+    assert issuance_environment["ISSUANCE_NATIVE_SERVICE_URL"] == (
+        "http://issuance-native:8005"
+    )
 
-    # Universal native ownership is a beta/default-composition change.  Keep
-    # every production HTTP consumer on its previously selected legacy owner;
-    # checking only the issuance service itself would miss a consumer cutover.
+    # The retained Python HTTP owner still serves nine passport routes. Native
+    # consumers explicitly select the native service; other HTTP consumers
+    # retain the Python URL for routes not yet migrated.
     for service_name in ("auth", "applicant", "presentation-policy", "flow"):
         environment = services[service_name]["environment"]
         assert environment["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
         if service_name == "flow":
-            assert environment["ISSUANCE_NATIVE_SERVICE_URL"] == (
-                "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
-            )
+            assert environment["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
         else:
             assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
 
@@ -167,10 +167,11 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
         services["flow"].get("depends_on", {})
     )
 
-    assert CONTRACT["production_unchanged"] is True
+    assert CONTRACT["production_unchanged"] is False
     assert CONTRACT["production_http_owner"] == {
         "consumers": ["auth", "applicant", "presentation-policy", "flow"],
-        "selected_environment_variable": "ISSUANCE_SERVICE_URL",
+        "native_selected_consumers": ["flow"],
+        "retained_http_consumers": ["auth", "applicant", "presentation-policy"],
         "runtime_precedence": [
             "ISSUANCE_NATIVE_SERVICE_URL",
             "ISSUANCE_SERVICE_URL",

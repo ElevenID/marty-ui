@@ -3,13 +3,15 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use marty_compliance_profile::{
-    compliance_router, system_profiles, ComplianceError, ComplianceHttpState, ComplianceRepository,
-    ComplianceService, CreateComplianceProfileRequest, MemoryComplianceRepository,
-    UpdateComplianceProfileRequest,
+    compliance_router, system_profiles, ComplianceError, ComplianceHttpState, ComplianceProfile,
+    ComplianceRepository, ComplianceService, CreateComplianceProfileRequest,
+    MemoryComplianceRepository, PostgresComplianceRepository, UpdateComplianceProfileRequest,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde_json::{json, Value};
+use sqlx::postgres::PgPoolOptions;
 use std::{collections::BTreeSet, sync::Arc};
 use tower::ServiceExt;
 #[derive(Clone)]
@@ -60,6 +62,30 @@ fn harness() -> (Arc<ComplianceService>, Arc<dyn ComplianceRepository>) {
 }
 fn request() -> CreateComplianceProfileRequest {
     serde_json::from_value(json!({"organization_id":"org-1","name":"Enterprise SD-JWT VC","description":"Enterprise issuance baseline","compliance_code":"ENTERPRISE_VC","credential_format":"sd_jwt_vc","issuance_protocol":"OID4VCI_PRE_AUTH","issuer_artifact_requirements":{"requires_did":true,"requires_jwk":true,"recommended_algorithms":["ES256"]},"verification_policy_set_id":"policy-set-1","trust_profile_constraints":{"compatible_profile_types":["CUSTOM"],"required_source_types":["TRUST_LIST"],"required_formats":["SD_JWT_VC"]},"api_surface":[{"rel":"issuer","path_template":"/.well-known/openid-credential-issuer","auth_required":false}],"frameworks":["GDPR"],"data_retention":{"retention_period":"1_year","retain_metadata_only":true,"anonymize_after_days":30},"consent_requirement":{"consent_type":"explicit","consent_text":"Consent","consent_version":"2.0"},"audit_configuration":{"audit_level":"detailed","retention_days":730},"data_minimization_rules":[{"description":"Protect email","applies_to_claims":["email"],"action":"hash","parameters":{"algorithm":"sha256"}}],"jurisdictional_constraints":[{"name":"EU","allowed_countries":["DE","FR"],"data_residency_required":true,"allowed_data_regions":["eu"]}],"age_verification":{"enabled":true,"minimum_age":21,"verification_method":"derived"}})).unwrap()
+}
+
+#[tokio::test]
+async fn repositories_reject_private_rule_parameters_before_database_access() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost:1/compliance_profile_test")
+        .unwrap();
+    let postgres = PostgresComplianceRepository::new(pool);
+    let memory = MemoryComplianceRepository::new();
+    let mut profile = ComplianceProfile::new(request(), Utc::now()).unwrap();
+    profile.data_minimization_rules[0].parameters.insert(
+        "issuer".into(),
+        json!({"private_jwk":{"kty":"EC","d":"secret"}}),
+    );
+    for repository in [&postgres as &dyn ComplianceRepository, &memory] {
+        assert!(matches!(
+            repository.save(profile.clone()).await,
+            Err(ComplianceError::BadRequest(_))
+        ));
+    }
+    profile.data_minimization_rules[0]
+        .parameters
+        .insert("issuer".into(), json!({"key_reference":"transit/issuer/1"}));
+    memory.save(profile).await.unwrap();
 }
 #[tokio::test]
 async fn language_neutral_contract_freezes_all_routes_and_policy_sections() {

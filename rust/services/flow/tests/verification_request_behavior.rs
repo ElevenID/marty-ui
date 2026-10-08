@@ -10,13 +10,14 @@ use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
     prepare_verification_request, CredentialTemplateProvider, CredentialTemplateReference,
-    FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest,
-    FlowProviderError, FlowProviderRegistry, PreparedVerificationRequest,
-    PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
-    PresentationPolicyReference, RequestObjectCompatibility, SigningIdentity,
-    SigningIdentityProvider, SigningRequest, SigningResult, VerificationRequestMethod,
-    VerificationRequestRetrievalOptions, VerificationRequestTransport,
+    FlowInstanceRecord, FlowKeyEnvelopeProvider, FlowProviderError, FlowProviderRegistry,
+    PreparedVerificationRequest, PresentationEvaluationRequest, PresentationEvaluationResult,
+    PresentationPolicyProvider, PresentationPolicyReference, RequestObjectCompatibility,
+    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    VerificationRequestMethod, VerificationRequestRetrievalOptions, VerificationRequestTransport,
 };
+#[path = "support/haip_remote_fixture.rs"]
+mod haip_remote_fixture;
 use marty_verification::flow::FlowInstanceStatus;
 use serde::Deserialize;
 use serde_json::json;
@@ -142,20 +143,12 @@ struct Envelopes;
 
 #[async_trait]
 impl FlowKeyEnvelopeProvider for Envelopes {
-    async fn wrap(
+    async fn create_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
-        Ok(FlowKeyEnvelope {
-            organization_id: request.organization_id.clone(),
-            flow_instance_id: request.flow_instance_id.clone(),
-            purpose: request.purpose.clone(),
-            envelope: "vault:dc-api-key".into(),
-        })
-    }
-
-    async fn unwrap(&self, _envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        unreachable!("retrieval only wraps response keys")
+        organization_id: &str,
+        flow_instance_id: &str,
+    ) -> Result<marty_flow::HaipRemoteKey, FlowProviderError> {
+        Ok(haip_remote_fixture::key(organization_id, flow_instance_id))
     }
 }
 

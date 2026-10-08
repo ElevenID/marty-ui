@@ -7,8 +7,8 @@ use sqlx::{postgres::PgRow, PgPool, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::{
-    ApplicationEventReceipt, FlowArtifactRecord, FlowDefinitionRecord, FlowInstanceRecord,
-    FlowRecordError, PlannedApplicationFlowRecord, RepositoryError,
+    checked_public_record, ApplicationEventReceipt, FlowArtifactRecord, FlowDefinitionRecord,
+    FlowInstanceRecord, FlowRecordError, PlannedApplicationFlowRecord, RepositoryError,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -414,6 +414,7 @@ impl PostgresFlowRepository {
             final_plan.push(entry);
         }
 
+        checked_public_record(&final_plan)?;
         sqlx::query(
             "UPDATE flow_service.flow_application_event_receipts SET flow_plan=$1, updated_at=$2 \
              WHERE event_id_sha256=$3",
@@ -850,7 +851,7 @@ impl PostgresFlowRepository {
                 destination_url: row.try_get("destination_url").map_err(storage)?,
                 audience: row.try_get("audience").map_err(storage)?,
                 event_type: row.try_get("event_type").map_err(storage)?,
-                payload: row.try_get("payload").map_err(storage)?,
+                payload: checked_public_record(row.try_get("payload").map_err(storage)?)?,
                 attempt_count: u32::try_from(attempt_count)
                     .map_err(|error| RepositoryError::Storage(error.to_string()))?,
                 lease_token,
@@ -973,6 +974,9 @@ fn validate_callback(
     instance: &FlowInstanceRecord,
     callback: Option<&Message>,
 ) -> Result<(), RepositoryError> {
+    if let Some(message) = callback {
+        checked_public_record(&message.payload)?;
+    }
     if callback.is_some_and(|message| {
         message.metadata.message_id != instance.id
             || message.metadata.correlation_id.as_deref() != Some(instance.id.as_str())
@@ -1071,7 +1075,7 @@ fn definition_from_row(row: &PgRow) -> Result<FlowDefinitionRecord, RepositoryEr
                 .ok_or_else(|| record("definition.preconditions[]"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(FlowDefinitionRecord {
+    checked_public_record(FlowDefinitionRecord {
         id: row.try_get("id").map_err(storage)?,
         organization_id: row.try_get("organization_id").map_err(storage)?,
         name: row.try_get("name").map_err(storage)?,
@@ -1107,6 +1111,7 @@ fn definition_from_row(row: &PgRow) -> Result<FlowDefinitionRecord, RepositoryEr
 
 fn application_receipt_from_row(row: &PgRow) -> Result<ApplicationEventReceipt, RepositoryError> {
     let flow_plan: Value = row.try_get("flow_plan").map_err(storage)?;
+    checked_public_record(&flow_plan)?;
     let flow_plan = serde_json::from_value(flow_plan).map_err(|_| record("receipt.flow_plan"))?;
     let created_at: DateTime<Utc> = row.try_get("created_at").map_err(storage)?;
     let updated_at: DateTime<Utc> = row.try_get("updated_at").map_err(storage)?;
@@ -1122,7 +1127,7 @@ fn application_receipt_from_row(row: &PgRow) -> Result<ApplicationEventReceipt, 
 }
 
 fn instance_from_row(row: &PgRow) -> Result<FlowInstanceRecord, RepositoryError> {
-    Ok(FlowInstanceRecord {
+    checked_public_record(FlowInstanceRecord {
         id: row.try_get("id").map_err(storage)?,
         flow_definition_id: row.try_get("flow_definition_id").map_err(storage)?,
         organization_id: row.try_get("organization_id").map_err(storage)?,
@@ -1146,7 +1151,7 @@ fn instance_from_row(row: &PgRow) -> Result<FlowInstanceRecord, RepositoryError>
 }
 
 fn artifact_from_row(row: &PgRow) -> Result<FlowArtifactRecord, RepositoryError> {
-    Ok(FlowArtifactRecord {
+    checked_public_record(FlowArtifactRecord {
         id: row.try_get("id").map_err(storage)?,
         flow_instance_id: row.try_get("flow_instance_id").map_err(storage)?,
         issuance_transaction_id: row.try_get("issuance_transaction_id").map_err(storage)?,
@@ -1207,6 +1212,7 @@ fn nonnegative_u32(row: &PgRow, field: &str) -> Result<u32, RepositoryError> {
 }
 
 fn validate_definition_numbers(definition: &FlowDefinitionRecord) -> Result<(), RepositoryError> {
+    checked_public_record(definition)?;
     definition.kernel()?;
     if definition.default_timeout_seconds == 0 || definition.version == 0 {
         return Err(record("definition numeric bounds"));
@@ -1215,6 +1221,7 @@ fn validate_definition_numbers(definition: &FlowDefinitionRecord) -> Result<(), 
 }
 
 fn validate_instance_record(instance: &FlowInstanceRecord) -> Result<(), RepositoryError> {
+    checked_public_record(instance)?;
     instance.kernel()?;
     if instance
         .application_flow_key_hash
@@ -1227,6 +1234,7 @@ fn validate_instance_record(instance: &FlowInstanceRecord) -> Result<(), Reposit
 }
 
 fn validate_artifact_record(artifact: &FlowArtifactRecord) -> Result<(), RepositoryError> {
+    checked_public_record(artifact)?;
     if artifact.attempt_number == 0 || !artifact.wallet_metadata.is_object() {
         return Err(record("artifact state"));
     }
@@ -1239,4 +1247,43 @@ fn record(field: &str) -> RepositoryError {
 
 fn number_storage(error: std::num::TryFromIntError) -> RepositoryError {
     RepositoryError::Storage(error.to_string())
+}
+
+#[cfg(test)]
+mod private_material_tests {
+    use super::*;
+    use sqlx::postgres::PgPoolOptions;
+
+    #[tokio::test]
+    async fn direct_instance_write_rejects_private_jwk_before_database_access() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://localhost:1/flow_test")
+            .unwrap();
+        let repository = PostgresFlowRepository::new(pool);
+        let instance = FlowInstanceRecord {
+            id: "instance-1".into(),
+            flow_definition_id: "flow-1".into(),
+            organization_id: "org-1".into(),
+            status: FlowInstanceStatus::Created,
+            current_step_id: None,
+            context: serde_json::json!({"public_jwk":{"kty":"EC","d":"secret"}}),
+            step_history: vec![],
+            state_history: vec![],
+            subject_id: None,
+            subject_type: "applicant".into(),
+            external_reference: None,
+            application_flow_key_hash: None,
+            started_at: None,
+            completed_at: None,
+            expires_at: None,
+            result: None,
+            error: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert!(matches!(
+            repository.save_instance(&instance).await,
+            Err(RepositoryError::InvalidStoredState(_))
+        ));
+    }
 }

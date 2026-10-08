@@ -35,6 +35,23 @@ if [ "${DIDCOMM_KMS_PLUGIN_REQUIRED:-false}" = "true" ]; then
         bao secrets enable -address="${BAO_ADDR}" -path=didcomm openbao-didcomm-authcrypt
     fi
 fi
+if [ "${DIDCOMM_KMS_PLUGIN_REQUIRED:-false}" = "true" ] || [ "${DIDCOMM_KMS_POLICY_ONLY:-false}" = "true" ]; then
+    if ! bao secrets list -address="${BAO_ADDR}" | grep -q '^didcomm/'; then
+        echo "DIDComm plugin must be mounted at didcomm/ before issuing its workload policy." >&2
+        exit 1
+    fi
+    # Runtime Issuance may read only public sender metadata and request a
+    # complete envelope. Key creation, rotation and deletion stay with the
+    # bootstrap/operator token; no private-key export path is granted.
+    bao policy write -address="${BAO_ADDR}" didcomm-issuance - <<'POLICY'
+path "didcomm/keys/+/+/versions/+" {
+  capabilities = ["read"]
+}
+path "didcomm/pack/+/+/+" {
+  capabilities = ["update"]
+}
+POLICY
+fi
 
 # ── Transit Engine (credential signing, encryption) ──────────────────
 
@@ -351,6 +368,18 @@ EOF
 echo "Writing isolated passport callback HMAC policy..."
 bao policy write -address="${BAO_ADDR}" passport-callback-hmac-service - <<'EOF'
 path "transit/hmac/passport-bureau-callback-marty-hmac" {
+  capabilities = ["create", "update"]
+}
+EOF
+
+# The supported physical-provider signer can additionally verify only scoped
+# imported provider HMACs. It cannot generate provider MACs or read/export keys.
+echo "Writing supported passport provider callback policy..."
+bao policy write -address="${BAO_ADDR}" passport-provider-callback-service - <<'EOF'
+path "transit/hmac/passport-bureau-callback-marty-hmac" {
+  capabilities = ["create", "update"]
+}
+path "transit/verify/passport-provider-callback-*" {
   capabilities = ["create", "update"]
 }
 EOF

@@ -362,7 +362,6 @@ impl KmsWebhookVerifier {
 pub struct BureauClient {
     base_url: Url,
     api_key: String,
-    webhook_secret: Option<Vec<u8>>,
     http: Client,
 }
 
@@ -372,11 +371,7 @@ impl BureauClient {
         hex::encode(Sha256::digest(self.base_url.as_str().as_bytes()))
     }
 
-    pub fn new(
-        base_url: &str,
-        api_key: &str,
-        webhook_secret: Option<&str>,
-    ) -> Result<Self, BureauError> {
+    pub fn new(base_url: &str, api_key: &str) -> Result<Self, BureauError> {
         if base_url.is_empty() {
             return Err(BureauError::NotConfigured);
         }
@@ -394,10 +389,6 @@ impl BureauClient {
         Ok(Self {
             base_url,
             api_key: api_key.to_owned(),
-            webhook_secret: webhook_secret
-                .filter(|secret| !secret.is_empty())
-                .map(str::as_bytes)
-                .map(<[u8]>::to_vec),
             http: Client::new(),
         })
     }
@@ -598,24 +589,6 @@ impl BureauClient {
             .json()
             .await?)
     }
-
-    #[must_use]
-    pub fn verify_webhook(&self, body: &[u8], signature: &str) -> bool {
-        verify_webhook_signature(self.webhook_secret.as_deref(), body, signature)
-    }
-
-    #[must_use]
-    pub(crate) fn webhook_secret(&self) -> Option<&[u8]> {
-        self.webhook_secret.as_deref()
-    }
-
-    pub fn parse_webhook(
-        &self,
-        body: &[u8],
-        signature: &str,
-    ) -> Result<VerifiedWebhookEvent, BureauError> {
-        parse_verified_webhook(self.webhook_secret(), body, signature)
-    }
 }
 
 /// The strict beta parser is shared by initial transport and retained-wire
@@ -672,45 +645,6 @@ fn batch_payload(batch: &PersonalizationBatch) -> Value {
         "organization_id": batch.organization_id,
         "jobs": batch.jobs.iter().map(PersonalizationJob::batch_payload).collect::<Vec<_>>(),
     })
-}
-
-#[must_use]
-pub(crate) fn verify_webhook_signature(
-    secret: Option<&[u8]>,
-    body: &[u8],
-    signature: &str,
-) -> bool {
-    let Some(secret) = secret else {
-        return false;
-    };
-    // The released webhook accepts the lowercase hexdigest, not alternate
-    // encodings of the same MAC.
-    if signature.len() != 64
-        || !signature
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return false;
-    }
-    let Ok(signature) = hex::decode(signature) else {
-        return false;
-    };
-    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret) else {
-        return false;
-    };
-    mac.update(body);
-    mac.verify_slice(&signature).is_ok()
-}
-
-pub(crate) fn parse_verified_webhook(
-    secret: Option<&[u8]>,
-    body: &[u8],
-    signature: &str,
-) -> Result<VerifiedWebhookEvent, BureauError> {
-    if !verify_webhook_signature(secret, body, signature) {
-        return Err(BureauError::InvalidWebhookSignature);
-    }
-    Ok(VerifiedWebhookEvent(parse_webhook_event(body)?))
 }
 
 fn parse_webhook_event(body: &[u8]) -> Result<WebhookEvent, BureauError> {
@@ -910,46 +844,18 @@ mod tests {
     }
 
     #[test]
-    fn webhook_signature_fails_closed() {
+    fn bureau_url_validation_rejects_embedded_credentials() {
         for url in [
             "https://user:password@bureau.example",
             "https://bureau.example?token=secret",
             "https://bureau.example#fragment",
         ] {
             assert!(matches!(
-                BureauClient::new(url, "key", Some("secret")),
+                BureauClient::new(url, "key"),
                 Err(BureauError::InvalidUrl)
             ));
         }
-        let missing = BureauClient::new("https://bureau.example", "key", None).unwrap();
-        assert!(!missing.verify_webhook(b"{}", ""));
-        let configured =
-            BureauClient::new("https://bureau.example", "key", Some("secret")).unwrap();
-        let body = br#"{"organization_id":"org-1","bureau_job_id":"job-1","status":"SHIPPED"}"#;
-        let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
-        mac.update(body);
-        let signature = hex::encode(mac.finalize().into_bytes());
-        assert!(configured.verify_webhook(body, &signature));
-        assert!(!configured.verify_webhook(b"{}", &signature));
-        assert!(!configured.verify_webhook(body, &signature.to_uppercase()));
-        assert!(!configured.verify_webhook(body, "not-hex"));
-        let event = configured.parse_webhook(body, &signature).unwrap();
-        assert_eq!(event.organization_id(), "org-1");
-        assert_eq!(event.bureau_job_id(), "job-1");
-        assert_eq!(event.status(), ProductionStatus::Shipped);
-        assert_eq!(event.tracking_number(), None);
-        assert!(matches!(
-            configured.parse_webhook(b"{}", &signature),
-            Err(BureauError::InvalidWebhookSignature)
-        ));
-        let missing_tenant = br#"{"bureau_job_id":"job-1","status":"SHIPPED"}"#;
-        let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
-        mac.update(missing_tenant);
-        let signature = hex::encode(mac.finalize().into_bytes());
-        assert!(matches!(
-            configured.parse_webhook(missing_tenant, &signature),
-            Err(BureauError::InvalidWebhookEvent)
-        ));
+        assert!(BureauClient::new("https://bureau.example", "key").is_ok());
     }
 
     #[tokio::test]
@@ -1029,7 +935,7 @@ mod tests {
             .unwrap()
             .strip_prefix("Bearer ")
             .unwrap();
-        let client = BureauClient::new(&format!("http://{address}"), api_key, None).unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), api_key).unwrap();
         let jobs = exchange["json"]["jobs"].as_array().unwrap();
         let second = job_from_wire(&jobs[1], DocumentType::TD1);
         let mut first = job_from_wire(&jobs[0], DocumentType::TD3);
@@ -1143,7 +1049,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = BureauClient::new(&format!("http://{address}"), "private-key", None).unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), "private-key").unwrap();
         let mut second = job(DocumentType::TD1);
         second.id = "job-2".into();
         second.application_id = "application-2".into();
@@ -1214,7 +1120,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = BureauClient::new(&format!("http://{address}"), "private-key", None).unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), "private-key").unwrap();
         assert!(matches!(
             client.submit_beta_batch(&batch).await,
             Err(BureauError::InvalidResponse(message)) if message == "beta batch response is oversized"
@@ -1247,7 +1153,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = BureauClient::new(&format!("http://{address}"), "private-key", None).unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), "private-key").unwrap();
         let mut second = job(DocumentType::TD1);
         second.id = "job-2".into();
         second.application_id = "application-2".into();
@@ -1348,8 +1254,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client =
-            BureauClient::new(&format!("http://{address}"), "bureau-key", Some("hmac")).unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), "bureau-key").unwrap();
 
         let submitted = client.submit(&job(DocumentType::TD2)).await.unwrap();
         assert_eq!(submitted.status, ProductionStatus::Shipped);
@@ -1410,7 +1315,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let client = BureauClient::new(&format!("http://{address}"), "bureau-key", None).unwrap();
+        let client = BureauClient::new(&format!("http://{address}"), "bureau-key").unwrap();
 
         let result = client.submit(&job(DocumentType::TD1)).await.unwrap();
         assert_eq!(result.status, ProductionStatus::Failed);

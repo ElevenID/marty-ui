@@ -32,6 +32,7 @@ const ES256_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYI
 const ES384_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n";
 const RS256_PUBLIC_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxZrSKXzXy4gpAp6iFW/B\nXWnIOL377WmFDT/H3IpLN7rg9rIS/FKyBtWFUICfDVwfoCMElc3nz+Pedl2Dw2b4\nFLomW89q2op6RVfuXK1QTgVfrvfF/30feNti6iemScKBibXkPLfCLZL0k8DU+PIC\nIHASwNCjmv3OTFIlv4am7/DemiOHqezP8JAK3Yc2n3kWZFeMnFomq3jFzjKABNHX\nN10EwkWLy7PFxhmdoZnRF4chIgIqT+YRyFt5r1f9n9OtW9uoQ0P+lBP3y3sv67Ng\nlAqxySz2siHm2Q87ZLAgMJztoncChb7ea6VRamaPR0qcfGmoeK5HPhPUZRBptMFF\nTwIDAQAB\n-----END PUBLIC KEY-----\n";
 const ED25519_PUBLIC_B64: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
+const ROTATED_ED25519_PUBLIC_B64: &str = "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=";
 
 type Keys = Arc<Mutex<BTreeMap<String, String>>>;
 
@@ -129,18 +130,28 @@ async fn read_key(
     };
     let public_key = match key_type.as_str() {
         "ed25519" => ED25519_PUBLIC_B64,
+        "ed25519-rotated" => ROTATED_ED25519_PUBLIC_B64,
         "ecdsa-p384" => ES384_PUBLIC_PEM,
         "rsa-2048" => RS256_PUBLIC_PEM,
         _ => ES256_PUBLIC_PEM,
+    };
+    let reported_type = if key_type == "ed25519-rotated" {
+        "ed25519"
+    } else {
+        key_type.as_str()
     };
     (
         StatusCode::OK,
         Json(json!({"data": {
             "latest_version": 1,
-            "type": key_type,
+            "type": reported_type,
             "supports_signing": true,
             "soft_deleted": false,
-            "keys": {"1": {"name": key_type, "public_key": public_key, "creation_time": "2026-09-26T00:00:00Z"}}
+            "exportable": false,
+            "allow_plaintext_backup": false,
+            "deletion_allowed": false,
+            "imported_key": false,
+            "keys": {"1": {"name": reported_type, "public_key": public_key, "creation_time": "2026-09-26T00:00:00Z"}}
         }})),
     )
 }
@@ -331,6 +342,24 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
             );
         }
     }
+    keys.lock()
+        .unwrap()
+        .insert(reference.to_owned(), "ed25519-rotated".into());
+    let (status, stale) = json_route(
+        &app,
+        "POST",
+        "/internal/compat/issuer-dids/sign",
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA",
+            "payload_b64": "cGF5bG9hZA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
     keys.lock().unwrap().remove(reference);
     let (status, missing) = json_route(
         &app,

@@ -189,6 +189,33 @@ fn partial_updates_clear_nullable_fields_merge_settings_and_report_exact_changes
 }
 
 #[test]
+fn settings_patch_rejects_private_material_without_changing_organization() {
+    let existing = existing_organization();
+    for payload in [
+        json!({"privateKeyJwk": "opaque"}),
+        json!({"nested": {"kty": "EC", "d": "opaque"}}),
+        json!({"nested": "{\"kty\":\"EC\",\"d\":\"opaque\"}"}),
+        json!({"certificate": "-----BEGIN PRIVATE KEY-----\nopaque\n-----END PRIVATE KEY-----"}),
+    ] {
+        let patch = UpdateOrganizationPatch {
+            settings: Some(payload.as_object().unwrap().clone()),
+            ..UpdateOrganizationPatch::default()
+        };
+        assert!(matches!(
+            plan_organization_update(&existing, patch, now()),
+            Err(OrganizationApplicationError::InvalidCommand(_))
+        ));
+        assert_eq!(existing.settings["existing_setting"], "preserved");
+    }
+
+    let public = UpdateOrganizationPatch {
+        settings: Some(json!({"public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}, "key_reference": "transit/keys/issuer-v4"}).as_object().unwrap().clone()),
+        ..UpdateOrganizationPatch::default()
+    };
+    assert!(plan_organization_update(&existing, public, now()).is_ok());
+}
+
+#[test]
 fn empty_updates_and_private_open_admission_fail_closed() {
     assert!(matches!(
         plan_organization_update(

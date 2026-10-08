@@ -356,7 +356,7 @@ def validate_physical_model(model, files, provider_registry=None):
                          "name": "elevenid-beta-network"},
                      "Beta physical provider networks are not isolated")
     physical_secrets = {
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
     }
     expected_secret_consumers = {
@@ -364,8 +364,10 @@ def validate_physical_model(model, files, provider_registry=None):
         "passport-callback-signer-supported": {
             "passport_callback_signer_api_key", "passport_callback_signer_bao_token"},
         "passport-provider-ingress": {
-            "passport_callback_signer_api_key", "passport_provider_webhook_secret"},
+            "passport_callback_signer_api_key"},
     }
+    physical_require("passport_provider_webhook_secret" not in model.get("secrets", {}),
+                     "Local provider webhook secret is forbidden")
     physical_secret_root = physical_secret_path(
         model, "passport_callback_signer_bao_token").parent.resolve()
     approved_secret_names = physical_secrets | {"marty_db_password"}
@@ -521,7 +523,7 @@ def validate_physical_model(model, files, provider_registry=None):
     physical_require(all(str(native.get(name, "false")).lower() == "true" for name in (
         "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
         "PASSPORT_KMS_CALLBACKS_ENABLED"))
-        and str(native.get("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false")).lower() == "false"
+        and "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" not in native
         and not native.get("ICAO_DOCUMENT_SIGNER_URL"),
         "Beta physical provider KMS mode is incomplete")
     for name in PASSPORT_RAW_KEY_NAMES:
@@ -570,23 +572,28 @@ def validate_physical_model(model, files, provider_registry=None):
     physical_require(native.get("PERSONALIZATION_BUREAU_API_KEY") in (None, "")
                      and native.get("PERSONALIZATION_BUREAU_API_KEY_FILE")
                      == "/run/secrets/passport_physical_provider_api_key"
-                     and not native.get("PERSONALIZATION_BUREAU_WEBHOOK_SECRET")
-                     and not native.get("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE")
+                     and "PERSONALIZATION_BUREAU_WEBHOOK_SECRET" not in native
+                     and "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE" not in native
                      and "passport_physical_provider_api_key" in
                      physical_secret_sources(services["issuance-native"]),
                      "Beta physical provider API credential must be file-backed")
-    physical_require(signer.get("SERVICE_NAME") == "passport_callback_signer"
-                     and signer.get("ENVIRONMENT") == "beta"
-                     and str(signer.get("PASSPORT_CALLBACK_SIGNER_ENABLED", "false")).lower()
+    physical_require(signer.get("SERVICE_NAME") == "passport_callback_signer_supported"
+                     and signer.get("ENVIRONMENT") == "production"
+                     and str(signer.get("PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED", "false")).lower()
                      == "true"
-                     and signer.get("SIGNING_KEYS_INTERNAL_API_KEY_FILE")
+                     and signer.get("PASSPORT_CALLBACK_SIGNER_API_KEY_FILE")
                      == "/run/secrets/passport_callback_signer_api_key"
-                     and signer.get("BAO_TOKEN_FILE")
+                     and signer.get("PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE")
                      == "/run/secrets/passport_callback_signer_bao_token"
                      and signer.get("BAO_ADDR") == "http://openbao:8200"
                      and not any(signer.get(name) for name in (
-                         "SIGNING_KEYS_INTERNAL_API_KEY", "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN",
-                         "OPENBAO_SERVICE_TOKEN_FILE"))
+                         "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
+                         "BAO_TOKEN", "BAO_TOKEN_FILE", "OPENBAO_SERVICE_TOKEN",
+                         "OPENBAO_SERVICE_TOKEN_FILE", "PASSPORT_CALLBACK_SIGNER_ENABLED"))
+                     and not any(name in signer for name in (
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE",
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET",
+                         "PASSPORT_PROVIDER_HMAC_SOURCE_FILE"))
                      and physical_secret_sources(signer_service) == {
                          "passport_callback_signer_api_key",
                          "passport_callback_signer_bao_token"},
@@ -599,11 +606,16 @@ def validate_physical_model(model, files, provider_registry=None):
                      == PRIVATE_CALLBACK_URL
                      and ingress.get("PASSPORT_PROVIDER_SIGNER_API_KEY_FILE")
                      == "/run/secrets/passport_callback_signer_api_key"
-                     and ingress.get("PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE")
-                     == "/run/secrets/passport_provider_webhook_secret"
+                     and re.fullmatch(r"[1-9][0-9]{0,9}",
+                                      str(ingress.get("PASSPORT_PROVIDER_HMAC_KEY_VERSION", "")))
+                     and int(ingress["PASSPORT_PROVIDER_HMAC_KEY_VERSION"]) <= 4294967295
+                     and not any(name in ingress for name in (
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE",
+                         "PASSPORT_PROVIDER_WEBHOOK_SECRET",
+                         "PASSPORT_PROVIDER_HMAC_SOURCE_FILE"))
                      and physical_secret_sources(ingress_service) == {
                          "passport_callback_signer_api_key",
-                         "passport_provider_webhook_secret", "marty_db_password"},
+                         "marty_db_password"},
                      "Beta physical provider callback ingress is invalid")
     physical_require(signing.get("ENVIRONMENT") == "beta"
                      and str(signing.get("SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED", "false"))
@@ -659,11 +671,11 @@ def validate_physical_model(model, files, provider_registry=None):
                      and ingress_service.get("image") == image,
                      "Beta physical provider callback image is not immutable")
     secret_values = [physical_secret(model, name) for name in (
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
     )]
     secret_paths = [physical_secret_path(model, name) for name in (
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
         "marty_db_password",
     )]
@@ -799,12 +811,14 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
         ):
             if str(native.get(name, "false")).lower() != "true":
                 raise PassportConfigurationError("Beta passport KMS mode is incomplete")
-        if (
-            str(native.get("PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false")).lower()
-            != "false"
-        ):
+        if "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" in native:
             raise PassportConfigurationError(
-                "Beta passport self-signed mode is forbidden"
+                "Beta passport self-signed configuration is forbidden"
+            )
+        if ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET" in native
+                or "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE" in native):
+            raise PassportConfigurationError(
+                "Beta passport local callback secret is forbidden"
             )
         if native.get("ICAO_DOCUMENT_SIGNER_URL"):
             raise PassportConfigurationError("Beta passport remote signer is forbidden")

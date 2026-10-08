@@ -5,14 +5,16 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
+use chrono::Utc;
 use marty_deployment_profile::{
     deployment_router, ApiAuthConfiguration, AssignDeviceRequest, AuthMethod,
     CreateDeploymentProfileRequest, CreateLaneRequest, DeploymentError, DeploymentHttpState,
-    DeploymentRepository, DeploymentService, MemoryDeploymentRepository,
-    UpdateDeploymentProfileRequest,
+    DeploymentProfile, DeploymentRepository, DeploymentService, Lane, MemoryDeploymentRepository,
+    PostgresDeploymentRepository, UpdateDeploymentProfileRequest,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde_json::{json, Value};
+use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
 #[derive(Clone)]
@@ -81,6 +83,48 @@ fn create_request() -> CreateDeploymentProfileRequest {
         "environment_config":{"language":"fr-FR","offline_cache_ttl_seconds":7200},
         "enabled_flow_ids":["flow-1","flow-1"], "update_channel":"beta"
     })).unwrap()
+}
+
+#[tokio::test]
+async fn repository_rejects_private_key_material_before_database_access() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost:1/deployment_profile_test")
+        .unwrap();
+    let postgres = PostgresDeploymentRepository::new(pool);
+    let memory = MemoryDeploymentRepository::new();
+
+    let mut profile = DeploymentProfile::new(create_request(), Utc::now()).unwrap();
+    profile.environment_config.insert(
+        "issuer".into(),
+        json!({"public_jwk":{"kty":"EC","crv":"P-256","d":"secret"}}),
+    );
+    for repository in [&postgres as &dyn DeploymentRepository, &memory] {
+        assert!(matches!(
+            repository.save_profile(profile.clone()).await,
+            Err(DeploymentError::BadRequest(_))
+        ));
+    }
+
+    let mut lane = Lane::new(
+        &profile.id,
+        serde_json::from_value(json!({"name":"Arrival"})).unwrap(),
+        Utc::now(),
+    )
+    .unwrap();
+    lane.metadata
+        .insert("config".into(), json!(r#"{"private_key_pem":"secret"}"#));
+    for repository in [&postgres as &dyn DeploymentRepository, &memory] {
+        assert!(matches!(
+            repository.save_lane(lane.clone()).await,
+            Err(DeploymentError::BadRequest(_))
+        ));
+    }
+
+    profile.environment_config.insert(
+        "issuer".into(),
+        json!({"public_jwk":{"kty":"EC","crv":"P-256","x":"public"},"key_reference":"transit/issuer/1"}),
+    );
+    memory.save_profile(profile).await.unwrap();
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ publish = false
 autotests = false
 
 [dev-dependencies]
+affinidi-messaging-didcomm.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
@@ -21,7 +22,7 @@ hex.workspace = true
 hmac.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
-marty-didcomm = { workspace = true, features = ["did_web"] }
+marty-didcomm = { workspace = true, features = ["did_web", "encrypted-envelope"] }
 marty-flow = { path = "../../services/flow" }
 marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }

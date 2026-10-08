@@ -1,10 +1,11 @@
 use chrono::{Duration, Utc};
 use marty_organization::{
-    catalog::seed_system_roles, migration::migrate_organization_schema,
-    postgres::PostgresOrganizationStore, ApiKey, ApiKeySpec, AuditEvent, AuditEventQuery,
-    ConsoleContextPreference, JoinCode, JoinMechanism, Member, MemberStatus, Organization,
-    OrganizationStatus, OrganizationType, Permission, PolicySet, PolicySetSpec, PolicySetStatus,
-    PolicySetType, Role, ViewMode,
+    catalog::seed_system_roles,
+    migration::migrate_organization_schema,
+    postgres::{PostgresOrganizationStore, RepositoryError},
+    ApiKey, ApiKeySpec, AuditEvent, AuditEventQuery, ConsoleContextPreference, JoinCode,
+    JoinMechanism, Member, MemberStatus, Organization, OrganizationStatus, OrganizationType,
+    Permission, PolicySet, PolicySetSpec, PolicySetStatus, PolicySetType, Role, ViewMode,
 };
 use serde_json::{json, Map};
 use sqlx::postgres::PgPoolOptions;
@@ -60,6 +61,24 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .save_organization(&organization)
         .await
         .expect("organization save must pass");
+    let mut rejected = organization.clone();
+    rejected.settings.insert(
+        "nested".to_owned(),
+        json!({"public_jwk": {"kty": "EC", "d": "opaque"}}),
+    );
+    assert!(matches!(
+        store.save_organization(&rejected).await,
+        Err(RepositoryError::PrivateKeyMaterial)
+    ));
+    assert_eq!(
+        store
+            .organization_by_id(organization_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .settings,
+        organization.settings
+    );
     assert_eq!(
         store
             .organization_by_slug(&organization.slug)
@@ -261,6 +280,19 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .save_audit_event(&event)
         .await
         .expect("audit save must pass");
+    let mut rejected_event = event.clone();
+    rejected_event.id = Uuid::new_v5(&organization_id, b"private-audit-event");
+    rejected_event.metadata = json!({"nested": "{\"kty\":\"EC\",\"d\":\"opaque\"}"});
+    assert!(matches!(
+        store.save_audit_event(&rejected_event).await,
+        Err(RepositoryError::PrivateKeyMaterial)
+    ));
+    rejected_event.metadata = event.metadata.clone();
+    rejected_event.changes = Some(json!({"privateKeyJwk": "opaque"}));
+    assert!(matches!(
+        store.save_audit_event(&rejected_event).await,
+        Err(RepositoryError::PrivateKeyMaterial)
+    ));
     let events = store
         .list_audit_events(
             organization_id,

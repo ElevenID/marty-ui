@@ -114,6 +114,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
     composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4'
+    scoped_kms = (
+        'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
+        'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
+    )
     assert (
         sum(
             line.strip() == 'timed canvas_serial "$mode" ' + preflight
@@ -130,7 +134,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     )
     assert (
         sum(
-            line.strip() == "timed canvas_serial json_consumer " + json_serial
+            line.strip() == "timed canvas_serial json_consumer env " + scoped_kms + json_serial
             for line in script.splitlines()
         )
         == 1
@@ -139,7 +143,9 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests)) ]]"
         in script
     )
-    assert script.count(composition_full + ' >"$composition_log" 2>&1 &') == 1
+    assert script.count(scoped_kms + composition_full + ' >"$composition_log" 2>&1 &') == 1
+    assert script.count('trap cleanup_canvas_kms EXIT') == 1
+    assert script.count('trap cleanup_target_logs EXIT') == 1
     assert (
         script.count(
             'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
@@ -311,12 +317,22 @@ def shell_case(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     doubles = {
-        "python3": f'#!/usr/bin/env bash\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
+        "python3": f'''#!/usr/bin/env bash
+if [[ "${{1:-}}" == */start-canvas-didcomm-openbao.py ]]; then
+  printf 'kms-start|%s\\n' "$1" >> "$TEST_LOG"
+  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"http://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+  exit 0
+fi
+exec "{Path(sys.executable).as_posix()}" "$@"
+''',
         "docker": r"""#!/usr/bin/env bash
 set -euo pipefail
 record=docker
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
+if [[ $# == 3 && "$1" == rm && "$2" == -f && "$3" == canvas-kms-aaaaaaaaaaaa ]]; then
+  exit 0
+fi
 [[ $# == 2 && "$1" == pull ]] || exit 90
 [[ "$TEST_FAILURE" != docker ]] || exit 13
 """,
@@ -324,6 +340,18 @@ printf '%s\n' "$record" >> "$TEST_LOG"
 set -euo pipefail
 printf 'jq|%s\n' "$1" >> "$TEST_LOG"
 if [[ "$1" == -er ]]; then
+  if [[ "$#" == 3 && "$2" == .container && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'canvas-kms-aaaaaaaaaaaa\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .url && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'http://127.0.0.1:8200\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .root_token && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+    exit 0
+  fi
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
   [[ "$TEST_FAILURE" != images ]] || exit 17
   printf '%s\n' "$TEST_POSTGRES_IMAGE" "$TEST_PYTHON_IMAGE"
@@ -907,8 +935,10 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         ]
     )
     assert [call for call in calls if call[0] == "docker"] == [
-        ["docker", "pull", pin] for pin in PINS
+        *[["docker", "pull", pin] for pin in PINS],
+        ["docker", "rm", "-f", "canvas-kms-aaaaaaaaaaaa"],
     ]
+    assert len([call for call in calls if call[0] == "kms-start"]) == 1
 
 
 def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(

@@ -80,17 +80,12 @@ RUNTIME_ENV = {
                         "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
                         "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
                         "MARTY_SCHEMA_STARTUP_MODE": "validate",
-                        "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
-                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY": "",
-                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE": "",
                         "ICAO_DOCUMENT_SIGNER_URL": "",
                         "ICAO_DOCUMENT_SIGNER_API_KEY": "",
                         "ICAO_DOCUMENT_SIGNER_API_KEY_FILE": "",
                         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
                         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
                         "PERSONALIZATION_BUREAU_API_KEY_FILE": "",
-                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "",
-                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE": "",
                         "PASSPORT_TENANT_API_KEYS": "",
                         "PASSPORT_TENANT_API_KEYS_FILE": ""},
     "passport-callback-signer": {"PASSPORT_CALLBACK_SIGNER_ENABLED": "true"},
@@ -402,6 +397,14 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
         env = environment(service)
         require(env.get("SERVICE_NAME") == name.replace("-", "_"),
                 f"Rendered beta service dispatch differs: {name}")
+        if name == "issuance-native":
+            for key in ("PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+                        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+                        "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+                        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE"):
+                require(key not in env,
+                        f"Rendered beta Rust selector differs: {name}.{key}")
         for key, expected in RUNTIME_ENV.get(name, {}).items():
             require(env.get(key) == expected,
                     f"Rendered beta Rust selector differs: {name}.{key}")

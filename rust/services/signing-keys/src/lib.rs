@@ -12,6 +12,8 @@ pub mod integration_secret_envelope;
 pub mod kms;
 pub mod passport_artifact_envelope;
 pub mod passport_callback_hmac;
+mod private_material;
 pub mod profiles;
 pub mod registry;
 pub mod validation;
+pub mod vc_api_holder_proof;

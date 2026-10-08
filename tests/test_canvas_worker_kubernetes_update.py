@@ -220,6 +220,7 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         # cannot reach the operator's installed cluster client.
         "PATH": tmp_path.as_posix(),
         "REPO_ROOT": ROOT.as_posix(),
+        "K8S_DIR": (ROOT / "k8s").as_posix(),
         "PYTHON_BIN": Path(sys.executable).as_posix(),
         "NAMESPACE": NAMESPACE,
         "IMAGE_TAG": "synthetic-tag",
@@ -227,9 +228,10 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         "FIXTURE_JSON": raw,
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
-        # This test isolates the Canvas cutover guard; the native issuance
-        # selection and its image-update guard have separate contract tests.
-        "K8S_ISSUANCE_NATIVE_ENABLED": "false",
+        # Native issuance is mandatory; the isolated guard below supplies a
+        # read-only stub for its separately tested selection check.
+        "K8S_ISSUANCE_NATIVE_ENABLED": "true",
+        "MARTY_SERVICES_IMAGE": "synthetic.invalid/services@sha256:" + "a" * 64,
     }
     assert "MARTY_ISSUANCE_IMAGE" not in env
     catalog = json.loads((ROOT / "deploy-config/catalog/services.json").read_text())
@@ -244,8 +246,16 @@ warn() { :; }
 error() { printf '%s\n' "$*" >&2; exit 1; }
 catalog_services() { printf '%s\n' gateway canvas-sync-worker issuance; }
 command_not_found_handle() { return 91; }
+native_check() {
+  [[ "$1" == check-update && "$2" == --repo-root ]] || return 97
+  local snapshot
+  IFS= read -r snapshot || true
+  [[ "$snapshot" == '{"items":[]}' ]] || return 98
+}
 kubectl() {
   case "$1:$2" in
+    get:deployment/issuance-native)
+      printf '%s' '{"items":[]}' ;;
     get:deployment)
       [[ $# == 8 && "$3" == canvas-sync-worker && "$4" == -n && "$5" == "$NAMESPACE" && "$6" == -o && "$7" == json && "$8" == --request-timeout=10s ]] || return 92
       printf '%s\n' "$PRIVATE_DIAGNOSTIC" >&2
@@ -266,7 +276,7 @@ readonly -f kubectl
 """
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
-        input=prelude + extracted_update() + "\ncmd_update_images\n",
+        input=prelude + extracted_update() + "\nprepare_kubernetes_native_issuance() { K8S_NATIVE_ISSUANCE_BIN=native_check; }\ncmd_update_images\n",
         text=True,
         capture_output=True,
         env=env,
@@ -277,6 +287,10 @@ readonly -f kubectl
     if case == "native":
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == [
+            "WRITE:deployment/signing-keys",
+            "ROLLOUT",
+            "WRITE:deployment/issuance-native",
+            "ROLLOUT",
             "WRITE:deployment/gateway",
             "WRITE:deployment/canvas-sync-worker",
             "WRITE:deployment/ui",

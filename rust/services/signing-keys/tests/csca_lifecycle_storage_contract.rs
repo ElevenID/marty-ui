@@ -26,7 +26,7 @@ fn request(label: &str) -> ImportCscaCertificateRequest {
         _ => panic!("unsupported public CSCA fixture"),
     };
     ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
+        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(cert_pem).unwrap())
             .unwrap(),
         cert_pem: cert_pem.to_string(),
         cert_chain_pem: String::new(),
@@ -97,11 +97,17 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
     let organization_id = format!("rust-csca-http-{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url).await.unwrap();
     let store = CscaLifecycleStore::from_connection(registry.connection());
+    let now = Utc::now();
+    let mut document = store.load(&organization_id, now).await.unwrap();
+    document
+        .import("csca-http-1", request("HTTP CSCA"), now)
+        .unwrap();
+    store.save(&document).await.unwrap();
     let app = marty_signing_keys::http::router_with_dependencies(
         "test-internal-key".to_string(),
         Some(registry.clone()),
         None,
-        Some(store),
+        Some(store.clone()),
         None,
         None,
         None,
@@ -117,11 +123,13 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
     .to_string();
     let certificate_path =
         format!("/internal/documents/{organization_id}/csca-certificates/csca-http-1");
+    let forged_path =
+        format!("/internal/documents/{organization_id}/csca-certificates/csca-http-forged");
 
     let imported = app
         .clone()
         .oneshot(
-            Request::put(&certificate_path)
+            Request::put(&forged_path)
                 .header("content-type", "application/json")
                 .header("x-api-key", "test-internal-key")
                 .body(Body::from(import_body))
@@ -129,7 +137,7 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
         )
         .await
         .unwrap();
-    assert_eq!(imported.status(), StatusCode::OK);
+    assert_eq!(imported.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let listed = app
         .clone()
@@ -173,7 +181,18 @@ async fn redis_backed_http_routes_complete_the_authenticated_lifecycle() {
         )
         .await
         .unwrap();
-    assert_eq!(renewed.status(), StatusCode::OK);
+    assert_eq!(renewed.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let mut document = store.load(&organization_id, now).await.unwrap();
+    document
+        .renew(
+            "csca-http-1",
+            "csca-http-2",
+            request("HTTP CSCA rotated"),
+            false,
+            now,
+        )
+        .unwrap();
+    store.save(&document).await.unwrap();
 
     let expiring = app
         .clone()

@@ -287,6 +287,13 @@ func putJSON(ctx context.Context, storage logical.Storage, path string, value an
 	return storage.Put(ctx, &logical.StorageEntry{Key: path, Value: data})
 }
 
+func requireTransactionalStorage(storage logical.Storage) error {
+	if _, ok := storage.(logical.TransactionalStorage); !ok {
+		return errors.New("key lifecycle requires transactional OpenBao storage")
+	}
+	return nil
+}
+
 func publicResponse(meta *keyMeta, key *keyVersion) *logical.Response {
 	return &logical.Response{Data: map[string]any{
 		"tenant": meta.Tenant, "name": meta.Name,
@@ -309,6 +316,9 @@ func createKey(ctx context.Context, req *logical.Request, d *framework.FieldData
 	kid := d.Get("sender_key_id").(string)
 	if !didOwnsKeyID(did, kid) {
 		return logical.ErrorResponse("sender key ID must belong to sender DID"), logical.ErrInvalidRequest
+	}
+	if err := requireTransactionalStorage(req.Storage); err != nil {
+		return nil, err
 	}
 	rollback, err := logical.StartTxStorage(ctx, req)
 	if err != nil {
@@ -349,6 +359,9 @@ func rotateKey(ctx context.Context, req *logical.Request, d *framework.FieldData
 	tenant, name, err := names(d)
 	if err != nil {
 		return logical.ErrorResponse("invalid key path"), logical.ErrInvalidRequest
+	}
+	if err := requireTransactionalStorage(req.Storage); err != nil {
+		return nil, err
 	}
 	rollback, err := logical.StartTxStorage(ctx, req)
 	if err != nil {

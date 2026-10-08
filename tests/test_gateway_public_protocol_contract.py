@@ -28,7 +28,7 @@ def test_gateway_public_dto_shape_manifest_is_unique_and_versioned() -> None:
 
 
 def test_every_gateway_behavior_vector_has_a_declared_rust_test_owner() -> None:
-    assert len(VECTOR_TEST_OWNERS) == 23
+    assert len(VECTOR_TEST_OWNERS) == 22
     _assert_rust_behavior_vector_test_owners()
 
 

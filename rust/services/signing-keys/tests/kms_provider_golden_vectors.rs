@@ -208,9 +208,11 @@ async fn managed_transit_stub(
             StatusCode::NOT_FOUND,
             r#"{"errors":["no handler for route"]}"#.to_string(),
         ),
-        ("/v1/sys/mounts/transit", 0) | ("/v1/transit/keys/issuer-key", 1) => {
-            (StatusCode::NO_CONTENT, String::new())
-        }
+        ("/v1/transit/keys/issuer-key", 1) => (
+            StatusCode::NOT_FOUND,
+            r#"{"errors":["no handler for route"]}"#.to_string(),
+        ),
+        ("/v1/sys/mounts/transit", 0) => (StatusCode::NO_CONTENT, String::new()),
         ("/v1/transit/sign/issuer-key", 1) => (
             StatusCode::OK,
             r#"{"data":{"signature":"vault:v1:c2lnbmF0dXJl"}}"#.to_string(),
@@ -248,7 +250,7 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
 
     let service_config = serde_json::json!({
         "id": "managed-openbao-transit",
-        "service_type": "custom-transit-compatible",
+        "service_type": "openbao-transit",
         "endpoint": format!("http://{address}"),
         "mount": "transit",
         "auth_mode": "token",
@@ -275,12 +277,9 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
             .iter()
             .map(|request| request.path_query.as_str())
             .collect::<Vec<_>>(),
-        ["/v1/transit/sign/issuer-key", "/v1/transit/keys/issuer-key"]
+        ["/v1/transit/keys/issuer-key", "/v1/transit/keys/issuer-key"]
     );
-    assert!(requests
-        .iter()
-        .all(|request| request.method != "POST"
-            || request.path_query == "/v1/transit/sign/issuer-key"));
+    assert!(requests.iter().all(|request| request.method == "GET"));
     assert!(requests.iter().all(|request| {
         request.headers.get("x-vault-token").map(String::as_str) == Some("service-token")
     }));

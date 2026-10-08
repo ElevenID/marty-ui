@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::SigningKey;
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::Sha256;
 
 use super::issuance_named_peers::{
-    counts, start_peers, PeerState, API_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION, PROFILE,
-    SIGNING_KEY, TEMPLATE, TOKEN,
+    counts, start_peers, PeerState, RemoteIssuerSigner, API_KEY, FORMAT, HOLDER, ISSUER,
+    ORGANIZATION, PROFILE, SIGNING_KEY, TEMPLATE, TOKEN,
 };
+use super::remote_didcomm_sender::RemoteSenderFixture;
 
 use super::renewal_reference_fixture as reference;
 
@@ -122,7 +122,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         Ingress::KubernetesDirect | Ingress::KubernetesGateway
     );
     use super::{
-        didcomm_test_fixtures::authcrypt_parties_with_ids,
+        didcomm_test_fixtures::{document_with_public_and_signing, holder_with_id},
         didcomm_wallet_fixture::WalletFixture,
         issuance_process::{
             bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
@@ -154,10 +154,20 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         } = case_database_keys(authenticated, allow_private_ips);
         let wallet = WalletFixture::start(200);
         let endpoint = format!("{}/inbox", wallet.origin);
-        let (sender, sender_secret, mut recipient, recipient_secret) =
-            authcrypt_parties_with_ids(ISSUER, HOLDER);
-        // Reuse the shared document's distinct, fixed synthetic signing key.
-        let signer = Arc::new(SigningKey::from_bytes(&[11; 32]));
+        let (mut recipient, recipient_secret) = holder_with_id(HOLDER);
+        let remote_sender =
+            RemoteSenderFixture::create(wallet.ca_file.parent().unwrap(), ISSUER, ORGANIZATION)
+                .await;
+        let signer = Arc::new(
+            RemoteIssuerSigner::create(
+                &remote_sender.base_url,
+                &std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap(),
+            )
+            .await,
+        );
+        let signing_x = URL_SAFE_NO_PAD.encode(signer.verifying_key().as_bytes());
+        let sender =
+            document_with_public_and_signing(ISSUER, &remote_sender.public_key, &signing_x);
         let signing_methods: Vec<_> = sender
             .verification_method
             .iter()
@@ -171,11 +181,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .unwrap()
                 .x
                 .as_deref(),
-            Some(
-                URL_SAFE_NO_PAD
-                    .encode(signer.verifying_key().as_bytes())
-                    .as_str()
-            )
+            Some(signing_x.as_str())
         );
         recipient.service.push(
             serde_json::from_value(
@@ -213,7 +219,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "fresh-main-policy.json"
             });
         let encryption = if authenticated {
-            json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(sender_secret)})
+            json!({"mode":"authcrypt","sender_key_ref":remote_sender.reference})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -325,7 +331,6 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                     "ISSUANCE_API_KEY":API_KEY, "GRPC_SERVICE_TOKEN":TOKEN,
                     "SIGNING_KEYS_INTERNAL_API_KEY":SIGNING_KEY,
                     "TOKEN_HMAC_KEY":TOKEN_HMAC_KEY,
-                    "INTEGRATION_SECRET_MASTER_KEY":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                     "PUBLIC_API_URL":"https://issuer.example", "UI_BASE_URL":"http://localhost:3000",
                     "ISSUANCE_OFFER_TTL_MINUTES":"10080", "TOKEN_RATE_LIMIT":"30",
                     "CANVAS_PORTABLE_INTEGRATION_ENABLED":"false", "CANVAS_PILOT_ORGANIZATION_IDS":""
@@ -334,6 +339,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "database_url":database_url, "redis_url":redis_url,
                 "peer_origin":origin, "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
                 "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
+                "kms_url":remote_sender.base_url, "kms_token_file":remote_sender.token_file,
                 "authcrypt":authenticated, "allow_private_ips":allow_private_ips
             });
             // Native-only stage reserves but does not launch the gateway. The
@@ -364,6 +370,8 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", &origin)
                 .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
                 .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)
+                .env("DIDCOMM_KMS_ADDR", &remote_sender.base_url)
+                .env("DIDCOMM_KMS_TOKEN_FILE", &remote_sender.token_file)
                 .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
             command
         };
@@ -520,18 +528,17 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         assert_eq!(captures["messages"].as_array().unwrap().len(), 1);
         let encrypted = captures["messages"][0].as_str().unwrap();
         let plaintext = if authenticated {
-            let envelope = marty_didcomm::decrypt_authenticated_jwe(
+            let envelope = super::didcomm_test_fixtures::holder_decrypt_authcrypt(
                 encrypted,
                 &recipient_secret,
                 &state.recipient,
                 &state.sender,
-            )
-            .unwrap();
+            );
             assert_eq!(envelope.sender_kid, format!("{ISSUER}#key-1"));
             assert_eq!(envelope.recipient_kid, format!("{HOLDER}#key-1"));
             envelope.plaintext
         } else {
-            marty_didcomm::decrypt_jwe(encrypted, &recipient_secret).unwrap()
+            super::didcomm_test_fixtures::holder_decrypt_anoncrypt(encrypted, &recipient_secret)
         };
         let message = marty_didcomm::unpack_didcomm_message(&plaintext).unwrap();
         assert_eq!(message.from.as_deref(), Some(ISSUER));

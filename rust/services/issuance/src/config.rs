@@ -23,7 +23,6 @@ pub struct PassportNativeConfig {
     pub managed_issuer_signing_enabled: bool,
     pub kms_artifacts_enabled: bool,
     pub kms_callbacks_enabled: bool,
-    pub artifact_key: Option<String>,
     pub signer_url: Option<String>,
     pub signer_api_key: Option<String>,
     pub bureau_url: Option<String>,
@@ -31,8 +30,6 @@ pub struct PassportNativeConfig {
     pub bureau_provider_profile_id: Option<String>,
     pub beta_reconciliation_enabled: bool,
     pub beta_reconciliation_operator_token: Option<String>,
-    pub bureau_webhook_secret: Option<String>,
-    pub self_signed_test_enabled: bool,
 }
 
 impl std::fmt::Debug for PassportNativeConfig {
@@ -50,7 +47,6 @@ impl std::fmt::Debug for PassportNativeConfig {
             )
             .field("kms_artifacts_enabled", &self.kms_artifacts_enabled)
             .field("kms_callbacks_enabled", &self.kms_callbacks_enabled)
-            .field("artifact_key_configured", &self.artifact_key.is_some())
             .field("signer_url_configured", &self.signer_url.is_some())
             .field("signer_api_key_configured", &self.signer_api_key.is_some())
             .field("bureau_url_configured", &self.bureau_url.is_some())
@@ -67,11 +63,6 @@ impl std::fmt::Debug for PassportNativeConfig {
                 "beta_reconciliation_operator_token_configured",
                 &self.beta_reconciliation_operator_token.is_some(),
             )
-            .field(
-                "bureau_webhook_secret_configured",
-                &self.bureau_webhook_secret.is_some(),
-            )
-            .field("self_signed_test_enabled", &self.self_signed_test_enabled)
             .finish()
     }
 }
@@ -82,26 +73,11 @@ impl PassportNativeConfig {
         tenant_keys_configured: bool,
     ) -> Result<Self, MmfError> {
         let enabled = environment_flag(values, "PASSPORT_NATIVE_HTTP_ENABLED");
-        let self_signed_test_enabled =
-            environment_flag(values, "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED");
-        if !enabled {
-            return Ok(Self {
-                enabled,
-                internal_service_auth_enabled: false,
-                managed_issuer_signing_enabled: false,
-                kms_artifacts_enabled: false,
-                kms_callbacks_enabled: false,
-                artifact_key: None,
-                signer_url: None,
-                signer_api_key: None,
-                bureau_url: None,
-                bureau_api_key: None,
-                bureau_provider_profile_id: None,
-                beta_reconciliation_enabled: false,
-                beta_reconciliation_operator_token: None,
-                bureau_webhook_secret: None,
-                self_signed_test_enabled,
-            });
+        if environment_flag(values, "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED") {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "self-signed passport signing is forbidden",
+            ));
         }
         let configured = |name: &str| {
             values
@@ -111,16 +87,39 @@ impl PassportNativeConfig {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned)
         };
-        let kms_artifacts_enabled = environment_flag(values, "PASSPORT_KMS_ARTIFACTS_ENABLED");
-        if kms_artifacts_enabled
-            && (configured("PHYSICAL_DOCUMENT_ARTIFACT_KEY").is_some()
-                || configured("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE").is_some())
+        if values.contains_key("PHYSICAL_DOCUMENT_ARTIFACT_KEY")
+            || values.contains_key("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE")
         {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "KMS passport artifact mode cannot be combined with PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+                "local passport artifact-key configuration is forbidden",
             ));
         }
+        if values.contains_key("PERSONALIZATION_BUREAU_WEBHOOK_SECRET")
+            || values.contains_key("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "local passport callback-secret configuration is forbidden",
+            ));
+        }
+        if !enabled {
+            return Ok(Self {
+                enabled,
+                internal_service_auth_enabled: false,
+                managed_issuer_signing_enabled: false,
+                kms_artifacts_enabled: false,
+                kms_callbacks_enabled: false,
+                signer_url: None,
+                signer_api_key: None,
+                bureau_url: None,
+                bureau_api_key: None,
+                bureau_provider_profile_id: None,
+                beta_reconciliation_enabled: false,
+                beta_reconciliation_operator_token: None,
+            });
+        }
+        let kms_artifacts_enabled = environment_flag(values, "PASSPORT_KMS_ARTIFACTS_ENABLED");
         let kms_callbacks_enabled = environment_flag(values, "PASSPORT_KMS_CALLBACKS_ENABLED");
         let bureau_provider_profile_id = configured("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID");
         let bureau_url = configured("PERSONALIZATION_BUREAU_URL");
@@ -156,15 +155,6 @@ impl PassportNativeConfig {
                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID exceeds 128 bytes",
             ));
         }
-        if kms_callbacks_enabled
-            && (configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET").is_some()
-                || configured("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE").is_some())
-        {
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "KMS passport callback mode cannot be combined with PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-            ));
-        }
         if kms_callbacks_enabled && bureau_url.is_some() && bureau_provider_profile_id.is_none() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
@@ -183,7 +173,6 @@ impl PassportNativeConfig {
             ),
             kms_artifacts_enabled,
             kms_callbacks_enabled,
-            artifact_key: secret_value(values, "PHYSICAL_DOCUMENT_ARTIFACT_KEY")?,
             signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
             signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
             bureau_url,
@@ -191,8 +180,6 @@ impl PassportNativeConfig {
             bureau_provider_profile_id,
             beta_reconciliation_enabled,
             beta_reconciliation_operator_token,
-            bureau_webhook_secret: secret_value(values, "PERSONALIZATION_BUREAU_WEBHOOK_SECRET")?,
-            self_signed_test_enabled,
         };
         let production = values
             .get("ENVIRONMENT")
@@ -216,19 +203,10 @@ impl PassportNativeConfig {
                 "beta passport bureau simulator cannot be selected as a production provider",
             ));
         }
-        if config.managed_issuer_signing_enabled
-            && (config.signer_url.is_some() || config.self_signed_test_enabled)
-        {
+        if config.managed_issuer_signing_enabled && config.signer_url.is_some() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "managed passport issuer signing cannot be combined with remote or self-signed signing",
-            ));
-        }
-        if config.self_signed_test_enabled && config.signer_url.is_none() {
-            #[cfg(not(feature = "passport-self-signed-test"))]
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "self-signed passport test mode requires the passport-self-signed-test build feature",
+                "managed passport issuer signing cannot be combined with an external signer",
             ));
         }
         // Tenant authentication is mandatory even for the diagnostic capability
@@ -584,9 +562,9 @@ impl IssuanceServiceConfig {
                 "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY is required for integration secrets",
             ));
         }
-        validate_production_grpc_service_token(
+        validate_grpc_service_token(
             config.internal_service_token.as_deref(),
-            &std::env::var("ENVIRONMENT").unwrap_or_else(|_| "development".to_owned()),
+            config.grpc_enabled,
         )?;
         Ok(config)
     }
@@ -1539,19 +1517,14 @@ fn secret_value(values: &BTreeMap<String, String>, name: &str) -> Result<Option<
     Ok(Some(value.to_owned()))
 }
 
-fn validate_production_grpc_service_token(
-    token: Option<&str>,
-    environment: &str,
-) -> Result<(), MmfError> {
-    if ["development", "dev", "local", "test"]
-        .contains(&environment.trim().to_ascii_lowercase().as_str())
-    {
+fn validate_grpc_service_token(token: Option<&str>, grpc_enabled: bool) -> Result<(), MmfError> {
+    if !grpc_enabled {
         return Ok(());
     }
     let token = token.ok_or_else(|| {
         MmfError::new(
             ErrorCode::Configuration,
-            "GRPC_SERVICE_TOKEN is required outside development environments",
+            "GRPC_SERVICE_TOKEN is required when gRPC is enabled",
         )
     })?;
     let normalized = token.to_ascii_lowercase();
@@ -1567,13 +1540,13 @@ fn validate_production_grpc_service_token(
     {
         return Err(MmfError::new(
             ErrorCode::Configuration,
-            "GRPC_SERVICE_TOKEN must not be a placeholder in production",
+            "GRPC_SERVICE_TOKEN must not be a placeholder",
         ));
     }
     if token.chars().count() < 32 {
         return Err(MmfError::new(
             ErrorCode::Configuration,
-            "GRPC_SERVICE_TOKEN must contain at least 32 characters in production",
+            "GRPC_SERVICE_TOKEN must contain at least 32 characters",
         ));
     }
     Ok(())
@@ -1584,9 +1557,7 @@ mod tests {
     use crate::canvas_network_timeout::CanvasNetworkTimeout;
     use mmf_core::ErrorCode;
 
-    use super::{
-        validate_production_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig,
-    };
+    use super::{validate_grpc_service_token, IssuanceServiceConfig, PassportNativeConfig};
 
     #[test]
     fn production_passport_refuses_beta_simulator_without_qualifying_an_external_provider() {
@@ -1771,13 +1742,14 @@ mod tests {
         assert!(!config.passport_native.managed_issuer_signing_enabled);
         assert!(!config.passport_native.kms_artifacts_enabled);
         assert!(!config.passport_native.kms_callbacks_enabled);
-        assert!(config.passport_native.artifact_key.is_none());
-        let disabled = IssuanceServiceConfig::from_values(values(&[(
+        let forbidden = IssuanceServiceConfig::from_values(values(&[(
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
             "nonexistent-passport-key-file",
         )]))
-        .unwrap();
-        assert!(!disabled.passport_native.enabled);
+        .unwrap_err();
+        assert!(forbidden
+            .to_string()
+            .contains("local passport artifact-key configuration is forbidden"));
 
         let error =
             IssuanceServiceConfig::from_values(values(&[("PASSPORT_NATIVE_HTTP_ENABLED", "true")]))
@@ -1786,14 +1758,13 @@ mod tests {
         assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
 
         let secret = "a".repeat(32);
-        let fernet_key = fernet::Fernet::generate_key();
         let complete = values(&[
             ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
+            ("PASSPORT_KMS_ARTIFACTS_ENABLED", "true"),
             (
                 "PASSPORT_TENANT_API_KEYS",
                 &format!("{{\"org-a\":\"{secret}\"}}"),
             ),
-            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", &fernet_key),
             ("ICAO_DOCUMENT_SIGNER_URL", "https://signer.example.test"),
             ("ICAO_DOCUMENT_SIGNER_API_KEY", "signer-secret"),
             ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
@@ -1802,7 +1773,6 @@ mod tests {
                 "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
                 "provider-reference",
             ),
-            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "webhook-secret"),
         ]);
         let config = IssuanceServiceConfig::from_values(complete.clone()).unwrap();
         assert!(config.passport_native.enabled);
@@ -1811,17 +1781,11 @@ mod tests {
             Some("provider-reference")
         );
         let debug = format!("{config:?}");
-        for secret in [
-            &secret[..],
-            &fernet_key,
-            "signer-secret",
-            "bureau-secret",
-            "webhook-secret",
-        ] {
+        for secret in [&secret[..], "signer-secret", "bureau-secret"] {
             assert!(!debug.contains(secret));
         }
         for name in [
-            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+            "PASSPORT_KMS_ARTIFACTS_ENABLED",
             "ICAO_DOCUMENT_SIGNER_URL",
             "PERSONALIZATION_BUREAU_URL",
         ] {
@@ -1839,7 +1803,6 @@ mod tests {
                 ![
                     "ICAO_DOCUMENT_SIGNER_API_KEY",
                     "PERSONALIZATION_BUREAU_API_KEY",
-                    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
                 ]
                 .contains(&name.as_str())
             })
@@ -1848,7 +1811,6 @@ mod tests {
         assert!(anonymous.passport_native.enabled);
         assert!(anonymous.passport_native.signer_api_key.is_none());
         assert!(anonymous.passport_native.bureau_api_key.is_none());
-        assert!(anonymous.passport_native.bureau_webhook_secret.is_none());
 
         let too_long = IssuanceServiceConfig::from_values(values(&[
             ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
@@ -2004,20 +1966,25 @@ mod tests {
         ]);
         let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
         assert!(config.passport_native.kms_artifacts_enabled);
-        assert!(config.passport_native.artifact_key.is_none());
         for (name, value) in [
             ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", "must-never-enter-process"),
+            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY", ""),
             (
                 "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
                 "nonexistent-passport-key-file",
             ),
+            ("PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", ""),
         ] {
             let mut conflicting = values.clone();
             conflicting.push((name.into(), value.into()));
             let error = IssuanceServiceConfig::from_values(conflicting).unwrap_err();
             assert_eq!(error.code, ErrorCode::Configuration);
-            assert!(error.to_string().contains("cannot be combined"));
-            assert!(!error.to_string().contains(value));
+            assert!(error
+                .to_string()
+                .contains("artifact-key configuration is forbidden"));
+            if !value.is_empty() {
+                assert!(!error.to_string().contains(value));
+            }
         }
     }
 
@@ -2031,20 +1998,38 @@ mod tests {
         ]);
         let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
         assert!(config.passport_native.kms_callbacks_enabled);
-        assert!(config.passport_native.bureau_webhook_secret.is_none());
         for (name, value) in [
             ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", "must-never-load"),
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET", ""),
             (
                 "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
                 "nonexistent-webhook-key-file",
             ),
+            ("PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE", ""),
         ] {
             let mut conflicting = values.clone();
             conflicting.push((name.into(), value.into()));
             let error = IssuanceServiceConfig::from_values(conflicting).unwrap_err();
             assert_eq!(error.code, ErrorCode::Configuration);
-            assert!(error.to_string().contains("cannot be combined"));
-            assert!(!error.to_string().contains(value));
+            assert!(error
+                .to_string()
+                .contains("callback-secret configuration is forbidden"));
+            if !value.is_empty() {
+                assert!(!error.to_string().contains(value));
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_passport_rejects_retired_local_key_selectors() {
+        for name in [
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
+        ] {
+            let error = IssuanceServiceConfig::from_values(values(&[(name, "")])).unwrap_err();
+            assert_eq!(error.code, ErrorCode::Configuration, "{name}");
         }
     }
 
@@ -2056,10 +2041,9 @@ mod tests {
         ]))
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::Configuration);
-        #[cfg(not(feature = "passport-self-signed-test"))]
-        assert!(error.to_string().contains("passport-self-signed-test"));
-        #[cfg(feature = "passport-self-signed-test")]
-        assert!(error.to_string().contains("PASSPORT_TENANT_API_KEYS"));
+        assert!(error
+            .to_string()
+            .contains("self-signed passport signing is forbidden"));
     }
 
     #[test]
@@ -2650,7 +2634,7 @@ mod tests {
     }
 
     #[test]
-    fn grpc_service_token_configuration_preserves_the_fail_closed_python_boundary() {
+    fn grpc_service_token_configuration_fails_closed_when_listener_enabled() {
         let conflict = IssuanceServiceConfig::from_values(values(&[
             ("GRPC_SERVICE_TOKEN", "direct-token"),
             ("GRPC_SERVICE_TOKEN_FILE", "mounted-token"),
@@ -2663,18 +2647,24 @@ mod tests {
             "too-short",
         ] {
             assert_eq!(
-                validate_production_grpc_service_token(Some(token), "production")
-                    .expect_err("weak production service token")
+                validate_grpc_service_token(Some(token), true)
+                    .expect_err("weak service token")
                     .code,
                 ErrorCode::Configuration
             );
         }
-        assert!(validate_production_grpc_service_token(
+        assert!(validate_grpc_service_token(
             Some("production-service-token-with-at-least-32-bytes"),
-            "production"
+            true
         )
         .is_ok());
-        assert!(validate_production_grpc_service_token(None, "test").is_ok());
+        assert_eq!(
+            validate_grpc_service_token(None, true)
+                .expect_err("enabled gRPC requires a service token")
+                .code,
+            ErrorCode::Configuration
+        );
+        assert!(validate_grpc_service_token(None, false).is_ok());
     }
 
     #[test]

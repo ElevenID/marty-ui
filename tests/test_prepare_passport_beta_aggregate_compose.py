@@ -242,6 +242,9 @@ def test_rendered_compose_rejects_external_provider_profile():
     ("issuance-native", "PERSONALIZATION_BUREAU_URL", "https://external.example"),
     ("issuance-native", "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID", "external"),
     ("issuance-native", "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", "/run/old-key"),
+    ("issuance-native", "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false"),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET", ""),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE", ""),
 ])
 def test_rendered_compose_rejects_external_or_legacy_passport_binding(service, key, value):
     handoff, intent, rendered, ui = candidate()

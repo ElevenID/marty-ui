@@ -16,9 +16,12 @@ use axum::{
     response::{IntoResponse, Response},
     Json, Router,
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine,
+};
 use bytes::Bytes;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::VerifyingKey;
 use http_body_util::StreamBody;
 use hyper::body::Frame;
 use marty_didcomm::DidDocument;
@@ -45,11 +48,146 @@ pub(super) const CANVAS_CLIENT_KEY: &str = "synthetic-base-canvas-client-key";
 pub(super) const FOREIGN_CLIENT_KEY: &str = "synthetic-base-foreign-client-key";
 
 #[derive(Clone)]
+pub(super) struct RemoteIssuerSigner {
+    client: reqwest::Client,
+    base_url: String,
+    token: String,
+    key_name: String,
+    verifying_key: VerifyingKey,
+}
+
+impl RemoteIssuerSigner {
+    pub(super) async fn create(base_url: &str, root_token: &str) -> Self {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let key_name = format!("canvas_issuer_{}", uuid::Uuid::new_v4().simple());
+        client
+            .post(format!("{base_url}/v1/transit/keys/{key_name}"))
+            .header("X-Vault-Token", root_token)
+            .json(&json!({"type":"ed25519","exportable":false,"allow_plaintext_backup":false}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let metadata: Value = client
+            .get(format!("{base_url}/v1/transit/keys/{key_name}"))
+            .header("X-Vault-Token", root_token)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(metadata["data"]["type"], "ed25519");
+        assert_eq!(metadata["data"]["exportable"], false);
+        assert_eq!(metadata["data"]["allow_plaintext_backup"], false);
+        let version = metadata["data"]["latest_version"]
+            .as_u64()
+            .unwrap()
+            .to_string();
+        let public_key = metadata["data"]["keys"][&version]["public_key"]
+            .as_str()
+            .unwrap();
+        let public_bytes: [u8; 32] = STANDARD.decode(public_key).unwrap().try_into().unwrap();
+        let verifying_key = VerifyingKey::from_bytes(&public_bytes).unwrap();
+
+        let policy_name = format!("canvas-issuer-{}", uuid::Uuid::new_v4().simple());
+        client
+            .put(format!("{base_url}/v1/sys/policies/acl/{policy_name}"))
+            .header("X-Vault-Token", root_token)
+            .json(&json!({"policy":format!("path \"transit/sign/{key_name}\" {{ capabilities = [\"update\"] }}")}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let issued: Value = client
+            .post(format!("{base_url}/v1/auth/token/create"))
+            .header("X-Vault-Token", root_token)
+            .json(&json!({"policies":[policy_name],"no_default_policy":true,"ttl":"1h"}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let token = issued["auth"]["client_token"].as_str().unwrap().to_owned();
+        Self {
+            client,
+            base_url: base_url.to_owned(),
+            token,
+            key_name,
+            verifying_key,
+        }
+    }
+
+    pub(super) fn verifying_key(&self) -> &VerifyingKey {
+        &self.verifying_key
+    }
+
+    pub(super) async fn sign(&self, payload: &[u8]) -> Vec<u8> {
+        let response: Value = self
+            .client
+            .post(format!(
+                "{}/v1/transit/sign/{}",
+                self.base_url, self.key_name
+            ))
+            .header("X-Vault-Token", &self.token)
+            .json(&json!({"input":STANDARD.encode(payload),"prehashed":false}))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let signature = response["data"]["signature"].as_str().unwrap();
+        let (prefix, encoded) = signature.rsplit_once(':').unwrap();
+        assert!(prefix.starts_with("vault:v"));
+        let bytes = STANDARD.decode(encoded).unwrap();
+        assert_eq!(bytes.len(), 64);
+        bytes
+    }
+}
+
+#[cfg(test)]
+mod kms_tests {
+    use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires the disposable Canvas OpenBao Transit backend"]
+    async fn scoped_transit_signer_verifies_without_key_read_authority() {
+        let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
+        let root_token = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
+        let signer = RemoteIssuerSigner::create(&base_url, &root_token).await;
+        let payload = b"canvas managed issuer signing proof";
+        let signature = ed25519_dalek::Signature::from_slice(&signer.sign(payload).await).unwrap();
+        signer
+            .verifying_key()
+            .verify_strict(payload, &signature)
+            .unwrap();
+        let metadata = signer
+            .client
+            .get(format!("{base_url}/v1/transit/keys/{}", signer.key_name))
+            .header("X-Vault-Token", &signer.token)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(metadata.status(), StatusCode::FORBIDDEN);
+    }
+}
+
+#[derive(Clone)]
 pub(super) struct PeerState {
     pub(super) source_id: String,
     pub(super) sender: DidDocument,
     pub(super) recipient: DidDocument,
-    pub(super) signer: Arc<SigningKey>,
+    pub(super) signer: Arc<RemoteIssuerSigner>,
     // Record before decoding or validation so failed requests cannot disappear.
     pub(super) attempts: Arc<Mutex<Vec<String>>>,
     pub(super) accepted: Arc<Mutex<Vec<String>>>,
@@ -305,11 +443,11 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
             let payload = URL_SAFE_NO_PAD
                 .decode(body["payload_b64"].as_str().unwrap())
                 .unwrap();
-            let signature = state.signer.sign(&payload);
+            let signature = state.signer.sign(&payload).await;
             state.signed.lock().unwrap().push(payload);
             Json(json!({"ok":true,"issuer_did":ISSUER,"algorithm":"EdDSA",
                 "verification_method_id":format!("{ISSUER}#signing-1"),
-                "signature_b64":URL_SAFE_NO_PAD.encode(signature.to_bytes())}))
+                "signature_b64":URL_SAFE_NO_PAD.encode(signature)}))
             .into_response()
         }
         "/internal/revocation-profiles/didcomm-status/reserve-index" => {
@@ -342,7 +480,13 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
 }
 
 pub(super) async fn start_peers(state: PeerState) -> OwnedHttp {
-    OwnedHttp::start(Router::new().fallback(peer).with_state(state)).await
+    OwnedHttp::start(
+        Router::new()
+            .fallback(peer)
+            .with_state(state)
+            .merge(super::issuance_process::remote_integration_secret::router_for(SIGNING_KEY)),
+    )
+    .await
 }
 
 pub(super) fn counts(values: &[String]) -> BTreeMap<&str, usize> {

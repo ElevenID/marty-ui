@@ -624,10 +624,20 @@ pub(super) async fn run_private_ip_refusal(pool: &PgPool) {
 
         let policy_dir = tempfile::tempdir().unwrap();
         let policy = policy_dir.path().join("didcomm-policy.json");
-        let (_, sender_secret, _, _) =
-            super::super::didcomm_test_fixtures::authcrypt_parties_with_ids(ISSUER, HOLDER);
+        let remote_sender = if authenticated {
+            Some(
+                super::super::remote_didcomm_sender::RemoteSenderFixture::create(
+                    policy_dir.path(),
+                    ISSUER,
+                    ORGANIZATION,
+                )
+                .await,
+            )
+        } else {
+            None
+        };
         let mode_policy = if authenticated {
-            json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(sender_secret)})
+            json!({"mode":"authcrypt","sender_key_ref":remote_sender.as_ref().unwrap().reference})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -663,11 +673,15 @@ pub(super) async fn run_private_ip_refusal(pool: &PgPool) {
                     issuer_resolver: issuer.clone(),
                     builder: builder.clone(),
                     lifecycle: Arc::new(lifecycle),
-                    envelope: Arc::new(NativeDidcommEnvelope::new(
-                        None,
-                        None,
-                        Some(policy.to_str().unwrap()),
-                    )),
+                    envelope: Arc::new({
+                        let envelope =
+                            NativeDidcommEnvelope::new(None, None, Some(policy.to_str().unwrap()));
+                        if let Some(sender) = &remote_sender {
+                            envelope.with_remote_kms(sender.client())
+                        } else {
+                            envelope
+                        }
+                    }),
                     endpoints: Arc::new(DidcommEndpointValidator::new(false)),
                     transport: transport.clone(),
                 },

@@ -29,10 +29,17 @@ aws-config.workspace = true
 aws-sdk-kms.workspace = true
 aws-smithy-http-client.workspace = true
 base64.workspace = true
+bs58 = "0.4"
 chrono.workspace = true
 const-oid.workspace = true
 der.workspace = true
+hex.workspace = true
 marty-crypto = { workspace = true, features = ["x509"] }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-oid4vci = { workspace = true, features = ["issuer"] }
+marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
+marty-passport-auth = { path = "../../crates/passport-auth" }
+p256.workspace = true
 percent-encoding.workspace = true
 regex.workspace = true
 reqwest = { workspace = true, features = ["query"] }
@@ -52,5 +59,6 @@ x509-cert.workspace = true
 
 [dev-dependencies]
 http.workspace = true
-marty-verification = { workspace = true, features = ["authority-issuance"] }
+marty-verification.workspace = true
+tempfile.workspace = true
 tower.workspace = true

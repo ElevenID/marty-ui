@@ -51,9 +51,7 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
         selfhost_flow["PASSPORT_NATIVE_FLOW_ENABLED"]
         == "${PASSPORT_NATIVE_FLOW_ENABLED:-false}"
     )
-    assert selfhost_flow["ISSUANCE_NATIVE_SERVICE_URL"] == (
-        "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
-    )
+    assert selfhost_flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     assert (
         selfhost_gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     )
@@ -91,16 +89,15 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
         for key in (
             "PASSPORT_TENANT_API_KEYS",
             "PASSPORT_TENANT_API_KEYS_FILE",
-            "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
             "ICAO_DOCUMENT_SIGNER_URL",
             "ICAO_DOCUMENT_SIGNER_API_KEY",
-            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
             "PERSONALIZATION_BUREAU_URL",
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
             "PERSONALIZATION_BUREAU_API_KEY",
-            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
         ):
             assert key in native
+        assert "PHYSICAL_DOCUMENT_ARTIFACT_KEY" not in native
+        assert "PERSONALIZATION_BUREAU_WEBHOOK_SECRET" not in native
         assert (
             native["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"]
             == "${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}"
@@ -110,14 +107,8 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
             native["PASSPORT_TENANT_API_KEYS_FILE"]
             == flow["PASSPORT_TENANT_API_KEYS_FILE"]
         )
-    assert (
-        development["PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED"]
-        == "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}"
-    )
-    assert (
-        beta["PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED"]
-        == "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}"
-    )
+    assert "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" not in development
+    assert "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" not in beta
 
 
 def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
@@ -165,7 +156,7 @@ def test_gateway_stays_legacy_until_tenant_key_boundary_is_qualified() -> None:
     assert contract["gateway_cutover"]["current_owner"] == "issuance"
 
 
-def test_self_signed_test_image_is_explicit_opt_in() -> None:
+def test_self_signed_test_image_and_local_signer_are_retired() -> None:
     dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
     build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
         encoding="utf-8"
@@ -176,23 +167,8 @@ def test_self_signed_test_image_is_explicit_opt_in() -> None:
             encoding="utf-8"
         )
     )
-    assert "ARG PASSPORT_SELF_SIGNED_TEST=false" in dockerfile
-    assert (
-        "false) run-public-rust-build build-rust-service-binaries default ;;"
-        in dockerfile
-    )
-    assert (
-        "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
-        in dockerfile
-    )
-    assert (
-        "set -- --features marty-issuance-service/passport-self-signed-test"
-        in build_script
-    )
-    assert "PASSPORT_SELF_SIGNED_TEST must be true or false" in dockerfile
-    assert "Verify opt-in passport test-mode image boundary" in workflow
-    assert "PASSPORT_SELF_SIGNED_TEST=true" in workflow
-    assert (
-        "PASSPORT_SELF_SIGNED_TEST=true"
-        in contract["self_signed_test_signer"]["packaged_image_build_arg"]
-    )
+    assert "PASSPORT_SELF_SIGNED_TEST" not in dockerfile
+    assert "passport-self-signed-test" not in build_script
+    assert "Build opt-in passport test-mode image" not in workflow
+    assert "self-signed passport signing is forbidden" in workflow
+    assert "retired" in contract["self_signed_test_signer"]["native_status"]

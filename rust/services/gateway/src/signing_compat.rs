@@ -4,8 +4,6 @@ use mmf_platform::HttpMethod;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SigningCompatibilityOperation {
-    FlowEnvelopeUnwrap,
-    FlowEnvelopeWrap,
     IntegrationSecretEncrypt,
     IntegrationSecretDecrypt,
     IssuerContext,
@@ -30,12 +28,6 @@ pub enum SigningCompatibilityOperation {
 pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityOperation> {
     let relative = path.strip_prefix("/internal/signing-keys/")?;
     match (method, relative) {
-        (HttpMethod::Post, "flow-key-envelopes/unwrap") => {
-            Some(SigningCompatibilityOperation::FlowEnvelopeUnwrap)
-        }
-        (HttpMethod::Post, "flow-key-envelopes/wrap") => {
-            Some(SigningCompatibilityOperation::FlowEnvelopeWrap)
-        }
         (HttpMethod::Post, "integration-secrets/encrypt") => {
             Some(SigningCompatibilityOperation::IntegrationSecretEncrypt)
         }
@@ -149,7 +141,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 20);
+        assert_eq!(contract.routes.len(), 18);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -159,8 +151,6 @@ mod tests {
 
     fn operation_name(operation: &SigningCompatibilityOperation) -> &'static str {
         match operation {
-            SigningCompatibilityOperation::FlowEnvelopeUnwrap => "flow_envelope_unwrap",
-            SigningCompatibilityOperation::FlowEnvelopeWrap => "flow_envelope_wrap",
             SigningCompatibilityOperation::IntegrationSecretEncrypt => "integration_secret_encrypt",
             SigningCompatibilityOperation::IntegrationSecretDecrypt => "integration_secret_decrypt",
             SigningCompatibilityOperation::IssuerContext => "issuer_context",

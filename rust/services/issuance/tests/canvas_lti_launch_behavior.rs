@@ -11,7 +11,6 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, TimeZone, Utc};
-use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 use marty_issuance_service::{
     canvas_lti_launch::{
         canvas_lti_experience_handoff, feature_enabled, launch_scope,
@@ -42,6 +41,7 @@ use marty_issuance_service::{
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_oid4vci::lti::VerifiedLtiLaunch;
 use serde_json::{json, Value};
+use sha2::Digest;
 use tower::ServiceExt;
 
 #[derive(Default)]
@@ -222,19 +222,37 @@ fn contract() -> Value {
     .expect("valid Canvas LTI contract")
 }
 
-fn lti_jwk(kid: &str, verifying_key: &VerifyingKey) -> Value {
+fn lti_jwk(kid: &str, public_x: &str) -> Value {
     json!({
         "kty": "OKP",
         "crv": "Ed25519",
         "kid": kid,
         "alg": "EdDSA",
         "use": "sig",
-        "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
+        "x": public_x,
     })
 }
 
-fn lti_token(kid: &str, key_byte: u8) -> (String, Value) {
-    let signing_key = SigningKey::from_bytes(&[key_byte; 32]);
+fn public_lti_token(kind: &str, kid: &str, vector_id: u8, input: &str) -> (String, Value) {
+    let vectors: Value = serde_json::from_str(include_str!("fixtures/canvas_lti_public_jwt.json"))
+        .expect("public LTI JWT vectors");
+    let vector = vectors
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|vector| vector["kind"] == kind && vector["kid"] == kid && vector["id"] == vector_id)
+        .expect("registered public LTI JWT vector");
+    assert_eq!(
+        hex::encode(sha2::Sha256::digest(input.as_bytes())),
+        vector["signing_input_sha256"]
+    );
+    (
+        format!("{input}.{}", vector["signature_b64"].as_str().unwrap()),
+        lti_jwk(kid, vector["public_x"].as_str().unwrap()),
+    )
+}
+
+fn lti_token(kid: &str, vector_id: u8) -> (String, Value) {
     let claims = json!({
         "iss": "https://canvas.instructure.com",
         "sub": "opaque-subject",
@@ -249,12 +267,7 @@ fn lti_token(kid: &str, key_byte: u8) -> (String, Value) {
     let header = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
     let claims = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
     let signing_input = format!("{header}.{claims}");
-    let signature = signing_key.sign(signing_input.as_bytes());
-    let token = format!(
-        "{signing_input}.{}",
-        URL_SAFE_NO_PAD.encode(signature.to_bytes())
-    );
-    (token, lti_jwk(kid, &signing_key.verifying_key()))
+    public_lti_token("launch", kid, vector_id, &signing_input)
 }
 
 fn platform_from(value: &Value) -> CanvasLtiPlatform {
@@ -613,8 +626,7 @@ fn experience_handoff_replays_the_complete_frozen_mip_vector() {
     );
 }
 
-fn orchestration_token(kid: &str, key_byte: u8) -> (String, Value) {
-    let signing_key = SigningKey::from_bytes(&[key_byte; 32]);
+fn orchestration_token(kid: &str, vector_id: u8) -> (String, Value) {
     let claims = json!({
         "iss": "https://canvas.instructure.com",
         "sub": "opaque-subject",
@@ -644,14 +656,7 @@ fn orchestration_token(kid: &str, key_byte: u8) -> (String, Value) {
     let header = URL_SAFE_NO_PAD.encode(header.to_string().as_bytes());
     let claims = URL_SAFE_NO_PAD.encode(claims.to_string().as_bytes());
     let signing_input = format!("{header}.{claims}");
-    let signature = signing_key.sign(signing_input.as_bytes());
-    (
-        format!(
-            "{signing_input}.{}",
-            URL_SAFE_NO_PAD.encode(signature.to_bytes())
-        ),
-        lti_jwk(kid, &signing_key.verifying_key()),
-    )
+    public_lti_token("orchestration", kid, vector_id, &signing_input)
 }
 
 fn orchestration_binding(platform: &CanvasLtiPlatform) -> CanvasLtiProgramBinding {

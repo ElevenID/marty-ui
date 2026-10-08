@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use marty_verification::device_auth::{
-    evaluate_device_key_eligibility, DeviceChallengeRecord, DeviceKeyEligibilityRequest,
-    DeviceKeyRecord, DeviceKeyState, MAX_KEY_VERSION, MAX_ROTATION_GRACE_SECONDS,
+    evaluate_device_key_eligibility, validate_device_public_key, DeviceChallengeRecord,
+    DeviceKeyEligibilityRequest, DeviceKeyRecord, DeviceKeyState, MAX_KEY_VERSION,
+    MAX_ROTATION_GRACE_SECONDS,
 };
 use sqlx::{postgres::PgRow, PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -24,6 +25,27 @@ fn persistence(error: sqlx::Error) -> DeviceError {
     DeviceError::Persistence(error.to_string())
 }
 
+fn reject_private_preferences(value: &serde_json::Value) -> Result<(), DeviceError> {
+    if marty_key_material_policy::contains_private_key(value) {
+        return Err(DeviceError::BadRequest(
+            "device preferences cannot contain private key material".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_public_projection(der: Option<&str>, kid: Option<&str>) -> Result<(), DeviceError> {
+    match (der, kid) {
+        (None, None) => Ok(()),
+        (Some(der), Some(kid)) => validate_device_public_key(der, kid)
+            .map(|_| ())
+            .map_err(|_| DeviceError::BadRequest("device public key is invalid".into())),
+        _ => Err(DeviceError::BadRequest(
+            "device public key and identifier must be supplied together".into(),
+        )),
+    }
+}
+
 fn registration(row: &PgRow) -> Result<DeviceRegistration, DeviceError> {
     let platform = match row
         .try_get::<String, _>("platform")
@@ -39,9 +61,17 @@ fn registration(row: &PgRow) -> Result<DeviceRegistration, DeviceError> {
             )))
         }
     };
-    let preferences = serde_json::from_value(row.try_get("preferences").map_err(persistence)?)
+    let preferences_json: serde_json::Value = row.try_get("preferences").map_err(persistence)?;
+    reject_private_preferences(&preferences_json).map_err(|_| {
+        DeviceError::Persistence("stored device preferences contain private key material".into())
+    })?;
+    let preferences = serde_json::from_value(preferences_json)
         .map_err(|error| DeviceError::Persistence(error.to_string()))?;
     let version: Option<i64> = row.try_get("key_version").map_err(persistence)?;
+    let public_key_der: Option<String> = row.try_get("public_key_der").map_err(persistence)?;
+    let public_key_kid: Option<String> = row.try_get("public_key_kid").map_err(persistence)?;
+    validate_public_projection(public_key_der.as_deref(), public_key_kid.as_deref())
+        .map_err(|_| DeviceError::Persistence("stored device public key is invalid".into()))?;
     Ok(DeviceRegistration {
         id: row.try_get("id").map_err(persistence)?,
         user_id: row.try_get("user_id").map_err(persistence)?,
@@ -53,8 +83,8 @@ fn registration(row: &PgRow) -> Result<DeviceRegistration, DeviceError> {
         os_version: row.try_get("os_version").map_err(persistence)?,
         device_model: row.try_get("device_model").map_err(persistence)?,
         preferences,
-        public_key_der: row.try_get("public_key_der").map_err(persistence)?,
-        public_key_kid: row.try_get("public_key_kid").map_err(persistence)?,
+        public_key_der,
+        public_key_kid,
         key_valid_from: row.try_get("key_valid_from").map_err(persistence)?,
         key_valid_until: row.try_get("key_valid_until").map_err(persistence)?,
         key_version: version.map(|value| value as u64),
@@ -66,6 +96,10 @@ fn registration(row: &PgRow) -> Result<DeviceRegistration, DeviceError> {
 }
 
 fn key(row: &PgRow) -> Result<DeviceKeyRecord, DeviceError> {
+    let public_key_der: String = row.try_get("public_key_der").map_err(persistence)?;
+    let public_key_kid: String = row.try_get("public_key_kid").map_err(persistence)?;
+    validate_public_projection(Some(&public_key_der), Some(&public_key_kid))
+        .map_err(|_| DeviceError::Persistence("stored device public key is invalid".into()))?;
     let state = match row
         .try_get::<String, _>("state")
         .map_err(persistence)?
@@ -94,8 +128,8 @@ fn key(row: &PgRow) -> Result<DeviceKeyRecord, DeviceError> {
         id: row.try_get("id").map_err(persistence)?,
         registration_id: row.try_get("registration_id").map_err(persistence)?,
         key_version: row.try_get::<i64, _>("key_version").map_err(persistence)? as u64,
-        public_key_der: row.try_get("public_key_der").map_err(persistence)?,
-        public_key_kid: row.try_get("public_key_kid").map_err(persistence)?,
+        public_key_der,
+        public_key_kid,
         state,
         valid_from: valid_from.to_rfc3339(),
         valid_until: valid_until.map(|value| value.to_rfc3339()),
@@ -123,9 +157,8 @@ async fn write_registration(
     transaction: &mut Transaction<'_, Postgres>,
     value: &DeviceRegistration,
     exists: bool,
+    preferences: serde_json::Value,
 ) -> Result<(), DeviceError> {
-    let preferences = serde_json::to_value(&value.preferences)
-        .map_err(|error| DeviceError::Persistence(error.to_string()))?;
     let platform = match value.platform {
         Platform::Ios => "ios",
         Platform::Android => "android",
@@ -146,6 +179,13 @@ async fn write_registration(
 #[async_trait]
 impl DeviceRepository for PostgresDeviceRepository {
     async fn save(&self, mut value: DeviceRegistration) -> Result<DeviceRegistration, DeviceError> {
+        validate_public_projection(
+            value.public_key_der.as_deref(),
+            value.public_key_kid.as_deref(),
+        )?;
+        let preferences = serde_json::to_value(&value.preferences)
+            .map_err(|error| DeviceError::Persistence(error.to_string()))?;
+        reject_private_preferences(&preferences)?;
         let mut transaction = self.pool.begin().await.map_err(persistence)?;
         let existing = sqlx::query("SELECT * FROM device_registration_service.device_registrations WHERE user_id=$1 AND device_id=$2 AND is_active=true AND organization_id IS NOT DISTINCT FROM $3 FOR UPDATE")
             .bind(&value.user_id).bind(&value.device_id).bind(&value.organization_id).fetch_optional(&mut *transaction).await.map_err(persistence)?;
@@ -184,7 +224,7 @@ impl DeviceRepository for PostgresDeviceRepository {
             value.key_valid_from = Some(committed_at);
             value.key_valid_until = None;
         }
-        write_registration(&mut transaction, &value, existing.is_some()).await?;
+        write_registration(&mut transaction, &value, existing.is_some(), preferences).await?;
         if create_key {
             let committed_at = value.key_valid_from.expect("assigned");
             sqlx::query("INSERT INTO device_registration_service.device_registration_keys (id,registration_id,key_version,public_key_der,public_key_kid,state,valid_from,created_at) VALUES ($1,$2,1,$3,$4,'CURRENT',$5,$5)")
@@ -225,6 +265,7 @@ impl DeviceRepository for PostgresDeviceRepository {
         public_key_kid: &str,
         grace: u64,
     ) -> Result<DeviceRegistration, DeviceError> {
+        validate_public_projection(Some(public_key_der), Some(public_key_kid))?;
         if grace > MAX_ROTATION_GRACE_SECONDS {
             return Err(DeviceError::BadRequest(
                 "device key rotation grace is outside server bounds".into(),
@@ -335,5 +376,51 @@ impl DeviceRepository for PostgresDeviceRepository {
             now: Utc::now().to_rfc3339(),
         })?;
         Ok(result.eligible.then_some(value))
+    }
+}
+
+#[cfg(test)]
+mod custody_tests {
+    use super::PostgresDeviceRepository;
+    use crate::{CreateRegistration, DeviceError, DeviceRegistration, DeviceRepository, Platform};
+    use chrono::Utc;
+    use sqlx::postgres::PgPoolOptions;
+
+    #[tokio::test]
+    async fn direct_repository_rejects_private_material_before_database_access() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgresql://127.0.0.1:1/unused")
+            .expect("synthetic PostgreSQL URL");
+        let store = PostgresDeviceRepository::new(pool);
+        let input = CreateRegistration {
+            user_id: None,
+            organization_id: None,
+            device_id: "synthetic-device".into(),
+            platform: Platform::Web,
+            fcm_token: "synthetic-push-token".into(),
+            app_version: None,
+            os_version: None,
+            device_model: None,
+            preferences: Default::default(),
+            public_key_der: None,
+            public_key_kid: None,
+            key_valid_from: None,
+            key_valid_until: None,
+            is_active: true,
+        };
+        let mut registration = DeviceRegistration::new("synthetic-user".into(), input, Utc::now());
+        registration.preferences.quiet_hours_start =
+            Some("-----BEGIN PRIVATE KEY-----synthetic-----END PRIVATE KEY-----".into());
+        assert!(matches!(
+            store.save(registration.clone()).await,
+            Err(DeviceError::BadRequest(_))
+        ));
+        registration.preferences.quiet_hours_start = None;
+        registration.public_key_der = Some("private key bytes".into());
+        registration.public_key_kid = Some("synthetic-kid".into());
+        assert!(matches!(
+            store.save(registration).await,
+            Err(DeviceError::BadRequest(_))
+        ));
     }
 }

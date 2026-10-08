@@ -16,7 +16,7 @@ import (
 
 func TestHaipKeyStaysInOpenBaoAndDecryptsBoundResponse(t *testing.T) {
 	ctx := context.Background()
-	storage := &logical.InmemStorage{}
+	storage := transactionalTestStorage(t)
 	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
 	if err != nil {
 		t.Fatal(err)
@@ -126,7 +126,7 @@ func TestHaipKeyStaysInOpenBaoAndDecryptsBoundResponse(t *testing.T) {
 
 func TestHaipMissingCurrentKeyDoesNotSilentlyRegenerate(t *testing.T) {
 	ctx := context.Background()
-	storage := &logical.InmemStorage{}
+	storage := transactionalTestStorage(t)
 	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
 	if err != nil {
 		t.Fatal(err)

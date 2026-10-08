@@ -38,10 +38,8 @@
   "self_signed_test_signer": {
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
-    "native_status": "available behind non-default passport-self-signed-test Cargo feature plus explicit runtime flag; remote URL takes precedence",
-    "packaged_image_build_arg": "PASSPORT_SELF_SIGNED_TEST=true builds a separate opt-in image; the shared release image defaults to false",
-    "core_capability": "marty-verification/authority-issuance at the pinned Core revision; local single-use keys are excluded from the default production build",
-    "python_retirement_gate": "feature-enabled HTTP/database and packaged test-mode behavior are covered by the dedicated CI PostgreSQL fixture; retain Python until image, gateway/Flow and provider acceptance gates pass"
+    "native_status": "retired; PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true is rejected before native passport startup in every build",
+    "replacement_evidence": "managed CSCA, DSC, and SOD issuance is exercised by the disposable OpenBao acceptance chain; passport HTTP and PostgreSQL behavior use remote signer and artifact KMS clients"
   },
   "bureau_batch_provider": {
     "python_reference": "contracts/physical-passport-provider-reference.json batch_http",
@@ -106,18 +104,14 @@
     "nondecimal_conversion": "accepted by the request model; Python int conversion fails at the later operation"
   },
   "degraded_capabilities": {
-    "condition": "native HTTP enabled with tenant keys but without signer, artifact key, or bureau",
+    "condition": "native HTTP enabled with tenant keys but without signer, managed artifact KMS, or bureau",
     "http_status": 200,
     "supported": false,
     "signer_mode": "UNAVAILABLE",
     "encrypted_artifact_store": false,
     "bureau_configured": false,
     "blocker_count": 3,
-    "authenticated_application_create": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is required for encrypted document artifacts"},
-    "invalid_artifact_key": {
-      "capability_blocker": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid for encrypted sensitive artifacts.",
-      "authenticated_application_create": {"status": 503, "detail": "PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid"}
-    },
+    "authenticated_application_create": {"status": 503, "detail": "KMS passport artifact provider is unavailable"},
     "invalid_provider_configuration": "unsafe or malformed configured provider URLs still fail startup; do not expose their secrets"
   },
   "flow_cutover": {
@@ -142,9 +136,9 @@
     "body": {"detail": [{"type": "missing", "loc": ["header", "x-personalization-signature"], "msg": "Field required", "input": null}]}
   },
   "webhook_without_bureau_url_observation": {
-    "python_oracle": "verify_webhook_signature uses BUREAU_WEBHOOK_SECRET independently of BUREAU_URL; a callback with an invalid signature returns before the job store is read",
+    "python_oracle": "the retired Python callback used a process-held BUREAU_WEBHOOK_SECRET independently of BUREAU_URL",
     "invalid_signature": {"status": 401, "body": {"detail": "Invalid personalization webhook signature"}},
-    "native_requirement": "inbound callback verification remains available with a configured webhook secret when outbound bureau submission is unavailable"
+    "native_requirement": "inbound callback verification remains available through managed KMS when outbound bureau submission is unavailable; a missing KMS verifier fails with 503"
   },
   "webhook_tenant_binding": {
     "decision": "Intentional native security correction: the retained Python callback does not carry trusted tenant identity; beta's new Rust bureau must sign organization_id in the raw callback body before native ownership is selected.",

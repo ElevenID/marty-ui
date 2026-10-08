@@ -5,14 +5,15 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{TimeZone, Utc};
 use marty_flow::{
     prepare_profiled_verification_start, prepare_verification_start, CredentialClaimReference,
-    CredentialTemplateProvider, CredentialTemplateReference, FlowKeyEnvelope,
-    FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError, FlowProviderRegistry,
-    Oid4vpClientIdScheme, Oid4vpProfile, PresentationEvaluationRequest,
-    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
-    RequestTransport, RequestUriMethod, SigningIdentity, SigningIdentityProvider, SigningRequest,
-    SigningResult, StartVerificationFlowRequest, VerificationResponseType,
-    VerificationStartContext, VerificationStartOptions,
+    CredentialTemplateProvider, CredentialTemplateReference, FlowKeyEnvelopeProvider,
+    FlowProviderError, FlowProviderRegistry, Oid4vpClientIdScheme, Oid4vpProfile,
+    PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
+    PresentationPolicyReference, RequestTransport, RequestUriMethod, SigningIdentity,
+    SigningIdentityProvider, SigningRequest, SigningResult, StartVerificationFlowRequest,
+    VerificationResponseType, VerificationStartContext, VerificationStartOptions,
 };
+#[path = "support/haip_remote_fixture.rs"]
+mod haip_remote_fixture;
 use mmf_push::WebhookDestinationRegistry;
 use serde::Deserialize;
 use serde_json::json;
@@ -147,20 +148,12 @@ struct Envelopes;
 
 #[async_trait]
 impl FlowKeyEnvelopeProvider for Envelopes {
-    async fn wrap(
+    async fn create_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
-        Ok(FlowKeyEnvelope {
-            organization_id: request.organization_id.clone(),
-            flow_instance_id: request.flow_instance_id.clone(),
-            purpose: request.purpose.clone(),
-            envelope: "vault:verification-key".into(),
-        })
-    }
-
-    async fn unwrap(&self, _envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        unreachable!("verification start only wraps HAIP keys")
+        organization_id: &str,
+        flow_instance_id: &str,
+    ) -> Result<marty_flow::HaipRemoteKey, FlowProviderError> {
+        Ok(haip_remote_fixture::key(organization_id, flow_instance_id))
     }
 }
 

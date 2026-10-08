@@ -45,6 +45,28 @@
       }
     },
     {
+      "name": "openbao_rs256_pkcs1v15",
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "rsa-key", "auth_reference": "root", "algorithm": "RS256" },
+      "payload_b64": "aGVsbG8gd29ybGQ",
+      "expected_request": {
+        "method": "POST", "path_query": "/v1/transit/sign/rsa-key", "headers": { "x-vault-token": "root" },
+        "json": { "input": "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=", "prehashed": true, "hash_algorithm": "sha2-256", "signature_algorithm": "pkcs1v15" }
+      },
+      "provider_response": { "data": { "signature": "vault:v1:c2lnbmF0dXJl" } },
+      "expected_response": { "signature_b64": "c2lnbmF0dXJl", "signature_encoding": "raw" }
+    },
+    {
+      "name": "openbao_ps256_hash_salt",
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "rsa-key", "auth_reference": "root", "algorithm": "PS256" },
+      "payload_b64": "aGVsbG8gd29ybGQ",
+      "expected_request": {
+        "method": "POST", "path_query": "/v1/transit/sign/rsa-key", "headers": { "x-vault-token": "root" },
+        "json": { "input": "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=", "prehashed": true, "hash_algorithm": "sha2-256", "signature_algorithm": "pss", "salt_length": "hash" }
+      },
+      "provider_response": { "data": { "signature": "vault:v1:c2lnbmF0dXJl" } },
+      "expected_response": { "signature_b64": "c2lnbmF0dXJl", "signature_encoding": "raw" }
+    },
+    {
       "name": "openbao_eddsa_unhashed",
       "service_config": {
         "service_type": "hashicorp-vault-transit",

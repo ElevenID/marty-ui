@@ -58,7 +58,6 @@ def model(tmp_path, enabled=True):
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
-            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
             "ICAO_DOCUMENT_SIGNER_URL": "",
             "PERSONALIZATION_BUREAU_URL": VALIDATOR["PRIVATE_BUREAU_URL"],
             "PERSONALIZATION_BUREAU_API_KEY": TOKEN,

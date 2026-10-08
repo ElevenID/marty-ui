@@ -35,7 +35,7 @@ fn request_from_public_cert(
     country: &str,
 ) -> ImportCscaCertificateRequest {
     ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
+        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(cert_pem).unwrap())
             .unwrap(),
         cert_pem: cert_pem.to_string(),
         cert_chain_pem: String::new(),
@@ -489,6 +489,12 @@ fn malformed_duplicate_and_non_ca_imports_fail_without_mutating_state() {
     });
     assert!(matches!(
         document.import("leaked-jwk", leaked_jwk, now),
+        Err(CscaLifecycleError::Invalid(_))
+    ));
+    let mut leaked_expected_jwk = csca_request("USA", "Leaked expected JWK");
+    leaked_expected_jwk.expected_public_jwk["d"] = json!("private");
+    assert!(matches!(
+        document.import("leaked-expected-jwk", leaked_expected_jwk, now),
         Err(CscaLifecycleError::Invalid(_))
     ));
     assert_eq!(document.revision, revision);

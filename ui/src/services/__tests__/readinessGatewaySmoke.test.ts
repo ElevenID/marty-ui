@@ -208,10 +208,8 @@ describe('readiness gateway smoke', () => {
     const rotatedKey = await rotateSigningKey('key_1', { organization_id: 'org_live', immediate: true })
     const config = await updateKeyManagementConfig({
       organization_id: 'org_live',
-      hsm_enabled: true,
-      hsm_settings: { slot: 'issuer-primary' },
-      vault_enabled: false,
-      vault_settings: {},
+      services: [{ id: 'managed-openbao-transit', service_type: 'openbao-transit' }],
+      default_service_id: 'managed-openbao-transit',
     })
     const certificate = await setServiceCertificate('managed-openbao-transit', {
       organization_id: 'org_live',
@@ -243,16 +241,12 @@ describe('readiness gateway smoke', () => {
     expect(rotationBody).toEqual({ immediate: true })
     expect(rotatedKey).toEqual({ id: 'key_2', rotated_from: 'key_1', immediate: true })
     expect(configBody).toEqual({
-      hsm_enabled: true,
-      hsm_settings: { slot: 'issuer-primary' },
-      vault_enabled: false,
-      vault_settings: {},
+      services: [{ id: 'managed-openbao-transit', service_type: 'openbao-transit' }],
+      default_service_id: 'managed-openbao-transit',
     })
     expect(config).toEqual({
-      hsm_enabled: true,
-      hsm_settings: { slot: 'issuer-primary' },
-      vault_enabled: false,
-      vault_settings: {},
+      services: [{ id: 'managed-openbao-transit', service_type: 'openbao-transit' }],
+      default_service_id: 'managed-openbao-transit',
     })
     expect(certificateMethod).toBe('PUT')
     expect(certificateQueryParams?.get('organization_id')).toBe('org_live')

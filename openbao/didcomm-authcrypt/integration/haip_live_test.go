@@ -241,6 +241,18 @@ func TestHaipRustSigningRouteLiveOpenBao(t *testing.T) {
 	if created["key_reference"] != "didcomm/haip/keys/"+tenant+"/"+flow+"/versions/"+version {
 		t.Fatal("Rust HAIP create returned wrong key reference")
 	}
+	status, resolved := requestJSON(t, client, base, http.MethodPost, "internal/haip-response-keys/resolve", "X-API-Key", apiKey, map[string]any{
+		"organization_id": tenant, "flow_instance_id": flow, "version": version,
+	})
+	if status != http.StatusOK || resolved["key_reference"] != created["key_reference"] || resolved["version"] != version {
+		t.Fatalf("Rust HAIP read-only resolution failed: status %d: %v", status, resolved)
+	}
+	status, _ = requestJSON(t, client, base, http.MethodPost, "internal/haip-response-keys/resolve", "X-API-Key", apiKey, map[string]any{
+		"organization_id": tenant, "flow_instance_id": flow, "version": strings.Repeat("0", 32),
+	})
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("Rust HAIP missing-version resolve status %d", status)
+	}
 	plaintext := []byte(`{"vp_token":"rust-live-holder","state":"flow_rust"}`)
 	compact := encryptForHaip(t, public, plaintext)
 	decryptPath := "internal/haip-response-keys/decrypt"

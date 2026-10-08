@@ -967,7 +967,7 @@ struct ManagedKey {
     lti_only: bool,
 }
 
-fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
+pub(crate) fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
     let tenant = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
         .simple()
         .to_string();
@@ -976,16 +976,58 @@ fn tenant_managed_key_name(organization_id: &str, reference: &str) -> bool {
         .any(|prefix| reference.starts_with(&format!("{prefix}{tenant}-")))
 }
 
-fn foreign_namespaced_key(organization_id: &str, reference: &str) -> bool {
-    crate::domain::MANAGED_KEY_PREFIXES
-        .iter()
-        .filter_map(|prefix| reference.strip_prefix(prefix))
-        .any(|suffix| {
-            suffix.len() > 32
-                && suffix.as_bytes().get(32) == Some(&b'-')
-                && suffix.as_bytes()[..32].iter().all(u8::is_ascii_hexdigit)
-                && !tenant_managed_key_name(organization_id, reference)
-        })
+pub(crate) fn managed_key_reference_for_fields(
+    organization_id: &str,
+    issuer_did: &str,
+    key_purpose: &str,
+    credential_format: &str,
+    algorithm: &str,
+) -> String {
+    let tuple =
+        format!("{organization_id}|{issuer_did}|{key_purpose}|{credential_format}|{algorithm}");
+    let token = Uuid::new_v5(&Uuid::NAMESPACE_URL, tuple.as_bytes())
+        .simple()
+        .to_string();
+    let prefix =
+        crate::domain::managed_key_prefix_for_purpose(key_purpose).unwrap_or("cred-issuer-");
+    format!(
+        "{prefix}{}-{}",
+        &token[..20],
+        algorithm.to_ascii_lowercase()
+    )
+}
+
+pub(crate) fn managed_profile_key_belongs_to_tenant(
+    organization_id: &str,
+    profile: &Value,
+    reference: &str,
+) -> bool {
+    if profile.get("organization_id").and_then(Value::as_str) != Some(organization_id) {
+        return false;
+    }
+    let Some(key_purpose) = profile.get("key_purpose").and_then(Value::as_str) else {
+        return false;
+    };
+    if !managed_key_purposes(reference).contains(&key_purpose) {
+        return false;
+    }
+    if tenant_managed_key_name(organization_id, reference) {
+        return true;
+    }
+    let (Some(issuer_did), Some(credential_format), Some(algorithm)) = (
+        profile.get("issuer_did").and_then(Value::as_str),
+        profile.get("credential_format").and_then(Value::as_str),
+        profile.get("algorithm").and_then(Value::as_str),
+    ) else {
+        return false;
+    };
+    managed_key_reference_for_fields(
+        organization_id,
+        issuer_did,
+        key_purpose,
+        credential_format,
+        algorithm,
+    ) == reference
 }
 
 fn issuer_tuple_key_name(reference: &str) -> bool {
@@ -1002,20 +1044,6 @@ fn issuer_tuple_key_name(reference: &str) -> bool {
         })
 }
 
-fn managed_key_algorithm(jwk: &Value) -> Option<&'static str> {
-    match (
-        jwk.get("kty").and_then(Value::as_str),
-        jwk.get("crv").and_then(Value::as_str),
-    ) {
-        (Some("EC"), Some("P-256")) => Some("ES256"),
-        (Some("EC"), Some("P-384")) => Some("ES384"),
-        (Some("EC"), Some("P-521")) => Some("ES512"),
-        (Some("RSA"), _) => Some("RS256"),
-        (Some("OKP"), Some("Ed25519")) => Some("EdDSA"),
-        _ => None,
-    }
-}
-
 async fn managed_live_keys(
     organization_id: &str,
     registry: &Value,
@@ -1029,9 +1057,8 @@ async fn managed_live_keys(
     let mut references = bindings
         .keys()
         .filter(|reference| {
-            !foreign_namespaced_key(organization_id, reference)
-                && (!issuer_tuple_key_name(reference)
-                    || profile_references.contains_key(*reference))
+            tenant_managed_key_name(organization_id, reference)
+                || profile_references.contains_key(*reference)
         })
         .cloned()
         .collect::<BTreeSet<_>>();
@@ -1057,20 +1084,26 @@ async fn managed_live_keys(
             || profile_references.get(&reference) == Some(&true)
             || reference.starts_with("lti-tool-");
         tasks.spawn(async move {
-            let public = match kms::managed_openbao_public_key_existing(&endpoint, &reference).await
+            let metadata = match kms::managed_openbao_metadata_existing(&endpoint, &reference).await
             {
-                Ok(public) => public,
+                Ok(metadata) => metadata,
                 Err(kms::KmsError::ProviderStatus {
                     status: reqwest::StatusCode::NOT_FOUND,
                     ..
                 }) => return Ok(None),
                 Err(_) => return Err(()),
             };
-            Ok(managed_key_algorithm(&public).map(|algorithm| ManagedKey {
-                reference,
-                algorithm: algorithm.to_owned(),
-                lti_only,
-            }))
+            if metadata.get("status").and_then(Value::as_str) != Some("active") {
+                return Err(());
+            }
+            let public = metadata.get("public_jwk").ok_or(())?;
+            Ok(
+                kms::managed_public_key_algorithm(public).map(|algorithm| ManagedKey {
+                    reference,
+                    algorithm: algorithm.to_owned(),
+                    lti_only,
+                }),
+            )
         });
     };
     for _ in 0..8 {
@@ -1109,12 +1142,14 @@ fn active_managed_profile_references(
                     == Some(MANAGED_OPENBAO_SERVICE_ID)
         })
         .filter_map(|profile| {
-            Some((
-                profile.get("signing_key_reference")?.as_str()?.to_owned(),
-                profile.get("key_purpose").and_then(Value::as_str) == Some("lti_tool_signing"),
-            ))
+            let reference = profile.get("signing_key_reference")?.as_str()?;
+            managed_profile_key_belongs_to_tenant(organization_id, profile, reference).then(|| {
+                (
+                    reference.to_owned(),
+                    profile.get("key_purpose").and_then(Value::as_str) == Some("lti_tool_signing"),
+                )
+            })
         })
-        .filter(|(reference, _)| !foreign_namespaced_key(organization_id, reference))
     {
         *references.entry(reference).or_insert(false) |= lti_only;
     }
@@ -1445,12 +1480,13 @@ fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
     let Some(body) = value.as_object() else {
         return Ok(empty_registry());
     };
+    reject_legacy_registry_fields(body)?;
     let Some(raw_services) = body.get("services").and_then(Value::as_array) else {
-        let mut legacy = normalize_legacy_registry(body)?;
+        let mut registry = empty_registry();
         let bindings = normalize_bindings(body.get("key_reference_purposes"));
         validate_lti_bindings(&bindings)?;
-        legacy["key_reference_purposes"] = json!(bindings);
-        return Ok(legacy);
+        registry["key_reference_purposes"] = json!(bindings);
+        return Ok(registry);
     };
     let mut services = Vec::new();
     for service in raw_services {
@@ -1482,6 +1518,7 @@ fn normalize_stored_registry(value: &Value) -> Result<Value, RegistryError> {
     let Some(body) = value.as_object() else {
         return Ok(empty_registry());
     };
+    reject_legacy_registry_fields(body)?;
     let mut services = Vec::new();
     if let Some(raw_services) = body.get("services").and_then(Value::as_array) {
         for service in raw_services {
@@ -1499,39 +1536,21 @@ fn normalize_stored_registry(value: &Value) -> Result<Value, RegistryError> {
     }))
 }
 
-fn normalize_legacy_registry(body: &Map<String, Value>) -> Result<Value, RegistryError> {
-    if !body.get("hsm_enabled").is_some_and(truthy) {
-        return Ok(empty_registry());
+fn reject_legacy_registry_fields(body: &Map<String, Value>) -> Result<(), RegistryError> {
+    if [
+        "hsm_enabled",
+        "hsm_settings",
+        "vault_enabled",
+        "vault_settings",
+    ]
+    .iter()
+    .any(|field| body.contains_key(*field))
+    {
+        return Err(RegistryError::Invalid(
+            "legacy flat key-management configuration is unsupported; use services".into(),
+        ));
     }
-    let Some(settings) = body.get("hsm_settings").and_then(Value::as_object) else {
-        return Ok(empty_registry());
-    };
-    if settings.get("managed_by").is_some_and(truthy) {
-        let mut registry = empty_registry();
-        registry["default_service_id"] = Value::String(MANAGED_OPENBAO_SERVICE_ID.to_string());
-        return Ok(registry);
-    }
-    let service = json!({
-        "name": first_nonempty(&[settings.get("provider_label"), settings.get("provider")]).unwrap_or("Registered KMS/HSM"),
-        "service_type": "custom-transit-compatible",
-        "provider": nonblank_string(settings.get("provider")).unwrap_or("custom"),
-        "protocol": "vault-transit-compatible",
-        "endpoint": settings.get("service_url").cloned().unwrap_or(Value::Null),
-        "mount": settings.get("mount").cloned().unwrap_or(Value::Null),
-        "namespace": settings.get("namespace").cloned().unwrap_or(Value::Null),
-        "region": settings.get("region").cloned().unwrap_or(Value::Null),
-        "auth_mode": settings.get("auth_mode").cloned().unwrap_or(Value::Null),
-        "key_reference": settings.get("key_reference").cloned().unwrap_or(Value::Null),
-        "key_aliases": settings.get("signing_key_names").cloned().unwrap_or(Value::Null),
-    });
-    let Some(normalized) = normalize_service_value(&service)? else {
-        return Ok(empty_registry());
-    };
-    let id = normalized["id"].clone();
-    let mut registry = empty_registry();
-    registry["services"] = Value::Array(vec![normalized]);
-    registry["default_service_id"] = id;
-    Ok(registry)
+    Ok(())
 }
 
 fn resolve_service(
@@ -1865,10 +1884,6 @@ fn nonblank_string(value: Option<&Value>) -> Option<&str> {
         .filter(|value| !value.trim().is_empty())
 }
 
-fn first_nonempty<'a>(values: &[Option<&'a Value>]) -> Option<&'a str> {
-    values.iter().find_map(|value| nonblank_string(*value))
-}
-
 fn object_or_empty(value: Option<&Value>) -> Value {
     value
         .and_then(Value::as_object)
@@ -1940,6 +1955,29 @@ mod tests {
             "cert_pem": "-----BEGIN CERTIFICATE-----"
         }))
         .is_ok());
+    }
+
+    #[test]
+    fn flat_key_management_settings_fail_closed_for_requested_and_stored_configs() {
+        for legacy in [
+            json!({"hsm_enabled": false}),
+            json!({"hsm_enabled": true, "hsm_settings": {"managed_by": "Marty"}}),
+            json!({"services": [], "hsm_settings": {"key_reference": "old-key"}}),
+            json!({"vault_enabled": false, "vault_settings": {}}),
+        ] {
+            for normalize in [
+                normalize_requested_registry as fn(&Value) -> Result<Value, RegistryError>,
+                normalize_stored_registry,
+            ] {
+                assert!(matches!(
+                    normalize(&legacy),
+                    Err(RegistryError::Invalid(message)) if message.contains("legacy flat")
+                ));
+            }
+        }
+        let modern = json!({"services": [], "key_reference_purposes": {}});
+        assert!(normalize_requested_registry(&modern).is_ok());
+        assert!(normalize_stored_registry(&modern).is_ok());
     }
 
     async fn disposable_redis_url() -> String {
@@ -2062,9 +2100,7 @@ mod tests {
             );
             assert!(tenant_managed_key_name("org-a", &own), "{prefix}");
             assert!(!tenant_managed_key_name("org-a", &foreign), "{prefix}");
-            assert!(foreign_namespaced_key("org-a", &foreign), "{prefix}");
         }
-        assert!(!foreign_namespaced_key("org-a", "cred-issuer-legacy-es256"));
         assert!(issuer_tuple_key_name(
             "cred-issuer-0123456789abcdef0123-es256"
         ));
@@ -2078,32 +2114,42 @@ mod tests {
         assert!(!issuer_tuple_key_name(&own));
         assert!(!issuer_tuple_key_name("cred-issuer-legacy-es256"));
         assert_eq!(
-            managed_key_algorithm(&json!({"kty":"EC", "crv":"P-384"})),
+            kms::managed_public_key_algorithm(&json!({"kty":"EC", "crv":"P-384"})),
             Some("ES384")
         );
     }
 
     #[test]
     fn shared_profile_reference_preserves_lti_only_restriction() {
+        let reference = managed_key_reference_for_fields(
+            "org-a",
+            "did:example:issuer",
+            "lti_tool_signing",
+            "LTI",
+            "ES256",
+        );
         let profiles = json!({"profiles": [
-            {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
-                "signing_key_reference": "legacy-shared-key", "key_purpose": "lti_tool_signing"},
-            {"status": "active", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
-                "signing_key_reference": "legacy-shared-key", "key_purpose": "vc_jwt_issuer"}
+            {"status": "active", "organization_id": "org-a", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
+                "signing_key_reference": reference, "key_purpose": "lti_tool_signing",
+                "issuer_did": "did:example:issuer", "credential_format": "LTI", "algorithm": "ES256"},
+            {"status": "active", "organization_id": "org-a", "signing_service_id": MANAGED_OPENBAO_SERVICE_ID,
+                "signing_key_reference": reference, "key_purpose": "vc_jwt_issuer",
+                "issuer_did": "did:example:issuer", "credential_format": "LTI", "algorithm": "ES256"}
         ]});
-        assert!(active_managed_profile_references("org-a", &profiles)["legacy-shared-key"]);
+        assert!(active_managed_profile_references("org-a", &profiles)[&reference]);
     }
 
     #[tokio::test]
-    async fn managed_inventory_discards_stale_and_foreign_keys_and_recovers_tenant_key() {
+    async fn managed_inventory_discards_unscoped_and_foreign_keys_and_recovers_tenant_key() {
         #[derive(Clone)]
         struct Fixture {
             own: String,
             foreign: String,
+            unsafe_key: String,
             reads: Arc<Mutex<Vec<String>>>,
         }
         async fn list(State(state): State<Fixture>) -> Json<Value> {
-            Json(json!({"data": {"keys": [state.own, state.foreign]}}))
+            Json(json!({"data": {"keys": [state.own, state.foreign, state.unsafe_key]}}))
         }
         async fn read(
             State(state): State<Fixture>,
@@ -2116,6 +2162,10 @@ mod tests {
             const PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
             Ok(Json(json!({"data": {
                 "latest_version": 1, "type": "ecdsa-p256",
+                "supports_signing": true, "soft_deleted": false,
+                "exportable": reference.ends_with("unsafe-es256"),
+                "allow_plaintext_backup": false, "deletion_allowed": false,
+                "imported_key": false,
                 "keys": {"1": {"public_key": PEM}}
             }})))
         }
@@ -2127,9 +2177,14 @@ mod tests {
             "cred-issuer-{}-foreign-es256",
             Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b").simple()
         );
+        let unsafe_key = format!(
+            "cred-issuer-{}-unsafe-es256",
+            Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-a").simple()
+        );
         let fixture = Fixture {
             own: own.clone(),
             foreign: foreign.clone(),
+            unsafe_key: unsafe_key.clone(),
             reads: Arc::new(Mutex::new(Vec::new())),
         };
         let app = Router::new()
@@ -2151,12 +2206,32 @@ mod tests {
             deleted: ["mdoc_dsc"],
             foreign.clone(): ["vc_jwt_issuer"]
         }}});
-        let profile_only = "oid4vp-verifier-01234567890123456789-es256";
+        let profile_only = managed_key_reference_for_fields(
+            "org-a",
+            "did:example:verifier",
+            "oid4vp_request_signing",
+            "JWT",
+            "ES256",
+        );
+        let foreign_tuple = managed_key_reference_for_fields(
+            "org-b",
+            "did:example:verifier",
+            "oid4vp_request_signing",
+            "JWT",
+            "ES256",
+        );
         let profiles = json!({"profiles": [
             {
                 "status": "active", "signing_service_id": "managed-openbao-transit",
-                "signing_key_reference": profile_only,
-                "key_purpose": "oid4vp_request_signing"
+                "organization_id": "org-a", "signing_key_reference": profile_only,
+                "key_purpose": "oid4vp_request_signing", "issuer_did": "did:example:verifier",
+                "credential_format": "JWT", "algorithm": "ES256"
+            },
+            {
+                "status": "active", "signing_service_id": "managed-openbao-transit",
+                "organization_id": "org-a", "signing_key_reference": foreign_tuple,
+                "key_purpose": "oid4vp_request_signing", "issuer_did": "did:example:verifier",
+                "credential_format": "JWT", "algorithm": "ES256"
             },
             {
                 "status": "revoked", "signing_service_id": "managed-openbao-transit",
@@ -2171,21 +2246,28 @@ mod tests {
             None => std::env::remove_var("BAO_TOKEN"),
         }
         server.abort();
-        assert!(complete);
+        assert!(!complete, "exportable managed key must degrade inventory");
         assert_eq!(
             keys.iter()
                 .map(|key| key.reference.as_str())
                 .collect::<Vec<_>>(),
-            [own.as_str(), "cred-issuer-legacy", profile_only]
+            [own.as_str(), profile_only.as_str()]
         );
         let reads = fixture.reads.lock().unwrap();
-        assert!(reads.contains(&"a-stale".into()));
+        assert!(!reads.contains(&"a-stale".into()));
         assert!(!reads.contains(&foreign));
+        assert!(!reads.contains(&foreign_tuple));
         assert!(!reads.contains(&revoked.to_owned()));
         assert!(!reads.contains(&deleted.to_owned()));
+        assert!(reads.contains(&unsafe_key));
         let service = managed_openbao_service(&endpoint, &keys, complete);
         assert_eq!(service["key_reference"], own);
-        assert_eq!(service["key_count"], 3);
+        assert_eq!(service["key_count"], 2);
+        assert_eq!(service["status"], "degraded");
+        assert!(!service["key_aliases"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(unsafe_key)));
         assert!(service["algorithms"]
             .as_array()
             .unwrap()
@@ -2198,7 +2280,10 @@ mod tests {
             key_purpose: Some("oid4vp_request_signing".into()),
             algorithm: Some("ES256".into()),
         }).unwrap();
-        assert_eq!(resolved.key_reference.as_deref(), Some(profile_only));
+        assert_eq!(
+            resolved.key_reference.as_deref(),
+            Some(profile_only.as_str())
+        );
     }
 
     #[tokio::test]

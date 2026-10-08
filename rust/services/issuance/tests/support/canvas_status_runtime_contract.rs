@@ -1,5 +1,6 @@
 //! Real configuration, tenant vault, credential/delivery persistence and HTTP.
 //! Only canonical status publication is controlled; the mirror uses a local server.
+use super::issuance_process::remote_integration_secret;
 use async_trait::async_trait;
 use axum::{
     extract::State,
@@ -21,8 +22,6 @@ use marty_issuance_service::{
     credential_management_postgres::PostgresCredentialManagementRepository,
     integration_secret::NewIntegrationSecret,
 };
-#[path = "remote_integration_secret.rs"]
-mod remote_integration_secret;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::sync::{

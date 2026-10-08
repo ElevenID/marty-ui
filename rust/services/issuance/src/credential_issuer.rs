@@ -488,36 +488,3 @@ fn invalid_proof(detail: impl Into<String>) -> CredentialIssuanceError {
 fn issuer_error(detail: impl Into<String>) -> CredentialIssuanceError {
     CredentialIssuanceError::IssuerUnavailable(detail.into())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::NativeCredentialProofVerifier;
-    use crate::credential::{CredentialProofVerifier, IssuerContext};
-    use serde_json::json;
-
-    #[tokio::test]
-    async fn ordinary_proof_uses_the_canonical_rust_verifier() {
-        let nonce = format!("proof-adapter-{}", uuid::Uuid::new_v4());
-        let proof = marty_oid4vci::proof::create_proof_jwt("https://issuer.example", &nonce)
-            .expect("proof fixture");
-        let verified = NativeCredentialProofVerifier
-            .verify(
-                &proof,
-                &nonce,
-                "org-a",
-                &IssuerContext {
-                    issuer_profile_id: "profile-a".to_owned(),
-                    issuer_did: "did:web:issuer.example".to_owned(),
-                    signing_service_id: "service-a".to_owned(),
-                    algorithm: "ES256".to_owned(),
-                    verification_method_id: None,
-                    public_jwk: None,
-                    certificate_chain: Vec::new(),
-                    raw_context: json!({}),
-                },
-            )
-            .await
-            .expect("valid ordinary proof");
-        assert!(verified.holder_did.starts_with("did:key:"));
-    }
-}

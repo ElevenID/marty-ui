@@ -719,7 +719,6 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-services",
         "test-passport-fence-postgres",
         "test-rust-feature-probe",
-        "test-rust-passport-image",
         "test-rust-services",
         "test-openbao-didcomm-plugin",
         "rust-lint-policy",
@@ -776,7 +775,6 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "rust_runtime": {
             "test-passport-fence-postgres",
             "test-rust-feature-probe",
-            "test-rust-passport-image",
             "test-rust-service-images",
         },
         "security": {"security"},
@@ -859,7 +857,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 19)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 18)
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -957,31 +955,22 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     jobs = document["jobs"]
     service_names = {step.get("name") for step in jobs["test-rust-services"]["steps"]}
     probe = jobs["test-rust-feature-probe"]
-    passport = jobs["test-rust-passport-image"]
-    assert probe["needs"] == passport["needs"] == "changes"
-    assert (
-        probe["if"] == passport["if"] == "needs.changes.outputs.rust_runtime == 'true'"
-    )
+    assert probe["needs"] == "changes"
+    assert probe["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
-    assert {"test-rust-feature-probe", "test-rust-passport-image"} <= set(
-        jobs["ci-gate"]["needs"]
-    )
+    assert "test-rust-feature-probe" in jobs["ci-gate"]["needs"]
+    assert "test-rust-passport-image" not in jobs
     assert "Verify frozen Rust feature-regression probe" not in service_names
     assert "Build opt-in passport test-mode image" not in service_names
     assert "Verify opt-in passport test-mode image boundary" not in service_names
     assert {step.get("name") for step in probe["steps"]} >= {
         "Verify frozen Rust feature-regression probe"
     }
-    passport_names = [step.get("name") for step in passport["steps"]]
-    assert passport_names.index(
-        "Build opt-in passport test-mode image"
-    ) < passport_names.index("Verify opt-in passport test-mode image boundary")
     assert "Build public selfhost image" in service_names
-    for job in (probe, passport):
-        assert not any(
-            step.get("uses", "").startswith("actions/download-artifact@")
-            for step in job["steps"]
-        )
+    assert not any(
+        step.get("uses", "").startswith("actions/download-artifact@")
+        for step in probe["steps"]
+    )
 
 
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
@@ -1003,7 +992,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Expose public image compiler cache credentials",
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
-        "Verify default passport test-mode boundary",
+        "Verify local passport signing is forbidden",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
         "Test native Canvas operation timeout TLS parity",
@@ -1018,7 +1007,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Exercise live Signing Keys public contracts on disposable Redis",
         "Exercise Gateway CSR and managed passport chain with disposable OpenBao",
         "Run Flow database contract after workspace suite",
-        "Test packaged passport self-signed mode",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
     }
@@ -2218,7 +2206,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            'MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -2302,7 +2290,7 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            'MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )

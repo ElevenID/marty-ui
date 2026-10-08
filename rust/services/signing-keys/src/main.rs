@@ -1,6 +1,7 @@
 use marty_signing_keys::{
     config::Config, csca_lifecycle::CscaLifecycleStore, documents::DocumentStore,
     flow_envelope::OpenBaoEnvelopeProvider, http, profiles::ProfileStore, registry::RegistryStore,
+    vc_api_holder_proof::OpenBaoHolderProofProvider,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -26,11 +27,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let document_store = DocumentStore::from_connection(registry_store.connection());
     let csca_lifecycle_store = CscaLifecycleStore::from_connection(registry_store.connection());
     let profile_store = ProfileStore::from_connection(registry_store.connection());
+    // A configured KMS must also be able to reconcile ephemeral holder keys
+    // after an interrupted request. Do not silently disable that cleanup.
+    let holder_proofs = if config.bao_addr.is_some() {
+        Some(OpenBaoHolderProofProvider::from_environment()?)
+    } else {
+        None
+    };
     let flow_envelopes = match (config.bao_addr, config.bao_token) {
         (Some(address), Some(token)) => Some(OpenBaoEnvelopeProvider::new(address, token)?),
         (None, None) => None,
         _ => unreachable!("configuration validates paired OpenBao values"),
     };
+    let flow_envelopes = match (flow_envelopes, config.haip_kms_token_file) {
+        (Some(provider), Some(path)) => Some(provider.with_haip_token_file(path)?),
+        (provider, None) => provider,
+        (None, Some(_)) => unreachable!("configuration requires BAO_ADDR for HAIP token"),
+    };
+    if let Some(holder_proofs) = holder_proofs {
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
+            loop {
+                interval.tick().await;
+                match holder_proofs.reap_stale_keys().await {
+                    Ok(deleted) if deleted > 0 => {
+                        info!(deleted, "reaped stale VC-API holder proof keys");
+                    }
+                    Err(error) => {
+                        error!(%error, "VC-API holder proof key reconciliation failed");
+                    }
+                    Ok(_) => {}
+                }
+            }
+        });
+    }
     let listener = TcpListener::bind(config.http_addr).await?;
     info!(
         address = %config.http_addr,

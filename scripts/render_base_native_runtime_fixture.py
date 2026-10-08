@@ -24,7 +24,6 @@ INPUT_KEYS = frozenset(
         "GRPC_SERVICE_TOKEN",
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "TOKEN_HMAC_KEY",
-        "INTEGRATION_SECRET_MASTER_KEY",
         "PUBLIC_API_URL",
         "UI_BASE_URL",
         "ISSUANCE_OFFER_TTL_MINUTES",
@@ -45,6 +44,8 @@ SPEC_KEYS = frozenset(
         "legacy_origin",
         "ca_file",
         "policy_directory",
+        "kms_url",
+        "kms_token_file",
         "authcrypt",
         "allow_private_ips",
     }
@@ -81,6 +82,9 @@ def validate_spec(spec):
     assert all(type(port) is int and 0 < port < 65536 for port in ports)
     owned_url(spec["database_url"], {"postgres", "postgresql"})
     owned_url(spec["redis_url"], {"redis"})
+    owned_url(spec["kms_url"], {"http"})
+    kms = urlsplit(spec["kms_url"])
+    assert not kms.username and not kms.password and kms.path in {"", "/"}
     for name in ("peer_origin", "legacy_origin"):
         owned_url(spec[name], {"http"})
         assert not urlsplit(spec[name]).username and not urlsplit(spec[name]).password
@@ -91,6 +95,8 @@ def validate_spec(spec):
         directory.is_absolute() and directory.is_dir() and directory.parent != directory
     )
     assert ca.is_file() and ca.parent.resolve() == directory.resolve()
+    token_file = Path(spec["kms_token_file"])
+    assert token_file.is_file() and token_file.parent.resolve() == directory.resolve()
     if spec["authcrypt"]:
         assert (directory / "didcomm-encryption-policy.json").is_file()
 
@@ -109,6 +115,8 @@ def fixture_overlay(spec, selected):
         "SIGNING_KEYS_INTERNAL_URL": spec["peer_origin"],
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL": spec["peer_origin"],
         "DIDCOMM_TLS_CA_FILE": spec["ca_file"],
+        "DIDCOMM_KMS_ADDR": spec["kms_url"],
+        "DIDCOMM_KMS_TOKEN_FILE": spec["kms_token_file"],
     }
     if spec["authcrypt"]:
         native["DIDCOMM_ENCRYPTION_POLICY_FILE"] = str(
@@ -177,6 +185,9 @@ def render(spec, command):
                 r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
             )
         }
+        required["MARTY_OPENBAO_DIDCOMM_IMAGE"] = (
+            "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
+        )
         inputs = {
             **required,
             **spec["inputs"],
@@ -207,6 +218,12 @@ def render(spec, command):
             inputs=inputs,
             policy_directory=Path(spec["policy_directory"]),
         )
+        if spec["authcrypt"]:
+            selected_native = selected["services"]["issuance-native"]["environment"]
+            assert selected_native["DIDCOMM_KMS_ADDR"] == "http://openbao:8200"
+            assert selected_native["DIDCOMM_KMS_TOKEN_FILE"] == (
+                "/run/secrets/didcomm-authcrypt/openbao-token"
+            )
         overlay = fixture_overlay(spec, selected)
         overlay_file = directory / "owned-process-addresses.json"
         overlay_file.write_text(json.dumps(overlay), encoding="utf-8")

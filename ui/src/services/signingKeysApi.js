@@ -130,22 +130,18 @@ export async function deleteSigningKey(keyId, params = {}) {
 }
 
 /**
- * Get HSM/Vault configuration
- * @returns {Promise<Object>} HSM/Vault settings
+ * Get remote signing-service configuration.
+ * @returns {Promise<Object>} Signing-service configuration
  */
 export async function getKeyManagementConfig(params = {}) {
   return get(withOrganizationQuery(`${BASE_PATH}/config`, params, {}, 'loading key management configuration'));
 }
 
 /**
- * Update HSM/Vault configuration. Existing service credentials are never
+ * Update remote signing-service configuration. Existing service credentials are never
  * returned by GET. An empty or omitted auth_reference preserves one only for
  * the same service connection; send null to clear it or a new value to replace it.
- * @param {Object} config - HSM/Vault configuration
- * @param {boolean} config.hsm_enabled - Whether HSM is enabled
- * @param {Object} config.hsm_settings - HSM connection settings
- * @param {boolean} config.vault_enabled - Whether Vault is enabled
- * @param {Object} config.vault_settings - Vault connection settings
+ * @param {Object} config - Signing-service configuration with a services array
  * @returns {Promise<Object>} Updated configuration
  */
 export async function updateKeyManagementConfig(config) {

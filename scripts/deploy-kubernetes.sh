@@ -149,13 +149,12 @@ apply_manifest() {
 }
 
 # No build, registry request or cluster mutation: capture the exact full model
-# before any deployment writes. Disabled/default keeps the existing path and
-# does not require the new executable or inspect unused native-only inputs.
+# before any deployment writes. KMS-only deployment requires the native owner.
 prepare_kubernetes_native_issuance() {
   K8S_NATIVE_RENDERED_MODEL=""
   K8S_ISSUANCE_NATIVE_ENABLED="${K8S_ISSUANCE_NATIVE_ENABLED-true}"
   case "$K8S_ISSUANCE_NATIVE_ENABLED" in
-    false) return 0 ;;
+    false) error "KMS-only Kubernetes deployment requires native issuance."; return 1 ;;
     true) ;;
     *) error "Kubernetes native issuance selection must be true or false."; return 1 ;;
   esac
@@ -254,7 +253,7 @@ cmd_setup_secrets() {
   local google_client_id google_client_secret smtp_username smtp_password
   local issuance_api_key token_hmac_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
-  local integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
+  local canvas_credentials_shared_secret openbao_service_token signing_keys_openbao_token didcomm_issuance_openbao_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
   local flow_workload_client_cert flow_workload_client_key
   local flow_workload_server_cert flow_workload_server_key
@@ -303,9 +302,11 @@ cmd_setup_secrets() {
   compliance_profile_workload_client_key="$(resolve_secret_input COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY)"
   flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
   flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
-  integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
+  signing_keys_openbao_token="$(resolve_secret_input SIGNING_KEYS_OPENBAO_TOKEN)"
+  didcomm_issuance_openbao_token="$(resolve_secret_input DIDCOMM_ISSUANCE_OPENBAO_TOKEN)"
+  require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"
   notification_openbao_token="$(resolve_secret_input NOTIFICATION_OPENBAO_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 
@@ -344,9 +345,10 @@ cmd_setup_secrets() {
     --from-literal=NOTIFICATION_APPLICANT_EVENT_TOKEN="$notification_applicant_event_token" \
     --from-literal=FLOW_WEBHOOK_SECRET="$flow_webhook_secret" \
     --from-literal=FLOW_APPLICATION_EVENT_HMAC_KEY="$flow_application_event_hmac_key" \
-    --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
+    --from-literal=SIGNING_KEYS_OPENBAO_TOKEN="$signing_keys_openbao_token" \
+    --from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token" \
     --from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"

@@ -606,63 +606,6 @@ jobs:
           target_budget_bytes=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["metadata"]["elevenid-feature-regression"]["target-budget-bytes"])' "$manifest")
           test "$target_bytes" -le "$target_budget_bytes"
 
-  test-rust-passport-image:
-    name: Rust Passport Test-mode Image
-    needs: changes
-    if: needs.changes.outputs.rust_runtime == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      - name: Expose public image compiler cache credentials
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        with:
-          script: |
-            const token = process.env.ACTIONS_RUNTIME_TOKEN;
-            const url = process.env.ACTIONS_RESULTS_URL;
-            if (!token || !url) throw new Error('GitHub compiler cache credentials are unavailable');
-            core.setSecret(token);
-            core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
-            core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
-            core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
-      - name: Build opt-in passport test-mode image
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-        with:
-          context: .
-          file: services/Dockerfile
-          load: true
-          push: false
-          tags: marty-passport-self-signed:contract
-          provenance: false
-          build-args: |
-            PASSPORT_SELF_SIGNED_TEST=true
-            MARTY_RELEASE_VERSION=ci
-            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-            SERVICE_NAME=issuance_native
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
-      - name: Verify opt-in passport test-mode image boundary
-        shell: bash
-        run: |
-          set -euo pipefail
-          if test_output="$(docker run --rm --network none \
-            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
-            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
-            --entrypoint /usr/local/bin/marty-issuance-service \
-            marty-passport-self-signed:contract 2>&1)"; then
-            echo "Test-mode image unexpectedly started without tenant keys" >&2
-            exit 1
-          fi
-          grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
-
   test-openbao-didcomm-plugin:
     name: Test OpenBao DIDComm plugin image
     needs: changes
@@ -1058,7 +1001,7 @@ jobs:
           printf 'MARTY_SELFHOST_TEST_PACKAGER_BINARY=%s\n' "$PWD/rust/target/debug/package-selfhost-bundle" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_IMAGE=%s\n' "$selfhost_image_id" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_REVISION=%s\n' "$selfhost_revision" >> "$GITHUB_ENV"
-      - name: Verify default passport test-mode boundary
+      - name: Verify local passport signing is forbidden
         if: matrix.lane == 'canvas'
         shell: bash
         run: |
@@ -1071,7 +1014,7 @@ jobs:
             echo "Default public image unexpectedly enabled passport test mode" >&2
             exit 1
           fi
-          grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
+          grep -Fq 'self-signed passport signing is forbidden' <<<"$default_output"
       - name: Prepare database contract executables
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1308,14 +1251,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_packaged_test marty_passport_bureau_test marty_passport_gateway_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
           docker exec --interactive "${{ job.services.postgres.id }}" \
             psql --username postgres --dbname marty_issuance_executable_smoke_test \
-            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
-          docker exec --interactive "${{ job.services.postgres.id }}" \
-            psql --username postgres --dbname marty_passport_packaged_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
@@ -1437,13 +1377,18 @@ jobs:
             grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
           done
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5; do
+          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5 document_storage_contract:1; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
               | tee "$RUNNER_TEMP/signing-$suite.log"
             grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
           done
+          cargo test --locked -p marty-signing-keys --lib \
+            document_storage_refuses_private_material_on_read_and_write -- --ignored
+      - name: Qualify scoped provider callback verification against disposable OpenBao
+        if: matrix.lane == 'contracts'
+        run: python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter
       - name: Exercise Gateway CSR and managed passport chain with disposable OpenBao
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1472,6 +1417,19 @@ jobs:
           export MARTY_TEST_OPENBAO_TOKEN=test-only
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
           export BAO_TOKEN=test-only
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request PUT \
+            --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"list\"] }"}' \
+            http://127.0.0.1:8200/v1/sys/policies/acl/kms-lti-test-signer >/dev/null
+          lti_token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data '{"policies":["kms-lti-test-signer"],"ttl":"20m"}' \
+            http://127.0.0.1:8200/v1/auth/token/create \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
+          [[ -n "$lti_token" && "$lti_token" != test-only ]]
+          MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
+            cargo test --locked -p marty-signing-keys --test public_service_sign_live_kms \
+              managed_openbao_rs256_signature_matches_jose_pkcs1_profile -- --ignored --exact
             cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
               authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
             -- --ignored --exact
@@ -1506,17 +1464,27 @@ jobs:
           (set -o noclobber; printf '%s' "$owner" > "$diagnostics/.owner")
           printf 'MARTY_RUNTIME_DIAGNOSTICS=%s\n' "$diagnostics" >> "$GITHUB_ENV"
           printf 'MARTY_RUNTIME_DIAGNOSTICS_OWNER=%s\n' "$owner" >> "$GITHUB_ENV"
+      - name: Build disposable Canvas DIDComm KMS backend
+        if: matrix.lane == 'canvas'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: openbao/didcomm-authcrypt/Dockerfile
+          load: true
+          push: false
+          tags: marty-openbao-didcomm:canvas
+          provenance: false
+      - name: Probe Canvas host and namespace KMS fixtures
+        if: matrix.lane == 'canvas'
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:canvas
+        run: python3 scripts/probe_canvas_didcomm_sidecar.py
       - name: Run isolated database contract suites concurrently
         working-directory: rust
         shell: bash
-        run: python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
-      - name: Test packaged passport self-signed mode
-        if: matrix.lane == 'contracts'
-        working-directory: rust
         env:
-          MARTY_PASSPORT_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
-          MARTY_PASSPORT_PACKAGED_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_packaged_test
-        run: cargo test --locked -p marty-issuance-service --features passport-self-signed-test --test passport_postgres_contract
+          MARTY_CANVAS_OPENBAO_IMAGE: marty-openbao-didcomm:canvas
+        run: python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
       - name: Test beta passport reconciliation and native batch on PostgreSQL
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -2554,7 +2522,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-rust-passport-image, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -2579,7 +2547,6 @@ jobs:
       SERVICES_RESULT: ${{ needs.test-services.result }}
       PASSPORT_FENCE_RESULT: ${{ needs.test-passport-fence-postgres.result }}
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
-      RUST_PASSPORT_RESULT: ${{ needs.test-rust-passport-image.result }}
       RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
       OPENBAO_RESULT: ${{ needs.test-openbao-didcomm-plugin.result }}
       RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
@@ -2597,7 +2564,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 19 ]]
+          [[ "${#results[@]}" -eq 18 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -2639,7 +2606,6 @@ jobs:
             require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"
             require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
-            require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
             require_selected test-openbao-didcomm-plugin "$OPENBAO_RESULT" "$OPENBAO_SELECTED"
             require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"

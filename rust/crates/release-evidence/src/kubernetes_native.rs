@@ -139,9 +139,9 @@ pub fn selected(values: &Environment) -> Result<bool> {
     match values
         .get("K8S_ISSUANCE_NATIVE_ENABLED")
         .map(String::as_str)
-        .unwrap_or("false")
+        .unwrap_or("true")
     {
-        "false" => Ok(false),
+        "false" => Err(REFUSAL),
         "true" => Ok(true),
         _ => Err(REFUSAL),
     }
@@ -380,7 +380,7 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
         require(
             flow.get("ISSUANCE_GRPC_TARGET")
-                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance:9005"})),
+                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"})),
         )?;
     }
     let gateway = environment(container(
@@ -451,7 +451,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"issuance-native"})),
     )?;
     let owner = container(deployment, "issuance-native")?;
-    closed_runtime_pod(deployment, owner)?;
+    closed_runtime_pod(deployment, owner, true)?;
     require(owner["envFrom"] == json!([{"configMapRef":{"name":"issuance-native-config"}}]))?;
     let env = environment(owner)?;
     let mut expected = BTreeMap::new();
@@ -464,6 +464,14 @@ fn native_template(resources: &[Value]) -> Result<()> {
     expected.insert(
         "ISSUER_BASE_URL",
         config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
+    );
+    expected.insert(
+        "DIDCOMM_KMS_ADDR",
+        config_ref("DIDCOMM_KMS_ADDR", "BAO_ADDR"),
+    );
+    expected.insert(
+        "DIDCOMM_KMS_TOKEN_FILE",
+        json!({"name":"DIDCOMM_KMS_TOKEN_FILE","value":"/run/secrets/didcomm-kms/token"}),
     );
     expected.insert("CANVAS_CREDENTIALS_API_TOKEN",json!({"name":"CANVAS_CREDENTIALS_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"CANVAS_CREDENTIALS_API_TOKEN","optional":true}}}));
     expected.insert("PERSONALIZATION_BUREAU_API_KEY",json!({"name":"PERSONALIZATION_BUREAU_API_KEY","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"PERSONALIZATION_BUREAU_API_KEY","optional":true}}}));
@@ -497,24 +505,25 @@ fn native_template(resources: &[Value]) -> Result<()> {
     Ok(())
 }
 
-fn closed_runtime_pod(deployment: &Value, owner: &Value) -> Result<()> {
+fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) -> Result<()> {
     require(deployment["apiVersion"] == "apps/v1")?;
-    require_keys(
-        owner,
-        &[
-            "name",
-            "image",
-            "imagePullPolicy",
-            "command",
-            "args",
-            "envFrom",
-            "env",
-            "ports",
-            "resources",
-            "livenessProbe",
-            "readinessProbe",
-        ],
-    )?;
+    let mut owner_keys = vec![
+        "name",
+        "image",
+        "imagePullPolicy",
+        "command",
+        "args",
+        "envFrom",
+        "env",
+        "ports",
+        "resources",
+        "livenessProbe",
+        "readinessProbe",
+    ];
+    if didcomm_token {
+        owner_keys.push("volumeMounts");
+    }
+    require_keys(owner, &owner_keys)?;
     require(
         owner["command"] == json!(["/app/services/entrypoint.sh"])
             && owner["args"] == json!([])
@@ -532,24 +541,33 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value) -> Result<()> {
         pod["serviceAccountName"] == "marty-app"
             && pod["imagePullSecrets"] == json!([{"name":"ocir-secret"}]),
     )?;
-    require_keys(
-        pod,
-        &[
-            "serviceAccountName",
-            "automountServiceAccountToken",
-            "imagePullSecrets",
-            "containers",
-        ],
-    )?;
+    let mut pod_keys = vec![
+        "serviceAccountName",
+        "automountServiceAccountToken",
+        "imagePullSecrets",
+        "containers",
+    ];
+    if didcomm_token {
+        pod_keys.push("volumes");
+    }
+    require_keys(pod, &pod_keys)?;
     require(
         pod["automountServiceAccountToken"] == false
             && pod["containers"].as_array().is_some_and(|v| v.len() == 1),
     )?;
-    require(
-        pod.get("volumes").is_none()
-            && owner.get("volumeMounts").is_none()
-            && pod.get("hostNetwork").is_none(),
-    )?;
+    require(pod.get("hostNetwork").is_none())?;
+    if didcomm_token {
+        require(
+            owner["volumeMounts"]
+                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true}]),
+        )?;
+        require(
+            pod["volumes"]
+                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}}]),
+        )?;
+    } else {
+        require(pod.get("volumes").is_none() && owner.get("volumeMounts").is_none())?;
+    }
     Ok(())
 }
 
@@ -564,7 +582,7 @@ fn signing_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"signing-keys"})),
     )?;
     let owner = container(deployment, "signing-keys")?;
-    closed_runtime_pod(deployment, owner)?;
+    closed_runtime_pod(deployment, owner, false)?;
     require(owner["envFrom"] == json!([]))?;
     let mut expected = BTreeMap::new();
     for (name, value) in [
@@ -574,12 +592,18 @@ fn signing_template(resources: &[Value]) -> Result<()> {
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
     }
-    for name in ["SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"] {
-        expected.insert(name, secret_ref(name));
-    }
+    expected.insert(
+        "SIGNING_KEYS_INTERNAL_API_KEY",
+        secret_ref("SIGNING_KEYS_INTERNAL_API_KEY"),
+    );
+    expected.insert("OPENBAO_SERVICE_TOKEN", json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}}));
     for name in ["BAO_ADDR", "PUBLIC_DOMAIN"] {
         expected.insert(name, config_ref(name, name));
     }
+    expected.insert(
+        "ISSUER_BASE_URL",
+        config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
+    );
     let env = environment(owner)?;
     require(env.len() == expected.len() && expected.iter().all(|(k, v)| env.get(k) == Some(&v)))?;
     require(owner["ports"] == json!([{"name":"http","containerPort":8017}]))?;

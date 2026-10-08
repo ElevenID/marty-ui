@@ -53,11 +53,8 @@ NATIVE_ADDITIVE = {
     "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     "ICAO_DOCUMENT_SIGNER_URL": "${ICAO_DOCUMENT_SIGNER_URL:-}",
     "ICAO_DOCUMENT_SIGNER_API_KEY": "${ICAO_DOCUMENT_SIGNER_API_KEY:-}",
-    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}",
-    "PHYSICAL_DOCUMENT_ARTIFACT_KEY": "${PHYSICAL_DOCUMENT_ARTIFACT_KEY:-}",
     "PERSONALIZATION_BUREAU_URL": "${PERSONALIZATION_BUREAU_URL:-}",
     "PERSONALIZATION_BUREAU_API_KEY": "${PERSONALIZATION_BUREAU_API_KEY:-}",
-    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}",
     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}",
 }
 PASSPORT_CONSUMER_ADDITIVE = {
@@ -89,8 +86,11 @@ LOADED_INPUTS = {
     "TOKEN_HMAC_KEY",
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
-PASSPORT_BETA_ONLY_FILE_ALIASES = {
+FORBIDDEN_LOCAL_CUSTODY_INPUTS = {
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
 }
 PASSPORT_BETA_OVERLAY_ONLY = {
@@ -171,6 +171,9 @@ def assert_input_inventory():
     )
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(native)
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(legacy)
+    assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (
+        set(native) | set(legacy) | set(beta_native)
+    )
     assert {
         key: model["x-issuance-application-env"].get(key) for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
@@ -178,7 +181,7 @@ def assert_input_inventory():
     expected_omitted = (
         LOADED_INPUTS
         | EXPLICIT_POLICY
-        | PASSPORT_BETA_ONLY_FILE_ALIASES
+        | FORBIDDEN_LOCAL_CUSTODY_INPUTS
         | PASSPORT_BETA_OVERLAY_ONLY
         | CONFIG_META
         | UNFORWARDED
@@ -233,6 +236,7 @@ def assert_models(
     shared_additions=SHARED_ADDITIONS,
     native_additive=NATIVE_ADDITIVE,
     passport_consumer_additive=PASSPORT_CONSUMER_ADDITIVE,
+    didcomm_kms_addr="${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}",
 ):
     preserved = deepcopy(after)
     native = GATE["native_dispatcher_model"](
@@ -244,6 +248,20 @@ def assert_models(
     assert {key: legacy_after.pop(key) for key in SHARED_ADDITIONS} == shared_additions
     assert legacy_after.pop("DIDCOMM_DELIVERY_OWNER") == "native"
     assert legacy_after.pop("ISSUANCE_NATIVE_SERVICE_URL") == "http://issuance-native:8005"
+    assert native["environment"].pop("DIDCOMM_KMS_ADDR") == didcomm_kms_addr
+    assert native["environment"].pop("DIDCOMM_KMS_TOKEN_FILE") == (
+        "/run/secrets/didcomm_issuance_openbao_token"
+    )
+    didcomm_mount = {
+        "source": "didcomm_issuance_openbao_token",
+        "target": "/run/secrets/didcomm_issuance_openbao_token",
+    }
+    assert isinstance(native["secrets"], list)
+    assert native["secrets"].count(didcomm_mount) == 1
+    native["secrets"].remove(didcomm_mount)
+    assert preserved["secrets"].pop("didcomm_issuance_openbao_token")["file"].endswith(
+        "/didcomm_issuance_openbao_token"
+    )
     if "SIGNING_KEYS_INTERNAL_URL" in before["services"]["issuance"]["environment"]:
         assert legacy_after["SIGNING_KEYS_INTERNAL_URL"] == "http://signing-keys:8017/internal"
         legacy_after["SIGNING_KEYS_INTERNAL_URL"] = before["services"]["issuance"][
@@ -261,6 +279,15 @@ def assert_models(
         "condition": "service_healthy",
         "required": True,
     }
+    # Native delivery readiness now gates the retained HTTP consumer; preserve
+    # the frozen liveness probe only for the unowned-diff comparison.
+    if "healthcheck" in preserved["services"]["issuance"]:
+        assert preserved["services"]["issuance"]["healthcheck"]["test"][-1] == (
+            "http://localhost:8005/ready"
+        )
+        preserved["services"]["issuance"]["healthcheck"] = before["services"][
+            "issuance"
+        ]["healthcheck"]
     if "depends_on" not in before["services"]["issuance"]:
         assert not preserved["services"]["issuance"].pop("depends_on")
     assert "integration_secret_master_key" not in preserved.get("secrets", {})
@@ -402,7 +429,7 @@ def interpolated_models():
     original = (ROOT / FROZEN).read_text(encoding="utf-8")
     current = (ROOT / GATE["BASE"]).read_text(encoding="utf-8")
     required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", original))
-    assert required == set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    assert set(re.findall(r"\$\{([A-Z0-9_]+):\?", current)) == required | {"BAO_ADDR"}
     environment = yaml.safe_load(original)["services"]["issuance"]["environment"]
     variables = (
         set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
@@ -413,12 +440,13 @@ def interpolated_models():
             for additions in PASSPORT_CONSUMER_ADDITIVE.values()
             for key in additions
         }
-    ) - required
+    ) - required - {"BAO_ADDR"}
 
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
         directory = Path(temporary)
         inputs = dict.fromkeys(required, "https://synthetic.example")
         inputs.update(
+            BAO_ADDR="http://synthetic-bao:8200",
             SELFHOST_STATE_DIR=(directory / "state").as_posix(),
             SELFHOST_SECRET_DIR=(directory / "secrets").as_posix(),
             KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
@@ -465,6 +493,7 @@ def interpolated_models():
                 shared_additions=rendered_additions(SHARED_ADDITIONS, values),
                 native_additive=rendered_additions(NATIVE_ADDITIVE, values),
                 passport_consumer_additive=rendered_passport_consumer_additions(values),
+                didcomm_kms_addr=values["BAO_ADDR"],
             )
             assert_signing_binding(after)
             print(f"PASS: self-host {mode} interpolated whole model")
@@ -484,7 +513,21 @@ def interpolated_models():
                         raise AssertionError(
                             f"Required self-host input accepted: {name}"
                         )
-        print(f"PASS: {len(required)} required inputs, missing/empty in both models")
+        for value in (None, ""):
+            values = dict(inputs)
+            if value is None:
+                values.pop("BAO_ADDR")
+            else:
+                values["BAO_ADDR"] = value
+            try:
+                render(GATE["BASE"], values)
+            except subprocess.CalledProcessError as error:
+                assert "required variable BAO_ADDR" in error.stderr
+            else:
+                raise AssertionError("Required native DIDComm KMS address accepted")
+        print(
+            f"PASS: {len(required)} shared inputs plus native BAO_ADDR reject missing/empty"
+        )
 
 
 def run():

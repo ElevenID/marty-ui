@@ -11,11 +11,136 @@ import (
 	"testing"
 
 	"github.com/openbao/openbao/sdk/v2/logical"
+	"github.com/openbao/openbao/sdk/v2/physical/inmem"
 )
+
+func transactionalTestStorage(t *testing.T) logical.Storage {
+	t.Helper()
+	physical, err := inmem.NewInmem(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage := logical.NewLogicalStorage(physical)
+	if err := requireTransactionalStorage(storage); err != nil {
+		t.Fatal(err)
+	}
+	return storage
+}
+
+type failMetadataStorage struct{ logical.TransactionalStorage }
+
+func (storage failMetadataStorage) BeginTx(ctx context.Context) (logical.Transaction, error) {
+	tx, err := storage.TransactionalStorage.BeginTx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &failMetadataTransaction{Transaction: tx}, nil
+}
+
+type failMetadataTransaction struct{ logical.Transaction }
+
+func (tx *failMetadataTransaction) Put(ctx context.Context, entry *logical.StorageEntry) error {
+	if strings.HasPrefix(entry.Key, "meta/") || strings.HasPrefix(entry.Key, "haip/meta/") {
+		return errors.New("injected metadata write failure")
+	}
+	return tx.Transaction.Put(ctx, entry)
+}
+
+func TestKeyLifecycleRequiresTransactionalStorage(t *testing.T) {
+	ctx := context.Background()
+	storage := &logical.InmemStorage{}
+	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		path string
+		data map[string]any
+	}{
+		{"keys/tenant_a/sender", map[string]any{
+			"sender_did": "did:example:alice", "sender_key_id": "did:example:alice#key-1",
+		}},
+		{"haip/keys/tenant_a/flow_a", nil},
+	} {
+		response, err := engine.HandleRequest(ctx, &logical.Request{
+			Operation: logical.UpdateOperation, Path: test.path,
+			Storage: storage, Data: test.data,
+		})
+		if err == nil || response != nil {
+			t.Fatalf("non-transactional key creation succeeded: %s", test.path)
+		}
+	}
+	for _, prefix := range []string{"meta/", "secret/", "haip/meta/", "haip/secret/"} {
+		entries, err := storage.List(ctx, prefix)
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("non-transactional storage retained %s: %v %v", prefix, entries, err)
+		}
+	}
+}
+
+func TestFailedMetadataWriteRollsBackVersionAndPointer(t *testing.T) {
+	ctx := context.Background()
+	storage := transactionalTestStorage(t)
+	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fault := failMetadataStorage{storage.(logical.TransactionalStorage)}
+	senderPath := "keys/tenant_a/sender"
+	senderData := map[string]any{
+		"sender_did": "did:example:alice", "sender_key_id": "did:example:alice#key-1",
+	}
+	for _, test := range []struct {
+		path, meta, versions string
+		data map[string]any
+	}{
+		{senderPath, metadataPath("tenant_a", "sender"), "secret/tenant_a/sender/", senderData},
+		{"haip/keys/tenant_a/flow_a", haipMetaPath("tenant_a", "flow_a"), "haip/secret/tenant_a/flow_a/", nil},
+	} {
+		response, err := engine.HandleRequest(ctx, &logical.Request{
+			Operation: logical.UpdateOperation, Path: test.path,
+			Storage: fault, Data: test.data,
+		})
+		if err == nil || response != nil {
+			t.Fatalf("metadata failure succeeded: %s", test.path)
+		}
+		meta, err := storage.Get(ctx, test.meta)
+		if err != nil || meta != nil {
+			t.Fatalf("failed create persisted metadata: %s", test.path)
+		}
+		versions, err := storage.List(ctx, test.versions)
+		if err != nil || len(versions) != 0 {
+			t.Fatalf("failed create persisted version: %s: %v", test.path, versions)
+		}
+	}
+	created, err := engine.HandleRequest(ctx, &logical.Request{
+		Operation: logical.UpdateOperation, Path: senderPath,
+		Storage: storage, Data: senderData,
+	})
+	if err != nil || created == nil || created.IsError() {
+		t.Fatalf("setup create failed: %v %#v", err, created)
+	}
+	current := created.Data["version"]
+	response, err := engine.HandleRequest(ctx, &logical.Request{
+		Operation: logical.UpdateOperation, Path: senderPath + "/rotate",
+		Storage: fault,
+	})
+	if err == nil || response != nil {
+		t.Fatal("metadata failure rotated key")
+	}
+	meta, err := loadMeta(ctx, storage, "tenant_a", "sender")
+	if err != nil || meta.CurrentVersion != current {
+		t.Fatalf("failed rotation changed current pointer: %v %#v", err, meta)
+	}
+	versions, err := storage.List(ctx, "secret/tenant_a/sender/")
+	if err != nil || len(versions) != 1 {
+		t.Fatalf("failed rotation retained uncommitted version: %v %v", versions, err)
+	}
+}
 
 func TestVersionedSenderKeyAndBoundPack(t *testing.T) {
 	ctx := context.Background()
-	storage := &logical.InmemStorage{}
+	storage := transactionalTestStorage(t)
 	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +316,7 @@ func assertPublicOnly(t *testing.T, response *logical.Response) {
 
 func TestConcurrentRotationsKeepUniqueVersions(t *testing.T) {
 	ctx := context.Background()
-	storage := &logical.InmemStorage{}
+	storage := transactionalTestStorage(t)
 	engine, err := Factory(ctx, &logical.BackendConfig{StorageView: storage})
 	if err != nil {
 		t.Fatal(err)
