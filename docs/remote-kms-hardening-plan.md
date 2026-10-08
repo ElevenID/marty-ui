@@ -6468,6 +6468,19 @@ status rejection. A direct KMS-only run of the registered integration target
 passed 12/12 on `f5ca93c`. This closes that specific test-custody item; the
 remaining Open Badge endorsement/X.509 and cross-format service assertions
 still need their own mapping.
+2026-10-08 K7 test-custody audit found another active local-key fixture in
+Credentials `tests/unit/test_canvas_lti_routes.py`: `_TestToolJwtSigner`
+generates and signs with an RSA private key for dynamic Canvas client
+assertions and deep-link responses, and `_private_rsa_jwk` generates keys for
+negative and public-JWKS cases. Native UI's
+`canvas_lti_tool_signing_behavior.rs` covers DID/tenant/method binding and
+failure paths with a mocked signature provider, while
+`managed_key_create_live_contract.rs` uses a mock Transit backend for the
+LTI key-purpose route. Neither is a real remote RS256 assertion-sign-and-
+verify replacement. Retire those Python private-key fixtures using public
+negative vectors and an opaque unit signer, and add a disposable real
+OpenBao-backed LTI assertion-sign/verify acceptance proof before calling
+test-side custody and Canvas behavior fully preserved.
 The broad Credentials retirement candidate was checkpointed locally as
 `4051dd4` on `security/remote-kms-retirement-20261007`: 69 files changed,
 including local issuer-key adapter/test removal, no-private-key clean-install
