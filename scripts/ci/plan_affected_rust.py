@@ -348,11 +348,26 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
         },
         {
+            # Auth finalizes Canvas LTI sessions through Issuance's
+            # conditionally registered native HTTP route, without a Cargo edge.
             "package": "marty-auth",
             "evidence": "rust/services/auth/src/config.rs",
             "binding": "ISSUANCE_NATIVE_SERVICE_URL",
             "runtime_evidence": "rust/services/auth/src/main.rs",
             "runtime_marker": "&config.issuance_native_service_url",
+            "startup_marker": "HttpCanvasExperienceSessionProvider::new(",
+            "request_evidence": "rust/services/auth/src/canvas_transport.rs",
+            "request_marker": '"/v1/integrations/canvas/lti/experience-sessions/current"',
+            "request_method_marker": "method: OutboundHttpMethod::Get,",
+            "request_auth_marker": 'headers.insert("authorization".into(), format!("Bearer {token}"));',
+            "callsite_evidence": "rust/services/auth/src/http_service.rs",
+            "callsite_route_marker": '"/v1/auth/canvas-lti/finalize"',
+            "callsite_marker": ".finalize(&CanvasFinalizeContext {",
+            "provider_evidence": "rust/services/issuance/src/http.rs",
+            "provider_condition_marker": "if services.canvas_lti_experience_session.is_some() {",
+            "provider_marker": "get(get_canvas_lti_experience_session)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005",
         },
         {
             "package": "marty-flow",
