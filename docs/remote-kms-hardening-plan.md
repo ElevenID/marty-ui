@@ -2749,6 +2749,21 @@ removed. Core commit: `67d703d`. Other test-only local issuer methods and
 fixtures in `issuer.rs`, `types.rs` and `holder_key.rs` still need retirement;
 no hosted CI or PR was triggered for this checkpoint.
 
+2026-10-07 Core mDoc x5chain remote conformance: the former crate-imported
+`mdoc_x5chain_conformance.rs` fixture generated a private P-256 issuer key to
+assert x5chain wire placement. Those assertions now run inside the disposable
+OpenBao live issuer target: a non-exportable ES256 Transit key signs the mDoc,
+and the test checks certificate chain bytes in the unprotected COSE header,
+ES256 only in the protected header, no x5chain in issued namespace items, and
+no value digest for x5chain metadata. All three live tests passed against a
+fresh disposable OpenBao 2.5.5 and the container was removed. The old local
+issuer fixture and its crate import were deleted. The KMS-only issuer/wallet
+library suite passed after deletion (318 passed, one ignored); targeted Clippy
+with `-D warnings`, Rustfmt and diff checks passed. Core commit: `ab376b1`.
+Other crate-internal `IssuerKey` signing paths remain and need the same
+assertion-preserving retirement before Core is PR-ready. No hosted CI or PR
+was triggered for this checkpoint.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
