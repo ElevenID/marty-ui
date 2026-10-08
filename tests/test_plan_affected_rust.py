@@ -939,6 +939,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "\n  deployment-profile:\n", 1
         )[0]
         self.assertIn(edge["deployment_marker"], presentation)
+        with self.assertRaises(AssertionError):
+            self.assertIn(
+                edge["deployment_marker"],
+                presentation.replace(edge["deployment_marker"], "removed-binding"),
+            )
         self.assertNotIn("marty-issuance-service", {
             dep["name"] for dep in packages["marty-presentation-policy"]["dependencies"]
         })

@@ -1779,8 +1779,8 @@ that URL into `HttpTemplateProvider`, and GETs
 status URL from the same native-Issuance setting and GETs it in its control
 plane. Native Issuance owns both HTTP routes, and the base Compose profile
 points both consumers at `issuance-native:8005`; neither consumer declares
-Issuance as a Cargo dependency. Record these two exact observed edges with
-source/deployment-marker regressions in the shadow planner. The self-host
+Issuance as a Cargo dependency. The shadow planner records these two observed
+edges with source/deployment-marker regressions. The self-host
 profile currently points Applicant and Presentation Policy status lookup at
 legacy `issuance`, so these observations do not imply native ownership of
 their self-host traffic. The planner retains its full-workspace fallback for
