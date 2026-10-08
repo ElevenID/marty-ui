@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All current hosted checks, including CodeQL, Fast Rust Preflight and CI Gate, pass; the PR remains draft with review required. UI and Credentials PRs, exact artifacts and deployment cutover remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; the Credentials candidate has removed both `keys` ORM models/key-manager paths, historical `issuer_signing_keys` create/drop revisions, a duplicate wallet ORM, and an unused `selective_disclosure_keys` JSON column. Its 46-revision graph, 14 focused tests, fresh ORM schema and disposable PostgreSQL issuance schema pass. Core now rejects private material on direct Open Badge public-key writes; its 50 active storage tests pass. Cross-repository/assembled schema inventory, runtime data-flow review and release-artifact proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses a shared private-material policy for signing-key documents, Organization settings/audit JSON and Trust Profile repository records. Focused tests and disposable PostgreSQL checks pass. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
 
 ### First execution steps
 
@@ -6593,3 +6593,18 @@ JSON. The same repository-level policy now guards both write and read paths;
 the disposable PostgreSQL 16 contract rejects nested private JWK data in
 either column while retaining the one legitimate audit event. Organization
 format and warnings-denied all-target Clippy pass after that correction.
+
+2026-10-08 K10 shared policy and Trust Profile review: the policy now also
+detects `private_jwk`/`private_pem` field names and `rsa_d` in JWK-shaped
+objects, and offers a map API so Organization settings checks do not clone
+the whole JSON object. The policy and Organization suites and warnings-denied
+Clippy pass after this adjustment. Trust Profile's eight PostgreSQL save
+methods now check their complete serializable records before SQL; all eight
+row readers apply the same check after decoding. This covers imported
+verification keys, public certificate records, trust rules and their generic
+metadata. A direct repository test proves a synthetic private imported JWK
+is rejected before any database connection; public JWK and remote-reference
+values pass the policy. The full Trust Profile package suite and all-target
+warnings-denied Clippy pass. These are uncommitted UI candidate changes; a
+fresh assembled PostgreSQL schema, other services' generic JSON stores and
+exact release-artifact behavior remain K10 gates.
