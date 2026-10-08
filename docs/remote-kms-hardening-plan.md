@@ -849,7 +849,7 @@ PRs in dependency order. Corrections to each group stay in its feature PR.
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; candidate 0.2 pins compile signing-keys, issuance and Flow; Flow's old verification edge is now removed and its package graph contains no marty-crypto 0.1.62; workspace/test matrix pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
-| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes; hosted CI, forbidden-API, binding, exact-artifact and self-review gates remain |
+| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local TLS OpenBao issuer/holder-to-candidate-verifier positive proof passed; hosted CI, forbidden-API, binding, exact-artifact and self-review gates remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | Pending |
 
 ### First execution steps
@@ -2974,6 +2974,33 @@ acceptance. The current candidate passed `cargo +1.95.0 test --locked -p
 marty-presentation-policy --bin marty-verifier-positive-gate --quiet` (2 tests)
 in the UI Rust workspace. Those cases prove public input parsing and rejection
 of an unsigned presentation, not a positive image or KMS flow.
+2026-10-07 local live positive verifier chain: Core's test signer agent now
+supports an explicit OpenBao Transit mode over verified HTTPS, with a scoped
+token, exact sign route, SHA-256 prehash and canonical DER-to-raw ES256
+normalization. The original producer failed before signing because it supplied
+the bare issuer DID as `verification_method_id`; Core correctly requires a
+fragment key under that DID. The producer, issuer public JWK and UI gate now
+use `did:example:verifier-runtime-gate-issuer#key-1`, while the credential's
+issuer identity remains the bare DID. Core commit: `8bd3f08`.
+
+A disposable TLS OpenBao 2.5.5 container at image digest
+`sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452`
+generated two separate ECDSA P-256 Transit keys. Metadata showed
+`exportable=false` and `allow_plaintext_backup=false` for both. Separate
+sign-only policies and ten-minute tokens denied both cross-key sign attempts
+with HTTP 403. Two authenticated local Rust signer agents served the issuer
+and holder; the Core producer used remote issuance and wallet presentation
+APIs to emit fresh public-only input. The candidate UI verifier binary
+returned `passed/PASS` with all eight checks; changing the issuer signature
+caused rejection. The preserved integration branch's digest-pinned
+`positive_oid4vp_public_input()` accepted a second fresh producer result.
+Core's three focused agent/producer tests and Clippy with warnings denied
+passed; UI gate's two tests, targeted Rustfmt and diff checks passed. The
+disposable server, agent processes, scoped tokens and temporary fixtures were
+removed after the run. This is strong local remote-KMS/wallet/verifier evidence
+against the candidate binaries, but it is not an exact packaged-image,
+published Core producer or release-pin qualification. The integration runner
+still needs the grouped acceptance PR and exact-image execution.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.

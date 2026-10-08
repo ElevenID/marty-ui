@@ -15,6 +15,7 @@ use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 const ISSUER: &str = "did:example:verifier-runtime-gate-issuer";
+const ISSUER_KID: &str = "did:example:verifier-runtime-gate-issuer#key-1";
 const EMAIL: &str = "runtime-gate@example.invalid";
 const NONCE: &str = "runtime-gate-nonce-with-at-least-32-bytes";
 const AUDIENCE: &str = "https://verifier.runtime-gate.invalid";
@@ -49,7 +50,7 @@ impl GateInput {
         require(
             jwk["kty"] == "EC"
                 && jwk["crv"] == "P-256"
-                && jwk["kid"] == ISSUER
+                && jwk["kid"] == ISSUER_KID
                 && jwk["alg"] == "ES256",
             "runtime gate issuer key identity rejected",
         )?;
@@ -392,7 +393,7 @@ mod tests {
         json!({
             "presentation": "invalid.unsigned.presentation",
             "issuer_public_jwk": {
-                "kty": "EC", "crv": "P-256", "alg": "ES256", "kid": ISSUER,
+                "kty": "EC", "crv": "P-256", "alg": "ES256", "kid": ISSUER_KID,
                 "x": URL_SAFE_NO_PAD.encode([0u8; 32]),
                 "y": URL_SAFE_NO_PAD.encode([0u8; 32]),
             }
