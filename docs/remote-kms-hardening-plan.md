@@ -849,7 +849,7 @@ PRs in dependency order. Corrections to each group stay in its feature PR.
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; candidate 0.2 pins compile signing-keys, issuance and Flow; Flow's old verification edge is now removed and its package graph contains no marty-crypto 0.1.62; workspace/test matrix pending |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
-| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local TLS OpenBao issuer/holder-to-candidate-verifier positive proof passed; hosted CI, forbidden-API, binding, exact-artifact and self-review gates remain |
+| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | Pending |
 
 ### First execution steps
@@ -3002,7 +3002,36 @@ disposable server, agent processes, scoped tokens and temporary fixtures were
 removed after the run. This is strong local remote-KMS/wallet/verifier evidence
 against the candidate binaries, but it is not an exact packaged-image,
 published Core producer or release-pin qualification. The integration runner
-still needs the grouped acceptance PR and exact-image execution.
+still needs the grouped acceptance PR and exact-image execution. This was the
+candidate-binary checkpoint; the subsequent local image run is below.
+2026-10-07 local packaged verifier artifact checkpoint: the actual
+`services/Dockerfile` shared image built from the current dirty UI feature
+worktree using the locked release profile and all 24 shipping Rust binaries.
+Its local image ID was
+`sha256:8ebd21aa05108295db2cc171273f6a8ca2a8cff6b4f5d95fc7637eab6b58c99e`,
+tagged `local/marty-ui-services:kms-candidate-20261007` with revision label
+`local-dirty-kms-20261007`; the locked Core dependency resolved to published
+`a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7`. The preserved integration
+branch at `a3e0646` ran its SHA-256-pinned Core producer and `docker run -i`
+against `/usr/local/bin/marty-verifier-positive-gate` in this image. A fresh
+two-key TLS OpenBao Transit presentation returned `passed/PASS` and all eight
+checks. The packaged binary rejected an altered issuer signature and a
+private `d` member in the public issuer JWK. Separate sign-only issuer and
+holder tokens were each denied with HTTP 403 on the other's route; key
+metadata showed non-exportable, no plaintext backup. Empty stdin also failed.
+The disposable OpenBao server, agents, scoped tokens and temporary inputs
+were removed. This now proves the local shared-image path for that verifier
+gate. It does not qualify a committed/published release digest, other service
+routes, hosted CI, the full acceptance transaction or rollback. The image was
+built before the following `.dockerignore` edit; that edit excludes
+`docker/secrets/` from subsequent local build contexts because no Dockerfile
+COPY/ADD consumes it. A cached rebuild after that edit produced local image
+ID `sha256:c542cbb06b6ea72bb7180baf2a70ace4195b7ea7c10298f857033fdf8e11c903`
+with the same runtime manifest
+`sha256:5aefd4e33ec670b11eaf85f81a969463a7ea2655a7501e0d8d5481899df400b9`
+and config `sha256:a52b7b535a2e2dc9b12078a6fdda2bcf7404db344035c89f257da482940c3375`;
+its manifest-list ID changed with the context attestation. Full feature-diff
+review and release qualification remain.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
