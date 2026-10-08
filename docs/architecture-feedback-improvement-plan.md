@@ -20,8 +20,9 @@ root pytest source owners without removing a check; its protected run passed.
 selection. #1153 reused isolated schema clones for 22 Canvas repository cases;
 PR and protected CI passed, with 20 fewer repeated container/migration cycles.
 The hosted wall-time runs vary too much to attribute a pipeline saving yet.
-UI #1186 and #1187 and Core #354 have merged; the A5 REST fresh-run attestation
-candidate awaits hosted full-main evidence and does not authorize test skips.
+UI #1186, #1187, and #1189 and Core #354 have merged; #1189's first fresh
+full-main REST attestation passed on its merge commit but authorizes no test
+skips or exact-current-main release qualification.
 Full protected checks remain. The separate roster component draft is deferred
 for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
@@ -2162,7 +2163,8 @@ The unchanged REST producer is imported by many other worker producers and its
 bytes are pinned in the body-timeout and lease-expiry capture maps, so changing
 it merely to decorate the REST oracle would disturb independent references.
 
-This candidate instead emits `canvas-rest-fresh-run.json` only after the
+Merged [UI #1189](https://github.com/ElevenID/marty-ui/pull/1189) emits
+`canvas-rest-fresh-run.json` only after the
 published REST JSON equals all four frozen observations and the owned database
 and probe have closed. The record is restricted to a scheduled or manually
 dispatched full run on checked-out `main`; it binds run/attempt/SHA/job, exact
@@ -2176,8 +2178,39 @@ qualification, or authority to skip any live case. All existing process,
 PostgreSQL, historical replay, and release gates remain in force. The original
 147 package-migrated worker identities remain required; three additive Rust
 tests check input drift and evidence-constructor refusal. The first hosted
-full-main record is still required before calling this evidence achieved;
-local source tests only validate fail-closed construction.
+full-main record has now been checked.
+The manual [run 37842597081](https://github.com/ElevenID/marty-ui/actions/runs/37842597081)
+completed successfully on merge commit `916c75aed`. Both 14-day artifacts,
+`canvas-rest-fresh-run-37842597081-1` and
+`canvas-startup-fresh-run-37842597081-1`, were downloaded and checked: each
+binds repository, `main`, workflow dispatch, run 37842597081 attempt 1, the
+same SHA, and the Canvas job; each reports published comparison and owned
+cleanup passed with pinned issuance/PostgreSQL images and migration revision.
+This verifies fresh reproducibility on that commit, not original historical
+capture or release qualification. A separate #1188 release-lock change
+advanced `main` while the run executed, so it cannot qualify the newer tip for
+an exact-current-main release claim.
+
+## A5 JSON-depth current-input guard (2026-10-08 reviewed candidate)
+
+The pinned JSON-depth published-producer diagnostic remains a routine Canvas
+case; its preceding protected timing recorded about 125 seconds for the whole
+probe, including migration, seed, and producer execution. The two native
+provider/credential-route depth cases are separate guarantees. The new
+`canvas-json-depth-current-inputs.json` records twelve current-checkout inputs:
+the Rust probe constructor, mounted preparer/depth runner and static local
+helpers, depth and shared scenario data, pinned image/PostgreSQL fixture, and
+test-only recovery overlay. A release-collected guard checks their normalized
+bytes, selector and mount structure, fixed image identities, static imports,
+and transitive JSON references. After the hosted release-policy test exposed
+a missing helper-consumer allowlist entry, the corrected classification and
+image-context exclusions passed 175 focused policy/input tests; the independent
+reviewer found no P1–P3 issue in the fix. This inventory
+does **not** prove original capture provenance, downstream image contents, or
+complete host/environment closure. It changes no tier, skip, gate, or release
+rule and establishes no speedup. Historical depth selection remains required
+until a stronger exact-probe closure invariant and change-triggered full
+qualification are implemented and reviewed; protected merge groups retain it.
 
 ## Design references
 
