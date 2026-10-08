@@ -6273,6 +6273,29 @@ and diff checks pass; the hosted native lanes must pass on the updated PR
 head before this finding is closed. The correction remains local until the
 other in-flight PR checks finish, so it can be pushed as one batched update.
 
+2026-10-08 Core PR #355 first full hosted run finished: Affected Rust Tests,
+all four per-language CodeQL analyses, and the other listed passing jobs
+passed. The aggregate CodeQL gate failed on high alert #260
+(`rust/cleartext-transmission`) in the test-only OpenBao Transit helper.
+The helper transmitted a scoped bearer token over loopback HTTP, even though
+the reported taint source was synthetic public certificate fixture data.
+The correction uses OpenBao's documented `-dev-tls` mode, retrieves the
+generated CA from the disposable container, pins it in both Rust test clients
+and curl, and reconstructs a literal HTTPS loopback origin after validating
+the marked URL. It does not disable TLS verification or dismiss the alert.
+The disposable runner's five live remote status tests passed on Windows via
+WSL with that CA, and the remote issuer integration target compiled with its
+exact KMS-only feature selection. Shell syntax, Rust formatting and diff
+checks passed. OpenBao's pinned image required `-dev-listen-address=:8200`
+for TLS; numeric IP bind addresses failed listener initialization in the
+local probe, while the empty-host bind plus Docker's loopback port mapping
+served a CA-verified `https://127.0.0.1` endpoint. The isolated probe
+container and CA were removed after validation.
+The OCSP, binding-test profile, and TLS corrections were pushed together to
+Core draft PR #355 at `6fbe674` (`f85592b`, `9b15904`, `6fbe674`). Hosted
+checks and CodeQL alert resolution on this exact head remain pending. The
+previous failed logs and alert remain review evidence.
+
 2026-10-08 Credentials consumer qualification at Core candidate 0.2: local
 Windows Core `marty_rs` and `marty_verification_py` wheels built and loaded
 from an isolated target, not from globally installed 0.1.60 extensions.
