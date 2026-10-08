@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS build
+FROM golang:1.26-alpine@sha256:c95332c2af86b6d89b91bd0500f4b9529ccbd090a0d1855c6d1ceaa142ae8615 AS build
 WORKDIR /src/openbao/didcomm-authcrypt
 COPY openbao/didcomm-authcrypt/go.mod openbao/didcomm-authcrypt/go.sum ./
 RUN go mod download

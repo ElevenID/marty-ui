@@ -208,7 +208,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["behavior_contract"]["commit"]
-        == "8e3868bcf424838c7f47085bb7a24cca7006472c"
+        == "367945d4e37b93c5e3a385e60a5c417c7862dc6d"
     )
     assert discovery["schema"] == "marty.issuance-static-discovery/v1"
     assert (

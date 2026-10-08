@@ -9,9 +9,9 @@
   "behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-static-discovery.json",
-    "commit": "5b210bde2bee4360a9504e4c360250b54f48f5ba",
-    "sha256": "8cfbca9ac3f238ad602e58bd383e6a6ecbc69bfba782a7486fe282e8b9d22e19",
-    "adaptation": "Retain additive EdDSA discovery from this source; preflight Vary follows Credentials 367945d4e37b93c5e3a385e60a5c417c7862dc6d."
+    "commit": "367945d4e37b93c5e3a385e60a5c417c7862dc6d",
+    "sha256": "eac62a41388649a597f8dfce6806c40201e85f0f329157d7ab9133c8125ac32c",
+    "adaptation": "KMS-only ES256 mdoc proof metadata and CORS preflight Vary match this Credentials source."
   },
   "oid4vci_authorization_behavior_contract": {
     "path": "contracts/issuance-oid4vci-authorization.json",

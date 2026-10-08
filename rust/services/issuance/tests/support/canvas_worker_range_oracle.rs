@@ -11,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use super::remote_integration_secret;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_issuance_service::{
@@ -28,8 +29,6 @@ use marty_issuance_service::{
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
 };
-#[path = "remote_integration_secret.rs"]
-mod remote_integration_secret;
 use mmf_config::numeric_config::PythonConfigInteger;
 use serde_json::{json, Value};
 use sqlx::PgPool;

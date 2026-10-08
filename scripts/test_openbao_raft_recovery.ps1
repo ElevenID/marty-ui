@@ -175,6 +175,9 @@ try {
     docker stop $snapshotName | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'snapshot recovery node did not stop' }
     $snapshotUrl = Start-RaftOpenBao $snapshotName $snapshotVolume
+    if (-not (Wait-InitializedApi $snapshotUrl).initialized) {
+        throw 'snapshot recovery node did not reopen restored storage'
+    }
     $snapshotUnsealed = Invoke-RestMethod -Uri "$snapshotUrl/v1/sys/unseal" -Method Post `
         -ContentType 'application/json' -Body $unsealBody
     if ($snapshotUnsealed.sealed) { throw 'snapshot recovery did not accept original unseal key' }

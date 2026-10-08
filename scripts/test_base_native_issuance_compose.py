@@ -360,7 +360,7 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "source": "./docker/openbao-didcomm-dev.hcl",
             "target": "/bao/config/didcomm-plugin.hcl",
             "read_only": True,
-            "bind": {},
+            "bind": {"create_host_path": False},
         })
         bootstrap = expected["services"]["openbao-init"]
         bootstrap["image"] = plugin_image

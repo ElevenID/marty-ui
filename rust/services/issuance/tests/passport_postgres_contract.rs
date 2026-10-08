@@ -2059,8 +2059,7 @@ async fn passport_jobs_survive_restart_without_cross_tenant_reads() {
         if let Some(provider_profile_id) = provider_profile_id {
             body["provider_profile_id"] = serde_json::json!(provider_profile_id);
         }
-        let body = serde_json::to_vec(&body).unwrap();
-        body
+        serde_json::to_vec(&body).unwrap()
     };
     let unsigned_event = signed_event(None);
     let unsigned_event = kms.verified_callback(&unsigned_event).await;

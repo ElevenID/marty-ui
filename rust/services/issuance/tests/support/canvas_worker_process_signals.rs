@@ -11,8 +11,7 @@ use std::{
 use serde_json::Value;
 use sqlx::PgPool;
 
-#[path = "remote_integration_secret.rs"]
-mod remote_integration_secret;
+use super::remote_integration_secret;
 
 pub(super) struct OwnedWorker(pub(super) Child);
 

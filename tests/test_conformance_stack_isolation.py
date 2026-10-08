@@ -347,7 +347,13 @@ def test_didcomm_authcrypt_policy_is_mounted_only_into_issuance() -> None:
         )
     }
     assert issuance["volumes"] == [
-        "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}:/run/secrets/didcomm-authcrypt:ro"
+        {
+            "type": "bind",
+            "source": "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}",
+            "target": "/run/secrets/didcomm-authcrypt",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        }
     ]
 
 

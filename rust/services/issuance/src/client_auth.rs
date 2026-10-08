@@ -429,7 +429,7 @@ mod tests {
         let verified = verify_assertion(
             assertion,
             "wallet-client",
-            &jwk,
+            jwk,
             &["https://issuer.example/token".to_owned()],
             now,
         )
@@ -438,7 +438,7 @@ mod tests {
         assert!(verify_assertion(
             assertion,
             "wallet-client",
-            &jwk,
+            jwk,
             &["https://other.example/token".to_owned()],
             now
         )
@@ -447,7 +447,7 @@ mod tests {
         assert!(verify_assertion(
             vectors["attacker"].as_str().unwrap(),
             "wallet-client",
-            &jwk,
+            jwk,
             &["https://issuer.example/token".to_owned()],
             now
         )
@@ -456,7 +456,7 @@ mod tests {
         assert!(verify_assertion(
             vectors["embedded_jwk"].as_str().unwrap(),
             "wallet-client",
-            &jwk,
+            jwk,
             &["https://issuer.example/token".to_owned()],
             now
         )

@@ -109,7 +109,6 @@ pub const SHARED_BINDINGS: &[&str] = &[
     "ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
     "RP_GRPC_TARGET",
-    "SIGNING_KEYS_INTERNAL_URL",
 ];
 const MOUNTS: [(&str, &str, &str, &str, &str); 2] = [
     (
@@ -634,6 +633,16 @@ fn pair_settings(legacy: &mut Value, native: &mut Value, values: &Environment) -
     for &name in SECRET_SETTINGS {
         require(explicit.contains_key(name))?;
     }
+    require(
+        explicit.get("SIGNING_KEYS_INTERNAL_URL")
+            == Some(
+                &json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://signing-keys:8017/internal"}),
+            )
+            && environment(native)?.get("SIGNING_KEYS_INTERNAL_URL")
+                == Some(
+                    &&json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://gateway:8000/internal/signing-keys"}),
+                ),
+    )?;
     for &name in INHERITED_SETTINGS
         .iter()
         .chain(SECRET_SETTINGS)

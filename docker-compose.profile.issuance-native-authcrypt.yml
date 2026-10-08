@@ -17,7 +17,12 @@ services:
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     command: ["server", "-config=/bao/config/didcomm-plugin.hcl", "-dev"]
     volumes:
-      - ./docker/openbao-didcomm-dev.hcl:/bao/config/didcomm-plugin.hcl:ro
+      - type: bind
+        source: ./docker/openbao-didcomm-dev.hcl
+        target: /bao/config/didcomm-plugin.hcl
+        read_only: true
+        bind:
+          create_host_path: false
   openbao-init:
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     environment:

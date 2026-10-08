@@ -6875,3 +6875,37 @@ whitespace checks passed. The `%SystemDrive%` cache artifacts remain untracked
 and excluded. The merge and tracker update still need to be pushed; hosted UI
 CI and review have not yet passed. Do not mark K8/K9/K10 complete from these
 local integration checks.
+
+2026-10-08 UI first hosted CI review: the merged branch was pushed at
+`6fae2fc92` and PR #1192 ran its broad workflow. UI tests, protocol contract,
+security scanning, Rust supply chain, Python lint, Passport PostgreSQL, and
+MIP lifecycle passed. The run found integration failures in dependency review,
+the standalone Rust probe lock, the OpenBao snapshot-recovery startup race,
+strict Rust lint, native release contracts, and Canvas Kubernetes runtime
+composition. The local correction batch upgrades the Go OpenBao plugin to
+`golang.org/x/crypto` 0.56 on Go 1.26, refreshes the standalone locked probe,
+waits for initialized OpenBao API before snapshot unseal, removes duplicate
+Rust test-module loading and Clippy warnings, refreshes exact Core provenance
+and Compose bind expectations, and keeps native Kubernetes signing traffic on
+the Gateway route while retaining the legacy direct service route. The local
+plugin image build, Go tests/vet, live Raft recovery, strict Rust lint, Rust
+release-evidence unit tests, locked Rust probe check, and 217 focused Python
+contract tests passed. These corrections are still local and need a single
+batched push and hosted rerun; Rust service images and Rust analysis from the
+first run were still in progress at this checkpoint. Core #355 remains green,
+draft, and review-required. Credentials is locally qualified against the Core
+candidate but has no PR; its release metadata and coverage mapping remain
+open. No K8/K9/K10 or shipped-artifact gate is closed yet.
+
+2026-10-08 UI CodeQL follow-up: the first run completed Rust analysis but
+raised two high-severity findings at
+`rust/services/issuance/src/integration_secret_kms.rs` where the client sends
+an integration secret and API key to a configured HTTP Signing Keys endpoint.
+This is a real transport-boundary issue: supported Compose and Kubernetes
+configurations currently use private-network HTTP for the shared Signing Keys
+URL. Resolve it with an authenticated TLS transport for integration-secret
+operations and matching deployed endpoints/trust roots, while preserving the
+separate signing routes and synthetic acceptance behavior. Do not suppress the
+alert or switch the existing HTTP URL to HTTPS without a serving endpoint.
+The local CI-correction batch does not yet resolve this finding and remains
+un-pushed to avoid another broad run before the transport change is ready.
