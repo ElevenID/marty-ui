@@ -6314,3 +6314,19 @@ Do not change those expectations or claim release qualification before
 reviewed Core artifacts are actually published and pinned. The second
 suite log is
 `artifacts/kms-credentials-core02-python-suite-qualified-env-2026-10-08.log`.
+
+2026-10-08 Credentials retirement self-review: the candidate deletes the
+old Behave feature tree and its Makefile targets along with local-key issuer
+steps. Those feature files also named supported verifier behaviors (tampered
+W3C VC and SD-JWT rejection, selective presentation, Open Badge status and
+trust, mDoc/ZK verification). The old tree is not invoked by the candidate
+CI or Python dependency manifest, but deleting it still requires a behavior
+coverage map before the Credentials PR can be called regression-reviewed.
+Core already has KMS-backed SD-JWT/JWT-VC issuance and verification tests,
+including altered signatures, wrong public keys and subset disclosure in
+`marty-oid4vci/tests/remote_issuer_live_kms.rs`, plus structural checks in
+`sd_jwt_vc_conformance.rs`. Core also has authenticated Open Badge status
+negative tests and native ZK lanes. This is partial replacement evidence,
+not proof for every removed scenario; map the remaining Open Badge,
+cross-format, lifecycle and ZK cases to qualified native tests or add them
+before merging the Credentials retirement PR.
