@@ -2161,8 +2161,9 @@ published REST JSON equals all four frozen observations and the owned database
 and probe have closed. The record is restricted to a scheduled or manually
 dispatched full run on checked-out `main`; it binds run/attempt/SHA/job, exact
 current input hashes, script graph, corpus, pinned image fixture, migration
-revision, and test executable. Upload is allowed only after the Canvas job
-succeeds, with fourteen-day retention and a missing-file failure. A fresh
+revision, and test executable. Upload runs only after preceding Canvas steps
+succeed, with fourteen-day retention and a missing-file failure; external use
+also requires the final job and workflow to succeed. A fresh
 matching capture proves reproducibility under those present inputs, **not**
 the inputs used for the original historical capture, permission to reuse
 qualification, or authority to skip any live case. All existing process,
