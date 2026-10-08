@@ -20,6 +20,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
+MIGRATED_CASES = json.loads(
+    (ROOT / "contracts/canvas-worker-package-migration.json").read_text(
+        encoding="utf-8"
+    )
+)["case_ids"]
 TARGET = "worker_mixed_roster_matches_frozen_published_process"
 TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
 BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
@@ -375,7 +380,11 @@ else
   [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
   [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
-  [[ "$7" == marty-canvas-acceptance ]] || exit 90
+  if [[ "$4" == canvas_published_worker_contract ]]; then
+    [[ "$7" == marty-canvas-worker-acceptance ]] || exit 90
+  else
+    [[ "$7" == marty-canvas-acceptance ]] || exit 90
+  fi
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
   if [[ "$TEST_FAILURE" == missing-executable ]]; then
     printf './does-not-exist\n'
@@ -532,7 +541,10 @@ fi
         lines = (
             registrations
             if registrations is not None
-            else [f"{name}: test" for name in required_registrations()]
+            else [
+                f"{name}: test"
+                for name in sorted(set(required_registrations()) | set(MIGRATED_CASES))
+            ]
         )
         composition = [
             line
@@ -1470,7 +1482,7 @@ def test_preflight_group_owner_runs_exact_modes(tmp_path, monkeypatch, qualifica
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "path+file:///checkout/rust/crates/canvas-acceptance#marty-canvas-acceptance@0.1.0",
+                "package_id": "path+file:///checkout/rust/crates/canvas-worker-acceptance#marty-canvas-worker-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
@@ -1520,7 +1532,7 @@ def test_preflight_group_owner_runs_exact_modes(tmp_path, monkeypatch, qualifica
     )
 
 
-def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
+def test_preflight_digest_selects_worker_owner_not_stale_packages(
     tmp_path, monkeypatch
 ):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
@@ -1528,6 +1540,8 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
     acceptance.write_bytes(b"current acceptance worker contract")
     stale = tmp_path / "issuance-worker-contract"
     stale.write_bytes(b"stale issuance worker contract")
+    old_acceptance = tmp_path / "old-acceptance-worker-contract"
+    old_acceptance.write_bytes(b"stale composition-package worker contract")
 
     def artifact(owner, executable):
         return {
@@ -1543,7 +1557,8 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
             json.dumps(entry)
             for entry in (
                 artifact("marty-issuance-service", stale),
-                artifact("marty-canvas-acceptance", acceptance),
+                artifact("marty-canvas-acceptance", old_acceptance),
+                artifact("marty-canvas-worker-acceptance", acceptance),
             )
         )
         + "\n",
@@ -1552,7 +1567,13 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     assert module["_canvas_executable"]() == acceptance
     artifacts.write_text(
-        json.dumps(artifact("marty-issuance-service", stale)) + "\n",
+        "\n".join(
+            json.dumps(entry)
+            for entry in (
+                artifact("marty-issuance-service", stale),
+                artifact("marty-canvas-acceptance", old_acceptance),
+            )
+        ) + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="exactly one Canvas worker contract"):

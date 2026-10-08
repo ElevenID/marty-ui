@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = ROOT / "contracts/canvas-worker-tier-obligations.json"
+MIGRATION = ROOT / "contracts/canvas-worker-package-migration.json"
 
 
 def require(condition: bool, message: str) -> None:
@@ -31,13 +32,63 @@ def listed_test_names(output: str) -> set[str]:
     return set(names)
 
 
+def validate_package_migration(migration: dict, listed: set[str], root: Path = ROOT) -> None:
+    """Keep all moved case identities; new future cases need not rewrite history."""
+    require(
+        migration.get("schema") == "marty.canvas-worker-package-migration/v1",
+        "Unknown Canvas package migration schema",
+    )
+    require(
+        migration.get("from")
+        == {
+            "package": "marty-canvas-acceptance",
+            "target": "canvas_published_worker_contract",
+            "source": "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
+        }
+        and migration.get("to")
+        == {
+            "package": "marty-canvas-worker-acceptance",
+            "target": "canvas_published_worker_contract",
+            "source": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
+        },
+        "Canvas package migration owner drift",
+    )
+    require(
+        migration.get("required_lane") == "test-rust-services/canvas"
+        and (root / migration["to"]["source"]).is_file()
+        and (root / migration.get("shared_fixture_source", "")).is_file(),
+        "Canvas package migration source or lane drift",
+    )
+    case_ids = migration.get("case_ids")
+    require(
+        isinstance(case_ids, list)
+        and len(case_ids) == 147
+        and all(isinstance(name, str) and name for name in case_ids)
+        and case_ids == sorted(set(case_ids)),
+        "Canvas package migration identity list drift",
+    )
+    require(
+        set(case_ids) <= listed,
+        "Canvas package migration missing a compiled case",
+    )
+    require(
+        migration.get("ignored_capture_only_case_ids")
+        == [
+            "capture_worker_body_timeout_published_process",
+            "capture_worker_lease_expiry_published_process",
+        ]
+        and set(migration["ignored_capture_only_case_ids"]) <= set(case_ids),
+        "Canvas package migration capture-only identity drift",
+    )
+
+
 def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
     require(
         inventory.get("schema") == "marty.canvas-worker-tier-obligations/v1",
         "Unknown Canvas tier inventory schema",
     )
     require(
-        inventory.get("package") == "marty-canvas-acceptance",
+        inventory.get("package") == "marty-canvas-worker-acceptance",
         "Wrong Canvas owner package",
     )
     require(
@@ -227,6 +278,7 @@ def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
 
 def main() -> int:
     inventory = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    migration = json.loads(MIGRATION.read_text(encoding="utf-8"))
     if len(sys.argv) == 4 and sys.argv[1] == "--require-execution":
         lane = sys.argv[2]
         path = Path(sys.argv[3])
@@ -234,9 +286,12 @@ def main() -> int:
         validate_fast_owner_execution(inventory, lane, path.read_text(encoding="utf-8"))
         print(f"Canvas {lane} fast owner executed exactly once and passed")
     elif len(sys.argv) == 1:
-        validate(inventory, listed_test_names(sys.stdin.read()))
+        listed = listed_test_names(sys.stdin.read())
+        validate(inventory, listed)
+        validate_package_migration(migration, listed)
         print(
-            "Canvas tier inventory: 33 historical references and 4 native cases discovered"
+            "Canvas tier inventory: 33 historical references and 4 native cases discovered; "
+            "147 package-migrated cases retained"
         )
     else:
         require(
@@ -250,6 +305,7 @@ def main() -> int:
         original = listed_test_names(original_output.decode("utf-8"))
         selected = listed_test_names(selected_output.decode("utf-8"))
         validate(inventory, original)
+        validate_package_migration(migration, original)
         validate_selection(inventory, original, selected, *sys.argv[2:])
         print("Canvas tier inventory: exact compiled worker selection confirmed")
     return 0

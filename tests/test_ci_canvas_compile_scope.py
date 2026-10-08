@@ -74,6 +74,8 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "-p",
             "marty-canvas-acceptance",
             "-p",
+            "marty-canvas-worker-acceptance",
+            "-p",
             "marty-issuance-service",
             "--lib",
             "--test",
@@ -162,10 +164,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     execution = steps["Run safe Rust contract groups concurrently"]
     assert execution["if"] == "matrix.lane == 'contracts'"
     assert (
-        "cargo test --locked --workspace --exclude marty-canvas-acceptance "
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance "
         in execution["run"]
     )
-    assert execution["run"].count("--exclude") == 1
+    assert execution["run"].count("--exclude") == 2
 
     gate = workflow["jobs"]["ci-gate"]
     assert "test-rust-services" in gate["needs"]
@@ -182,28 +184,33 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert "'true:false:[\"contracts\"]'" in gate_script
     assert '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate_script
 
-    package = ROOT / "rust/crates/canvas-acceptance"
-    manifest = tomllib.loads((package / "Cargo.toml").read_text(encoding="utf-8"))
-    assert manifest["package"]["autotests"] is False
-    targets = {entry["name"] for entry in manifest["test"]}
-    assert targets == {
-        "canvas_published_worker_contract",
-        "canvas_published_schema_contract",
+    packages = {
+        "canvas-acceptance": (
+            "canvas_published_schema_contract",
+            "//! Ownership boundary for published Canvas composition acceptance.",
+        ),
+        "canvas-worker-acceptance": (
+            "canvas_published_worker_contract",
+            "//! Ownership boundary for published Canvas worker acceptance.",
+        ),
     }
-    assert not any(key in manifest for key in ("bin", "example", "bench"))
-    assert not (package / "src/bin").exists()
-    assert not (package / "src/main.rs").exists()
-    assert not (package / "examples").exists()
-    assert not (package / "benches").exists()
-    # The library is an ownership marker only. New library tests need an explicit
-    # execution owner before this package can remain excluded from contracts.
-    assert (package / "src/lib.rs").read_text(encoding="utf-8").strip() == (
-        "//! Ownership boundary for published Canvas worker and composition acceptance."
-    )
+    for directory, (target, marker) in packages.items():
+        package = ROOT / "rust/crates" / directory
+        manifest = tomllib.loads((package / "Cargo.toml").read_text(encoding="utf-8"))
+        assert manifest["package"]["autotests"] is False
+        assert {entry["name"] for entry in manifest["test"]} == {target}
+        assert not any(key in manifest for key in ("bin", "example", "bench"))
+        assert not (package / "src/bin").exists()
+        assert not (package / "src/main.rs").exists()
+        assert not (package / "examples").exists()
+        assert not (package / "benches").exists()
+        # New library tests need an explicit execution owner before this package
+        # can remain excluded from contracts.
+        assert (package / "src/lib.rs").read_text(encoding="utf-8").strip() == marker
     runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
     )
-    for target in targets:
+    for target in (target for target, _ in packages.values()):
         assert target in runner
     assert '"$composition_executable" --skip' in runner
     assert '"$worker_executable" --skip' in runner

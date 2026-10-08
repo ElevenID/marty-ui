@@ -1297,7 +1297,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
+            "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",
@@ -1313,7 +1313,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/canvas-acceptance/tests/support/canvas_startup_attestation.rs",
+            "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-tier-obligations.json": {
             ".github/workflows/ci.yml",
@@ -1321,6 +1321,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "scripts/test_canvas_worker_rest_https.py",
             "tests/test_canvas_tier_obligations.py",
             "tests/test_canvas_worker_validation_tier.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-package-migration.json": {
+            "scripts/ci/check_canvas_tier_obligations.py",
+            "tests/test_canvas_tier_obligations.py",
+            "tests/test_canvas_published_preflight.py",
             "tests/test_ci_workflow_performance.py",
         },
         "python-value-fast-obligations.json": {
@@ -1885,7 +1891,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         _classify_changed_paths(
             [
                 "tests/test_canvas_published_preflight.py",
-                "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs",
+                "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
             ],
             tmp_path,
             combined=True,
@@ -3942,7 +3948,12 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
 
 @pytest.mark.parametrize(
     "package",
-    ["services/issuance", "crates/service-acceptance", "crates/canvas-acceptance"],
+    [
+        "services/issuance",
+        "crates/service-acceptance",
+        "crates/canvas-acceptance",
+        "crates/canvas-worker-acceptance",
+    ],
 )
 def test_every_issuance_and_acceptance_integration_test_remains_registered(
     package,
@@ -4016,9 +4027,15 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
     )
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
     assert "crates/canvas-acceptance" in workspace["workspace"]["members"]
+    worker = tomllib.loads(
+        (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    assert "crates/canvas-worker-acceptance" in workspace["workspace"]["members"]
     assert {target["name"] for target in canvas["test"]} == {
-        "canvas_published_worker_contract",
         "canvas_published_schema_contract",
+    }
+    assert {target["name"] for target in worker["test"]} == {
+        "canvas_published_worker_contract",
     }
     assert {target["name"] for target in gateway["test"]} == {
         "passport_managed_kms_chain",
@@ -4026,6 +4043,18 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "gateway_signing_acceptance",
     }
     assert "marty-signing-keys" not in canvas["dev-dependencies"]
+    assert "marty-signing-keys" not in worker["dev-dependencies"]
+    assert not {
+        "marty-flow",
+        "marty-gateway",
+        "marty-selfhost-bundle",
+        "marty-release-evidence",
+        "marty-didcomm",
+        "marty-oid4vci",
+        "marty-verification",
+        "mmf-platform",
+        "mmf-security",
+    } & set(worker["dev-dependencies"])
     assert "marty-signing-keys" in gateway["dev-dependencies"]
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
@@ -4033,9 +4062,11 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
     )
     groups = (ROOT / "scripts/ci/run-db-contract-groups.py").read_text(encoding="utf-8")
     assert "-p marty-canvas-acceptance" in workflow
+    assert "-p marty-canvas-worker-acceptance" in workflow
     assert 'contains("#marty-canvas-acceptance@")' in workflow
     assert "package=marty-canvas-acceptance" in runner
-    assert '"#marty-canvas-acceptance@"' in groups
+    assert "package=marty-canvas-worker-acceptance" in runner
+    assert '"#marty-canvas-worker-acceptance@"' in groups
 
 
 def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate() -> (

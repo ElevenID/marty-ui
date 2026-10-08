@@ -2089,6 +2089,52 @@ preparer, frozen equality, real PostgreSQL/process owner, and deadline. The
 local live probe passed all 132 cases in about 36 seconds; this is attribution,
 not a speedup or authority to remove the historical acceptance owner.
 
+2026-10-08 A4 outcome: [UI #1186](https://github.com/ElevenID/marty-ui/pull/1186)
+passed independent review, full PR CI, and all protected merge-group checks,
+then merged. Its PR and protected timing artifacts each retained exactly 132
+expected, unique, successful JSON-consumer case rows with no unexpected IDs.
+The PR case durations summed to 34.738 seconds within a 39.766-second
+JSON-consumer segment; the protected case sum was 32.429 seconds. These are
+diagnostics from different runs, not a measured pipeline speedup.
+
+Next A1/TST01/INT03 ownership candidate (2026-10-08, reviewed local draft):
+`canvas_published_worker_contract` has a distinct published-process and
+PostgreSQL obligation from the composition target, but both still share the
+`marty-canvas-acceptance` dev-dependency graph. Move the worker target into
+`marty-canvas-worker-acceptance` with a narrower declared dependency closure;
+keep its test bodies, single-source Issuance fixture support, exact case/tier
+inventory, pinned producer mapping, real worker-binary handoff, preflight
+digest, and full Canvas gate. The separate composition package retains its
+Flow/Gateway/self-host dependencies and Bookworm artifact owner. Update Cargo,
+artifact selectors, contract-runner identities, and contracts-lane exclusions
+atomically. The bounded `canvas-worker-package-migration.json` ledger records
+all 147 unchanged compiled case IDs and the two ignored capture-only IDs;
+the existing compiled-list guard checks for missing migrated identities without
+another executable launch or new skip authority. Before publishing, prove
+old/new discovered test-ID and ignore parity, locked package compilation,
+focused policy regressions, and a real
+hosted published-process run. This is an ownership and potential worker-only
+compile-surface improvement, not a measured CI speedup or permission to narrow
+required checks. Canvas adapter runtime extraction and no-Canvas qualification
+remain separate INT03/PKG07 work.
+
+Local draft evidence: the pre-split compiled worker target comes from a clean
+worktree whose target-source Git blob `50879f423799ad4bd2a53ceb1458468523814f48`
+matches this branch's `origin/main` source. Its `--list` and the moved package's
+compiled `--list` have the same 147 ordered test IDs; `--ignored --list` has
+the same two capture-only IDs. The new worker target's default local run passed
+145 and ignored two, but the opt-in PostgreSQL/published-process cases return
+early without hosted configuration. The new worker and unchanged composition
+targets passed package-scoped locked checks, and the exact three-package
+Canvas CI Cargo selection passed a locked offline `--no-run` with both
+acceptance targets, Issuance behavior/OAuth targets, and all three libraries.
+Its worker executable also lists the same 147 cases and two ignored captures.
+Focused runner/tier/policy tests and independent review passed. On Linux,
+the worker-only Cargo dependency closure has 620 unique package versions
+versus 693 for the old combined acceptance package; the full CI job still
+builds both packages, so this is not a measured whole-job saving. Full hosted
+Canvas execution and protected validation remain required before merge.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
