@@ -7,6 +7,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::Path,
+    process::Command,
 };
 
 const ARTIFACT: &str = "canvas-startup-fresh-run.json";
@@ -52,6 +53,46 @@ fn main_run_from(env: impl Fn(&str) -> Option<String>) -> Option<Value> {
         "job": job,
         "lane": "canvas",
     }))
+}
+
+fn git_rev_parse(root: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("rev-parse")
+        .args(args)
+        .output()
+        .expect("Startup attestation cannot invoke Git for checkout identity");
+    assert!(
+        output.status.success(),
+        "Startup attestation cannot verify Git checkout identity"
+    );
+    String::from_utf8(output.stdout)
+        .expect("Startup attestation Git checkout identity is not UTF-8")
+        .trim()
+        .to_owned()
+}
+
+fn verify_checkout_identity(root: &Path, run: &Value) {
+    let checkout_root = git_rev_parse(root, &["--show-toplevel"]);
+    assert_eq!(
+        Path::new(&checkout_root)
+            .canonicalize()
+            .expect("Startup attestation Git root is unavailable"),
+        root.canonicalize()
+            .expect("Startup attestation repository root is unavailable"),
+        "Startup attestation input root is not the checked-out repository root"
+    );
+    let head = git_rev_parse(root, &["--verify", "HEAD"]);
+    assert!(
+        valid_sha(&head, 40),
+        "Invalid startup attestation checkout SHA"
+    );
+    assert_eq!(
+        run["sha"].as_str(),
+        Some(head.as_str()),
+        "Startup attestation GITHUB_SHA does not match checked-out HEAD"
+    );
 }
 
 fn normalized_sha(path: &Path) -> String {
@@ -215,12 +256,29 @@ pub(super) fn emit_after_startup_pass(
     let Some(run) = main_run_from(|name| std::env::var(name).ok()) else {
         return;
     };
-    let executable = std::env::current_exe().expect("Test executable path missing");
-    let evidence = startup_evidence(root, observed, run, &executable, &worker_binary_after);
     let runner_temp =
         std::env::var("RUNNER_TEMP").expect("Startup attestation output directory missing");
     let output = Path::new(&runner_temp).join(ARTIFACT);
-    persist_evidence(&output, &evidence);
+    persist_verified_evidence(root, &output, &run, || {
+        let executable = std::env::current_exe().expect("Test executable path missing");
+        startup_evidence(
+            root,
+            observed,
+            run.clone(),
+            &executable,
+            &worker_binary_after,
+        )
+    });
+}
+
+fn persist_verified_evidence(
+    root: &Path,
+    output: &Path,
+    run: &Value,
+    evidence: impl FnOnce() -> Value,
+) {
+    verify_checkout_identity(root, run);
+    persist_evidence(output, &evidence());
 }
 
 fn persist_evidence(output: &Path, evidence: &Value) {
@@ -238,6 +296,56 @@ fn persist_evidence(output: &Path, evidence: &Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn checkout_identity_matches_the_attested_repository() {
+        let root = super::super::canvas_published_database::repository_root();
+        let head = git_rev_parse(&root, &["--verify", "HEAD"]);
+        verify_checkout_identity(&root, &json!({"sha": head}));
+    }
+
+    #[test]
+    fn checkout_identity_rejects_wrong_valid_sha_without_writing_artifact() {
+        let root = super::super::canvas_published_database::repository_root();
+        let head = git_rev_parse(&root, &["--verify", "HEAD"]);
+        let wrong = if head == "a".repeat(40) {
+            "b".repeat(40)
+        } else {
+            "a".repeat(40)
+        };
+        let artifact_dir = tempfile::tempdir().unwrap();
+        let artifact = artifact_dir.path().join(ARTIFACT);
+        let built_evidence = AtomicBool::new(false);
+        assert!(std::panic::catch_unwind(|| {
+            persist_verified_evidence(&root, &artifact, &json!({"sha": wrong}), || {
+                built_evidence.store(true, Ordering::SeqCst);
+                json!({})
+            });
+        })
+        .is_err());
+        assert!(!built_evidence.load(Ordering::SeqCst));
+        assert!(!artifact.exists());
+    }
+
+    #[test]
+    fn checkout_identity_rejects_unavailable_checkout_without_writing_artifact() {
+        let checkout = tempfile::tempdir().unwrap();
+        let root = PathBuf::from(checkout.path());
+        let artifact = root.join(ARTIFACT);
+        let built_evidence = AtomicBool::new(false);
+        assert!(std::panic::catch_unwind(|| {
+            persist_verified_evidence(&root, &artifact, &json!({"sha": "a".repeat(40)}), || {
+                built_evidence.store(true, Ordering::SeqCst);
+                json!({})
+            });
+        })
+        .is_err());
+        assert!(!built_evidence.load(Ordering::SeqCst));
+        assert!(!artifact.exists());
+    }
 
     #[test]
     fn evidence_write_rejects_existing_record_without_overwriting_it() {

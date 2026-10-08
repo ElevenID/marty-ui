@@ -911,6 +911,16 @@ Do not reuse historical evidence without independently verifiable capture record
 or a controlled, fully attested capture; neither retroactively inferred hashes
 nor replacing expected outputs to match native behavior is acceptable proof.
 
+Fresh startup attestation checkout identity (2026-10-08): the full-main
+weekly/manual artifact now verifies that its claimed `GITHUB_SHA` is the actual
+checked-out repository `HEAD` before writing evidence, and fails closed if Git
+cannot verify that identity or the repository root differs. This tightens the
+fresh artifact's run-to-source binding only; it does not attest original frozen
+capture inputs, reduce historical replay coverage, alter qualification tiers,
+or authorize evidence reuse. Focused tests cover a matching checkout, a wrong
+but well-formed SHA, unavailable checkout, and absence of an output artifact
+on either failure.
+
 ## HTTPS duplicate experiment disposition (2026-10-06)
 
 When both Rust lanes are selected, both execute
