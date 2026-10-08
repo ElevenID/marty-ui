@@ -2110,7 +2110,12 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
     scanned = {path.relative_to(ROOT).as_posix() for path in dockerfiles}
     for workflow, excluded in (
         (CI_PATH, set()),
-        (ROOT / ".github/workflows/cd.yml", {"docker/ui.Dockerfile"}),
+        # Official-only UI and tunnel-wrapper roles do not compile Rust
+        # service binaries; their separate release ownership is asserted by
+        # test_selfhost_release_preparation.py.
+        (ROOT / ".github/workflows/cd.yml", {
+            "docker/ui.Dockerfile", "docker/cloudflared-wrapper.Dockerfile",
+        }),
     ):
         image_inputs = set(
             re.findall(

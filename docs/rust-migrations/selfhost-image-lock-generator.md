@@ -47,3 +47,21 @@ Rust `package-selfhost-bundle --image-lock` path expects. It binds every
 rendered Compose service to one digest. A release producer must still verify
 provenance and anonymous pull for every image, qualify an extracted installed
 bundle, and sign/attest the eventual lock and archive before publication.
+
+The opt-in `Stack release` dispatch input `prepare_selfhost_lock` runs an
+official-release **preparation lane** after the existing stack qualification
+gates. It builds only the distinct self-host UI and pinned cloudflared wrapper
+as digest-only, provenance-attested, signed images. It renders all Compose
+profiles from the exact claimed checkout, takes the issuance digest from the
+source stack lock, requires `selfhost_external_images_json` to name every
+independent service by exact digest, verifies Marty's image attestations and
+anonymous pull of every locked image, then uploads only a 30-day
+`selfhost-lock-preparation-unqualified-*` artifact. It never adds a fourth
+role to the three-role stack transaction, promotes a self-host tag, blocks or
+weakens the existing stack publication gates, or publishes a customer bundle.
+
+This lane is **not** self-host qualification. The input's third-party
+infrastructure digests have exact repository/anonymous-pull checks but no
+independent provenance policy yet. The bundle ZIP, source notices, and clean
+installed-bundle acceptance still require a separate gated release slice.
+Do not advertise the preparation artifact as an installable release.
