@@ -2911,6 +2911,18 @@ warnings denied, Rustfmt and diff checks passed; the disposable provider was
 removed. Core commit: `cb6a9e2`. Recording and concurrency scheduler
 fixtures still sign locally in Core tests; their assertion-preserving
 migration remains in the same grouped Core feature PR. Hosted CI is pending.
+2026-10-07 Core batch pre-sign fixture separation: eight batch tests that
+reject an invalid scope, duplicate route, invalid preparation, metadata
+drift, empty batch or batch-wide executor error now use public ES256 metadata
+and a signer that panics if called. This removes private-key custody from
+those paths and strengthens their no-sign boundary; the old recording signer
+now serves only tests that actually reach signature execution. All 25
+signing-batch unit tests passed in the KMS-only feature set, the full KMS-only
+library suite passed 291 tests with one opt-in ignored before the final
+fixture simplification, and targeted Clippy with warnings denied, Rustfmt and
+diff checks passed after it. Core commit: `53a83dc`. This is a local batch
+within the still-unopened Core feature PR; result-envelope, assembly and
+concurrency scheduler fixtures still need remote/public-only migration.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
