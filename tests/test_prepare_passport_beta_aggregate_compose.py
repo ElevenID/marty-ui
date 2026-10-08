@@ -20,13 +20,31 @@ from scripts.prepare_passport_beta_aggregate_compose import (
 
 def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
     handoff, *_ = candidate()
-    services = yaml.safe_load(
-        compose.image_override(handoff).replace("!reset null", "null")
-    )["services"]
+    override = compose.image_override(handoff)
+    document = yaml.compose(override)
+    services_node = next(value for key, value in document.value
+                         if key.value == "services")
+    names = [key.value for key, _ in services_node.value]
+    assert len(names) == len(set(names))
+    services = yaml.safe_load(override.replace("!reset null", "null"))["services"]
     for name in ("issuance", "issuance-native"):
         environment = services[name]["environment"]
         assert environment["ENVIRONMENT"] == "beta"
         assert environment["GRPC_INSECURE_ALLOWED"] == "true"
+
+
+def test_live_operator_binds_all_signed_image_interpolation_inputs():
+    source = (Path(__file__).resolve().parents[1]
+              / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(
+                  encoding="utf-8")
+    for variable, field in (
+        ("MARTY_SERVICES_IMAGE", "services_image"),
+        ("MARTY_ISSUANCE_IMAGE", "issuance_image"),
+        ("MARTY_UI_RELEASE_IMAGE", "ui_image"),
+    ):
+        binding = f"$env:{variable} = [string]$script:plan.{field}"
+        assert source.count(binding) == 1
+        assert source.index(binding) < source.index("Invoke-SignedIssuanceMigration\n")
 
 
 

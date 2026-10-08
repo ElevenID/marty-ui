@@ -882,6 +882,9 @@ try {
     $script:productionRecoveryReady = $true
     $null = Assert-ProductionContinuity
     $env:MARTY_SERVICES_IMAGE = [string]$script:plan.services_image
+    # Compose resolves the base file before the signed Rust override replaces
+    # its issuance image. Bind the pinned historical image for parsing only.
+    $env:MARTY_ISSUANCE_IMAGE = [string]$script:plan.issuance_image
     $env:MARTY_UI_RELEASE_IMAGE = [string]$script:plan.ui_image
     $expectedBuildVars = @(
         'MARTY_COMMON_URI', 'MARTY_COMMON_DIGEST',

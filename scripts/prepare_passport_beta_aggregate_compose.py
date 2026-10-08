@@ -208,6 +208,9 @@ def image_override(handoff: dict[str, Any]) -> str:
         rows.extend((f"  {name}:", "    image: ${MARTY_SERVICES_IMAGE}",
                      "    environment:",
                      f"      SERVICE_NAME: {name.replace('-', '_')}"))
+        if name == "issuance-native":
+            rows.extend(("      ENVIRONMENT: beta",
+                         "      GRPC_INSECURE_ALLOWED: 'true'"))
     # The final protected overlay replaces the default Python alias and its
     # Alembic job together. Both use the same signed Rust services artifact.
     rows.extend(("  issuance:", "    image: ${MARTY_SERVICES_IMAGE}",
@@ -219,9 +222,6 @@ def image_override(handoff: dict[str, Any]) -> str:
                  "      GRPC_INSECURE_ALLOWED: 'true'",
                  "      MARTY_SCHEMA_STARTUP_MODE: validate",
                  "      CANVAS_MIRROR_WORKER_ENABLED: 'false'",
-                 "  issuance-native:", "    environment:",
-                 "      ENVIRONMENT: beta",
-                 "      GRPC_INSECURE_ALLOWED: 'true'",
                  "  issuance-migrations:",
                  "    image: ${MARTY_SERVICES_IMAGE}", "    build: !reset null",
                  "    entrypoint: [/usr/local/bin/marty-issuance-service]",
