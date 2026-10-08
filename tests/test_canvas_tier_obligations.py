@@ -23,7 +23,9 @@ INVENTORY = json.loads(
     (ROOT / "contracts/canvas-worker-tier-obligations.json").read_text(encoding="utf-8")
 )
 MIGRATION = json.loads(
-    (ROOT / "contracts/canvas-worker-package-migration.json").read_text(encoding="utf-8")
+    (ROOT / "contracts/canvas-worker-package-migration.json").read_text(
+        encoding="utf-8"
+    )
 )
 RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 
@@ -255,7 +257,7 @@ def test_contracts_fast_owner_cli_reads_actual_log(tmp_path: Path) -> None:
 
 def test_fast_owner_guards_run_before_lane_success() -> None:
     runner = RUNNER.read_text(encoding="utf-8")
-    assert runner.index('--require-execution canvas "$worker_log"') > runner.index(
+    assert runner.rindex('--require-execution canvas "$worker_log"') > runner.index(
         "(( composition_status == 0 && worker_status == 0 ))"
     )
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

@@ -722,8 +722,9 @@ def test_caller_cannot_override_native_validation_tier(
 @pytest.mark.parametrize(
     "row", ["missing", "duplicate", "ignored", "failed", "substituted"]
 )
-def test_canvas_fast_owner_must_actually_pass_once(shell_case, row):
-    result, calls = shell_case(["full"], fast_owner_row=row)
+@pytest.mark.parametrize("mode", ["full", "worker-full"])
+def test_canvas_fast_owner_must_actually_pass_once(shell_case, row, mode):
+    result, calls = shell_case([mode], fast_owner_row=row)
     assert result.returncode != 0
     assert any(call[0] == "child" and call[1] == "worker-contract" for call in calls)
     assert "fast owner did not execute exactly once and pass" in result.stderr
