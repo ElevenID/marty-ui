@@ -30,6 +30,18 @@ table in the service databases. A qualified deployment must contain no
 private-key tables or secret-bearing key columns, including dormant tables
 made by legacy ORM metadata or initialization code.
 
+Active-goal acceptance amendment: KMS hardening is incomplete until every
+product database created by the final Core, native UI and Credentials artifacts
+has been inspected from a fresh install and contains no table intended for
+private-key storage. Delete the corresponding table definitions and all
+creation, read and write paths at source, including dormant test setup and
+historical initialization chains that would recreate them. Do not add or ship
+schema, data or compatibility migration scripts for this retirement. Verify
+the assembled schema and representative runtime writes with disposable
+databases; inspect generic JSON columns so private JWK/PEM material cannot
+hide behind a neutral column name. Record the final table/column inventory
+and test evidence in K10 before closing the active goal.
+
 The user resumed this work on 2026-10-07 and requested large feature PRs to reduce
 CI/CD cost, self-review for regressions and feature loss, security and general
 quality, and Rust-first, DRY implementation. Earlier migration-first deferrals
