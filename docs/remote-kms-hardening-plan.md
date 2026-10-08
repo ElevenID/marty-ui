@@ -2884,6 +2884,19 @@ passed 297 tests with one opt-in ignored, and targeted Clippy with warnings
 denied, Rustfmt and diff checks passed. The container was removed. Core
 commit: `9498920`. The broader test-only batch signers and mDoc local issuer
 path still require assertion-preserving retirement. No hosted CI or PR yet.
+2026-10-07 Core mDoc local-signer retirement: deleted the test-only
+`sign_mdoc(IssuerKey, ...)` path, its private JWK COSE signer, and local issuer
+fixture. Kept deterministic MSO/Sig_structure bytes, public holder device-key
+validation, validity/error precedence, digest planning and batch preparation
+in public-only unit tests. The disposable OpenBao acceptance suite now checks
+the signed mDoc `issuerAuth` array without an outer COSE tag, the tag-24 MSO,
+and every valueDigest against the complete tagged issuer item (rejecting the
+inner-item digest), including the x5chain case. The KMS-only library suite
+passed 293 tests with one opt-in ignored, the default library suite passed
+265 with one opt-in ignored, and all five live OpenBao cases passed. Targeted
+Clippy with warnings denied, Rustfmt and diff checks passed; the disposable
+provider was removed. Core commit: `d0c97f9`. Broader batch fixture signers
+remain. This does not qualify hosted CI, exact artifacts or the Core PR.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
