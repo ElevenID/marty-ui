@@ -159,3 +159,20 @@ jobs:
             sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
+      # Keep this on trusted main. PR and merge-group image builds read the
+      # compiler cache but must never publish speculative compiler outputs.
+      # Do not export the release-binary BuildKit layers into the near-full
+      # repository cache; only sccache's compilation outputs may be written.
+      - name: Warm public service release-binary compiler outputs
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: services/Dockerfile
+          target: rust-service-builder
+          push: false
+          provenance: false
+          cache-from: type=gha,scope=marty-ui-public-services
+          secret-envs: |
+            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
+            sccache_url=SCCACHE_GHA_CACHE_URL
+            sccache_mode=SCCACHE_GHA_RW_MODE

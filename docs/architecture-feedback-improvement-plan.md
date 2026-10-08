@@ -1706,6 +1706,19 @@ less qualified-product compile surface, or artifact reuse. Keep the same
 release build, exact-image acceptance, and public-cache security boundary;
 do not infer a speedup from the telemetry patch itself.
 
+The full [#1164 PR run](https://github.com/ElevenID/marty-ui/actions/runs/37727436632)
+passed and reported 1,150 dependency-cook hits with zero misses, followed by
+zero release-binary hits and 23 misses. Its builder took 414.5 seconds. This
+identifies a cache coverage gap, not a causal saving from #1164. The
+repository cache was already near the included 10 GB limit, so the next
+bounded experiment warms only the same release-binary compiler outputs on
+trusted main; PR and merge-group builds stay read-only and the additional
+build exports no BuildKit layer cache. Measure the warmer's cost, cache
+occupancy/eviction, and the next comparable PR's binary hit count and Canvas
+critical path. Revert the warm step if it displaces more useful cache data or
+does not improve feedback. No binary, packaged-image check, or release gate is
+removed.
+
 For A3/A6, the exact `SELFHOST_BUNDLE.md` input is a shipped asset of
 `marty-selfhost-bundle`; the Rust shadow planner now records that package and
 its `marty-canvas-acceptance` Cargo consumer for a packager-plus-document
