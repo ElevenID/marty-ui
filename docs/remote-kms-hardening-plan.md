@@ -6460,6 +6460,14 @@ have all passed on final artifacts. In particular, cross-format
 interoperability, Open Badge endorsement/X.509 trust, mDoc ZK success and
 failure, and service-level multi-format revocation still require assertion-
 level mapping and, where absent, new native tests before K7 closure.
+The older note above that `marty-verification/tests/open_badges_conformance.rs`
+still generated issuer keys is superseded on the current Core PR head. That
+suite now verifies previously signed public vectors for OB2/OB3, structure,
+wrong key, expiry, hashed recipient, verification-method variants and unsigned
+status rejection. A direct KMS-only run of the registered integration target
+passed 12/12 on `f5ca93c`. This closes that specific test-custody item; the
+remaining Open Badge endorsement/X.509 and cross-format service assertions
+still need their own mapping.
 The broad Credentials retirement candidate was checkpointed locally as
 `4051dd4` on `security/remote-kms-retirement-20261007`: 69 files changed,
 including local issuer-key adapter/test removal, no-private-key clean-install
