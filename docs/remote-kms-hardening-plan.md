@@ -6330,3 +6330,9 @@ negative tests and native ZK lanes. This is partial replacement evidence,
 not proof for every removed scenario; map the remaining Open Badge,
 cross-format, lifecycle and ZK cases to qualified native tests or add them
 before merging the Credentials retirement PR.
+The candidate Core head `6fbe674` passed both focused replacement suites
+locally with the KMS-only issuer/verifier/wallet feature selection:
+`sd_jwt_vc_conformance` (6/6) and `remote_jwt_vc_boundary` (6/6).
+These prove preparation, selective-disclosure structure, and refusal of
+private or mismatched issuer metadata; they do not alone replace the deleted
+service-level Behave scenarios.
