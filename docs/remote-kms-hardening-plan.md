@@ -6754,3 +6754,17 @@ contract remained open is superseded by this passing run. A subsequent
 row-reader cleanup removed duplicate JSON decoding; the complete Notification
 package and strict Clippy passed, and the live PostgreSQL/OpenBao integration
 contract passed again against fresh disposable services after that change.
+
+2026-10-08 self-host bundle regression review: the local test must use the
+pinned standalone Docker Compose 5.4.0 executable, as hosted CI does; the
+default `docker compose` invocation cannot satisfy the test's explicit
+standalone renderer contract. With that executable, the remaining extracted
+bundle failure exposed a stale synthetic environment: the issuance-native
+Compose file now requires `BAO_ADDR` for `DIDCOMM_KMS_ADDR`, but the fixture did
+not supply it. The bundle fixture now supplies a synthetic address, requires
+the DIDComm OpenBao token mount and forbids the retired integration-secret
+master-key file. The adjacent Canvas self-host acceptance fixture and its
+container-recovery check now use the same DIDComm token mount. All 24
+`marty-selfhost-bundle` tests pass with the pinned renderer; the focused
+Canvas container-recovery test passes. These are source/fixture checks, not
+the still-required shipped-image and assembled-runtime qualification.
