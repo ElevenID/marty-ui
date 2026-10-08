@@ -6282,6 +6282,11 @@ transport contract. With Starlette 1.7.0 installed only in that isolated
 target, the exact suite passed 1,751 tests with two failures, 29 skips and
 200 passing subtests. Both remaining failures assert that published release
 dependency metadata and CI still point to the earlier Core release commit.
+The locally built Windows verification wheel successfully created an
+unsigned DER OCSP request from public certificate fixtures, and both wheel
+modules omit the sampled retired issuer-key and local crypto exports. These
+are local wheel checks; Linux/aarch64 and final release-wheel behavior still
+require hosted and exact-artifact proof.
 Do not change those expectations or claim release qualification before
 reviewed Core artifacts are actually published and pinned. The second
 suite log is
