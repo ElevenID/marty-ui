@@ -2970,7 +2970,10 @@ scoped KMS backend, positive producer output and exact-image verification have
 not yet been exercised together. Next qualify that chain with real remote keys,
 then bring the integration acceptance PR and release pin forward. Do not delete
 the shipping verifier gate or claim its source-only review proves artifact
-acceptance.
+acceptance. The current candidate passed `cargo +1.95.0 test --locked -p
+marty-presentation-policy --bin marty-verifier-positive-gate --quiet` (2 tests)
+in the UI Rust workspace. Those cases prove public input parsing and rejection
+of an unsigned presentation, not a positive image or KMS flow.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
