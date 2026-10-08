@@ -38,6 +38,7 @@ jobs:
       rust: ${{ steps.classify.outputs.rust }}
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
       rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
+      planner_only: ${{ steps.classify.outputs.planner_only }}
       release: ${{ steps.classify.outputs.release }}
       verification: ${{ steps.classify.outputs.verification }}
       security: ${{ steps.classify.outputs.security }}
@@ -61,6 +62,7 @@ jobs:
           rust=false
           rust_runtime=false
           rust_matrix='["canvas","contracts"]'
+          planner_only=false
           release=false
           verification=false
           security=false
@@ -109,6 +111,30 @@ jobs:
             git diff --name-only -z --no-renames "$BASE_SHA" HEAD > "$changed_paths_file"
             mapfile -d '' -t changed_files < "$changed_paths_file"
             report_historical_input_shadow pull_request proved "${changed_files[@]}"
+            # Only the two informational planner sources plus their exact
+            # coordination document may use the bounded PR feedback path.
+            # Protected merge groups always retain the complete release job.
+            planner_candidate=false
+            planner_source=false
+            if (( ${#changed_files[@]} > 0 )); then
+              planner_candidate=true
+            fi
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
+                  planner_source=true
+                  ;;
+                docs/architecture-feedback-improvement-plan.md) ;;
+                *) planner_candidate=false ;;
+              esac
+            done
+            if [[ "$planner_candidate" == true && "$planner_source" == true &&
+                  -f scripts/ci/plan_affected_rust.py &&
+                  ! -L scripts/ci/plan_affected_rust.py &&
+                  -f tests/test_plan_affected_rust.py &&
+                  ! -L tests/test_plan_affected_rust.py ]]; then
+              planner_only=true
+            fi
             # A nonempty PR consisting solely of proven test-only leaves has
             # no production Rust or image input. Keep every actual test owner.
             leaf_only=false
@@ -277,6 +303,7 @@ jobs:
             printf 'rust=%s\n' "$rust"
             printf 'rust_runtime=%s\n' "$rust_runtime"
             printf 'rust_matrix=%s\n' "$rust_matrix"
+            printf 'planner_only=%s\n' "$planner_only"
             printf 'release=%s\n' "$release"
             printf 'verification=%s\n' "$verification"
             printf 'security=%s\n' "$security"
@@ -2313,6 +2340,7 @@ jobs:
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Replay Canvas mirror oracle in exact Credentials release image
+        if: needs.changes.outputs.planner_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -2332,7 +2360,13 @@ jobs:
             --release-image --publication-boundary-reference --check
       - name: Require workflow policy test collection
         run: python -m pytest --collect-only -q tests/test_ci_workflow_performance.py
+      - name: Run planner-owned PR checks
+        if: needs.changes.outputs.planner_only == 'true'
+        run: >-
+          python -m pytest tests/test_plan_affected_rust.py
+          tests/test_ci_workflow_performance.py -v --tb=short
       - name: Run repository release checks
+        if: needs.changes.outputs.planner_only != 'true'
         run: python -m pytest tests -v --tb=short
       - name: Report affected Rust packages in shadow mode
         if: github.event_name == 'pull_request'
@@ -2341,6 +2375,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: python3 scripts/ci/plan_affected_rust.py
       - name: Configure the pinned containerd image store
+        if: needs.changes.outputs.planner_only != 'true'
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
@@ -2351,6 +2386,7 @@ jobs:
               }
             }
       - name: Configure the pinned OCI exporter
+        if: needs.changes.outputs.planner_only != 'true'
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
@@ -2358,11 +2394,13 @@ jobs:
           driver: docker-container
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Require the exact supported OCI backend
+        if: needs.changes.outputs.planner_only != 'true'
         env:
           MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
           MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
         run: python scripts/check_verification_candidate_backend.py
       - name: Prove the same OCI archive through the future consumer path
+        if: needs.changes.outputs.planner_only != 'true'
         env:
           MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
         run: >-
@@ -2370,8 +2408,10 @@ jobs:
           tests/test_verification_candidate_backend.py
           tests/test_verification_candidate_workflow.py
       - name: Require a compatible Credentials image for native DIDComm consumers
+        if: needs.changes.outputs.planner_only != 'true'
         run: python scripts/check_didcomm_native_credentials_release.py
       - name: Require the event-owner migration for native retention
+        if: needs.changes.outputs.planner_only != 'true'
         run: python scripts/check_issuance_retention_credentials_release.py
 
   test-credential-lifecycle-browser:
