@@ -1306,6 +1306,11 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_rest_input_evidence.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         },
+        "canvas-json-depth-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_ci_workflow_performance.py",
+            "tests/test_canvas_json_depth_current_inputs.py",
+        },
         "canvas-worker-retry-after-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
@@ -1395,12 +1400,14 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
+        "contracts/canvas-json-depth-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
         "contracts/canvas-renewal-profile-obligations.json",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
+        "tests/test_canvas_json_depth_current_inputs.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
         "tests/test_canvas_worker_validation_tier.py",
@@ -1560,6 +1567,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
 ) -> None:
     helper = "scripts/ci/canvas_oracle_current_inputs.py"
     owners = {
+        "tests/test_canvas_json_depth_current_inputs.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",

@@ -2177,13 +2177,18 @@ qualification, or authority to skip any live case. All existing process,
 PostgreSQL, historical replay, and release gates remain in force. The original
 147 package-migrated worker identities remain required; three additive Rust
 tests check input drift and evidence-constructor refusal. The first hosted
-full-main record must be checked before calling this evidence achieved.
+full-main record has now been checked.
 The manual [run 37842597081](https://github.com/ElevenID/marty-ui/actions/runs/37842597081)
-targets merge commit `916c75aed`; require its completed workflow result and
-both artifacts before admitting its record. A separate #1188 release-lock
-change advanced `main` while it ran, so this run cannot qualify the new tip for
-an exact-current-main release claim. Local source tests only validate
-fail-closed construction.
+completed successfully on merge commit `916c75aed`. Both 14-day artifacts,
+`canvas-rest-fresh-run-37842597081-1` and
+`canvas-startup-fresh-run-37842597081-1`, were downloaded and checked: each
+binds repository, `main`, workflow dispatch, run 37842597081 attempt 1, the
+same SHA, and the Canvas job; each reports published comparison and owned
+cleanup passed with pinned issuance/PostgreSQL images and migration revision.
+This verifies fresh reproducibility on that commit, not original historical
+capture or release qualification. A separate #1188 release-lock change
+advanced `main` while the run executed, so it cannot qualify the newer tip for
+an exact-current-main release claim.
 
 ## A5 JSON-depth current-input guard (2026-10-08 reviewed candidate)
 
