@@ -6231,6 +6231,15 @@ inspection remain open K10 work.
 Follow-up commit `5d29f4b` also detects JSON-encoded private JWKs in JWKS
 extension strings, bounds recursive inspection, and preserves ordinary public
 extensions. Ruff and the same 134 focused tests passed after that correction.
+2026-10-08 native signing-keys DID review: the leased DID publication path
+serialized its assembled document directly to Redis, bypassing the generic
+document `save` guard. The current UI candidate now rejects private material
+in both the existing DID document and the assembled result inside the shared
+builder used by leased and ordinary publication. A new public-positive and
+private-existing negative test passed; the full signing-keys library passed
+135 tests with 8 ignored, and warnings-denied Clippy passed on Rust 1.97.1.
+This is a local uncommitted UI candidate paired with the broader document/
+HTTP change; live leased-Redis and assembled artifact qualification remain.
 The device-registration write path calls Core's
 `validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
 rejects other DER shapes, and binds the claimed key identifier to its public
