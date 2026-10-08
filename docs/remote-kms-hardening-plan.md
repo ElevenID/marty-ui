@@ -6857,3 +6857,21 @@ The PR is open and review-required. The first GitHub read returned no checks
 yet, so hosted CI has not been counted as passing. Keep corrections in this
 same broad PR and batch local fixes before its next hosted run to limit CI
 cost. Core #355 is the upstream dependency; Credentials has no PR yet.
+
+2026-10-08 UI integration checkpoint: PR #1192 could not form a test merge
+against the newer `main` (`809f093a6`), which split Canvas worker acceptance,
+changed CI selection, and tightened the passport image gate. The branch now
+has a local merge commit `01942fb70` resolving 11 textual conflicts. The
+resolution retains remote OpenBao acceptance setup, the new Canvas timeout
+tier, the Canvas worker package split, and all three CI selector outputs
+(`openbao`, `planner_only`, `rollback_test_only`). The combined Python suite
+finished with 410 passed, 1 skipped, and 2 stale selector expectations; both
+corrected expectations passed on a focused rerun. Earlier stale expectations
+for the scoped KMS probe and renamed passport gate were also corrected.
+`cargo +1.95.0 check --locked` passed for Credential Template, Issuance,
+Canvas acceptance, and Canvas worker acceptance. Targeted Rust formatting,
+locked metadata, the frozen self-host Compose model comparison, and staged
+whitespace checks passed. The `%SystemDrive%` cache artifacts remain untracked
+and excluded. The merge and tracker update still need to be pushed; hosted UI
+CI and review have not yet passed. Do not mark K8/K9/K10 complete from these
+local integration checks.
