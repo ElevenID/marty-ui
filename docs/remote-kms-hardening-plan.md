@@ -1028,6 +1028,8 @@ or loads issuer/holder private keys. No second local signing implementation was
 added. This is implementation and local parser/build evidence, not yet real KMS,
 wallet, image, tenant or release acceptance. Next run the producer against two
 actual remote KMS keys and the exact image, including tampered/negative cases.
+This describes the `6d98e73` checkpoint; a later local remote-key run is
+recorded below, while exact-image and release acceptance remain open.
 
 Validation so far: Rust 1.95.0 probe tests passed (2); the Core producer passed
 `cargo +1.95.0 check --locked -p marty-test-wallet --bin
