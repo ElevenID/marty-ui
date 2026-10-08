@@ -6197,3 +6197,23 @@ native service DDL. This is source-level evidence only. The assembled fresh
 PostgreSQL database, every legacy initialization entrypoint, JSON payload
 writes and shipped release artifacts still need K10 qualification before
 calling the product database free of private-key storage.
+The device-registration write path calls Core's
+`validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
+rejects other DER shapes, and binds the claimed key identifier to its public
+JWK thumbprint before storing it. This strengthens the public-only reading of
+that table beyond its column names. Core's SQLite `open_badge_keys` schema is
+a verification-method document store with a direct-write private-material
+guard; its generic `config` table currently has no application writer in the
+crate beyond schema-version handling. Continue reviewing other JSON-bearing
+tables and all direct repository entrypoints before closing K10.
+
+2026-10-08 Core local quality gate: `cargo +1.97.1 fmt --all -- --check`
+and the full branch `git diff --check` pass. Warnings-denied all-target
+Clippy across the same non-ZKP, non-bindings workspace selection passed with
+captured exit 0 in
+`artifacts/kms-core-584a-clippy-selected-2026-10-08.log`. The initial
+all-workspace Windows Clippy attempt could not build the native ZKP crate
+because the local MSVC environment lacks OpenSSL and zstd headers; this is
+recorded in `artifacts/kms-core-584a-clippy-2026-10-08.log`. The required
+Linux ZKP/bindings lanes and hosted Core CI remain to be qualified on the
+final broad PR head.
