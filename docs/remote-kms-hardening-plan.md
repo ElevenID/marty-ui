@@ -6232,3 +6232,11 @@ under `USE_ZK_MOCK=1`; the ZKP mock package test lane also exited 0. The
 exact `marty-oid4vci` KMS-only issuer and verifier no-default feature profiles
 both compile at the same SSI pin. These checks do not replace the Linux native
 ZKP security lane or exact wheel inspection.
+Core grouped draft PR #355 was opened on the locally qualified, clean head
+`d56c3fe52f195f7e8cc157fa03898efb5a89f701` so its full diff and hosted
+Linux lanes can be reviewed together. It remains draft while the remaining
+regression/security/quality review and hosted findings are resolved; opening
+the draft does not waive the plan's complete-review or final-head merge gate.
+Initial hosted policy, license metadata/inventory, workflow quality and
+Python/actions CodeQL jobs passed; other jobs were still running at this
+checkpoint.
