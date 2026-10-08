@@ -2871,6 +2871,19 @@ cases passed against a fresh OpenBao. Targeted Clippy with `-D warnings`,
 Rustfmt, public-vector JSON validation and diff checks passed. The disposable
 provider was removed. Core commit: `afd69ae`. Other Core format/batch
 private-key fixtures remain; this is not Core PR readiness or hosted CI.
+2026-10-07 Core mixed-batch remote checkpoint: the public ES256 batch API
+issued JWT-VC, proof-bound SD-JWT and mDoc in caller order through a single
+non-exportable OpenBao issuer key. The live test binds all three exact signer
+inputs and returned raw signatures to assembled credentials, uses a separate
+provider-generated holder public key without invoking its signer, and rejects
+a duplicate route before an additional provider call. The signing-batch input
+tests no longer create private holder keys merely to obtain public JWKs;
+synthetic private members still exercise fail-closed rejection. All five live
+Core cases passed against fresh marked OpenBao, the KMS-only library suite
+passed 297 tests with one opt-in ignored, and targeted Clippy with warnings
+denied, Rustfmt and diff checks passed. The container was removed. Core
+commit: `9498920`. The broader test-only batch signers and mDoc local issuer
+path still require assertion-preserving retirement. No hosted CI or PR yet.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
