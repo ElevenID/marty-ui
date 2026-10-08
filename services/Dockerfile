@@ -29,6 +29,7 @@ RUN case "$TARGETARCH" in \
     && rm /tmp/sccache.tar.gz /tmp/sccache-aarch64.tar.gz
 
 COPY --chmod=755 scripts/ci/run-public-rust-build.sh /usr/local/bin/run-public-rust-build
+COPY --chmod=644 scripts/ci/public-sccache-stats.awk /usr/local/bin/public-sccache-stats.awk
 
 FROM rust-service-cache AS rust-service-dependencies
 
