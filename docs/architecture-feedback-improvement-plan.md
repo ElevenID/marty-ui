@@ -1711,6 +1711,21 @@ behavior before publication. The `db-migrate` reuse claim is limited to the
 exact digest and isolated profile proven by #1167, not future releases. No CI
 speedup is claimed from this generator alone.
 
+PKG02 follow-up: the opt-in official-release preparation lane builds the two
+distinct self-host roles by digest only after existing stack qualification,
+checks the source-bound image map and Marty attestations, anonymously pulls
+each locked image, and retains only a short-lived artifact explicitly marked
+unqualified. It does not alter the three-role stack transaction or ordinary
+PR gates. Its independent infrastructure refs still lack a reviewed
+provenance/licensing policy, and it neither signs nor qualifies an installable
+bundle. The next release-only gate must bind a packaged Linux ZIP and its
+embedded lock to the exact transaction, extract into a fresh directory, use
+only extracted scripts/configuration with isolated disposable state and
+policy-scoped OpenBao tokens, prove migrations/readiness and one representative
+product journey, and verify owned cleanup. Archive/lock signing and external
+image provenance remain separate publication prerequisites. These are
+release-quality obligations, not claimed CI feedback savings.
+
 The [#1161 protected run](https://github.com/ElevenID/marty-ui/actions/runs/37719253068)
 measured 7m14s for reusable Rust test compilation, followed serially by
 8m15s building the public self-host image, 1m58s for published-worker
