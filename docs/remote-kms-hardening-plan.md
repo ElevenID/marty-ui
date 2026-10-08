@@ -6249,6 +6249,9 @@ as failing until a refreshed aggregate check passes; once the remaining
 hosted jobs complete, request a targeted refresh if available or batch a
 follow-up head update with other required corrections. Do not dismiss the
 alert or treat current analysis as a passing PR check.
+The targeted GitHub check-run rerequest endpoint returned HTTP 404 for this
+CodeQL check, so it did not refresh. A later Core head update is still needed
+to produce a new aggregate check once the remaining jobs have been reviewed.
 The device-registration write path calls Core's
 `validate_device_public_key`, which parses canonical PKCS#1 RSA public DER,
 rejects other DER shapes, and binds the claimed key identifier to its public
