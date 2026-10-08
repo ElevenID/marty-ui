@@ -2897,6 +2897,20 @@ passed 293 tests with one opt-in ignored, the default library suite passed
 Clippy with warnings denied, Rustfmt and diff checks passed; the disposable
 provider was removed. Core commit: `d0c97f9`. Broader batch fixture signers
 remain. This does not qualify hosted CI, exact artifacts or the Core PR.
+2026-10-07 Core high-S batch fixture retirement: the test-only P-256 high-S
+signing key and both serial/concurrent local-signing tests are removed. A live
+OpenBao wrapper receives genuine remote ES256 signatures and changes only the
+public `s` representation to a valid high-S P1363 signature; it retains no
+private key. The serial and concurrent batch executors both preserve those
+exact bytes across JWT-VC, SD-JWT and mDoc. The wrapper serializes access to
+its test client while exercising the concurrent batch assembly path; it does
+not claim backend request overlap. All six live OpenBao cases passed, the
+KMS-only library suite passed 291 tests with one opt-in ignored, and the
+default library suite passed 263 with one opt-in ignored. Targeted Clippy with
+warnings denied, Rustfmt and diff checks passed; the disposable provider was
+removed. Core commit: `cb6a9e2`. Recording and concurrency scheduler
+fixtures still sign locally in Core tests; their assertion-preserving
+migration remains in the same grouped Core feature PR. Hosted CI is pending.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
