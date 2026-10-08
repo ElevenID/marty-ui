@@ -2010,8 +2010,8 @@ safe overlap, not a repeatable whole-job saving. #1176's new phase artifact
 recorded host fetch/pull and four pinned Bookworm Cargo commands; the
 combined protected run measured 14/28 seconds for fetch/pull and 457 seconds
 for the compile phase, including 187, 159, 83, and 24 seconds for its four
-offline commands. Future reuse
-must preserve the same toolchain, target, features, ABI, and coverage.
+offline commands. Future reuse must preserve the same toolchain, target,
+features, ABI, and coverage.
 
 [UI #1179](https://github.com/ElevenID/marty-ui/pull/1179) passed PR and
 protected CI and merged. Its persistent PowerShell rollback harness retains
@@ -2021,18 +2021,39 @@ protected run measured about 1.99 seconds. The enclosing release-check step
 fell from 9m23s to 8m04s across the compared PR runs, but different runner
 conditions prevent attributing all of that step change to this patch.
 
-A5 current-input closure candidate (2026-10-08):
+A5 current-input closure (2026-10-08):
 `contracts/canvas-worker-retry-after-current-inputs.json` binds the current
 Retry-After reference to ten exact producer/scenario inputs, using the same
 normalized-hash and transitive-edge guard as existing Canvas current-input
 evidence. Per-input drift tests cover all ten listed inputs; a same-set swap
 test covers the REST reference edge. This is evidence about a bounded current
-repository-input slice,
-not authentication of the frozen historical capture or a reason to relax
-historical qualification. The implementation candidate rebased cleanly onto
-the current main at preparation; 148 targeted tests passed locally, and an
-independent reviewer cleared the rebased diff. Hosted PR/protected validation
-is still required.
+repository-input slice, not authentication of the frozen historical capture
+or a reason to relax historical qualification. [UI #1182](https://github.com/ElevenID/marty-ui/pull/1182)
+passed 148 targeted local tests, independent review, full PR CI including live
+Canvas, and protected combined-head CI, then merged as `ad0cd884f`. It does
+not establish complete historical capture closure.
+
+A6 exact-file feedback (2026-10-08): [UI #1180](https://github.com/ElevenID/marty-ui/pull/1180)
+added a fail-closed rollback-test-only PR selector, and
+[#1181](https://github.com/ElevenID/marty-ui/pull/1181) exercised it with an
+independently reviewed one-file test change. Its hosted PR CI passed in 2m09s:
+all 88 rollback cases and 219 selected release/policy tests ran, security and
+the aggregate gate passed, and unrelated heavy PR lanes skipped. The protected
+merge group then ran every required lane and passed. This measures scoped PR
+feedback, not a change in full-queue throughput or a repository-wide average.
+
+Next A6 fail-fast candidate (2026-10-08): the required Canvas published-worker
+preflights currently run after the public self-host image build, although they
+consume the verified Bookworm test executables and their own pinned published
+fixtures, not that newly built public image. The #1182 PR and protected runs
+spent 316 and 483 seconds respectively building the public image before these
+preflights. Move the unchanged two/four-case preflight step immediately after
+rendered-base preparation, before the image build, in the same Canvas job.
+Keep its exact executable/run-bound evidence, later public-image qualification,
+full Canvas database group, and CI gate. A failing preflight could report
+before that image-build wait; successful-run wall time is not expected to
+improve, and failure frequency is not established. Require hosted PR and
+protected proof before marking this candidate merged.
 
 ## Design references
 
