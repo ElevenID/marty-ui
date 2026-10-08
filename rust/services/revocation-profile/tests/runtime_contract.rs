@@ -41,6 +41,12 @@ enum BindRetryDisposition {
     Exhausted,
 }
 
+#[derive(Debug)]
+enum ListenerWaitFailure {
+    Exit(ExitStatus),
+    Timeout,
+}
+
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_POSTGRES_URL and MARTY_TEST_REDIS_URL"]
 async fn executable_serves_http_grpc_and_operational_contracts() {
@@ -88,22 +94,27 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
                     started = Some((http_port, grpc_port, child));
                     break;
                 }
-                Err(status) => {
+                Err(failure) => {
                     stderr.seek(SeekFrom::Start(0)).unwrap();
                     let mut diagnostic = String::new();
                     stderr.read_to_string(&mut diagnostic).unwrap();
-                    match bind_retry_disposition(&diagnostic, attempt) {
-                        BindRetryDisposition::Retry => {}
-                        BindRetryDisposition::Fatal => {
+                    match failure {
+                        ListenerWaitFailure::Timeout => {
                             eprintln!("{diagnostic}");
-                            panic!(
-                                "revocation-profile exited before both listeners became healthy: {status}"
-                            );
+                            panic!("revocation-profile listeners did not become healthy");
                         }
-                        BindRetryDisposition::Exhausted => {
-                            panic!(
-                                "revocation-profile could not bind after {MAX_BIND_ATTEMPTS} attempts"
-                            );
+                        ListenerWaitFailure::Exit(status) => {
+                            match bind_retry_disposition(&diagnostic, attempt) {
+                                BindRetryDisposition::Retry => {}
+                                BindRetryDisposition::Fatal => {
+                                    eprintln!("{diagnostic}");
+                                    panic!("revocation-profile exited before both listeners became healthy: {status}");
+                                }
+                                BindRetryDisposition::Exhausted => {
+                                    eprintln!("{diagnostic}");
+                                    panic!("revocation-profile could not bind after {MAX_BIND_ATTEMPTS} attempts");
+                                }
+                            }
                         }
                     }
                 }
@@ -246,10 +257,10 @@ async fn wait_for_listeners(
     http_port: u16,
     grpc_port: u16,
     child: &mut Child,
-) -> Result<(), ExitStatus> {
+) -> Result<(), ListenerWaitFailure> {
     for _ in 0..100 {
         if let Some(status) = child.try_wait().unwrap() {
-            return Err(status);
+            return Err(ListenerWaitFailure::Exit(status));
         }
         if TcpStream::connect(("127.0.0.1", http_port)).await.is_ok()
             && TcpStream::connect(("127.0.0.1", grpc_port)).await.is_ok()
@@ -258,7 +269,7 @@ async fn wait_for_listeners(
         }
         sleep(Duration::from_millis(100)).await;
     }
-    panic!("revocation-profile listeners did not become healthy");
+    Err(ListenerWaitFailure::Timeout)
 }
 
 async fn connect_grpc(target: &str) -> RevocationProfileServiceClient<tonic::transport::Channel> {
