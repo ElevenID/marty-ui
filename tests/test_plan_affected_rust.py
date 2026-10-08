@@ -761,6 +761,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-presentation-policy",
                 "marty-flow",
                 "marty-gateway",
+                "marty-applicant",
                 "marty-compliance-profile",
                 "marty-deployment-profile",
                 "marty-revocation-profile",
@@ -769,18 +770,22 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-credential-template",
                 "marty-verification-service",
                 "marty-issuance-service",
+                "marty-presentation-policy",
                 "marty-flow",
                 "marty-auth",
                 "marty-gateway",
+                "marty-applicant",
             },
             "marty-revocation-profile": {
                 "marty-revocation-profile",
                 "marty-credential-template",
                 "marty-verification-service",
                 "marty-issuance-service",
+                "marty-presentation-policy",
                 "marty-flow",
                 "marty-auth",
                 "marty-gateway",
+                "marty-applicant",
             },
         }
         for producer, expected in expected_observed_closure.items():
@@ -844,6 +849,99 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             reachable.add(consumer)
                             frontier.append(consumer)
                 self.assertEqual(reachable, expected)
+
+    def test_issuance_applicant_template_http_consumer_is_observed_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/issuance/src/application_template_http.rs"],
+                              metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [edge for edge in result["observed_non_cargo_consumers"]
+                 if edge["producer"] == "marty-issuance-service"
+                 and edge["package"] == "marty-applicant"]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("binding", "evidence"),
+            ("runtime_marker", "evidence"),
+            ("request_call_marker", "request_evidence"),
+            ("request_marker", "request_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("deployment_marker", "deployment_evidence"),
+        )
+        sources = {path: (ROOT / path).read_text(encoding="utf-8")
+                   for path in {edge[source] for _, source in markers}}
+
+        def assert_markers() -> None:
+            for marker, source in markers:
+                self.assertIn(edge[marker], sources[edge[source]])
+
+        assert_markers()
+        compose = sources[edge["deployment_evidence"]]
+        applicant = compose.split("\n  applicant:\n", 1)[1].split(
+            "\n  notification:\n", 1
+        )[0]
+        self.assertIn(edge["deployment_marker"], applicant)
+        for marker, source in markers:
+            path = edge[source]
+            original = sources[path]
+            sources[path] = original.replace(edge[marker], "removed-route-or-binding")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_markers()
+            sources[path] = original
+        assert_markers()
+        self.assertNotIn("marty-issuance-service", {
+            dep["name"] for dep in packages["marty-applicant"]["dependencies"]
+        })
+
+    def test_issuance_presentation_policy_status_http_consumer_is_observed_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/issuance/src/http.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        edges = [edge for edge in result["observed_non_cargo_consumers"]
+                 if edge["producer"] == "marty-issuance-service"
+                 and edge["package"] == "marty-presentation-policy"]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("binding", "evidence"),
+            ("status_marker", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("provider_marker", "provider_evidence"),
+        )
+        sources = {path: (ROOT / path).read_text(encoding="utf-8")
+                   for path in {edge[source] for _, source in markers}}
+
+        def assert_markers() -> None:
+            for marker, source in markers:
+                self.assertIn(edge[marker], sources[edge[source]])
+
+        assert_markers()
+        for marker, source in markers:
+            path = edge[source]
+            original = sources[path]
+            sources[path] = original.replace(edge[marker], "removed-route-or-binding")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_markers()
+            sources[path] = original
+        assert_markers()
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        presentation = compose.split("\n  presentation-policy:\n", 1)[1].split(
+            "\n  deployment-profile:\n", 1
+        )[0]
+        self.assertIn(edge["deployment_marker"], presentation)
+        self.assertNotIn("marty-issuance-service", {
+            dep["name"] for dep in packages["marty-presentation-policy"]["dependencies"]
+        })
 
     def test_three_flow_grpc_runtime_consumers_are_observed_without_narrowing(
         self,

@@ -1772,6 +1772,21 @@ non-Cargo runtime and test consumers are not
 fully mapped. This only strengthens shadow evidence; it does not change a
 required check or establish a Canvas acceptance skip.
 
+A0/A3 Issuance consumer audit (2026-10-08, based on UI main `fc101c3ec`):
+Applicant selects `ISSUANCE_NATIVE_SERVICE_URL` in its native startup, passes
+that URL into `HttpTemplateProvider`, and GETs
+`/v1/application-templates/{id}`. Presentation Policy constructs a credential
+status URL from the same native-Issuance setting and GETs it in its control
+plane. Native Issuance owns both HTTP routes, and the base Compose profile
+points both consumers at `issuance-native:8005`; neither consumer declares
+Issuance as a Cargo dependency. Record these two exact observed edges with
+source/deployment-marker regressions in the shadow planner. The self-host
+profile currently points Applicant and Presentation Policy status lookup at
+legacy `issuance`, so these observations do not imply native ownership of
+their self-host traffic. The planner retains its full-workspace fallback for
+every service change. This is not complete non-Cargo closure, permission to
+skip tests, or a measured speedup.
+
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
 assignee, issue/PR, dependency state, exact candidate evidence and next action
