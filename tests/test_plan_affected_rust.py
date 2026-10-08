@@ -696,6 +696,81 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
                 )
 
+    def test_flow_callback_to_auth_internal_route_is_observed_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/auth/src/http_service.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-auth" and edge["package"] == "marty-flow"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("auth_url_marker", "auth_request_evidence"),
+            ("auth_request_marker", "auth_request_evidence"),
+            ("binding", "evidence"),
+            ("grpc_marker", "grpc_evidence"),
+            ("conditional_marker", "runtime_evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("selection_marker", "selection_evidence"),
+            ("submission_context_marker", "submission_evidence"),
+            ("submission_secret_marker", "submission_evidence"),
+            ("submission_event_marker", "submission_evidence"),
+            ("submission_outbox_marker", "submission_evidence"),
+            ("outbox_marker", "outbox_evidence"),
+            ("delivery_marker", "delivery_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_registration_marker", "provider_evidence"),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in {edge[source] for _, source in markers}
+        }
+
+        def assert_markers() -> None:
+            for marker, source in markers:
+                self.assertIn(edge[marker], sources[edge[source]])
+
+        assert_markers()
+        for marker, source in markers:
+            path = edge[source]
+            original = sources[path]
+            sources[path] = original.replace(edge[marker], "removed-runtime-edge")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_markers()
+            sources[path] = original
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        flow = compose.split("\n  flow:\n", 1)[1].split("\n  issuance:\n", 1)[0]
+        auth = compose.split("\n  auth:\n", 1)[1].split("\n  organization:\n", 1)[0]
+        deployment_markers = (
+            ("deployment_auth_base_marker", "auth"),
+            ("deployment_secret_marker", "flow"),
+            ("deployment_binding_marker", "flow"),
+            ("deployment_marker", "flow"),
+        )
+        deployments = {"auth": auth, "flow": flow}
+
+        def assert_deployment_markers() -> None:
+            for marker, service in deployment_markers:
+                self.assertIn(edge[marker], deployments[service])
+
+        assert_deployment_markers()
+        for marker, service in deployment_markers:
+            original = deployments[service]
+            deployments[service] = original.replace(edge[marker], "removed-runtime-edge")
+            with self.subTest(marker=marker), self.assertRaises(AssertionError):
+                assert_deployment_markers()
+            deployments[service] = original
+        self.assertNotIn(
+            "marty-auth", {dep["name"] for dep in packages["marty-flow"]["dependencies"]}
+        )
+
     def test_organization_trust_profile_control_plane_is_observed(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

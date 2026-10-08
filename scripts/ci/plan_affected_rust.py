@@ -759,6 +759,45 @@ next(
     }
 )
 
+# Flow's callback worker sends to Auth's internal credential-verification route
+# only when its callback secret and allowlisted destination are configured.
+# This is separate from Gateway's public Auth proxy edge above.
+OBSERVED_NON_CARGO_CONSUMERS["marty-auth"].append(
+    {
+        "package": "marty-flow",
+        "auth_request_evidence": "rust/services/auth/src/credential_http.rs",
+        "auth_url_marker": '"{}/internal/v1/auth/credential-verified?nonce={nonce}"',
+        "auth_request_marker": "callback_url: self.config.callback_url(&nonce),",
+        "evidence": "rust/services/flow/src/config.rs",
+        "binding": 'value(&values, "FLOW_CALLBACK_DESTINATIONS")',
+        "grpc_evidence": "rust/services/flow/src/grpc_service.rs",
+        "grpc_marker": "callback_url: nonempty(input.callback_url),",
+        "runtime_evidence": "rust/services/flow/src/main.rs",
+        "conditional_marker": "let callback_worker = callback_secret.map(|secret| {",
+        "runtime_marker": "tokio::spawn(run_callback_dispatcher(",
+        "selection_evidence": "rust/services/flow/src/verification_start.rs",
+        "selection_marker": ".require(&request.organization_id, callback_url)",
+        "submission_evidence": "rust/services/flow/src/verification_submission.rs",
+        "submission_context_marker": '.get("callback_url")',
+        "submission_secret_marker": ".callback_secret",
+        "submission_event_marker": "CallbackEvent::new_with_retention(",
+        "submission_outbox_marker": ".map(|event| event.into_outbox_message_with_max_attempts(options.callback_max_attempts))",
+        "outbox_evidence": "rust/services/flow/src/callback.rs",
+        "outbox_marker": "reply_to: Some(self.destination_url)",
+        "delivery_evidence": "rust/services/flow/src/callback_delivery.rs",
+        "delivery_marker": ".post(&callback.destination_url)",
+        "provider_evidence": "rust/services/auth/src/http_service.rs",
+        "provider_marker": '"/internal/v1/auth/credential-verified"',
+        "provider_registration_marker": "post(credential_verified),",
+        "deployment_evidence": "docker-compose.base.yml",
+        "deployment_service": "flow",
+        "deployment_auth_base_marker": "AUTH_SERVICE_INTERNAL_URL: ${AUTH_SERVICE_INTERNAL_URL:-http://auth:8001}",
+        "deployment_secret_marker": "FLOW_WEBHOOK_SECRET:",
+        "deployment_binding_marker": "FLOW_CALLBACK_DESTINATIONS:",
+        "deployment_marker": "http://auth:8001/internal/v1/auth/credential-verified?nonce=__MARTY_TOKEN__",
+    }
+)
+
 
 def changed_paths(base: str, head: str) -> list[str]:
     # Both move endpoints matter, including a deleted package that metadata no

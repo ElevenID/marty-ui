@@ -1871,7 +1871,7 @@ their self-host traffic. The planner retains its full-workspace fallback for
 every service change. This is not complete non-Cargo closure, permission to
 skip tests, or a measured speedup.
 
-A3 additional service-consumer observations (2026-10-08 candidate, based on
+A3 additional service-consumer observations (2026-10-08, merged in #1174, based on
 UI main `c0b6038d9`): Applicant's configured `FLOW_SERVICE_URL` feeds the
 production `HttpFlowProvider`, which signs and POSTs an approved application
 to Flow's registered `/v1/flows/webhooks/application-approved` route. Device
@@ -1889,6 +1889,75 @@ a Cargo dependency, so that publisher is not added as a non-Cargo edge.
 Service changes still select every Rust package; no required gate or measured
 turnaround changes. Other runtime consumers and non-Cargo inputs remain
 unmapped.
+
+Reviewed [UI #1174](https://github.com/ElevenID/marty-ui/pull/1174), exact
+head `5ba54fc22`, passed all 29 applicable PR checks and protected
+combined-head [run 37762957463](https://github.com/ElevenID/marty-ui/actions/runs/37762957463),
+including the live Canvas database suite and aggregate gate, then merged as
+`29988a37c` on 2026-10-08 at 10:56:06 UTC. Besides the two A3 shadow edges
+above, it selects Release Contract Tests only for the exact current-Canvas-input
+helper-only PR path (A6), and makes fresh full-main Canvas startup attestation
+fail closed when the local checkout root or HEAD differs from the claimed SHA
+(A5). Mixed or unknown inputs, merge groups, and historical qualification
+retain their broad checks. The same batch pins the packaged OpenBao bootstrap
+helper to a current multi-architecture digest; the named test of a freshly
+extracted ZIP passed on Linux. No customer install, external OpenBao server,
+official-release qualification, or new CI speedup is claimed.
+
+The protected #1171 and #1172 Canvas timing artifacts recorded
+`repository_roster_metadata` at 76.769 and 82.742 seconds; #1174's PR and
+combined-head runs recorded 84.476 and 85.306 seconds. Corresponding
+`published-canvas` group totals were 450.844, 576.859, 584.493, and 600.889
+seconds. These different runs do not establish a causal saving from moving
+two value-shape cases into fast unit tests; the real lease-expiry fences remain.
+The #1174 queue run is a full-gate outcome, not evidence that the new
+helper-only PR selector has been exercised on GitHub.
+
+A3 next shadow observation (2026-10-08): Auth constructs its internal
+`credential-verified` callback URL and submits it in the Flow gRPC verification
+request. Flow conditionally selects the organization-allowlisted URL, creates a
+callback outbox message on verification submission, and its configured worker
+POSTs to Auth's registered internal route. The base Compose Auth URL and Flow
+destination/secret bindings agree. The planner records Auth-to-Flow as an
+observed non-Cargo runtime consumer with source-backed regression markers;
+Auth changes still select the full Rust workspace. This observation neither
+establishes complete runtime graph closure nor narrows a required CI gate.
+
+Next measured compiler-reuse investigation (2026-10-08): #1174's PR and
+protected Canvas jobs spent 10m01s and 10m32s respectively in `Compile reusable
+Rust test executables`. That step starts with an empty host-visible `rust/target`
+and invokes Cargo inside the pinned Bookworm container with `--network none`;
+it does not pass the host `RUSTC_WRAPPER` into that container. Both uploaded
+host `sccache-stats.json` snapshots have zero cache hits and misses because
+they measure the host daemon, not this container compile. They are not evidence
+of Bookworm cache effectiveness or a backend outage. Preserve the Bookworm ABI
+check, offline dependency closure, exact target/features/toolchain, and the
+existing GitHub-cache storage budget while testing any reuse design. Compare
+actual container compilation time and target identity before adding a cache
+layer or claiming a saving.
+
+Acceptance split triage: the apparently separable Flow and DIDComm renewal
+cases in `canvas_published_schema_contract` still call
+`PublishedDatabase::start()` and exercise the pinned published schema, real
+processes, or durable recovery. Moving those named cases to the ordinary
+contracts lane would require its own published-image/database fixture and
+run-bound parity proof; test names alone do not make the move safe or remove
+the Bookworm compile prerequisite. The existing fast four-way renewal
+policy/crypto matrix already uses the production endpoint validator and native
+delivery ports; the Compose and Kubernetes cases retain distinct rendered
+configuration obligations. No case or lane is removed on this audit.
+
+The Bookworm command also compiles issuance's 70.7-second library-test unit
+because the late Canvas TLS timeout oracle invokes its crate-private
+`canvas_operation_http::tests::native_socket_case`. A direct move to an
+integration test would require widening private transport APIs; that is not a
+mere test-file relocation. The production HTTP operation client depends on
+Canvas origin policy, streaming content decoding, timeout types, and response
+text/Python compatibility modules, with tests referring back to issuance
+configuration and credential protocol behavior. Any new reusable transport
+crate must move that cohesive dependency closure and preserve the existing
+independent socket/oracle checks; do not expose internals just to remove one
+test executable or claim a 70.7-second wall saving from one Cargo unit.
 
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
