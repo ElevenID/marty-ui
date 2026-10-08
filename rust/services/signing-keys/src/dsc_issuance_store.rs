@@ -9,7 +9,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::{csca_lifecycle, documents, profiles, registry, registry::RotationLease};
+use crate::{
+    csca_lifecycle, documents, private_material::contains_private_key, profiles, registry,
+    registry::RotationLease,
+};
 
 const PENDING_TTL_MS: u64 = 120_000;
 const RECEIPTS: &str = "passport_dsc_issuance";
@@ -267,7 +270,8 @@ impl DscIssuanceStore {
         if !attachment.is_object()
             || !public_result.is_object()
             || forbidden_public_data(&public_result)
-            || contains_private_key_material(&attachment)
+            || contains_private_key(&public_result)
+            || contains_private_key(&attachment)
             || attachment
                 .get("cert_pem")
                 .and_then(Value::as_str)
@@ -483,26 +487,11 @@ fn forbidden_public_data(value: &Value) -> bool {
                 "service_config",
                 "auth_reference",
                 "token",
-                "private_key",
             ]
             .contains(&key.as_str())
                 || forbidden_public_data(value)
         }),
         Value::Array(items) => items.iter().any(forbidden_public_data),
-        Value::String(text) => text.contains("PRIVATE KEY"),
-        _ => false,
-    }
-}
-
-fn contains_private_key_material(value: &Value) -> bool {
-    match value {
-        Value::Object(fields) => fields.values().any(contains_private_key_material),
-        Value::Array(items) => items.iter().any(contains_private_key_material),
-        Value::String(text) => {
-            text.contains("-----BEGIN PRIVATE KEY-----")
-                || text.contains("-----BEGIN EC PRIVATE KEY-----")
-                || text.contains("-----BEGIN RSA PRIVATE KEY-----")
-        }
         _ => false,
     }
 }
@@ -670,6 +659,45 @@ mod tests {
             "signing_key_reference":"private-internal-ref"
         });
         let result = json!({"certificate_pem":cert.clone(),"chain_pem":"","status":"issued"});
+        let mut private_attachment = attachment.clone();
+        private_attachment["metadata"] =
+            json!({"nested": "{\"kty\":\"EC\",\"d\":\"forbidden-private-scalar\"}"});
+        assert!(matches!(
+            store
+                .commit(
+                    &claim,
+                    &snapshot,
+                    &lease,
+                    "dsc",
+                    "csca",
+                    "csca-1",
+                    "operator-test",
+                    "01",
+                    private_attachment,
+                    result.clone()
+                )
+                .await,
+            Err(DscIssuanceStoreError::Invalid(_))
+        ));
+        let mut private_result = result.clone();
+        private_result["metadata"] = json!({"kty":"EC","d":"forbidden-private-scalar"});
+        assert!(matches!(
+            store
+                .commit(
+                    &claim,
+                    &snapshot,
+                    &lease,
+                    "dsc",
+                    "csca",
+                    "csca-1",
+                    "operator-test",
+                    "01",
+                    attachment.clone(),
+                    private_result
+                )
+                .await,
+            Err(DscIssuanceStoreError::Invalid(_))
+        ));
         assert!(matches!(
             store
                 .commit(
