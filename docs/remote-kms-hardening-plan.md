@@ -2923,6 +2923,16 @@ fixture simplification, and targeted Clippy with warnings denied, Rustfmt and
 diff checks passed after it. Core commit: `53a83dc`. This is a local batch
 within the still-unopened Core feature PR; result-envelope, assembly and
 concurrency scheduler fixtures still need remote/public-only migration.
+2026-10-07 Core batch envelope boundary: the eight result-envelope fault
+cases now feed synthetic signature results into the private executor seam and
+use the public-only panic-on-sign metadata fixture. Missing, duplicate,
+unexpected, wrong-scope/batch/route and combined identity/signature/backend
+faults must fail envelope validation before signature validation or a signer
+call. All 25 signing-batch unit tests passed in the KMS-only feature set;
+targeted Clippy with warnings denied, Rustfmt and diff checks passed. Core
+commit: `457237e`. Reordered valid results, cryptographic signature faults,
+assembly failures and scheduler behavior still use local signing fixtures
+pending live remote replacements. No hosted CI or PR was triggered.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
