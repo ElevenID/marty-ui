@@ -169,11 +169,23 @@ pub async fn reconcile_credential_template_data(
     )
     .fetch_one(&mut *transaction)
     .await?;
+    summary.templates_deprecated += sqlx::query(
+        "UPDATE credential_template_service.credential_templates
+         SET status='deprecated',updated_at=now()
+         WHERE lower(status)='active'
+           AND upper(credential_payload_format)='ICAO_EMRTD'
+           AND issuance_protocol='PHYSICAL_DOCUMENT'
+           AND NOT coalesce(issuer_did LIKE 'did:%',false)",
+    )
+    .execute(&mut *transaction)
+    .await?
+    .rows_affected();
     let missing_active_revocation: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM credential_template_service.credential_templates
          WHERE lower(status)='active'
            AND NOT (upper(credential_payload_format)='ICAO_EMRTD'
-                    AND issuance_protocol='PHYSICAL_DOCUMENT')
+                    AND issuance_protocol='PHYSICAL_DOCUMENT'
+                    AND coalesce(issuer_did LIKE 'did:%',false))
            AND nullif(trim(revocation_profile_id),'') IS NULL",
     )
     .fetch_one(&mut *transaction)
@@ -197,19 +209,21 @@ pub async fn reconcile_credential_template_data(
              WHERE template.organization_id=profile.organization_id
                AND lower(template.status)='active'
                AND NOT (upper(template.credential_payload_format)='ICAO_EMRTD'
-                        AND template.issuance_protocol='PHYSICAL_DOCUMENT')
+                        AND template.issuance_protocol='PHYSICAL_DOCUMENT'
+                        AND coalesce(template.issuer_did LIKE 'did:%',false))
                AND nullif(trim(template.revocation_profile_id),'') IS NULL",
         )
         .execute(&mut *transaction)
         .await?
         .rows_affected();
     }
-    summary.templates_deprecated = sqlx::query(
+    summary.templates_deprecated += sqlx::query(
         "UPDATE credential_template_service.credential_templates
          SET status='deprecated',updated_at=now()
          WHERE lower(status)='active'
            AND NOT (upper(credential_payload_format)='ICAO_EMRTD'
-                    AND issuance_protocol='PHYSICAL_DOCUMENT')
+                    AND issuance_protocol='PHYSICAL_DOCUMENT'
+                    AND coalesce(issuer_did LIKE 'did:%',false))
            AND nullif(trim(revocation_profile_id),'') IS NULL",
     )
     .execute(&mut *transaction)

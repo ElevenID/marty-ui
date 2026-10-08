@@ -94,6 +94,27 @@ if (-not (Test-Path -LiteralPath $sessionPath -PathType Leaf)) {
     throw 'Private Rust Flow session is unavailable'
 }
 $intentPath = [IO.Path]::GetFullPath($MaintenanceReceipt) + '.intent.json'
+$reservedPaths = [Collections.Generic.HashSet[string]]::new(
+    [StringComparer]::OrdinalIgnoreCase)
+foreach ($path in @(
+    $output, $planPath, $productionPostflightPath, $productionRecoveryPath,
+    $fenceRecheckPath, $credentialsPretransitionPath, $ceremonyIntentPath,
+    $ceremonyPath, $kmsPretransitionPath, $transitionPath, $writePath,
+    $writeIntentPath, $flowWritePath, $flowWriteIntentPath, $referenceIntentPath,
+    $continuityPath, ($output + '.fence-receipt.json'),
+    ($output + '.maintenance-receipt.json'), ($output + '.maintenance-intent.json'),
+    ($output + '.native-receipt.json'), $intentPath,
+    ([IO.Path]::GetFullPath($StackManifest)),
+    ([IO.Path]::GetFullPath($FenceReceipt)),
+    ([IO.Path]::GetFullPath($MaintenanceReceipt)),
+    ([IO.Path]::GetFullPath($NativeReceipt)), $issuerChainPath,
+    $issuerCeremonyPath, $cscaSessionPath, $dscSessionPath, $sessionPath,
+    $applicationPath, $flowPath
+)) {
+    if (-not $reservedPaths.Add($path)) {
+        throw "Aggregate beta input/output paths must be distinct: $path"
+    }
+}
 . (Join-Path $PSScriptRoot 'beta-deployment-lock.ps1')
 . (Join-Path $PSScriptRoot 'beta-passport-fence-legacy-boundary.ps1')
 
@@ -740,6 +761,17 @@ try {
     if ([string]$script:plan.postgres_container_id -cne
         [string]$script:intent.postgres_container_id) {
         throw 'Aggregate beta database identity differs from maintenance intent'
+    }
+    $referenceOutputPreflight = Invoke-Plan -Arguments @(
+        (Join-Path $PSScriptRoot 'probe_passport_beta_reference_provision.py'),
+        '--preflight-outputs', '--plan', $planPath,
+        '--issuer-chain-file', $issuerChainPath,
+        '--intent-dir', $referenceIntentPath,
+        '--application-file', $applicationPath, '--flow-file', $flowPath)
+    if ($referenceOutputPreflight.schema -cne
+        'marty.passport-beta-reference-output-preflight/v1' -or
+        $referenceOutputPreflight.verified -ne $true) {
+        throw 'Beta passport reference outputs failed preflight'
     }
     $loginBefore = @(Invoke-BetaPsql -Sql `
         "SELECT rolcanlogin FROM pg_roles WHERE rolname='marty';")

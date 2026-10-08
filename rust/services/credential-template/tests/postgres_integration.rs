@@ -43,6 +43,7 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
     let suffix = "rust-contract-fixed";
     let template_id = format!("ct-{suffix}");
     let physical_template_id = format!("ct-passport-{suffix}");
+    let invalid_physical_template_id = format!("ct-pass-invalid-{suffix}");
     let wallet_id = format!("wr-{suffix}");
     let system_destination_id = format!("dd-system-{suffix}");
     let tenant_destination_id = format!("dd-tenant-{suffix}");
@@ -69,6 +70,10 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .delete_template(&physical_template_id)
         .await
         .expect("physical template cleanup must pass");
+    store
+        .delete_template(&invalid_physical_template_id)
+        .await
+        .expect("invalid physical template cleanup must pass");
 
     let template = CredentialTemplate {
         id: template_id.clone(),
@@ -146,6 +151,13 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .save_template(&physical_template)
         .await
         .expect("physical template save must pass");
+    let mut invalid_physical_template = physical_template.clone();
+    invalid_physical_template.id = invalid_physical_template_id.clone();
+    invalid_physical_template.issuer_did = None;
+    store
+        .save_template(&invalid_physical_template)
+        .await
+        .expect("legacy physical template save must pass");
     reconcile_credential_template_data(
         &pool,
         &CredentialTemplateDataReconciliationConfig {
@@ -175,11 +187,26 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .is_none());
     assert_eq!(
         store
-            .templates_by_organization("org-rust-contract", Some(TemplateStatus::Active))
+            .template_by_id(&invalid_physical_template_id)
             .await
-            .expect("tenant template list must pass")
-            .len(),
-        1
+            .expect("invalid physical template lookup")
+            .expect("invalid physical template exists")
+            .status,
+        TemplateStatus::Deprecated,
+        "a legacy physical template with no managed issuer must not stay active"
+    );
+    let active_template_ids = store
+        .templates_by_organization("org-rust-contract", Some(TemplateStatus::Active))
+        .await
+        .expect("tenant template list must pass")
+        .into_iter()
+        .map(|template| template.id)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        active_template_ids,
+        [template_id.clone(), physical_template_id.clone()]
+            .into_iter()
+            .collect()
     );
 
     let wallet = WalletRegistryEntry {
@@ -314,4 +341,8 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         .delete_template(&physical_template_id)
         .await
         .expect("physical template cleanup must pass"));
+    assert!(store
+        .delete_template(&invalid_physical_template_id)
+        .await
+        .expect("invalid physical template cleanup must pass"));
 }

@@ -12,7 +12,7 @@ import subprocess
 from typing import Any
 
 try:
-    from .passport_beta_reference_intents import DurableReferenceRequests, _write_new
+    from .passport_beta_reference_intents import DurableReferenceRequests, _bytes, _read, _write_new
     from .passport_supported_flow_references import (
         PASSPORT_COMPLIANCE_PROFILE_ID, provision_beta_physical_passport_references,
     )
@@ -25,7 +25,7 @@ try:
     from .probe_passport_beta_rust_owner_flow import checked_session, signed_service
     from .probe_passport_beta_rust_owner_write import checked_application
 except ImportError:
-    from passport_beta_reference_intents import DurableReferenceRequests, _write_new
+    from passport_beta_reference_intents import DurableReferenceRequests, _bytes, _read, _write_new
     from passport_supported_flow_references import (
         PASSPORT_COMPLIANCE_PROFILE_ID, provision_beta_physical_passport_references,
     )
@@ -126,6 +126,53 @@ def _output(path: Path, value: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def preflight_existing_outputs(plan: dict[str, Any], selection: dict[str, str],
+                               intent_dir: Path, application_file: Path,
+                               flow_file: Path) -> None:
+    """Reject stale output files before the protected deployment changes beta."""
+    organization = selection["organization_id"]
+    source_commit = plan["source_commit"]
+
+    def marker(key: str, path: str | None = None) -> dict[str, Any]:
+        value = _read(intent_dir / (key + ".json"))
+        require(value.get("source_commit") == source_commit
+                and value.get("organization_id") == organization
+                and (path is None or value.get("path") == path),
+                "Beta reference output intent changed")
+        return value
+
+    if application_file.exists():
+        marker("credential", "/v1/credential-templates")
+        marker("application", "/v1/application-templates")
+        credential = marker("credential-templates-activate")
+        application = marker("application-templates-activate")
+        destination = marker("destination", "/v1/delivery-destinations")
+        require(credential["path"] == f"/v1/credential-templates/{credential.get('id')}/activate"
+                and application["path"] == f"/v1/application-templates/{application.get('id')}/activate"
+                and isinstance(destination.get("destination_id"), str),
+                "Beta reference output intent is invalid")
+        expected = {
+            "organization_id": organization,
+            "issuer_did": selection["dsc_issuer_did"],
+            "credential_template_id": credential["id"],
+            "application_template_id": application["id"],
+            "delivery_destination_profile_id": destination["destination_id"],
+        }
+        require(application_file.read_bytes() == _bytes(expected),
+                "Beta reference application output changed")
+    if flow_file.exists():
+        require(application_file.is_file(), "Beta Flow output lacks application")
+        marker("flow", "/v1/flows/definitions")
+        flow = marker("flows-definitions-activate")
+        require(flow["path"] == f"/v1/flows/definitions/{flow.get('id')}/activate",
+                "Beta Flow output intent is invalid")
+        expected = {"organization_id": organization,
+                    "issuer_did": selection["dsc_issuer_did"],
+                    "flow_definition_id": flow["id"]}
+        require(flow_file.read_bytes() == _bytes(expected),
+                "Beta Flow output changed")
+
+
 def provision(plan: dict[str, Any], selection: dict[str, str],
               session: str, dsc_session: str | None, intent_dir: Path,
               application_file: Path, flow_file: Path | None,
@@ -219,23 +266,35 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--issuer-chain-file", required=True, type=Path)
-    parser.add_argument("--session-file", required=True, type=Path)
+    parser.add_argument("--session-file", type=Path)
     parser.add_argument("--dsc-session-file", type=Path)
     parser.add_argument("--intent-dir", required=True, type=Path)
     parser.add_argument("--application-file", required=True, type=Path)
     parser.add_argument("--flow-file", type=Path)
-    parser.add_argument("--phase", required=True, choices=("references", "flow"))
+    parser.add_argument("--phase", choices=("references", "flow"))
+    parser.add_argument("--preflight-outputs", action="store_true")
     args = parser.parse_args()
     try:
         plan_path = _private_path(args.plan)
         selection_path = _private_path(args.issuer_chain_file)
-        session_path = _private_path(args.session_file)
         intent_dir = _private_path(args.intent_dir)
         application_file = _private_path(args.application_file)
         flow_file = _private_path(args.flow_file) if args.flow_file else None
-        dsc_path = _private_path(args.dsc_session_file) if args.dsc_session_file else None
         plan = json.loads(plan_path.read_bytes())
         selection, _ = checked_selection(selection_path)
+        if args.preflight_outputs:
+            require(flow_file is not None and args.phase is None
+                    and args.session_file is None and args.dsc_session_file is None,
+                    "Beta reference output preflight arguments are invalid")
+            preflight_existing_outputs(plan, selection, intent_dir,
+                                       application_file, flow_file)
+            print(json.dumps({"schema": "marty.passport-beta-reference-output-preflight/v1",
+                              "verified": True}, sort_keys=True, separators=(",", ":")))
+            return
+        require(args.phase is not None and args.session_file is not None,
+                "Beta reference phase inputs are missing")
+        session_path = _private_path(args.session_file)
+        dsc_path = _private_path(args.dsc_session_file) if args.dsc_session_file else None
         session = checked_session(session_path)
         dsc_session = checked_session(dsc_path) if dsc_path else None
         result = provision(plan, selection, session, dsc_session, intent_dir,

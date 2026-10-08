@@ -621,9 +621,7 @@ fn validate_revocation_profile_policy(
     issuance_protocol: IssuanceProtocol,
     revocation_profile_id: Option<&str>,
 ) -> Result<(), CredentialTemplateApplicationError> {
-    if issuance_protocol == IssuanceProtocol::PhysicalDocument
-        && revocation_profile_id.is_some_and(|value| !value.trim().is_empty())
-    {
+    if issuance_protocol == IssuanceProtocol::PhysicalDocument && revocation_profile_id.is_some() {
         return Err(CredentialTemplateApplicationError::InvalidCommand(
             "physical documents cannot bind a digital revocation profile",
         ));

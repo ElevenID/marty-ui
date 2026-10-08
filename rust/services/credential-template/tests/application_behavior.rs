@@ -432,6 +432,9 @@ async fn physical_passport_template_uses_the_managed_issuer_and_stays_out_of_oid
         .create_template(invalid_revocation)
         .await
         .is_err());
+    let mut blank_revocation = physical.clone();
+    blank_revocation.revocation_profile_id = Some("  ".into());
+    assert!(application.create_template(blank_revocation).await.is_err());
     let digital_draft = application.create_template(command()).await.unwrap();
     let converted = application
         .update_template(UpdateTemplateCommand {

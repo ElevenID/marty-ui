@@ -94,12 +94,14 @@ def test_reference_and_flow_phases_create_once_and_resume_without_writes(
     intent = tmp_path / "intents"
     application = tmp_path / "application.json"
     flow = tmp_path / "flow.json"
+    probe.preflight_existing_outputs(plan, selection, intent, application, flow)
 
     references = probe.provision(
         plan, selection, "pilot-session", "dsc-session", intent,
         application, None, phase="references",
     )
     assert references["verified"] is True and application.is_file()
+    probe.preflight_existing_outputs(plan, selection, intent, application, flow)
     assert not gateway.rows["/v1/flows/definitions"]
     first_posts = list(gateway.posts)
     assert len(first_posts) == 5  # Three creates, two activations.
@@ -115,11 +117,19 @@ def test_reference_and_flow_phases_create_once_and_resume_without_writes(
         application, flow, phase="flow",
     )
     assert created_flow["verified"] is True and flow.is_file()
+    probe.preflight_existing_outputs(plan, selection, intent, application, flow)
     assert len(gateway.posts) == len(first_posts) + 2
     probe.provision(plan, selection, "pilot-session", None, intent,
                     application, flow, phase="flow")
     assert len(gateway.posts) == len(first_posts) + 2
     assert len(profile_posts) == 1  # Rust-owner resume does not write KMS.
+    flow.write_text('{"unrelated":true}')
+    with pytest.raises(ValueError, match="Beta Flow output changed"):
+        probe.preflight_existing_outputs(plan, selection, intent, application, flow)
+    flow.unlink()
+    application.write_text('{"unrelated":true}')
+    with pytest.raises(ValueError, match="application output changed"):
+        probe.preflight_existing_outputs(plan, selection, intent, application, flow)
 
 
 def test_reference_creation_cannot_start_after_owner_transition(tmp_path, monkeypatch):
