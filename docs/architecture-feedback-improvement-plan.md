@@ -1965,6 +1965,21 @@ assignee, issue/PR, dependency state, exact candidate evidence and next action
 for each scheduled item. Product, commercial, architecture and release-support
 decisions in the product plan remain open pending their accountable owners.
 
+A4 and compile-timing next candidate (2026-10-08): the PostgreSQL
+`hinted_retry` matrix receives already-normalized `Option<u64>` values. Its
+seven named header shapes collapse to three distinct persisted hints: 0, 60,
+and 86,400 seconds. Keep one live lease/failure/persistence/fence case for each
+effective value; assign the complete seven-shape policy table and attempt,
+jitter, and cap edges to the fast worker unit owner. The independent published
+HTTPS/parser matrix stays intact. In the same maintenance batch, record host
+fetch/pull/container/verification durations and each offline pinned-Bookworm
+Cargo command's elapsed time, target bytes, and exit status in the existing
+short-retention build-evidence artifact. The #1174
+Canvas compile step took 10m01s, but the current evidence does not isolate
+which of its four Cargo commands or host fetch/pull dominates. This batch
+must retain the exact compiler, Cargo targets, database assertions, and
+published-process coverage; claim a saving only after comparable CI timing.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
