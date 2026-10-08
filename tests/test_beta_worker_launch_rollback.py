@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -141,6 +142,26 @@ def stop_contract_process(
     return process.returncode
 
 
+def assert_clean_contract_exit(exit_code: int, *, timed_out: bool) -> None:
+    # A response timeout is already the primary failure. The killed helper's
+    # nonzero exit is expected cleanup, not a second assertion to report.
+    if not timed_out:
+        assert exit_code == 0
+
+
+def get_contract_response(process, responses, timed_out, *, timeout: float = 30):
+    try:
+        return responses.get(timeout=timeout)
+    except queue.Empty:
+        if process.poll() is not None:
+            pytest.fail("PowerShell contract helper exited without a response")
+        timed_out[0] = True
+        process.kill()
+        pytest.fail(
+            f"PowerShell contract helper did not respond within {timeout:g} seconds"
+        )
+
+
 @pytest.fixture(scope="module")
 def powershell_contract(tmp_path_factory):
     if not POWERSHELL:
@@ -174,25 +195,24 @@ def powershell_contract(tmp_path_factory):
 
         reader = threading.Thread(target=read_responses, daemon=True)
         reader.start()
+        timed_out = [False]
         try:
-            yield process, responses, errors
+            yield process, responses, errors, timed_out
         finally:
-            assert stop_contract_process(process, reader) == 0
+            assert_clean_contract_exit(
+                stop_contract_process(process, reader), timed_out=timed_out[0]
+            )
 
 
 @pytest.fixture
 def exercise(powershell_contract):
-    process, responses, errors = powershell_contract
+    process, responses, errors, timed_out = powershell_contract
 
     def run(cases: list[dict]) -> list[dict]:
         assert process.stdin is not None
         process.stdin.write(json.dumps(cases) + "\n")
         process.stdin.flush()
-        try:
-            line = responses.get(timeout=30)
-        except queue.Empty:
-            process.kill()
-            pytest.fail("PowerShell contract helper did not respond within 30 seconds")
+        line = get_contract_response(process, responses, timed_out)
         if line is None:
             errors.seek(0)
             pytest.fail(f"PowerShell contract helper exited: {errors.read()}")
@@ -202,6 +222,27 @@ def exercise(powershell_contract):
         return reports
 
     return run
+
+
+def test_timeout_cleanup_preserves_primary_diagnostic() -> None:
+    process = Mock()
+    process.poll.return_value = None
+    responses = queue.Queue()
+    timed_out = [False]
+    with pytest.raises(
+        pytest.fail.Exception, match="did not respond within 0.01 seconds"
+    ):
+        get_contract_response(process, responses, timed_out, timeout=0.01)
+    assert timed_out == [True]
+    process.kill.assert_called_once_with()
+    assert_clean_contract_exit(-9, timed_out=True)
+    with pytest.raises(AssertionError):
+        assert_clean_contract_exit(-9, timed_out=False)
+    exited = Mock()
+    exited.poll.return_value = 1
+    with pytest.raises(pytest.fail.Exception, match="exited without a response"):
+        get_contract_response(exited, queue.Queue(), [False], timeout=0.01)
+    exited.kill.assert_not_called()
 
 
 def test_contract_helper_reaps_an_unresponsive_process() -> None:
