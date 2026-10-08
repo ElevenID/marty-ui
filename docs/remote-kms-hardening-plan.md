@@ -6737,3 +6737,17 @@ outbox tests pass; all-target warnings-denied Clippy passes on Rust 1.95.
 This remains part of the uncommitted broad UI candidate. Notification's
 disposable PostgreSQL contract and the assembled database/artifact checks
 are still separate gates.
+
+2026-10-08 K10 Notification live storage qualification: the existing
+`postgres_integration` contract passed against fresh PostgreSQL 16 and a
+separate disposable OpenBao dev instance with a non-exportable
+`aes256-gcm96` Transit key. The test migrated the clean schema, created a
+webhook, wrapped its signing secret remotely, persisted an outbox event and
+verified idempotence. Direct information-schema inspection found seven
+`notification_service` tables and six JSON columns; no table or column was
+named for private-key storage. The one webhook endpoint row held a `vault:`
+secret envelope and a four-character hint, and the old plaintext `secret`
+column was absent. The disposable PostgreSQL and OpenBao containers were
+removed. This proves the tested service boundary, not the full assembled
+platform or exact published artifact. The prior note that this disposable
+contract remained open is superseded by this passing run.
