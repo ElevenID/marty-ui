@@ -3050,6 +3050,19 @@ deployment, and contract diff; do not open a narrow smoke-only PR or trigger
 hosted CI for each correction. The packaged image is still a local dirty
 candidate and hosted CI/release qualification remain pending.
 
+2026-10-07 wider CI contract reconciliation: the Canvas runtime-selection test
+still demanded a removed `integration_master_key` reader; it now checks the
+forbidden legacy setting and supported API-key readers. The base native Compose
+comparison explicitly accounts for the direct Signing Keys URL on the old
+service versus the gateway route on the native profile, while retaining an
+exhaustive field comparison across 12 rendered models. The self-host frozen
+model comparison recognizes the dedicated Signing Keys OpenBao token as a
+deliberate custody change and continues to reject any other unowned model
+drift; default, empty, and custom interpolation plus ten required-input checks
+passed. The focused 388-test Python configuration/security matrix, Ruff, and
+diff checks passed. These repairs remain within the broad UI feature PR and
+do not constitute release or hosted CI qualification.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch

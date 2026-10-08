@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import difflib
 import json
 from pathlib import Path
 import re
@@ -61,7 +62,6 @@ LEGACY_ONLY = frozenset(
     """
 BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
 CANVAS_LTI_TOOL_PUBLIC_JWKS
-INTEGRATION_SECRET_MASTER_KEY
 """.split()
 )
 # Exhaustive source-input inventory exclusions, each explained in the companion
@@ -119,6 +119,10 @@ def assert_sources(base, profile, runtime):
     assert set(env) - set(legacy) == set(NATIVE_ONLY) - {"GRPC_SERVICE_TOKEN"}
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
+        if key == "SIGNING_KEYS_INTERNAL_URL":
+            assert legacy[key] == "http://signing-keys:8017/internal"
+            assert env[key] == "http://gateway:8000/internal/signing-keys"
+            continue
         assert env[key] == legacy[key], "Native expression changed legacy precedence"
     publication_source = (
         ROOT / "rust/services/issuance/src/canvas_credentials_publication.rs"
@@ -218,6 +222,7 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
         for key, value in legacy.items()
         if key not in LEGACY_ONLY | owner_selection
     }
+    env["SIGNING_KEYS_INTERNAL_URL"] = "http://gateway:8000/internal/signing-keys"
     env.update(
         {
             "GRPC_SERVICE_TOKEN": token,
@@ -314,7 +319,10 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
         policy = {
             "environment": {
                 "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY["POLICY_TARGET"]
-                + "/didcomm-encryption-policy.json"
+                + "/didcomm-encryption-policy.json",
+                "DIDCOMM_KMS_ADDR": "http://openbao:8200",
+                "DIDCOMM_KMS_TOKEN_FILE": POLICY["POLICY_TARGET"]
+                + "/openbao-token",
             },
             "volumes": [
                 {
@@ -334,6 +342,22 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
                 *deepcopy(policy["volumes"]),
             ]
         expected["x-native-issuance-policy"] = policy
+        plugin_image = inputs["MARTY_OPENBAO_DIDCOMM_IMAGE"]
+        openbao = expected["services"]["openbao"]
+        openbao["image"] = plugin_image
+        openbao["command"] = [
+            "server", "-config=/bao/config/didcomm-plugin.hcl", "-dev"
+        ]
+        openbao["volumes"].append({
+            "type": "bind",
+            "source": "./docker/openbao-didcomm-dev.hcl",
+            "target": "/bao/config/didcomm-plugin.hcl",
+            "read_only": True,
+            "bind": {},
+        })
+        bootstrap = expected["services"]["openbao-init"]
+        bootstrap["image"] = plugin_image
+        bootstrap["environment"]["DIDCOMM_KMS_PLUGIN_REQUIRED"] = "true"
     return expected
 
 
@@ -346,9 +370,11 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
         inputs=inputs,
         policy_directory=policy_directory,
     )
-    assert actual == expected, (
-        "Native compatibility overlay changed an unowned field or required binding"
-    )
+    assert actual == expected, "".join(difflib.unified_diff(
+        json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
+        json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
+        fromfile="expected", tofile="actual",
+    ))
     POLICY["validate_model"](actual, authcrypt_enabled=authcrypt)
     assert (
         actual["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"]
@@ -409,6 +435,9 @@ def run(command):
                 r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
             )
         }
+        required["MARTY_OPENBAO_DIDCOMM_IMAGE"] = (
+            "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
+        )
         profile_text = json.dumps(source(PROFILE))
         variables = set(re.findall(r"\$\{([A-Z0-9_]+):-", profile_text))
         custom = {key: "synthetic-custom" for key in variables}
@@ -428,7 +457,6 @@ def run(command):
                 "UI_BASE_URL": "https://ui.synthetic.example",
                 "GRPC_SERVICE_TOKEN": "synthetic-paired-012345678901234567890123456789",
                 "TOKEN_HMAC_KEY": "synthetic-hmac-012345678901234567890123456789",
-                "INTEGRATION_SECRET_MASTER_KEY": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
                 "ISSUANCE_OFFER_TTL_MINUTES": "90",
                 "TOKEN_RATE_LIMIT": "1200",
                 "DIDCOMM_ALLOW_PRIVATE_IPS": "false",
@@ -446,6 +474,8 @@ def run(command):
                 "MARTY_MIGRATIONS_IMAGE": "synthetic.invalid/migrations@sha256:"
                 + "c" * 64,
                 "DIDCOMM_ENCRYPTION_POLICY_DIR": policy_directory.as_posix(),
+                "MARTY_OPENBAO_DIDCOMM_IMAGE":
+                    "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64,
                 **overrides,
             }
             (directory / "images.env").write_text(
