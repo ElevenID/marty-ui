@@ -318,6 +318,18 @@ The focused classifier test and the full workflow-performance file passed
 Go-container host-gateway smoke passed. This is local source evidence, not a
 hosted CI run of the grouped UI PR.
 
+2026-10-07 K5 production-graph review: the actual locked Rust workspace
+metadata passed the candidate KMS-only guard for all seven Marty Core crates
+at the reviewed `a5cb567` revision and isomdl 0.3.0 at `784a5294`; the
+guard's nine mutation tests also passed. Cargo still warned about an unused
+isomdl 0.2 patch from the old migration graph. That stale patch and its
+`Cargo.lock` unused entry were removed; locked metadata passed the same guard
+again without the warning, and the manifest/lock diff check passed. These
+graph changes remain in the broad uncommitted UI feature diff. The guard
+script and tests are still untracked files that must be included when that
+feature diff is staged; this local metadata check does not qualify an exact
+service image or hosted CI result.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
