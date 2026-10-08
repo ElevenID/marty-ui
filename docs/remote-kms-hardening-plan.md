@@ -6707,3 +6707,20 @@ tests plus all-target warnings-denied Clippy passed after the shared-helper
 and callback changes on Rust 1.95. This remains uncommitted in the broad UI
 feature candidate. Other persisted JSON fields and an assembled database
 inspection remain open.
+
+2026-10-08 K10 disposable PostgreSQL follow-up: PostgreSQL 16 backed the
+existing Presentation Policy and Flow integration contracts in separate
+databases; both passed. Flow's first invocation used an arbitrary database
+name and failed its explicit `marty_atomic_test` isolation assertion before
+executing the contract; the rerun with that required name passed. Applying
+Flow's clean-install `0001_flow_schema.sql` to a third disposable database
+created seven `flow_service` tables: application-event receipts, callback
+outbox, definitions, instance artifacts, instances, nonce consumptions and
+schema versions. Information-schema inspection found no private-key-named
+table or column among them; its 16 JSON columns were inventoried, including
+definition, instance, artifact and callback fields guarded above. Presentation
+Policy's fresh database contained only `presentation_policies`, with public
+policy metadata/document columns and no private-key-named table or column.
+The disposable PostgreSQL server was removed. This is per-service schema and
+runtime evidence, not the required assembled cross-repository schema or
+published-artifact proof.
