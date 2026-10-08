@@ -2140,8 +2140,12 @@ Canvas execution and protected validation remain required before merge.
 [UI #1186](https://github.com/ElevenID/marty-ui/pull/1186) merged the
 132-case JSON-consumer timing labels without changing its frozen corpus or
 qualification. [UI #1187](https://github.com/ElevenID/marty-ui/pull/1187)
-remains in protected validation at this checkpoint; it moves the unchanged
-published worker target into `marty-canvas-worker-acceptance`. Core
+merged as `4b15de493` after protected validation; it moves the unchanged
+published worker target into `marty-canvas-worker-acceptance`. Its protected
+Canvas job took 31m58s (19:10:49–19:42:47 UTC), including 622s host Rust
+compile, 122s published-worker preflight, 484s public self-host image build,
+and 596s isolated database suites. These are observations from one run, not an
+attributed speed improvement. Core
 [#354](https://github.com/ElevenID/marty-core/pull/354) merged as `fe8de9eec`
 with source-backed Verification JWK fixture selection; no Core CI speedup is
 claimed from that ownership guard. Neither change closes historical REST
