@@ -6226,6 +6226,16 @@ The exact ignored test passed against a disposable Redis 7 instance on
 loopback database 13 with Rust 1.97.1; rustfmt and scoped diff checks passed.
 This strengthens the runtime data-flow proof but does not yet establish a
 complete assembled database inventory.
+The next issuer-profile storage review found `ProfileStore::put` accepted
+arbitrary JSON with matching tenant and ID, and read validation only checked
+tenant scope. UI commit `f76b57f1a` now applies the same recursive
+private-material detector on writes and reads, failing closed for nested
+JSON-encoded private JWKs while admitting public JWKs and managed references.
+That commit also checkpoints the already-prepared tenant/profile binding
+validation and its test. The focused storage test passed; the full
+`marty-signing-keys` library selection passed 134 tests with seven ignored
+on Rust 1.97.1. Service-level Redis/write tests and assembled schema checks
+remain required for K10 closure.
 
 2026-10-08 Core local quality gate: `cargo +1.97.1 fmt --all -- --check`
 and the full branch `git diff --check` pass. Warnings-denied all-target
