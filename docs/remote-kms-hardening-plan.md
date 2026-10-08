@@ -1062,14 +1062,17 @@ The public shared image is built by `services/Dockerfile` through
 `marty-compliance-profile`. Its opt-in self-signed passport build adds
 `marty-issuance-service/passport-self-signed-test` to the same binary list.
 
-`marty-verifier-positive-gate` generates issuer and holder private keys and
-locally signs credentials. This capability is explicitly shipped, not merely
-present under unit-test compilation. The integration repository invokes it
-inside the production image in `scripts/credentials_verifier_artifact.py`.
-Removing it without replacing that actual-artifact acceptance path would lose
-coverage. A coordinated integration acceptance PR is therefore necessary.
-Preserve the positive checks while moving key creation to a separate test owner
-and keeping verification exercised in the shipping runtime.
+The shipped `marty-verifier-positive-gate` was subsequently changed by
+`4361f4718` to accept a bounded public presentation and issuer JWK on stdin;
+it no longer generates issuer/holder private keys or signs credentials. Its
+canonical positive verifier assertions remain in the shipping binary. The
+base integration script still invokes that binary without stdin, so it cannot
+qualify this new contract. The preserved integration branch
+`security/remote-kms-acceptance-20261007` supplies a digest-pinned Core
+producer and `docker run -i`, but has not yet run against two actual remote
+KMS keys and an exact candidate image. Keep the gate packaged until that
+producer-to-image route passes; it is verification-only capability, not a
+local custody exception.
 
 Other build roots include `rust/services/Dockerfile.ci` and the dedicated
 event-stream, signing-keys and revocation-profile Dockerfiles. The CI multi-target
@@ -2955,6 +2958,19 @@ multiple-invalid-signature cases still require valid preceding signatures and
 remain on the local recording fixture pending live remote replacement. All 25
 batch tests, targeted Clippy with warnings denied, Rustfmt and diff checks
 passed. Core commit: `53660cd`; no hosted CI or PR was triggered.
+2026-10-07 production verifier artifact reconciliation: inspected the current
+shipping Rust gate, its build/copy instructions and the preserved integration
+branch rather than relying on the earlier pre-hardening inventory. The gate
+contains only bounded public-input parsing, canonical verification and policy
+assertions; its tests reject private JWK members. Base integration still calls
+it without input, while the preserved acceptance branch has a SHA-256-pinned
+Core producer, authenticated issuer/holder signer-agent IPC and stdin wiring.
+The signer agents use a generic HTTPS signing endpoint; the actual separately
+scoped KMS backend, positive producer output and exact-image verification have
+not yet been exercised together. Next qualify that chain with real remote keys,
+then bring the integration acceptance PR and release pin forward. Do not delete
+the shipping verifier gate or claim its source-only review proves artifact
+acceptance.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
