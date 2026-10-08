@@ -68,7 +68,7 @@ docker run --rm \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
     -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
     -v "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}:/work-callback" \
-    quay.io/openbao/openbao:2 \
+    quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf \
     /bin/sh -ec '
 json_field() {
     printf "%s" "$1" | tr -d "\n" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"

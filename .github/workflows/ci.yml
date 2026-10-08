@@ -257,6 +257,12 @@ jobs:
                   # sources, manifests, and unknown siblings retain Rust CI.
                   release=true
                   ;;
+                scripts/ci/canvas_oracle_current_inputs.py)
+                  # Only root release-pytest Canvas input guards import this
+                  # helper. Capture scripts, manifest inputs, and unknown
+                  # script siblings keep their existing broader selection.
+                  release=true
+                  ;;
                 .github/workflows/verification-candidate-*.yml|tests/test_verification_candidate_*.py)
                   verification=true
                   release=true

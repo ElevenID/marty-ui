@@ -135,6 +135,12 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
     let fixture = ExtractedBundle::create(&repo, command());
     let output = fixture.output.clone();
     let extracted = fixture.extracted.clone();
+    let helper = "scripts/bootstrap-selfhost-vault.sh";
+    let packaged_helper = fs::read(extracted.join(helper)).unwrap();
+    assert_eq!(packaged_helper, fs::read(repo.join(helper)).unwrap());
+    assert!(String::from_utf8(packaged_helper).unwrap().contains(
+        "quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf"
+    ));
     assert_operator_bind_paths(&repo, &extracted);
     resolved_selfhost_runtime::qualify(&repo, &extracted);
     assert_eq!(inventory(&extracted), inventory(&output));

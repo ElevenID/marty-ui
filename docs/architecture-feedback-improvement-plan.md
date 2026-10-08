@@ -911,6 +911,16 @@ Do not reuse historical evidence without independently verifiable capture record
 or a controlled, fully attested capture; neither retroactively inferred hashes
 nor replacing expected outputs to match native behavior is acceptable proof.
 
+Fresh startup attestation checkout identity (2026-10-08): the full-main
+weekly/manual artifact now verifies that its claimed `GITHUB_SHA` is the actual
+checked-out repository `HEAD` before writing evidence, and fails closed if Git
+cannot verify that identity or the repository root differs. This tightens the
+fresh artifact's run-to-source binding only; it does not attest original frozen
+capture inputs, reduce historical replay coverage, alter qualification tiers,
+or authorize evidence reuse. Focused tests cover a matching checkout, a wrong
+but well-formed SHA, unavailable checkout, and absence of an output artifact
+on either failure.
+
 ## HTTPS duplicate experiment disposition (2026-10-06)
 
 When both Rust lanes are selected, both execute
@@ -1509,6 +1519,18 @@ The eight source files had no source-only commit in the inspected recent
 history, so no scoped-run saving is claimed until such a future PR produces
 hosted evidence.
 
+A6 current-Canvas-input helper ownership (2026-10-08, local candidate): the
+exact `scripts/ci/canvas_oracle_current_inputs.py` module is imported only by
+the startup, REST, and producer-inventory root Python tests collected in
+Release Contract Tests. It is not a Rust attestation/capture entrypoint, a
+direct CI command, or an included service-image input. A helper-only PR can
+therefore retain its release-test owner without selecting unrelated PR lanes.
+The exact selector has source/consumer and image-context regression checks;
+unknown script siblings and mixed inputs retain their other obligations, and
+merge groups and weekly/manual/stable qualification remain full. The helper
+was introduced in a mixed commit, so there is no comparable helper-only
+normal-run timing yet and no speedup is claimed.
+
 ## A3 merge-group historical-input shadow (2026-10-07, merged)
 
 The merge-group classifier conservatively sets `all=true` while checking the
@@ -1595,7 +1617,7 @@ for each of `repository_resource_race` (19.820s),
 (73.234s), with zero failed rows. These timings improve attribution, not
 runtime by themselves.
 
-## A4 roster-metadata case ownership (2026-10-08 candidate; not yet CI-qualified)
+## A4 roster-metadata case ownership (2026-10-08, merged)
 
 The protected #1155 timing artifact measured `repository_roster_metadata` at
 73.234s, but two natural 30-second lease-expiry cases account for most of its
@@ -1615,10 +1637,12 @@ preservation, and durable row effects. It also retains all five fence cases:
 real leases and prove different failure points. Only `worker_only` and
 `heartbeat_only` stop repeating the cloned-database matrix; their production
 patch paths remain covered by the fast owner. Published whole-worker process
-and frozen-oracle checks are unchanged. This candidate does not shorten leases,
-alter production behavior intentionally, or establish a CI speedup. Require
-independent review, focused Rust checks, the real PostgreSQL matrix, and
-protected CI before accepting the ownership change.
+and frozen-oracle checks are unchanged. The independent reviewer cleared the
+source-preserving extraction, focused Rust checks passed, and full PR plus
+protected combined-head CI passed, including the Canvas database lane.
+[#1172](https://github.com/ElevenID/marty-ui/pull/1172) merged as `b5cf2ae53`.
+This change does not shorten real leases or establish an attributable CI
+speedup; collect comparable case timing before claiming one.
 
 ## Product packaging and integration workstream (added 2026-10-07)
 
@@ -1736,12 +1760,15 @@ behavior before publication. The `db-migrate` reuse claim is limited to the
 exact digest and isolated profile proven by #1167, not future releases. No CI
 speedup is claimed from this generator alone.
 
-PKG02 follow-up: the opt-in official-release preparation lane builds the two
+PKG02 preparation merged in [#1171](https://github.com/ElevenID/marty-ui/pull/1171)
+as `e350df8f6` after full PR and protected combined-head CI. The opt-in
+official-release preparation lane builds the two
 distinct self-host roles by digest only after existing stack qualification,
 checks the source-bound image map and Marty attestations, anonymously pulls
 each locked image, and uploads only a short-lived workflow artifact explicitly
-marked unqualified; the digest-only OCI images remain in GHCR. It does not
-alter the three-role stack transaction or ordinary PR gates. Its independent
+marked unqualified; the digest-only OCI images remain in GHCR. The opt-in
+official-release path itself has not yet run. It does not alter the three-role
+stack transaction or ordinary PR gates. Its independent
 infrastructure refs still lack a reviewed provenance/licensing policy, and it
 neither signs nor qualifies an installable bundle. The next release-only gate
 must bind a packaged Linux ZIP and its
@@ -1843,6 +1870,25 @@ legacy `issuance`, so these observations do not imply native ownership of
 their self-host traffic. The planner retains its full-workspace fallback for
 every service change. This is not complete non-Cargo closure, permission to
 skip tests, or a measured speedup.
+
+A3 additional service-consumer observations (2026-10-08 candidate, based on
+UI main `c0b6038d9`): Applicant's configured `FLOW_SERVICE_URL` feeds the
+production `HttpFlowProvider`, which signs and POSTs an approved application
+to Flow's registered `/v1/flows/webhooks/application-approved` route. Device
+Registration's `ORG_GRPC_TARGET` feeds its production Organization membership
+client; organization-scoped device routes require an active membership via
+`get_member`. The base Compose profile declares Flow at port 8011 and
+Applicant on the same network; Applicant's HTTP URL comes from its code default,
+not an explicit Compose variable. Device Registration's Compose environment
+binds `ORG_GRPC_TARGET` to Organization. Neither consumer declares that
+provider as a Cargo dependency.
+The shadow planner records these two edges with request, provider, call-site,
+and scoped deployment-marker regressions. The Device Registration call is
+conditional on organization scope. Applicant already declares Event Stream as
+a Cargo dependency, so that publisher is not added as a non-Cargo edge.
+Service changes still select every Rust package; no required gate or measured
+turnaround changes. Other runtime consumers and non-Cargo inputs remain
+unmapped.
 
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track

@@ -123,3 +123,10 @@ def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> 
         "verified_worker_binary_sha(worker_binary, worker_binary_before, &resolved)"
         in attester
     )
+    assert "persist_verified_evidence(root, &output, &run, || {" in attester
+    verified_write = attester.split("fn persist_verified_evidence(", 1)[1].split(
+        "\nfn persist_evidence(", 1
+    )[0]
+    assert verified_write.index("verify_checkout_identity(root, run);") < verified_write.index(
+        "persist_evidence(output, &evidence());"
+    )
