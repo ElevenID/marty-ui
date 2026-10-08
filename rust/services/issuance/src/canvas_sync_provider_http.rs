@@ -1593,7 +1593,7 @@ mod tests {
             Arc::new(PostgresIntegrationSecretVault::new_remote(
                 pool.clone(),
                 KmsIntegrationSecretCipher::new(
-                    url::Url::parse("http://127.0.0.1:1/internal").unwrap(),
+                    url::Url::parse("https://127.0.0.1:1/internal").unwrap(),
                     "synthetic-test-key",
                 )
                 .unwrap(),

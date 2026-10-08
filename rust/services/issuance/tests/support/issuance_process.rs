@@ -85,6 +85,14 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
             remote_integration_secret::base_url().as_str(),
         )
         .env(
+            "INTEGRATION_SECRET_KMS_URL",
+            remote_integration_secret::base_url().as_str(),
+        )
+        .env(
+            "INTEGRATION_SECRET_KMS_CA_FILE",
+            remote_integration_secret::ca_file(),
+        )
+        .env(
             "SIGNING_KEYS_INTERNAL_API_KEY",
             remote_integration_secret::API_KEY,
         )

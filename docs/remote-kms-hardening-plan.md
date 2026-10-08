@@ -6939,3 +6939,23 @@ has no locally reproduced service-startup cause. The smoke harness now waits
 briefly for the published port mapping and prints Issuance and remote-service
 logs if the container exits or never receives one; this makes a remaining
 hosted-only failure diagnosable. It has not yet passed on the new PR head.
+
+2026-10-08 integration-secret transport implementation in progress (local,
+uncommitted, unpushed): CodeQL's two high alerts are a real plaintext/API-key
+HTTP path, not a false positive. A separate Rust TLS listener has been added
+to Signing Keys on configurable port 8018 with paired PEM certificate/key
+configuration; its HTTP listener denies integration-secret routes. Issuance's
+remote envelope client now accepts HTTPS only, disables redirects, verifies
+the TLS peer, and can load a trusted CA PEM via
+`INTEGRATION_SECRET_KMS_CA_FILE`. The API and Canvas worker use the shared
+`KmsIntegrationSecretCipher::from_environment` constructor with
+`INTEGRATION_SECRET_KMS_URL`. A unit test completed a real certificate-
+verified TLS encrypt/decrypt round trip. The Signing Keys package and
+Issuance package compile with the locked graph; an integration fixture
+compiles with a TLS test server. This is not yet deployable: Compose, K8s,
+runtime smoke/process fixtures, and live OpenBao recovery must supply the new
+URL and trust root; supported certificate provisioning/rotation needs a
+documented and tested path; the HTTP-route denial needs a live assertion.
+Do not push this partial transport change or claim CodeQL fixed until those
+surfaces and a hosted rerun pass. Use distinct certificates and keys for
+transport TLS versus non-exportable KMS application keys.

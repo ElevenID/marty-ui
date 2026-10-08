@@ -11,6 +11,7 @@ rust-version = "1.95"
 [workspace.dependencies]
 aes-gcm = "0.10"
 axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 async-trait = "0.1"
 aws-config = { version = "1.10.1", default-features = false, features = ["credentials-process", "default-https-client", "rt-tokio", "sso"] }
 aws-sdk-kms = { version = "1.114.0", default-features = false, features = ["default-https-client", "rt-tokio"] }

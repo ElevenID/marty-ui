@@ -297,8 +297,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(SecureProofNonceGenerator),
     );
     let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
-    let integration_secret_cipher = KmsIntegrationSecretCipher::new(
-        config.signing_keys_internal_url.clone(),
+    let integration_secret_cipher = KmsIntegrationSecretCipher::from_environment(
         config
             .signing_keys_internal_api_key
             .as_deref()

@@ -3,10 +3,10 @@
 //! The signing-keys service owns the Transit key. Issuance stores only the
 //! returned versioned envelope and supplies database-bound identity on reads.
 
-use std::time::Duration;
+use std::{env, fs, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use reqwest::{Client, StatusCode, Url};
+use reqwest::{Certificate, Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{PgConnection, Row};
@@ -63,6 +63,21 @@ struct DecryptRequest<'a> {
 }
 
 impl KmsIntegrationSecretCipher {
+    pub fn from_environment(api_key: &str) -> Result<Self, KmsIntegrationSecretError> {
+        let base_url = env::var("INTEGRATION_SECRET_KMS_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| Url::parse(&value).ok())
+            .ok_or(KmsIntegrationSecretError::InvalidConfig)?;
+        let ca_pem = env::var("INTEGRATION_SECRET_KMS_CA_FILE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(fs::read)
+            .transpose()
+            .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+        Self::new_with_ca_pem(base_url, api_key, ca_pem.as_deref())
+    }
+
     /// Verify every stored envelope against its database-bound identity before
     /// a remote-only process starts. A legacy row or unavailable KMS fails
     /// startup, including when that row is disabled.
@@ -126,8 +141,17 @@ impl KmsIntegrationSecretCipher {
     }
 
     pub fn new(base_url: Url, api_key: &str) -> Result<Self, KmsIntegrationSecretError> {
+        Self::new_with_ca_pem(base_url, api_key, None)
+    }
+
+    pub fn new_with_ca_pem(
+        base_url: Url,
+        api_key: &str,
+        ca_pem: Option<&[u8]>,
+    ) -> Result<Self, KmsIntegrationSecretError> {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         if api_key.trim().is_empty()
-            || !matches!(base_url.scheme(), "http" | "https")
+            || base_url.scheme() != "https"
             || base_url.host_str().is_none()
             || !base_url.username().is_empty()
             || base_url.password().is_some()
@@ -136,9 +160,16 @@ impl KmsIntegrationSecretCipher {
         {
             return Err(KmsIntegrationSecretError::InvalidConfig);
         }
-        let client = Client::builder()
+        let mut client = Client::builder()
             .timeout(Duration::from_secs(30))
             .redirect(reqwest::redirect::Policy::none())
+            .https_only(true);
+        if let Some(ca_pem) = ca_pem {
+            let ca = Certificate::from_pem(ca_pem)
+                .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+            client = client.tls_certs_merge([ca]);
+        }
+        let client = client
             .build()
             .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
         Ok(Self {
@@ -312,7 +343,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn client_sends_bound_identity_and_rejects_legacy_reads() {
         async fn encrypt(
             Query(query): Query<std::collections::HashMap<String, String>>,
@@ -362,27 +393,44 @@ mod tests {
             assert_eq!(body["envelope"]["schema"], SCHEMA);
             Json(json!({"plaintext_b64": STANDARD.encode("synthetic")}))
         }
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let ca_pem = certified.cert.pem();
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+            ca_pem.as_bytes().to_vec(),
+            certified.signing_key.serialize_pem().into_bytes(),
+        )
+        .await
+        .unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                Router::new()
-                    .route(
-                        "/internal/signing-keys/integration-secrets/encrypt",
-                        post(encrypt),
-                    )
-                    .route(
-                        "/internal/signing-keys/integration-secrets/decrypt",
-                        post(decrypt),
-                    ),
-            )
-            .await
-            .unwrap();
+            axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
+                .serve(
+                    Router::new()
+                        .route(
+                            "/internal/signing-keys/integration-secrets/encrypt",
+                            post(encrypt),
+                        )
+                        .route(
+                            "/internal/signing-keys/integration-secrets/decrypt",
+                            post(decrypt),
+                        )
+                        .into_make_service(),
+                )
+                .await
+                .unwrap();
         });
-        let client = KmsIntegrationSecretCipher::new(
-            Url::parse(&format!("http://{address}/internal/signing-keys")).unwrap(),
+        let client = KmsIntegrationSecretCipher::new_with_ca_pem(
+            Url::parse(&format!(
+                "https://127.0.0.1:{}/internal/signing-keys",
+                address.port()
+            ))
+            .unwrap(),
             "test-key",
+            Some(ca_pem.as_bytes()),
         )
         .unwrap();
         let stored = client

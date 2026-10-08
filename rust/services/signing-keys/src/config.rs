@@ -1,11 +1,20 @@
 use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf};
 
 const DEFAULT_HTTP_PORT: u16 = 8017;
+const DEFAULT_INTEGRATION_SECRET_TLS_PORT: u16 = 8018;
 const DEVELOPMENT_INTERNAL_API_KEY: &str = "dev-signing-keys-internal-api-key";
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct IntegrationSecretTls {
+    pub addr: SocketAddr,
+    pub cert_file: PathBuf,
+    pub key_file: PathBuf,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub http_addr: SocketAddr,
+    pub integration_secret_tls: Option<IntegrationSecretTls>,
     pub release_version: String,
     pub build_revision: String,
     pub internal_api_key: String,
@@ -34,6 +43,30 @@ impl Config {
         if port == 0 {
             return Err("SIGNING_KEYS_SERVICE_PORT must be greater than zero".into());
         }
+        let tls_cert = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE");
+        let tls_key = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE");
+        let tls_port = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT");
+        let integration_secret_tls = match (tls_cert, tls_key, tls_port) {
+            (None, None, None) => None,
+            (Some(cert_file), Some(key_file), tls_port) => {
+                let tls_port = tls_port
+                    .map(|value| value.parse::<u16>())
+                    .transpose()
+                    .map_err(|_| "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT is invalid")?
+                    .unwrap_or(DEFAULT_INTEGRATION_SECRET_TLS_PORT);
+                if tls_port == 0 || tls_port == port {
+                    return Err("integration-secret TLS port must differ from the HTTP port".into());
+                }
+                Some(IntegrationSecretTls {
+                    addr: SocketAddr::from(([0, 0, 0, 0], tls_port)),
+                    cert_file: PathBuf::from(cert_file),
+                    key_file: PathBuf::from(key_file),
+                })
+            }
+            _ => {
+                return Err("integration-secret TLS requires both certificate and key files".into())
+            }
+        };
         let release_version =
             value(values, "MARTY_RELEASE_VERSION").unwrap_or_else(|| "development".into());
         let internal_api_key = secret_value(values, "SIGNING_KEYS_INTERNAL_API_KEY")?
@@ -128,6 +161,7 @@ impl Config {
         }
         Ok(Self {
             http_addr: SocketAddr::from(([0, 0, 0, 0], port)),
+            integration_secret_tls,
             release_version,
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
@@ -175,6 +209,7 @@ mod tests {
     fn defaults_match_the_existing_service_contract() {
         let config = Config::from_values(&HashMap::new()).unwrap();
         assert_eq!(config.http_addr, SocketAddr::from(([0, 0, 0, 0], 8017)));
+        assert!(config.integration_secret_tls.is_none());
         assert_eq!(config.release_version, "development");
         assert_eq!(config.build_revision, "unknown");
         assert_eq!(config.internal_api_key, DEVELOPMENT_INTERNAL_API_KEY);
@@ -193,6 +228,29 @@ mod tests {
             let values = HashMap::from([("SIGNING_KEYS_SERVICE_PORT".into(), port.into())]);
             assert!(Config::from_values(&values).is_err());
         }
+    }
+
+    #[test]
+    fn integration_secret_tls_requires_a_complete_separate_listener() {
+        let mut values = HashMap::from([(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE".into(),
+            "/run/secrets/signing-keys.crt".into(),
+        )]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE".into(),
+            "/run/secrets/signing-keys.key".into(),
+        );
+        let config = Config::from_values(&values).unwrap();
+        assert_eq!(
+            config.integration_secret_tls.unwrap().addr.port(),
+            DEFAULT_INTEGRATION_SECRET_TLS_PORT
+        );
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT".into(),
+            DEFAULT_HTTP_PORT.to_string(),
+        );
+        assert!(Config::from_values(&values).is_err());
     }
 
     #[test]

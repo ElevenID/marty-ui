@@ -117,7 +117,7 @@ async fn run_initialized_worker(
     )?;
     let signing_key =
         required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
-    let cipher = KmsIntegrationSecretCipher::new(signing_url.clone(), &signing_key)?;
+    let cipher = KmsIntegrationSecretCipher::from_environment(&signing_key)?;
     let mut audit_connection = pool.acquire().await?;
     cipher.verify_storage(&mut audit_connection).await?;
     drop(audit_connection);

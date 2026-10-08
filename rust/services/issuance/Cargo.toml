@@ -97,6 +97,7 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+axum-server.workspace = true
 affinidi-messaging-didcomm.workspace = true
 x25519-dalek = "2"
 const-oid.workspace = true
@@ -112,7 +113,7 @@ jsonwebtoken.workspace = true
 mmf-platform.workspace = true
 rand08.workspace = true
 rsa.workspace = true
-rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 tower.workspace = true
 
 [build-dependencies]

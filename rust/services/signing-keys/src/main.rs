@@ -1,14 +1,23 @@
+use axum::{
+    extract::Request,
+    http::StatusCode,
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use axum_server::{tls_rustls::RustlsConfig, Handle};
 use marty_signing_keys::{
     config::Config, csca_lifecycle::CscaLifecycleStore, documents::DocumentStore,
     flow_envelope::OpenBaoEnvelopeProvider, http, profiles::ProfileStore, registry::RegistryStore,
     vc_api_holder_proof::OpenBaoHolderProofProvider,
 };
+use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -62,30 +71,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
     let listener = TcpListener::bind(config.http_addr).await?;
+    let integration_secret_tls = config.integration_secret_tls.clone();
     info!(
         address = %config.http_addr,
         release_version = %config.release_version,
         build_revision = %config.build_revision,
         "starting Rust signing-keys service"
     );
-    axum::serve(
-        listener,
-        http::router_with_dependencies_and_ceremony_keys(
-            config.internal_api_key,
-            config.dsc_issue_gateway_key,
-            config.csca_issue_gateway_key,
-            config.beta_csca_issuance_enabled,
-            Some(registry_store),
-            Some(document_store),
-            Some(csca_lifecycle_store),
-            Some(profile_store),
-            flow_envelopes,
-            config.public_domain,
-        ),
-    )
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+    let app = http::router_with_dependencies_and_ceremony_keys(
+        config.internal_api_key,
+        config.dsc_issue_gateway_key,
+        config.csca_issue_gateway_key,
+        config.beta_csca_issuance_enabled,
+        Some(registry_store),
+        Some(document_store),
+        Some(csca_lifecycle_store),
+        Some(profile_store),
+        flow_envelopes,
+        config.public_domain,
+    );
+    // The existing HTTP listener serves non-secret signing routes. Plaintext
+    // integration-secret requests are accepted only by the separate TLS port.
+    let http_app = app
+        .clone()
+        .layer(axum::middleware::from_fn(reject_integration_secret_http));
+    if let Some(tls) = integration_secret_tls {
+        let tls_config = RustlsConfig::from_pem_file(&tls.cert_file, &tls.key_file).await?;
+        let handle = Handle::new();
+        let shutdown_handle = handle.clone();
+        let http_server = axum::serve(listener, http_app).with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            shutdown_handle.graceful_shutdown(Some(Duration::from_secs(10)));
+        });
+        info!(address = %tls.addr, "starting integration-secret TLS listener");
+        let tls_server = axum_server::bind_rustls(tls.addr, tls_config)
+            .handle(handle)
+            .serve(app.into_make_service());
+        tokio::try_join!(http_server, tls_server)?;
+    } else {
+        axum::serve(listener, http_app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
+    }
     Ok(())
+}
+
+async fn reject_integration_secret_http(request: Request, next: Next) -> Response {
+    if request
+        .uri()
+        .path()
+        .starts_with("/internal/integration-secrets/")
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    next.run(request).await
 }
 
 async fn shutdown_signal() {

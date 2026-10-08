@@ -115,6 +115,14 @@ impl OwnedWorker {
                 "SIGNING_KEYS_INTERNAL_URL",
                 remote_integration_secret::base_url().as_str(),
             )
+            .env(
+                "INTEGRATION_SECRET_KMS_URL",
+                remote_integration_secret::base_url().as_str(),
+            )
+            .env(
+                "INTEGRATION_SECRET_KMS_CA_FILE",
+                remote_integration_secret::ca_file(),
+            )
             .env("RUST_LOG", "error")
             .envs(environment)
             .stdin(Stdio::null())

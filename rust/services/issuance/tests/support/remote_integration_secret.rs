@@ -4,6 +4,7 @@
 
 use std::{
     collections::HashMap,
+    path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -112,28 +113,63 @@ pub(crate) fn router_for(api_key: &'static str) -> Router {
         .with_state(state)
 }
 
-pub fn base_url() -> Url {
-    static BASE: OnceLock<Url> = OnceLock::new();
-    let base = BASE.get_or_init(|| {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+struct TestServer {
+    base_url: Url,
+    ca_pem: String,
+    #[allow(dead_code)] // Only process fixtures pass this trust root to a child binary.
+    ca_file: PathBuf,
+    _tempdir: tempfile::TempDir,
+}
+
+fn server() -> &'static TestServer {
+    static SERVER: OnceLock<TestServer> = OnceLock::new();
+    SERVER.get_or_init(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+        let ca_pem = certified.cert.pem();
+        let key_pem = certified.signing_key.serialize_pem();
+        let tempdir = tempfile::tempdir().unwrap();
+        let ca_file = tempdir.path().join("integration-secret-test-ca.pem");
+        std::fs::write(&ca_file, &ca_pem).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server_cert = ca_pem.clone();
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
             runtime.block_on(async {
-                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-                sender.send(listener.local_addr().unwrap().port()).unwrap();
-                axum::serve(listener, router_for(API_KEY)).await.unwrap();
+                let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+                    server_cert.into_bytes(),
+                    key_pem.into_bytes(),
+                )
+                .await
+                .unwrap();
+                axum_server::from_tcp_rustls(listener, tls)
+                    .unwrap()
+                    .serve(router_for(API_KEY).into_make_service())
+                    .await
+                    .unwrap();
             });
         });
-        Url::parse(&format!(
-            "http://127.0.0.1:{}/internal",
-            receiver.recv().unwrap()
-        ))
-        .unwrap()
-    });
-    base.clone()
+        TestServer {
+            base_url: Url::parse(&format!("https://127.0.0.1:{port}/internal")).unwrap(),
+            ca_pem,
+            ca_file,
+            _tempdir: tempdir,
+        }
+    })
+}
+
+pub fn base_url() -> Url {
+    server().base_url.clone()
+}
+
+#[allow(dead_code)] // Only process fixtures need a path; repository tests trust ca_pem directly.
+pub fn ca_file() -> &'static std::path::Path {
+    &server().ca_file
 }
 
 #[allow(dead_code)] // Process fixtures use the URL and key; repository fixtures use this client.
@@ -143,11 +179,25 @@ pub fn cipher() -> KmsIntegrationSecretCipher {
         std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_API_KEY"),
     ) {
         (Ok(remote_url), Ok(api_key)) => {
-            return KmsIntegrationSecretCipher::new(Url::parse(&remote_url).unwrap(), &api_key)
-                .expect("live Signing Keys test configuration");
+            let ca_pem = std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_CA_FILE")
+                .ok()
+                .map(std::fs::read)
+                .transpose()
+                .expect("live Signing Keys test CA file");
+            return KmsIntegrationSecretCipher::new_with_ca_pem(
+                Url::parse(&remote_url).unwrap(),
+                &api_key,
+                ca_pem.as_deref(),
+            )
+            .expect("live Signing Keys test configuration");
         }
         (Err(_), Err(_)) => {}
         _ => panic!("live Signing Keys test requires both URL and internal API key"),
     }
-    KmsIntegrationSecretCipher::new(base_url(), API_KEY).unwrap()
+    KmsIntegrationSecretCipher::new_with_ca_pem(
+        base_url(),
+        API_KEY,
+        Some(server().ca_pem.as_bytes()),
+    )
+    .unwrap()
 }
