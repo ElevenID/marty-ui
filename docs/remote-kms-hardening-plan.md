@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; Credentials commit `ab0e3e8` pins its Rust graph and CI wheel checkout to Core `d41d87c`. A locally built pair of exact-revision Windows wheels passed the qualified Python suite (1756 passed, 29 skipped, two expected published-manifest gate tests deselected); actual published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All current hosted checks, including CodeQL, Fast Rust Preflight and CI Gate, pass; the PR remains draft with review required. UI and Credentials PRs, exact artifacts and deployment cutover remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile and Deployment Profile repository records. Focused tests and disposable PostgreSQL checks pass for earlier stores; Deployment Profile's direct repository rejection, package tests and strict Clippy pass. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile and Presentation Policy storage records. Focused tests and disposable PostgreSQL checks pass for earlier stores; Deployment Profile and Presentation Policy package tests and strict Clippy pass. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
 
 ### First execution steps
 
@@ -6668,3 +6668,15 @@ remote-reference metadata remain accepted. The Deployment Profile package
 passes six library and nine integration tests; all-target Clippy passes with
 warnings denied on Rust 1.95. This is not yet an assembled PostgreSQL or
 shipped-artifact proof. Other generic JSON repositories remain to review.
+
+2026-10-08 K10 Presentation Policy storage correction: `PolicyRecord` is the
+canonical converter for PostgreSQL writes and reads. It now applies the
+shared Rust private-material policy to the current `policy_document` and
+all three legacy JSON fields before persistence and before decoding a row.
+This rejects a poisoned legacy column even when the current document is
+otherwise valid. A regression test covers JSON-encoded private JWK in a
+current policy and private material in both current-row and legacy-row
+columns. The complete Presentation Policy package suite (50 tests) and
+all-target warnings-denied Clippy pass on Rust 1.95. The UI candidate is
+still uncommitted as one broad feature; fresh assembled database and
+published artifact checks remain open.
