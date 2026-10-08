@@ -27,6 +27,9 @@ The intended UI role is `ui-selfhost`, excluding the public marketing and blog
 surface. It is not among the v1.1.231 public images.
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
+For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
+images no longer use `SELFHOST_IMAGE_TAG` or `MARTY_ISSUANCE_IMAGE`; the
+qualified image lock supplies those references instead.
 
 Use the image artifacts and verification evidence from the release workflow, then
 stage this bundle with `make package-selfhost-bundle` (Rust 1.95.0 and Docker
@@ -39,6 +42,17 @@ Optional arguments retain directory and ZIP output:
 ```bash
 make package-selfhost-bundle SELFHOST_BUNDLE_ARGS='--output-dir /existing/parent/customer-bundle --archive /existing/parent/customer-release'
 ```
+
+An opt-in `--image-lock /path/to/qualified-images.json` binds every rendered
+Compose service to an exact `registry/path@sha256:<64 lowercase hex>` reference.
+The JSON must use schema `marty.selfhost-image-lock/v1`, a `release` matching
+`release/stack-lock.json`, and a `services` object keyed by every rendered
+Compose service name. Packaging rejects missing/extra services, mutable image
+references, and a release mismatch, then includes the lock in the bundle as
+`.marty-selfhost-images.json`. This is a binding mechanism, not a qualification
+claim: the release process must first verify the image digests, provenance,
+signatures, licensing, and clean installed stack. No current public release
+provides such a qualified self-host image lock.
 
 `--archive` appends `.zip` to its basename. ZIPs contain the bundle directory,
 runtime files and directories. Unix packaging preserves executable modes;
@@ -60,12 +74,14 @@ remain external; packaging does not load their values.
 ## First run (after a qualified image/bundle release)
 
 1. Copy `.env.selfhost.production.example` to `.env.selfhost.production.local`.
-2. Set `SELFHOST_IMAGE_TAG`, `MARTY_ISSUANCE_IMAGE` (the exact matching
-   issuance OCI digest), `PUBLIC_DOMAIN`,
+2. For an unpinned bundle, set `SELFHOST_IMAGE_TAG` and
+   `MARTY_ISSUANCE_IMAGE` (the exact matching issuance OCI digest). A
+   digest-pinned bundle gets both image references from its qualified image
+   lock; these two settings may be left unused. Set `PUBLIC_DOMAIN`,
    `PUBLIC_API_URL`, `UI_BASE_URL`, `BAO_ADDR`, `SELFHOST_STATE_DIR`,
    `CREDENTIAL_LOGIN_POLICY_ID`, and `MARTY_ORG_ADMIN_EMAIL` in
-   `.env.selfhost.production.local`. The issuance image is intentionally
-   empty; Compose rejects that value until it is set. The operator must verify
+   `.env.selfhost.production.local`. For unpinned bundles the issuance image is
+   intentionally empty; Compose rejects it until set. The operator must verify
    its URI and digest against the qualified stack manifest; Compose does not
    authenticate that match. The example `FLOW_CALLBACK_DESTINATIONS` maps the
    default `MARTY_ORG_ID` to Auth's internal Compose-network HTTP callback.
