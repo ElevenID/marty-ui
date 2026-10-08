@@ -6348,6 +6348,8 @@ Only Fast Rust Preflight remained in progress at the live disposable
 OpenBao step; the aggregate CodeQL check still failed on alert #260.
 The literal-HTTPS follow-up is local Core commit `f5ca93c` and has not
 triggered another hosted run yet, so no CodeQL resolution is claimed.
+Fast Rust Preflight's disposable non-exportable OpenBao signing step then
+completed successfully on `6fbe674`; its Clippy step was still running.
 
 2026-10-08 Credentials consumer qualification at Core candidate 0.2: local
 Windows Core `marty_rs` and `marty_verification_py` wheels built and loaded
