@@ -2844,6 +2844,18 @@ removed. Core commit: `9b03621`. The attempted local `IssuerKey` fixture
 removal was reverted after the wallet verified-presentation test dependency
 surfaced. That wallet suite is the next assertion-preserving migration in the
 same Core feature PR. No hosted CI or PR was triggered for this checkpoint.
+The first wallet verified-presentation replacement now generates separate
+non-exportable issuer and holder P-256 keys in disposable OpenBao. Issuance,
+public-only issuer resolution, wallet preparation, holder signing of the exact
+prepared input, completion and audience/nonce verification all passed. The
+same live case rejects a tampered issuer signature, an unrelated holder public
+key and an unrelated holder signature without a Rust private-key fixture.
+All four live Core test cases passed after this addition; targeted Clippy with
+warnings denied, Rustfmt and diff checks passed. The disposable provider was
+removed. Core commit: `12fa539`. The old wallet suite still contains local
+private-key fixtures for additional mutations and boundary assertions; keep
+migrating those before deleting the test-only local signer helper. Hosted CI
+and the grouped Core PR remain pending.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
