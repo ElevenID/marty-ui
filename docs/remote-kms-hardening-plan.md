@@ -2723,6 +2723,32 @@ Extend the public-only prepared proof API to EdDSA with algorithm-bound
 signature verification and a public-only Ed25519 `did:key` derivation, prove
 it against a remote OpenBao holder key, then retire that local fixture.
 
+2026-10-07 Core remote EdDSA holder proof and scalar fixture retirement:
+`WalletEngine::prepare_proof_jwt` now accepts public-only P-256/ES256 and
+Ed25519/EdDSA JWKs, returns the selected signing algorithm, and verifies an
+exact 64-byte raw remote signature against that public key before assembling
+the proof. Its public-only Ed25519 `did:key` derivation uses the existing
+base58btc encoder shared with proof tests; private JWK members, wrong
+algorithm metadata and malformed public encodings fail. A disposable OpenBao
+test created a non-exportable Ed25519 holder key and a separate non-exportable
+P-256 issuer key. It verified self-certifying `did:key` identity, wrong nonce,
+wrong identity, invalid signatures, public-only `cnf`, and issuer signing of
+the IETF SD-JWT only after valid proof. All three live tests passed. A
+wallet-only KMS build passed, the KMS-only issuer/wallet library suite passed
+(323 passed, one ignored), and targeted Clippy with `-D warnings` passed.
+Core commit: `75f516e`.
+
+The old 327-line `scalar_sd_jwt_holder_binding.rs` local issuer/holder
+private-key suite and its crate import are now removed. The remote live target
+adds explicit unbound JWT-VC/SD-JWT `cnf` absence checks, retaining the old
+non-SD-JWT/direct-issuance distinction through production remote signing.
+After deletion, the KMS-only issuer/wallet library suite passed (319 passed,
+one ignored), all three disposable OpenBao live tests passed again, and
+targeted Clippy, Rustfmt and diff checks passed. The test container was
+removed. Core commit: `67d703d`. Other test-only local issuer methods and
+fixtures in `issuer.rs`, `types.rs` and `holder_key.rs` still need retirement;
+no hosted CI or PR was triggered for this checkpoint.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
