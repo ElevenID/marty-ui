@@ -9,9 +9,11 @@ It accepts the exact source stack transaction, its unchanged source
 image-only Docker Compose JSON model from the same source checkout. Pass the
 source `docker-compose.selfhost.prod.yml` and
 `docker-compose.selfhost.bundle.override.yml` as `--base-compose` and
-`--override-compose`. The caller must check the repository checkout is the
-claimed source SHA before rendering; the generator then verifies transaction
-identity, source-lock bytes, version, recorded digests, and service closure.
+`--override-compose`. The generator requires `--source-repo` to be a Git
+checkout at the claimed source SHA and compares the source stack lock and both
+Compose inputs to their committed Git blobs (using Git's configured checkout
+filters). It then verifies transaction identity, version, recorded digests,
+and service closure. The caller must render the model from that same checkout.
 
 The two additional Marty roles are supplied in `--selfhost-images` as a JSON
 object with exactly `ui-selfhost` and `cloudflared-wrapper` keys, each an
@@ -33,6 +35,7 @@ python scripts/build_selfhost_image_lock.py \
   --override-compose docker-compose.selfhost.bundle.override.yml \
   --transaction release-transaction.json \
   --stack-lock release/stack-lock.json \
+  --source-repo . \
   --source-sha "$SOURCE_SHA" --claim-run-id "$CLAIM_RUN_ID" \
   --selfhost-images selfhost-images.json \
   --external-services external-services.json \

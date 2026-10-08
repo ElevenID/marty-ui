@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -12,7 +13,6 @@ sys.path.insert(0, str(SCRIPTS))
 import build_selfhost_image_lock as builder  # noqa: E402
 import release_transaction as transaction  # noqa: E402
 
-SHA = "a" * 40
 PREFIX = "ghcr.io/elevenid/marty-ui"
 EXACT = "ghcr.io/elevenid/marty-ui-oss"
 
@@ -45,8 +45,17 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "schema": "marty.stack-lock/v1", "release": "marty-ui@1.2.3",
         "release_state": "eligible", "components": [],
     }) + "\n", encoding="utf-8")
+    if not (tmp_path / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "add", "base.yml",
+                        "override.yml", "stack-lock.json"], check=True)
+        subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=CI",
+                        "-c", "user.email=ci@example.invalid", "commit", "-qm",
+                        "source fixture"], check=True)
+    source_sha = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+                                capture_output=True, check=True, text=True).stdout.strip()
     claim = transaction.create_claim(
-        repository="ElevenID/marty-ui", tag="v1.2.3", source_sha=SHA,
+        repository="ElevenID/marty-ui", tag="v1.2.3", source_sha=source_sha,
         stack_lock=lock_file, claim_run_id="91", image_uris=transaction.IMAGE_URIS,
         tag_absent=True, release_absent=True,
         version_tags_absent={role: True for role in transaction.REQUIRED_IMAGE_ROLES},
@@ -81,9 +90,10 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
 def build(tmp_path: Path, **changes: object) -> dict:
     model, claim, stack_lock, selfhost, external = inputs(tmp_path)
     data = dict(model=model, transaction=claim, stack_lock=stack_lock,
+                source_repo=tmp_path,
                 base_compose=tmp_path / "base.yml",
                 override_compose=tmp_path / "override.yml",
-                source_sha=SHA, claim_run_id="91", selfhost_images=selfhost,
+                source_sha=claim["source_sha"], claim_run_id="91", selfhost_images=selfhost,
                 external_services=external)
     data.update(changes)
     return builder.build_lock(**data)
@@ -179,9 +189,10 @@ def test_rejects_release_and_source_revision_changes(tmp_path: Path) -> None:
                           encoding="utf-8")
     with pytest.raises(builder.ImageLockError, match="stack lock digest changed"):
         builder.build_lock(model=model, transaction=claim, stack_lock=stack_lock,
+                           source_repo=tmp_path,
                            base_compose=tmp_path / "base.yml",
                            override_compose=tmp_path / "override.yml",
-                           source_sha=SHA, claim_run_id="91",
+                           source_sha=claim["source_sha"], claim_run_id="91",
                            selfhost_images=selfhost, external_services=external)
 
 
@@ -204,20 +215,44 @@ def test_rejects_source_override_ownership_and_unmapped_build(tmp_path: Path) ->
     def build_changed_source() -> dict:
         return builder.build_lock(
             model=model, transaction=claim, stack_lock=stack_lock,
+            source_repo=tmp_path,
             base_compose=tmp_path / "base.yml",
             override_compose=tmp_path / "override.yml",
-            source_sha=SHA, claim_run_id="91",
+            source_sha=claim["source_sha"], claim_run_id="91",
             selfhost_images=selfhost, external_services=external,
         )
     source = tmp_path / "override.yml"
     source.write_text(source.read_text(encoding="utf-8").replace(
         f"{PREFIX}/services:1.2.3", "registry.example/gateway@sha256:" + "9" * 64
     ), encoding="utf-8")
-    with pytest.raises(builder.ImageLockError, match="known Marty image role"):
+    with pytest.raises(builder.ImageLockError, match="claimed Git blob: override.yml"):
         build_changed_source()
     model, claim, stack_lock, selfhost, external = inputs(tmp_path)
     source.write_text(source.read_text(encoding="utf-8").replace(
         f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n", ""
     ), encoding="utf-8")
-    with pytest.raises(builder.ImageLockError, match="replace every source-build"):
+    with pytest.raises(builder.ImageLockError, match="claimed Git blob: override.yml"):
         build_changed_source()
+
+
+def test_tampered_base_and_override_cannot_reclassify_gateway_external(tmp_path: Path) -> None:
+    model, claim, stack_lock, selfhost, external = inputs(tmp_path)
+    base = tmp_path / "base.yml"
+    override = tmp_path / "override.yml"
+    base.write_text(base.read_text(encoding="utf-8").replace(
+        "  gateway: {build: '.'}\n", "  gateway: {image: 'registry.example/gateway:1.2.3'}\n"
+    ), encoding="utf-8")
+    override.write_text(override.read_text(encoding="utf-8").replace(
+        f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n", ""
+    ), encoding="utf-8")
+    model["services"]["gateway"]["image"] = "registry.example/gateway:1.2.3"
+    external["gateway"] = "registry.example/gateway@sha256:" + "9" * 64
+    with pytest.raises(builder.ImageLockError, match="mandatory shared gateway"):
+        builder._ownership(base, override)
+    with pytest.raises(builder.ImageLockError, match="claimed Git blob"):
+        builder.build_lock(
+            model=model, transaction=claim, stack_lock=stack_lock,
+            source_repo=tmp_path, base_compose=base, override_compose=override,
+            source_sha=claim["source_sha"], claim_run_id="91",
+            selfhost_images=selfhost, external_services=external,
+        )

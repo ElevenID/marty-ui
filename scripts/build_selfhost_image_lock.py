@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import release_transaction
@@ -45,6 +46,7 @@ DEDICATED_SERVICES = {
     "cloudflared-beta": "cloudflared-wrapper",
 }
 ISSUANCE_SERVICES = frozenset({"issuance", "issuance-migrations"})
+MANDATORY_SHARED_SERVICES = frozenset({"gateway"})
 
 
 class ImageLockError(ValueError):
@@ -81,6 +83,39 @@ def _repository(value: str) -> str:
     if "/" not in image:
         return "docker.io/library/" + image
     return "docker.io/" + image
+
+
+def _git(*args: str, repo: Path) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise ImageLockError("Cannot verify the exact source checkout") from error
+    return result.stdout.strip() if args[0] == "rev-parse" else result.stdout
+
+
+def _verify_source_files(
+    repo: Path, source_sha: str, paths: tuple[Path, ...]
+) -> None:
+    try:
+        root = repo.resolve(strict=True)
+        _require(_git("rev-parse", "--show-toplevel", repo=root).decode() == str(root).replace("\\", "/"),
+                 "source checkout root differs from requested repository")
+        _require(_git("rev-parse", "HEAD", repo=root).decode() == source_sha,
+                 "source checkout HEAD differs from transaction")
+        for path in paths:
+            resolved = path.resolve(strict=True)
+            _require(resolved.is_relative_to(root), "source input is outside exact checkout")
+            relative = resolved.relative_to(root)
+            _require(resolved.is_file(), "source input is not a regular file")
+            committed = _git("rev-parse", f"{source_sha}:{relative.as_posix()}", repo=root)
+            working = _git("hash-object", f"--path={relative.as_posix()}",
+                           str(resolved), repo=root)
+            _require(committed == working.strip(),
+                     f"source input differs from claimed Git blob: {relative.as_posix()}")
+    except (OSError, UnicodeError) as error:
+        raise ImageLockError("source input is missing or unreadable") from error
 
 
 def _compose_services(path: Path) -> dict:
@@ -120,6 +155,8 @@ def _ownership(base_compose: Path, override_compose: Path) -> tuple[set[str], di
              "bundle override changed a Marty service image role")
     _require(set(DEDICATED_SERVICES).issubset(roles),
              "bundle override omits a dedicated Marty image role")
+    _require(MANDATORY_SHARED_SERVICES.issubset(roles),
+             "bundle override omits the mandatory shared gateway role")
     return set(base), roles
 
 
@@ -128,6 +165,7 @@ def build_lock(
     model: dict,
     transaction: dict,
     stack_lock: Path,
+    source_repo: Path,
     base_compose: Path,
     override_compose: Path,
     source_sha: str,
@@ -145,6 +183,8 @@ def build_lock(
         )
     except release_transaction.ReleaseTransactionError as error:
         raise ImageLockError(str(error)) from error
+    _verify_source_files(source_repo, source_sha,
+                         (stack_lock, base_compose, override_compose))
     _require(claim["images"] and claim["state"] in {
         "digests_recorded", "qualified", "promoting", "promoted", "published"
     }, "stack transaction has no recorded image digests")
@@ -219,6 +259,8 @@ def main() -> None:
                         help="Exact rendered, image-only Docker Compose JSON model")
     parser.add_argument("--transaction", required=True, type=Path)
     parser.add_argument("--stack-lock", required=True, type=Path)
+    parser.add_argument("--source-repo", required=True, type=Path,
+                        help="Git checkout exactly at the claimed source SHA")
     parser.add_argument("--base-compose", required=True, type=Path)
     parser.add_argument("--override-compose", required=True, type=Path)
     parser.add_argument("--source-sha", required=True)
@@ -233,6 +275,7 @@ def main() -> None:
         model=_json_object(args.compose_model),
         transaction=_json_object(args.transaction),
         stack_lock=args.stack_lock,
+        source_repo=args.source_repo,
         base_compose=args.base_compose,
         override_compose=args.override_compose,
         source_sha=args.source_sha,
