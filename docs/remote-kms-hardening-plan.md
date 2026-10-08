@@ -330,6 +330,19 @@ script and tests are still untracked files that must be included when that
 feature diff is staged; this local metadata check does not qualify an exact
 service image or hosted CI result.
 
+2026-10-07 grouped-PR readiness inventory: Core's
+`security/remote-kms-fixture-20261007` worktree is clean and ten commits ahead
+of its recorded `origin/main`, with no PR for that head. It still contains
+test-only issuer `IssuerKey` signing paths in OID4VCI's `formats/mod.rs` and
+`issuer.rs`; those tests must be retired or supplied by remote signer coverage
+before the Core feature PR can claim test-custody completion. The separate
+Credentials retirement worktree remains dirty with compatibility removals,
+and the UI integration worktree remains dirty with the large service,
+deployment and test feature diff. No repository has a grouped feature PR or
+qualified release artifact from these candidate worktrees yet. Keep their
+changes batched locally; do not infer PR readiness from Core's clean worktree
+alone.
+
 2026-10-07 managed-profile follow-up: the canonical Rust profile binding
 validator now rejects a managed key outside the profile tenant and tuple.
 This covers create, update, and DID resolution before publication; direct
@@ -2661,7 +2674,7 @@ linked-data proofs. Hosted CI and release artifacts remain pending.
 
 2026-10-07 Rust feature-graph CI checkpoint: the existing Rust lint job now
 resolves Cargo metadata once and applies both the MMF check and
-`scripts/ci/check_marty_core_kms_boundary.py`. The new check requires all eight
+`scripts/ci/check_marty_core_kms_boundary.py`. The new check requires all seven
 Marty Core crates at reviewed revision `a5cb567e6cd50e5a85b3b125a0a2ab6eea1d9fb7`,
 requires `kms-only` on crypto, DIDComm, OID4VCI and verification, rejects Core
 `default`, `local-key-operations` and `test-fixtures`, pins `isomdl` to the
