@@ -6818,3 +6818,16 @@ DER, key ID, version/state and timestamps, with no private-key-named table or
 column. The disposable database was removed. Auth's closed writer provenance
 and Device Registration's per-service test do not replace assembled-platform
 or shipped-artifact K10 qualification.
+
+2026-10-08 K10 shared classifier self-review correction: the first Rust JSON
+guard recognized `private_key` only at the start of a field name. A generic
+document could therefore have carried the retired
+`sender_x25519_private_key` member through a guarded JSON store. The one shared
+policy now recognizes private-key/JWK/PEM, secret-key and PKCS#8 tokens
+anywhere in normalized field names; focused vectors cover prefixed DIDComm and
+issuer names. An affected-package local run across the shared crate and ten
+consumer services completed with exit 0; tests that require separately
+provisioned OpenBao/Redis backends remained explicitly ignored. The shared
+crate passes formatting and all-target warnings-denied Clippy. This closes
+the identified classifier bypass in source; assembled runtime and shipped
+artifact checks remain open.
