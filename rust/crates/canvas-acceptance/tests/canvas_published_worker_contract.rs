@@ -582,6 +582,54 @@ mod canvas_worker_effect_expiry;
 #[path = "../../../services/issuance/tests/support/canvas_worker_roster_metadata.rs"]
 mod canvas_worker_roster_metadata;
 
+const ROSTER_DATABASE_CASES: &[&str] = &[
+    "absent",
+    "preexisting",
+    "explicit_null",
+    "stale_target_generation",
+    "wrong_owner",
+    "wrong_attempt",
+    "expired_before_write",
+    "expired_during_lock",
+];
+
+#[test]
+fn roster_case_ownership_matches_frozen_obligations() {
+    let obligations: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-roster-metadata-obligations.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        obligations["schema"],
+        "marty.canvas-roster-metadata-obligations/v1"
+    );
+    let fast: Vec<&str> = obligations["fast_shape_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        fast,
+        [
+            "absent",
+            "preexisting",
+            "explicit_null",
+            "worker_only",
+            "heartbeat_only"
+        ]
+    );
+    let database: Vec<&str> = obligations["database_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|case| case.as_str().unwrap())
+        .collect();
+    assert_eq!(database, ROSTER_DATABASE_CASES);
+    assert_eq!(database.len(), 8);
+    assert_eq!(fast.len(), 5);
+}
+
 #[tokio::test]
 async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fences() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
@@ -594,18 +642,7 @@ async fn worker_roster_metadata_reconciliation_preserves_current_fields_and_fenc
         .await
         .unwrap();
     let admin = published_template_admin(&owned).await;
-    for case in [
-        "absent",
-        "preexisting",
-        "explicit_null",
-        "worker_only",
-        "heartbeat_only",
-        "stale_target_generation",
-        "wrong_owner",
-        "wrong_attempt",
-        "expired_before_write",
-        "expired_during_lock",
-    ] {
+    for case in ROSTER_DATABASE_CASES {
         let (database_name, pool) = clone_published_case(&owned, &admin, case).await;
         canvas_worker_roster_metadata::assert_reconciliation(&pool, case).await;
         close_published_case(&admin, database_name, pool).await;
