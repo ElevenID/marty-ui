@@ -2235,7 +2235,8 @@ timing evidence. Only then consider a separate fail-closed worker-test-only PR
 selector, with protected full qualification preserved and changes to shared
 fixture/support inputs excluded until their dependency closure is proven.
 
-A6 diagnostic follow-up (2026-10-08 local draft): a maintainer adds the
+A6 diagnostic follow-up ([UI #1194](https://github.com/ElevenID/marty-ui/pull/1194),
+2026-10-08, hosted result pending): a maintainer adds the
 `ci-worker-diagnostic` label **before a subsequent PR-head push**; that
 `synchronize` event adds a third, worker-only Rust matrix lane. Labeling an
 already-open PR alone does not start this workflow, and unrelated label
@@ -2257,6 +2258,8 @@ The first labeled hosted PR must prove live case counts, run-bound preflight
 digest, pinned image/process/database and cleanup evidence. A later distinct
 test-source-only pilot is required before considering selective PR CI; the
 workspace-wide Clippy and release-policy jobs remain possible bottlenecks.
+The exact initial PR head was independently reviewed after rebase onto the
+merged worker-only runner; it is not live worker-only evidence.
 
 ## Design references
 
