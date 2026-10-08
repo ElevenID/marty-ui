@@ -6778,3 +6778,6 @@ negatives, and the Canvas acceptance target recompiles and passes its focused
 container-recovery test. The Linux-only rendered renewal and published-image
 runtime acceptance cases remain release gates; this Windows compile and
 configuration proof does not substitute for them.
+The two renderer/renewal obligation Python suites also pass (101 tests) with
+the retired input removed. The machine's default Python lacks pytest, so this
+run used an isolated `uv` invocation with pinned pytest and PyYAML.
