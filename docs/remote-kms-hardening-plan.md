@@ -6236,6 +6236,19 @@ validation and its test. The focused storage test passed; the full
 `marty-signing-keys` library selection passed 134 tests with seven ignored
 on Rust 1.97.1. Service-level Redis/write tests and assembled schema checks
 remain required for K10 closure.
+The signing document audit then found that `sanitize_public_jwk` silently
+discarded private JWK fields and generic Redis document save/read/mutation
+paths did not reject private material at the storage boundary. The local UI
+candidate now rejects private JWKs from provider/publication inputs, rejects
+private-bearing documents on read and write across holder, DID, JWKS and
+certificate paths, and preserves public projection of key references and
+non-secret metadata. Four old tests that assumed scrubbing of private-key
+payloads were changed to require rejection while retaining their positive
+public-key/relationship assertions. The full signing-keys library suite
+passes 134 tests with eight ignored; an additional ignored document-storage
+test passed against disposable Redis 7 on loopback DB 13, covering public
+write/read and private write/read rejection. This change is local in the
+large UI feature branch and not yet an assembled product/release proof.
 
 2026-10-08 Core local quality gate: `cargo +1.97.1 fmt --all -- --check`
 and the full branch `git diff --check` pass. Warnings-denied all-target
@@ -6317,6 +6330,15 @@ The OCSP, binding-test profile, and TLS corrections were pushed together to
 Core draft PR #355 at `6fbe674` (`f85592b`, `9b15904`, `6fbe674`). Hosted
 checks and CodeQL alert resolution on this exact head remain pending. The
 previous failed logs and alert remain review evidence.
+The second hosted CodeQL analysis on `6fbe674` again produced high alert
+#260 at the scoped Transit `.post` URL, despite the endpoint now being
+CA-verified HTTPS. This is a static-analysis visibility problem at the
+dynamic `self.base` URL, not evidence that the TLS run sent plaintext. A
+local correction stores the validated port and uses a literal HTTPS
+loopback origin at the signing request. The five live status tests passed
+again with that construction. Keep the alert open until a new hosted
+analysis verifies resolution; the second run's Fast Rust Preflight and
+Native ZKP Security Boundary were still running at this checkpoint.
 
 2026-10-08 Credentials consumer qualification at Core candidate 0.2: local
 Windows Core `marty_rs` and `marty_verification_py` wheels built and loaded
