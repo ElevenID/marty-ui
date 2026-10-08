@@ -6092,7 +6092,11 @@ named for private-key storage. The exact Alembic output is in
 `artifacts/kms-k10-credentials-fresh-alembic-2026-10-08.log`; the disposable
 database was removed. The separate fresh SQLAlchemy metadata test creates
 exactly the five remaining wallet/verification tables in SQLite and no `keys`
-table. Full assembled platform migrations, row-level payload
+table. The two other Credentials adapter ORM modules each define only a
+`credentials` table; neither defines a key table. Their duplicate credential
+models each created only `credentials` in separate in-memory SQLite probes;
+they need DRY review in the broader compatibility-retirement PR. Full
+assembled platform migrations, row-level payload
 review and release-artifact introspection remain K10 acceptance gates.
 
 2026-10-08 K10 Core public-key store review (local commit `cb025fe`): Core's SQLite
@@ -6105,7 +6109,8 @@ and nested symmetric JWKs. The new direct-write test proves rejection leaves
 zero rows and a subsequent public key is stored. The complete
 `marty-secure-storage --lib` suite passed 50 tests with one pre-existing
 ignored test, and `marty-types --lib` passed 19 tests. Targeted all-targets
-Clippy passed with warnings denied. This closes one generic
+Clippy passed with warnings denied, and the locked offline
+`marty-bindings` consumer check passed at the current candidate pin. This closes one generic
 JSON storage gap; the remaining database JSON fields and actual product write
 paths still need K10 review.
 
@@ -6119,6 +6124,63 @@ no-default-feature integration test failed to compile because its shared
 proof-scoped fixture referenced `ecdsa_sd_2023` outside the `w3c` +
 `secp256r1` gate. The helper now gates that vector branch without restoring
 local signing; all 16 single-feature variants of `ssi-data-integrity` pass.
-The remaining 99 workspace variants are running with already-qualified crates
-excluded. The `ssi-jwk` test-module feature gate also removed an otherwise
+The remaining 99 workspace variants then passed with already-qualified crates
+excluded, completing the exact CI each-feature matrix in local batches. The
+`ssi-jwk` test-module feature gate also removed an otherwise
 repeated unused-import warning; no-default and P-256 focused tests passed.
+The later hosted `cargo-rdme` step was preflighted locally and found the README
+stale: the source docs' remote-signer wording had diverged, and a malformed
+Data Models heading had been copied literally. The source heading/grammar and
+generated README were corrected; `cargo rdme --check --no-fail-on-warnings`
+now passes. `cargo deny check bans licenses` and all-feature root doctests
+also pass. Final warnings-denied rustdoc and workspace Clippy passed before
+the batched fork push.
+
+2026-10-08 SSI fork correction publication: warnings-denied all-feature
+workspace rustdoc and workspace Clippy passed, along with formatting, diff,
+README generation and dependency bans/licenses. The reviewed 12-file
+follow-up commit `584a0d1e2f6a80f92a8483151f6cc6b78b021ad1` was pushed
+to existing ElevenID SSI PR #9. Its second hosted build, policy and
+each-feature checks are pending; do not treat the PR as qualified yet. Core's
+41-entry patch manifest and lockfile are being repinned from `61ba3dc` to this
+new immutable revision, with a locked git-source consumer check in progress.
+The locked `marty-bindings` consumer check has now passed at `584a0d1`, and
+lockfile inspection found 33 selected SSI/DID packages all sourced from that
+one fork revision with no registry SSI/DID package. The second hosted
+workflow-policy check passed; hosted build/lint and each-feature checks remain
+pending. The Core verifier rerun passed 280 active tests with 72 ignored,
+and the pin is now clean local Core commit
+`2a2bf261393061488255cdb1f040c5ebab5b1938`. This commit retains the
+older dedicated `linked-data` dependency ref and existing isomdl patch;
+all 41 SSI/DID patch entries point to one fork revision. Do not open or land
+the broad Core PR until the fork's hosted build and feature checks pass and
+the remaining Core regression/security review is complete.
+SSI PR #9 then passed all required hosted build/lint, workflow-policy and
+each-feature checks and was merged with merge commit
+`8d3314c4d235af0fc781933a0a1797da8ac4960d` at 2026-10-08T19:44:34Z.
+The Core pin deliberately remains on its locally qualified immutable PR head
+`584a0d1`, which is reachable through that merge. The dependency fork is
+landed; this does not by itself qualify the Core, UI or Credentials PRs.
+The broad Core branch then merged the single new `origin/main` CI-selector
+commit (#354) without conflict, reaching clean local head
+`33ac1ccd28a9cfefa94997843133991f58b14a89` (0 behind main). The
+upstream selector's 10 Python tests pass on this assembled head. Its new
+cross-package JWK fixture edge remains present for the broad PR matrix.
+The assembled Core head also passes the verification feature-boundary and
+release-contract checks, plus their 6 and 78 Python unit tests. The newly
+selected `marty-crypto` JWK vector integration test passed all five tests at
+the pinned fork head; this is a targeted regression gate, not yet the complete Core PR
+matrix or published-artifact proof.
+The post-repin Core workspace test selection (all crates except the native ZKP
+and bindings lanes, with `test-fixtures`) is running against `584a0d1` and
+the merged current-main CI selector; record its result before claiming an
+assembled local Core regression matrix.
+That first full selection found one `marty-oid4vci` test still deserializing
+a private-shaped JWK to then assert batch-input rejection. The hardened fork
+now rejects it at deserialization, so the test now asserts that earlier
+fail-closed boundary while retaining its positive public JWK input assertions.
+The correction is Core commit `d56c3fe`; its focused test passes. The full
+workspace rerun log contains no reported failure and reaches the final test
+targets, but its process exit was lost across session recovery; repeat or
+otherwise capture an authoritative successful exit before claiming the broad
+Core workspace matrix. No production signing or fallback behavior was restored.
