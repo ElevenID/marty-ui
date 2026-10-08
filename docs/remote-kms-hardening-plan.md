@@ -6586,5 +6586,10 @@ key references remain accepted. The shared, Organization and signing-keys
 package suites passed with no failures; warnings-denied all-target Clippy
 passed. A disposable PostgreSQL 16 repository round trip proved the rejected
 write leaves the prior settings unchanged. The container was removed. This
-is part of the broad uncommitted UI feature candidate; audit metadata and
-other generic JSON stores still need review, as do assembled schema/artifacts.
+is part of the broad uncommitted UI feature candidate; other generic JSON
+stores still need review, as do assembled schema/artifacts. Follow-up review
+found `audit_events.changes` and `audit_events.metadata` could persist arbitrary
+JSON. The same repository-level policy now guards both write and read paths;
+the disposable PostgreSQL 16 contract rejects nested private JWK data in
+either column while retaining the one legitimate audit event. Organization
+format and warnings-denied all-target Clippy pass after that correction.
