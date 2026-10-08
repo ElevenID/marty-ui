@@ -2946,6 +2946,15 @@ diff checks passed. Recording, signature-validation, assembly and concurrency
 scheduler tests still have local test signing and require separate replacement.
 This is local progress within the grouped Core feature branch, not live KMS
 custody or hosted CI evidence. Core commit: `bc4efc8`.
+2026-10-07 Core first-signature fault fixture retirement: wrong-length and
+wrong-encoding faults at ordinal zero now receive synthetic executor bytes and
+the public-only panic-on-sign signer. This verifies first-item ES256 rejection
+without constructing a local signing key, while the envelope fault cases
+continue to reject before cryptographic validation. The later SD-JWT and
+multiple-invalid-signature cases still require valid preceding signatures and
+remain on the local recording fixture pending live remote replacement. All 25
+batch tests, targeted Clippy with warnings denied, Rustfmt and diff checks
+passed. Core commit: `53660cd`; no hosted CI or PR was triggered.
 
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
