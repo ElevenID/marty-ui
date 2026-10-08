@@ -1,0 +1,69 @@
+# Release-only, disposable runtime qualification for the published migrations
+# image. No host ports, production mounts, or source builds are permitted.
+services:
+  postgres:
+    image: ${PROBE_POSTGRES_IMAGE:?pin PostgreSQL by digest}
+    environment:
+      POSTGRES_DB: marty
+      POSTGRES_USER: marty
+      POSTGRES_PASSWORD_FILE: /run/secrets/marty_db_password
+    secrets: [marty_db_password]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U marty -d marty"]
+      interval: 2s
+      retries: 30
+    networks: [private]
+  redis:
+    image: ${PROBE_REDIS_IMAGE:?pin Redis by digest}
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      retries: 30
+    networks: [private]
+  openbao:
+    image: ${PROBE_OPENBAO_IMAGE:?pin OpenBao by digest}
+    entrypoint: [/bin/sh, /usr/local/bin/passport-supported-openbao-start]
+    configs:
+      - source: openbao_start
+        target: /usr/local/bin/passport-supported-openbao-start
+    secrets: [bao_root_token]
+    healthcheck:
+      test: [CMD, bao, status, -address=http://127.0.0.1:8200]
+      interval: 2s
+      retries: 30
+    networks: [private]
+  db-migrate:
+    image: ${PROBE_MIGRATIONS_IMAGE:?pin released migrations image by digest}
+    environment:
+      MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
+      DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
+      MARTY_ORG_ADMIN_EMAIL: probe@migration.invalid
+      MARTY_ORG_ID: 00000000-0000-0000-0000-000000000001
+      MARTY_ORG_SLUG: marty
+      MARTY_MIGRATION_PROFILE: selfhost-production
+      MARTY_KMS_BOOTSTRAP_ENABLED: "true"
+      REDIS_URL: redis://redis:6379
+      REDIS_DB_GATEWAY: "2"
+      BAO_ADDR: http://openbao:8200
+      BAO_TOKEN_FILE: /run/secrets/bao_root_token
+      PUBLIC_DOMAIN: migration.invalid
+      PUBLIC_API_URL: https://migration.invalid
+      ISSUER_BASE_URL: https://migration.invalid
+    secrets: [marty_db_password, bao_root_token]
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      openbao: {condition: service_healthy}
+    networks: [private]
+    restart: "no"
+secrets:
+  marty_db_password:
+    file: ${PROBE_SECRET_DIR:?use disposable secret directory}/marty_db_password
+  bao_root_token:
+    file: ${PROBE_SECRET_DIR:?use disposable secret directory}/bao_root_token
+configs:
+  openbao_start:
+    file: ./scripts/passport_supported_openbao_start.sh
+networks:
+  private:
+    internal: true
