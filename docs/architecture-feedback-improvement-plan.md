@@ -1695,6 +1695,17 @@ revision, verifies all upstream and third-party references, and emits the
 packager's exact service-image lock. This is a candidate architecture, not a
 qualified producer or permission to omit installed-artifact acceptance.
 
+The next PKG02/CICD01 diagnostic is the public Rust image build, not a new
+cache layer. In #1162's protected Canvas run the image step took 724 seconds,
+including 665.2 seconds in the release-binary builder, while the existing
+warmer targeted the dependency-cook stage. The builder's exact compiler-cache
+hit/miss rate was not reported. Emit only allowlisted numeric `sccache`
+counters for dependency cook and release-binary phases, compare comparable
+warm/PR builds, and then choose between a narrowly warmed binary profile,
+less qualified-product compile surface, or artifact reuse. Keep the same
+release build, exact-image acceptance, and public-cache security boundary;
+do not infer a speedup from the telemetry patch itself.
+
 For A3/A6, the exact `SELFHOST_BUNDLE.md` input is a shipped asset of
 `marty-selfhost-bundle`; the Rust shadow planner now records that package and
 its `marty-canvas-acceptance` Cargo consumer for a packager-plus-document

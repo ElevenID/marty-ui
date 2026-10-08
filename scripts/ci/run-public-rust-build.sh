@@ -20,7 +20,16 @@ if [ -s "$token" ] || [ -s "$url" ] || [ -s "$mode" ]; then
     *) echo "Invalid sccache cache mode" >&2; exit 1 ;;
   esac
   export RUSTC_WRAPPER=sccache
-  trap 'sccache --stop-server >/dev/null 2>&1 || true' EXIT
+  case "${1:-}" in
+    build-rust-service-binaries) cache_phase=release_binaries ;;
+    *) cache_phase=dependency_cook ;;
+  esac
+  report_cache_counters() {
+    sccache --show-stats 2>/dev/null |
+      awk -v phase="$cache_phase" -f /usr/local/bin/public-sccache-stats.awk || true
+    sccache --stop-server >/dev/null 2>&1 || true
+  }
+  trap report_cache_counters EXIT
 fi
 
 "$@"

@@ -25,6 +25,7 @@ services/common/
 !scripts/load-secrets-env.sh
 !scripts/ci/
 !scripts/ci/run-public-rust-build.sh
+!scripts/ci/public-sccache-stats.awk
 rust/services/*/tests
 rust/crates/*/tests
 rust/**/target
