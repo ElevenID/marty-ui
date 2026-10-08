@@ -79,6 +79,7 @@ pub mod application_template_http;
 pub mod application_template_postgres;
 pub mod application_template_service;
 pub mod canvas_review_resolution;
+mod canvas_roster_patch;
 pub mod canvas_sync_lease;
 pub mod canvas_sync_processor;
 pub mod canvas_sync_processor_postgres;

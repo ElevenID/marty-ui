@@ -1595,6 +1595,31 @@ for each of `repository_resource_race` (19.820s),
 (73.234s), with zero failed rows. These timings improve attribution, not
 runtime by themselves.
 
+## A4 roster-metadata case ownership (2026-10-08 candidate; not yet CI-qualified)
+
+The protected #1155 timing artifact measured `repository_roster_metadata` at
+73.234s, but two natural 30-second lease-expiry cases account for most of its
+expected duration. The original published worker repository matrix had ten
+cases in one sequential PostgreSQL test. The production cursor patch now has
+one pure owner for the five snapshot-value shapes (`absent`, `preexisting`,
+`explicit_null`, `worker_only`, `heartbeat_only`), with literal expected JSON,
+absence-versus-null assertions, and a fixed completion timestamp. The exact
+case IDs are frozen in `contracts/canvas-roster-metadata-obligations.json` and
+checked at both fast and database owners.
+
+The published PostgreSQL adapter retains `absent`, `preexisting`, and
+`explicit_null` to prove the real JSONB remove/merge, unrelated concurrent-key
+preservation, and durable row effects. It also retains all five fence cases:
+`stale_target_generation`, `wrong_owner`, `wrong_attempt`,
+`expired_before_write`, and `expired_during_lock`. The latter two still await
+real leases and prove different failure points. Only `worker_only` and
+`heartbeat_only` stop repeating the cloned-database matrix; their production
+patch paths remain covered by the fast owner. Published whole-worker process
+and frozen-oracle checks are unchanged. This candidate does not shorten leases,
+alter production behavior intentionally, or establish a CI speedup. Require
+independent review, focused Rust checks, the real PostgreSQL matrix, and
+protected CI before accepting the ownership change.
+
 ## Product packaging and integration workstream (added 2026-10-07)
 
 The local product plan (`artifacts/consumer-audit-2026-10-07/marty-product-packaging-and-integration-plan.md` in the coordinating workspace) defines PKG01-09, INT01-06, TST01-05, CICD01-04, BUS01-02, MKT01-02, and QA01-02. Those IDs are retained here so progress and acceptance evidence can be reconciled without duplicating the plan's full text. This tracker remains the active engineering queue; the product plan retains the detailed product and commercial acceptance criteria.
