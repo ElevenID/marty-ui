@@ -6098,7 +6098,12 @@ table. The remaining Credentials wallet adapter ORM defines only a
 candidate now re-exports the canonical adapter instead. The nested and
 canonical paths share identical `Base`, model and wallet class objects, and
 the 14 focused migration/custody tests plus Ruff pass. The separate broader
-five-table `models.py` metadata still needs data-flow and DRY review. Full
+five-table `models.py` metadata had one unused, unconstrained
+`selective_disclosure_keys` JSON column. No source read or write uses it; the
+candidate now removes it from the clean-install ORM and asserts its absence
+in the fresh SQLite metadata test. The focused custody tests and Ruff pass
+after this correction. Remaining model JSON fields still need data-flow
+review. Full
 assembled platform migrations, row-level payload
 review and release-artifact introspection remain K10 acceptance gates.
 
