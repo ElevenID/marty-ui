@@ -1995,6 +1995,45 @@ which of its four Cargo commands or host fetch/pull dominates. This batch
 must retain the exact compiler, Cargo targets, database assertions, and
 published-process coverage; claim a saving only after comparable CI timing.
 
+2026-10-08 A4/A6 outcome: [UI #1176](https://github.com/ElevenID/marty-ui/pull/1176)
+and [#1177](https://github.com/ElevenID/marty-ui/pull/1177) passed protected
+combined-head CI and merged. The Retry-After database owner retains three
+distinct persisted values (0, 60, and 86,400 seconds); the seven header shapes
+and policy edges have a fast owner, while the separate HTTPS/parser matrix
+remains. The roster owner retains all eight cases, with six fast database cases
+and two independently isolated real 30-second expiry cases. Their hosted PR
+timings were 4.513 seconds for the six-case matrix and 34.291/33.472 seconds
+for the overlapping expiry cases. The published-Canvas group varied from
+382.481 seconds in the #1177 PR run to 594.846 seconds in its protected run
+and 441.757 seconds in the later combined protected run. This establishes
+safe overlap, not a repeatable whole-job saving. #1176's new phase artifact
+recorded host fetch/pull and four pinned Bookworm Cargo commands; the
+combined protected run measured 14/28 seconds for fetch/pull and 457 seconds
+for the compile phase, including 187, 159, 83, and 24 seconds for its four
+offline commands. Future reuse
+must preserve the same toolchain, target, features, ABI, and coverage.
+
+[UI #1179](https://github.com/ElevenID/marty-ui/pull/1179) passed PR and
+protected CI and merged. Its persistent PowerShell rollback harness retains
+the original 84 collected cases and adds three isolation/cleanup checks. On
+hosted PR runners the module fell from about 84.62 to 3.47 seconds; the
+protected run measured about 1.99 seconds. The enclosing release-check step
+fell from 9m23s to 8m04s across the compared PR runs, but different runner
+conditions prevent attributing all of that step change to this patch.
+
+A5 current-input closure candidate (2026-10-08):
+`contracts/canvas-worker-retry-after-current-inputs.json` binds the current
+Retry-After reference to ten exact producer/scenario inputs, using the same
+normalized-hash and transitive-edge guard as existing Canvas current-input
+evidence. Per-input drift tests cover all ten listed inputs; a same-set swap
+test covers the REST reference edge. This is evidence about a bounded current
+repository-input slice,
+not authentication of the frozen historical capture or a reason to relax
+historical qualification. The implementation candidate rebased cleanly onto
+the current main at preparation; 148 targeted tests passed locally, and an
+independent reviewer cleared the rebased diff. Hosted PR/protected validation
+is still required.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
