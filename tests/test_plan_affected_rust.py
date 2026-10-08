@@ -697,6 +697,86 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
                 )
 
+    def test_auth_gateway_session_grpc_edge_is_source_backed_and_shadow_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        changed = Path(packages["marty-auth"]["manifest_path"]).relative_to(ROOT)
+        result = planner.plan([changed.as_posix()], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-auth" and edge["package"] == "marty-gateway"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("grpc_binding", "evidence"),
+            ("grpc_runtime_marker", "grpc_runtime_evidence"),
+            ("grpc_registration_marker", "grpc_runtime_evidence"),
+            ("grpc_connection_marker", "grpc_request_evidence"),
+            ("grpc_request_marker", "grpc_request_evidence"),
+            ("grpc_identity_marker", "grpc_request_evidence"),
+            ("grpc_provider_marker", "grpc_provider_evidence"),
+            (
+                "grpc_provider_registration_marker",
+                "grpc_provider_registration_evidence",
+            ),
+            ("grpc_deployment_marker", "grpc_deployment_evidence"),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for _, source in markers
+            if (path := edge[source])
+        }
+
+        def auth_validate_session_body(source_text: str) -> str:
+            owner = "impl AuthService for AuthGrpcService {"
+            method = "    async fn validate_session("
+            successor = "    async fn create_session("
+            self.assertIn(owner, source_text)
+            impl = source_text.split(owner, 1)[1]
+            self.assertIn(method, impl)
+            body = impl.split(method, 1)[1]
+            self.assertIn(successor, body)
+            return body.split(successor, 1)[0]
+
+        def assert_markers(snapshot: dict[str, str]) -> None:
+            for marker, source in markers:
+                text = snapshot[edge[source]]
+                if marker == "grpc_provider_marker":
+                    text = auth_validate_session_body(text)
+                self.assertIn(edge[marker], text)
+
+        assert_markers(sources)
+        for marker, source in markers:
+            with self.subTest(marker=marker):
+                path = edge[source]
+                changed_source = dict(sources)
+                if marker == "grpc_provider_marker":
+                    # Leave get_auth_status's identical call intact: it must
+                    # not mask removal from the validate_session RPC.
+                    body = auth_validate_session_body(sources[path])
+                    changed_source[path] = sources[path].replace(
+                        body, body.replace(edge[marker], "removed-edge", 1), 1
+                    )
+                    self.assertIn(edge[marker], changed_source[path])
+                else:
+                    changed_source[path] = sources[path].replace(
+                        edge[marker], "removed-edge"
+                    )
+                with self.assertRaises(AssertionError):
+                    assert_markers(changed_source)
+        self.assertNotIn(
+            "marty-auth",
+            {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
+        )
+
     def test_flow_callback_to_auth_internal_route_is_observed_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

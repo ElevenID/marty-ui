@@ -753,6 +753,30 @@ for producer, (
             "dispatch_marker": "StaticServiceRegistry::from_urls(&config.service_urls)?",
         }
     )
+# Gateway also validates sessions through Auth gRPC before using identity
+# claims. Enrich its existing public-HTTP edge, not a duplicate consumer.
+next(
+    edge
+    for edge in OBSERVED_NON_CARGO_CONSUMERS["marty-auth"]
+    if edge["package"] == "marty-gateway"
+).update(
+    {
+        "grpc_binding": 'grpc_target(values, "AUTH_GRPC_TARGET", "localhost:9001")?',
+        "grpc_runtime_evidence": "rust/services/gateway/src/main.rs",
+        "grpc_runtime_marker": "grpc_channel(&config, &config.auth_grpc_target)?",
+        "grpc_registration_marker": "let identities: Arc<dyn GatewayIdentityProvider> = identity_provider.clone();",
+        "grpc_request_evidence": "rust/services/gateway/src/providers.rs",
+        "grpc_connection_marker": "AuthServiceClient::new(auth)",
+        "grpc_request_marker": ".validate_session(request)",
+        "grpc_identity_marker": "if user.user_id.trim().is_empty() {",
+        "grpc_provider_evidence": "rust/services/auth/src/grpc_service.rs",
+        "grpc_provider_marker": ".validate_session(&request.get_ref().session_id)",
+        "grpc_provider_registration_evidence": "rust/services/auth/src/main.rs",
+        "grpc_provider_registration_marker": "AuthServiceServer::new(AuthGrpcService::new(components.application))",
+        "grpc_deployment_evidence": "docker-compose.base.yml",
+        "grpc_deployment_marker": "AUTH_GRPC_TARGET: auth:9001",
+    }
+)
 # Organization also supplies Gateway tenant membership through gRPC. Enrich
 # its existing published-HTTP edge instead of duplicating the same consumer.
 next(

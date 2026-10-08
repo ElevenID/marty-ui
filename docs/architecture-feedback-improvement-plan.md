@@ -2138,6 +2138,19 @@ versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
 
+## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
+
+The shadow planner already records Gateway's public Auth HTTP proxy, but
+Gateway also connects to Auth gRPC for session validation before accepting
+identity claims. This candidate enriches that existing producer-to-consumer
+edge with the configured/deployed target, Gateway channel and request,
+nonempty user-ID guard, and Auth server implementation/registration. A
+source-backed regression checks each marker and rejects its removal. It adds
+no second edge, changes no runtime behavior or CI selection, and does not
+prove the complete non-Cargo graph; service changes still select full Rust
+validation. Its value is accurate impact evidence for later fail-closed
+planning, not a measured CI speedup.
+
 ## A5 REST fresh-run provenance boundary (2026-10-08 candidate)
 
 [UI #1186](https://github.com/ElevenID/marty-ui/pull/1186) merged the
