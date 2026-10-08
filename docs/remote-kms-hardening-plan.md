@@ -6410,6 +6410,21 @@ locally with the KMS-only issuer/verifier/wallet feature selection:
 These prove preparation, selective-disclosure structure, and refusal of
 private or mismatched issuer metadata; they do not alone replace the deleted
 service-level Behave scenarios.
+2026-10-08 deleted-Behave review checkpoint: the removed Credentials feature
+files contain 20 digital-identity, 14 Open Badge, 14 SD-JWT, 15 W3C VC and
+3 ZK scenarios. Current Core tests directly name OID4VP nonce replay,
+tampering, audience/expiry rejection and required-ZK-predicate fail-closed
+behavior in `marty-oid4vci/tests/oid4vp_conformance.rs`; the live remote
+issuer suite names verified subset disclosure and mDoc issuance. Core's
+Open Badge status tests name authenticated clear status, revocation,
+suspension, wrong key/untrusted issuer and stale status-list rejection.
+Native UI has credential signing and PostgreSQL lifecycle tests plus managed
+OID4VP policy tests. This is a coverage map by inspected test entry points,
+not a claim that each deleted scenario is equivalent or that those suites
+have all passed on final artifacts. In particular, cross-format
+interoperability, Open Badge endorsement/X.509 trust, mDoc ZK success and
+failure, and service-level multi-format revocation still require assertion-
+level mapping and, where absent, new native tests before K7 closure.
 The broad Credentials retirement candidate was checkpointed locally as
 `4051dd4` on `security/remote-kms-retirement-20261007`: 69 files changed,
 including local issuer-key adapter/test removal, no-private-key clean-install
