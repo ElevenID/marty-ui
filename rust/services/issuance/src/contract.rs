@@ -610,7 +610,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         credential_admission["schema"] == "marty.issuance-credential-admission/v1"
             && credential_admission["cases"]
                 .as_array()
-                .is_some_and(|cases| cases.len() == 21)
+                .is_some_and(|cases| cases.len() == 26)
             && credential_admission["inputs"]["path"] == "/v1/issuance/credential",
         "unexpected credential admission behavior contract",
     )?;

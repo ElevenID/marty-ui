@@ -10,7 +10,8 @@
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-static-discovery.json",
     "commit": "5b210bde2bee4360a9504e4c360250b54f48f5ba",
-    "sha256": "f5a06d71d85dfa1fd75bf7ff1cedd1d9478134697f290267e0b774c812749aa2"
+    "sha256": "8cfbca9ac3f238ad602e58bd383e6a6ecbc69bfba782a7486fe282e8b9d22e19",
+    "adaptation": "Retain additive EdDSA discovery from this source; preflight Vary follows Credentials 367945d4e37b93c5e3a385e60a5c417c7862dc6d."
   },
   "oid4vci_authorization_behavior_contract": {
     "path": "contracts/issuance-oid4vci-authorization.json",
@@ -54,8 +55,8 @@
   "credential_admission_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
     "path": "contracts/issuance-credential-admission.json",
-    "commit": "11485868cf7d58770b1fb8deea0f5715b992a3c5",
-    "sha256": "8acbdaab9db036a65d32c377debb69e4415bacf61d417b5fa2b43dc6f5388c1b"
+    "commit": "976f39809b396322de8f3c307eb1257a59d5f8b7",
+    "sha256": "8eb5135252e7c809f9805636e0e9a1726c2295faa299389355fe8ec17e49da81"
   },
   "credential_signing_behavior_contract": {
     "repository": "ElevenID/marty-credentials",
