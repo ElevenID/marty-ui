@@ -20,8 +20,9 @@ root pytest source owners without removing a check; its protected run passed.
 selection. #1153 reused isolated schema clones for 22 Canvas repository cases;
 PR and protected CI passed, with 20 fewer repeated container/migration cycles.
 The hosted wall-time runs vary too much to attribute a pipeline saving yet.
-UI #1186 and #1187 and Core #354 have merged; the A5 REST fresh-run attestation
-candidate awaits hosted full-main evidence and does not authorize test skips.
+UI #1186, #1187, and #1189 and Core #354 have merged; #1189's first fresh
+full-main REST attestation passed on its merge commit but authorizes no test
+skips or exact-current-main release qualification.
 Full protected checks remain. The separate roster component draft is deferred
 for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
@@ -2201,8 +2202,10 @@ the Rust probe constructor, mounted preparer/depth runner and static local
 helpers, depth and shared scenario data, pinned image/PostgreSQL fixture, and
 test-only recovery overlay. A release-collected guard checks their normalized
 bytes, selector and mount structure, fixed image identities, static imports,
-and transitive JSON references. Focused guard plus REST tests passed 38 cases;
-an independent reviewer cleared the additive two-file delta. This inventory
+and transitive JSON references. After the hosted release-policy test exposed
+a missing helper-consumer allowlist entry, the corrected classification and
+image-context exclusions passed 175 focused policy/input tests; the independent
+reviewer found no P1–P3 issue in the fix. This inventory
 does **not** prove original capture provenance, downstream image contents, or
 complete host/environment closure. It changes no tier, skip, gate, or release
 rule and establishes no speedup. Historical depth selection remains required
