@@ -1656,6 +1656,16 @@ issuance contract, then release-bound clean-install proof; changing the
 namespace string alone would not satisfy it. PKG02 is the next first-use
 blocker after the current profile batch.
 
+PKG02 implementation is staged in bounded slices. The secret/template closure
+slice is under PR #1158 and must clear its protected merge queue. The next
+slice makes the self-host UI image independently runnable: its static source,
+runtime-config entrypoint and secret loader are baked into a dedicated image
+target, and the manual registry builder selects that target and the SPA Nginx
+config. A local image build and container startup smoke check validate the
+source/runtime contract. This does not yet establish published image parity,
+release-transaction coverage, a fresh bundle installation, or a CI speedup;
+those remain PKG02/PKG08 qualification requirements.
+
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
 assignee, issue/PR, dependency state, exact candidate evidence and next action
