@@ -76,6 +76,7 @@ def test_retained_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
     [
         ("canvas", "published-canvas"),
         ("rust-db", "rust-db"),
+        ("worker-canvas", "published-worker"),
     ],
 )
 def test_split_lanes_run_exactly_their_owned_database_group(
@@ -95,8 +96,53 @@ def test_split_lanes_run_exactly_their_owned_database_group(
     assert set(observed) == {expected}
     if mode == "canvas":
         assert observed[expected][-1] == "full-after-preflights"
+    elif mode == "worker-canvas":
+        assert observed[expected][-1] == "worker-full-after-preflights"
     else:
         assert "run-rust-db-contracts.sh" in observed[expected][-1]
+
+
+def test_worker_only_group_without_preflight_proof_retains_full_worker_suite(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(GROUPS, "_has_preflight_evidence", lambda: False)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main("worker-canvas") == 0
+    assert set(observed) == {"published-worker"}
+    assert observed["published-worker"][-1] == "worker-full"
+
+
+@pytest.mark.parametrize("qualification,count", [("0", 2), ("1", 4)])
+def test_worker_only_preflights_keep_exact_modes_and_evidence_owner(
+    tmp_path: Path, monkeypatch, qualification: str, count: int
+) -> None:
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification)
+    monkeypatch.setattr(GROUPS, "_preflight_evidence", lambda: None)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main("worker-preflights") == 0
+    assert len(observed) == count
+    assert set(observed) == set(
+        GROUPS.FULL_QUALIFICATION_PREFLIGHT_MODES
+        if qualification == "1"
+        else GROUPS.PREFLIGHT_MODES
+    )
+    assert all(command[-1] == f"worker-{name}" for name, command in observed.items())
 
 
 @pytest.mark.parametrize("qualification", ["0", "1"])
@@ -395,7 +441,10 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
                 "status": "ok",
             }
         )
-        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+        assert (
+            GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+            is None
+        )
     for name in (
         "case_from_scenario",
         "json_depth_extra",
@@ -418,7 +467,8 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
     ).read_text(encoding="utf-8")
     worker = (
-        ROOT / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT
+        / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     fixed_names = support.split("const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[", 1)[
         1
@@ -456,7 +506,8 @@ def test_repository_matrix_timing_labels_have_exact_rust_owners() -> None:
         ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
     ).read_text(encoding="utf-8")
     worker = (
-        ROOT / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
+        ROOT
+        / "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     labels = re.findall(
         r'RepositoryMatrix::(?:RosterMetadata|RosterExpiredBeforeWrite|RosterExpiredDuringLock|ResourceRace|Validation) => "([a-z_]+)"',

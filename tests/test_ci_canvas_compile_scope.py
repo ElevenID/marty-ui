@@ -54,9 +54,7 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     timed_commands = [
         shlex.split(line.strip())
         for line in canvas_branch.replace("\\\n", " ").splitlines()
-        if line.strip().startswith(
-            ("run_cargo_phase ", "cargo test ", "cargo build ")
-        )
+        if line.strip().startswith(("run_cargo_phase ", "cargo test ", "cargo build "))
     ]
     assert [command[:2] for command in timed_commands] == [
         ["run_cargo_phase", "tests"],
@@ -252,6 +250,30 @@ def _verify(artifacts: Path, target_dir: Path, records: list[dict]) -> None:
 def test_exact_canvas_artifacts_are_accepted(tmp_path: Path) -> None:
     artifacts, target_dir, records = _records(tmp_path)
     _verify(artifacts, target_dir, records)
+
+
+def test_worker_only_artifacts_require_real_worker_without_composition(
+    tmp_path: Path,
+) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    worker = [records[0], records[6]]
+    artifacts.write_text(
+        "".join(json.dumps(record) + "\n" for record in worker), encoding="utf-8"
+    )
+    VERIFY["verify"](artifacts, target_dir, worker_only=True)
+    with pytest.raises(ValueError, match="Expected exactly one"):
+        VERIFY["verify"](artifacts, target_dir)
+    for invalid in (
+        [worker[0]],
+        [worker[0], {**worker[1], "profile": {"test": True}}],
+        [*worker, {**worker[1], "executable": str(target_dir / "debug/other-worker")}],
+    ):
+        artifacts.write_text(
+            "".join(json.dumps(record) + "\n" for record in invalid),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="Expected exactly one"):
+            VERIFY["verify"](artifacts, target_dir, worker_only=True)
 
 
 @pytest.mark.parametrize("index", [0, 4, 5, 8])

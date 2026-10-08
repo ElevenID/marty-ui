@@ -23,8 +23,8 @@ if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" != 0 && "${MARTY_CANVAS_FULL_QUALI
   echo "Invalid Canvas qualification mode" >&2
   exit 2
 fi
-if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight ]]; then
-  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight]" >&2
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight && "$mode" != worker-full && "$mode" != worker-full-after-preflights && "$mode" != worker-mixed-roster-preflight && "$mode" != worker-timeout-preflight && "$mode" != worker-body-timeout-preflight && "$mode" != worker-lease-expiry-preflight ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight|worker-full|worker-full-after-preflights|worker-timeout-preflight|worker-lease-expiry-preflight|worker-body-timeout-preflight|worker-mixed-roster-preflight]" >&2
   exit 2
 fi
 if [[ -v MARTY_CANVAS_WORKER_RETRY_AFTER_TIER ]]; then
@@ -97,6 +97,87 @@ find_issuance_package_binary() {
   }
   printf '%s\n' "${matches[0]}"
 }
+# Opt-in diagnostic owner. No current CI selector invokes these modes; the
+# default and existing full/preflight paths below retain their original order.
+# This branch never loads composition, Gateway, Flow or the public selfhost
+# image. It still runs the same compiled worker target against the same pinned
+# published process/database and verifies the existing run-bound preflight.
+if [[ "$mode" == worker-* ]]; then
+  worker_mode="${mode#worker-}"
+  worker_executable=$(find_executable canvas_published_worker_contract)
+  worker_binary=$(find_issuance_package_binary marty-canvas-sync-worker)
+  export MARTY_CANVAS_WORKER_TEST_BINARY="$worker_binary"
+  worker_tests=$("$worker_executable" --list)
+  printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
+  pull_worker_images() {
+    local image
+    for image in "${images[@]}"; do
+      if [[ "$image" == "${images[0]}" ]]; then
+        timed image_pull postgres docker pull "$image"
+      else
+        timed image_pull published_probe docker pull "$image"
+      fi
+    done
+  }
+  worker_preflight_target=""
+  case "$worker_mode" in
+    timeout-preflight) worker_preflight_target=worker_timeout_matches_frozen_published_process ;;
+    lease-expiry-preflight) worker_preflight_target=worker_lease_expiry_matches_frozen_published_process ;;
+    body-timeout-preflight) worker_preflight_target=worker_body_timeout_matches_frozen_published_process ;;
+    mixed-roster-preflight) worker_preflight_target=worker_mixed_roster_matches_frozen_published_process ;;
+  esac
+  if [[ -n "$worker_preflight_target" ]]; then
+    printf '%s\n' "$worker_tests" | grep -Fx "$worker_preflight_target: test"
+    pull_worker_images
+    timed canvas_serial "$worker_mode" "$worker_executable" "$worker_preflight_target" --exact --nocapture --test-threads=1
+    exit 0
+  fi
+  worker_preflight_skips=()
+  expected_worker_skips=0
+  worker_retry_tier=full
+  worker_validation_tier=full
+  if [[ "$worker_mode" == full-after-preflights ]]; then
+    evidence="${RUNNER_TEMP:?}/canvas-published-preflights.sha256"
+    [[ -f "$evidence" ]] || { echo "Missing Canvas preflight evidence" >&2; exit 1; }
+    mapfile -t proof < "$evidence"
+    [[ ${#proof[@]} == 5 && "${proof[0]}" =~ ^[a-f0-9]{64}$ &&
+      "${proof[0]}" == "$(sha256sum "$worker_executable" | cut -d' ' -f1)" &&
+      "${proof[1]}" == "${GITHUB_RUN_ID:?}" &&
+      "${proof[2]}" == "${GITHUB_RUN_ATTEMPT:?}" &&
+      "${proof[3]}" == "${GITHUB_JOB:?}" &&
+      "${proof[4]}" == "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" ]] || {
+      echo "Canvas preflight evidence does not match this CI run and executable" >&2
+      exit 1
+    }
+    worker_preflight_skips=(
+      --skip worker_mixed_roster_matches_frozen_published_process
+      --skip worker_body_timeout_matches_frozen_published_process
+      --skip worker_timeout_matches_frozen_published_process
+      --skip worker_lease_expiry_matches_frozen_published_process
+    )
+    expected_worker_skips=4
+    if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]]; then
+      worker_preflight_skips+=(--skip reference_matches_published)
+      expected_worker_skips=37
+      worker_retry_tier=routine
+      worker_validation_tier=routine
+    fi
+  fi
+  worker_serial_test=worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings
+  printf '%s\n' "$worker_tests" | grep -Fx "$worker_serial_test: test"
+  worker_parallel_list=$("$worker_executable" --list --skip "$worker_serial_test" "${worker_preflight_skips[@]}")
+  printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$worker_mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$worker_serial_test"
+  worker_all=$(printf '%s\n' "$worker_tests" | grep -c ': test$')
+  worker_parallel=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
+  [[ $((worker_all - worker_parallel)) == $((1 + expected_worker_skips)) ]]
+  pull_worker_images
+  timed canvas_serial sql_logging "$worker_executable" "$worker_serial_test" --exact --nocapture --test-threads=1
+  worker_log=$(mktemp "${RUNNER_TEMP:?}/canvas-worker-only.XXXXXX")
+  trap 'rm -f -- "$worker_log"' EXIT
+  timed canvas_target worker env MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$worker_retry_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$worker_validation_tier" "$worker_executable" --skip "$worker_serial_test" "${worker_preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log"
+  python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"
+  exit 0
+fi
 composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
 config_skips=()

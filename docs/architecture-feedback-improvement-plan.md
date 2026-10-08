@@ -2212,6 +2212,29 @@ rule and establishes no speedup. Historical depth selection remains required
 until a stronger exact-probe closure invariant and change-triggered full
 qualification are implemented and reviewed; protected merge groups retain it.
 
+## A6 opt-in worker-only published runner (2026-10-08 local draft)
+
+The worker acceptance target is now a separate Cargo package, but routine CI
+still resolves composition and self-host artifacts and builds the public image
+before its full Canvas group. This reviewed draft adds opt-in
+`worker-preflights` and `worker-canvas` runner modes plus worker-only artifact
+verification; no workflow selects them, and the default full runner, required
+checks, and release gates are unchanged. The opt-in path keeps the same 147
+compiled worker identities, four exact pinned-process preflights, run-bound
+executable-digest proof before any preflight skip, routine/full historical-case
+policy, real worker binary, isolated PostgreSQL, timing, and owned cleanup.
+Synthetic regression tests passed (211 passed, one skipped, one existing
+Windows signal test deselected after it passed alone); focused mode tests and
+static checks also passed. No CI speedup or live published-process result is
+claimed: local artifacts include only a Windows test executable, not the Linux
+test and real worker binaries required by the Docker-backed runner.
+
+Next prove the opt-in path in a hosted Linux job with matching Cargo JSON
+artifacts, pinned images, all selected case IDs, preflight digest/cleanup and
+timing evidence. Only then consider a separate fail-closed worker-test-only PR
+selector, with protected full qualification preserved and changes to shared
+fixture/support inputs excluded until their dependency closure is proven.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

@@ -477,19 +477,41 @@ def main(mode: str = "database") -> int:
             commands["rust-db"] = ["bash", str(scripts / "run-rust-db-contracts.sh")]
     elif mode == "rust-db":
         commands = {"rust-db": ["bash", str(scripts / "run-rust-db-contracts.sh")]}
-    elif mode == "preflights":
+    elif mode == "worker-canvas":
+        # Opt-in owner only. The normal canvas group above is unchanged.
+        published_mode = (
+            "worker-full-after-preflights"
+            if _has_preflight_evidence()
+            else "worker-full"
+        )
+        commands = {
+            "published-worker": [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+                published_mode,
+            ]
+        }
+    elif mode in ("preflights", "worker-preflights"):
         evidence = _preflight_evidence()
         if evidence is not None:
             evidence.unlink(missing_ok=True)  # A failed rerun cannot reuse old proof.
         # Two workers overlap independent cases. Each exact preflight owns
         # its disposable Docker database and dynamically allocated HTTPS ports.
         commands = {
-            name: ["bash", str(scripts / "run-published-canvas-contracts.sh"), name]
+            name: [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+                f"worker-{name}" if mode == "worker-preflights" else name,
+            ]
             for name in preflight_modes
         }
     else:
         raise ValueError("Unsupported contract group mode")
-    prefix = "marty-preflight-groups-" if mode == "preflights" else "marty-db-groups-"
+    prefix = (
+        "marty-preflight-groups-"
+        if mode in ("preflights", "worker-preflights")
+        else "marty-db-groups-"
+    )
     with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
         directory = Path(temporary)
         results = run_groups(commands, directory)
@@ -497,9 +519,11 @@ def main(mode: str = "database") -> int:
             print(f"===== {name}: exit {status} =====", flush=True)
             print((directory / f"{name}.log").read_text(encoding="utf-8"), flush=True)
         failed = any(status != 0 for status in results.values())
-        if mode == "preflights" and set(results) != set(preflight_modes):
+        if mode in ("preflights", "worker-preflights") and set(results) != set(
+            preflight_modes
+        ):
             failed = True
-        if mode == "preflights" and not failed:
+        if mode in ("preflights", "worker-preflights") and not failed:
             try:
                 _record_preflight_evidence()
             except (OSError, ValueError, KeyError) as error:
@@ -512,6 +536,16 @@ def main(mode: str = "database") -> int:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] not in ([], ["preflights"], ["canvas"], ["rust-db"]):
-        raise SystemExit("Usage: run-db-contract-groups.py [preflights|canvas|rust-db]")
+    if sys.argv[1:] not in (
+        [],
+        ["preflights"],
+        ["canvas"],
+        ["rust-db"],
+        ["worker-preflights"],
+        ["worker-canvas"],
+    ):
+        raise SystemExit(
+            "Usage: run-db-contract-groups.py "
+            "[preflights|canvas|rust-db|worker-preflights|worker-canvas]"
+        )
     raise SystemExit(main(sys.argv[1] if sys.argv[1:] else "database"))
