@@ -78,6 +78,8 @@ impl PhaseTimer {
 // so the CI artifact can distinguish it from the surrounding worker target.
 pub(super) enum RepositoryMatrix {
     RosterMetadata,
+    RosterExpiredBeforeWrite,
+    RosterExpiredDuringLock,
     ResourceRace,
     Validation,
 }
@@ -85,6 +87,8 @@ pub(super) enum RepositoryMatrix {
 pub(super) fn repository_matrix_timer(matrix: RepositoryMatrix) -> PhaseTimer {
     let name = match matrix {
         RepositoryMatrix::RosterMetadata => "repository_roster_metadata",
+        RepositoryMatrix::RosterExpiredBeforeWrite => "repository_roster_expired_before_write",
+        RepositoryMatrix::RosterExpiredDuringLock => "repository_roster_expired_during_lock",
         RepositoryMatrix::ResourceRace => "repository_resource_race",
         RepositoryMatrix::Validation => "repository_validation",
     };

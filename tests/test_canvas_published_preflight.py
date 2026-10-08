@@ -63,9 +63,17 @@ K8S_RENDERED_CONFIG = (
     "resolved_kubernetes_runtime::"
     "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
 )
-LATEST_REGISTRATION_COUNT = 168
-LATEST_REGISTRATION_SHA256 = (
+PRE_ROSTER_REGISTRATION_COUNT = 168
+PRE_ROSTER_REGISTRATION_SHA256 = (
     "aea60fcdeff981e4df06b6aa58341e6f6b5bcff481954a47657dee8e0f853025"
+)
+ROSTER_EXPIRY_TESTS = (
+    "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
+    "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
+)
+LATEST_REGISTRATION_COUNT = 170
+LATEST_REGISTRATION_SHA256 = (
+    "db3ce3bed72fb3fcafe86edf5ad913fbafc9810ffa5d6ce55f8ea68c6db7ebbd"
 )
 
 
@@ -85,8 +93,14 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
         LATEST_REGISTRATION_SHA256
     )
-    assert names.count(K8S_RENDERED_CONFIG) == 1
-    before_k8s = [name for name in names if name != K8S_RENDERED_CONFIG]
+    assert all(names.count(name) == 1 for name in ROSTER_EXPIRY_TESTS)
+    before_roster = [name for name in names if name not in ROSTER_EXPIRY_TESTS]
+    assert len(before_roster) == PRE_ROSTER_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(before_roster).encode()).hexdigest() == (
+        PRE_ROSTER_REGISTRATION_SHA256
+    )
+    assert before_roster.count(K8S_RENDERED_CONFIG) == 1
+    before_k8s = [name for name in before_roster if name != K8S_RENDERED_CONFIG]
     assert len(before_k8s) == NEW_REGISTRATION_COUNT
     assert hashlib.sha256("\n".join(before_k8s).encode()).hexdigest() == (
         NEW_REGISTRATION_SHA256

@@ -364,6 +364,8 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         ("migration_seed", "worker_validation_template"),
         ("scenario", "retry-after.http_date_future"),
         ("scenario", "repository_roster_metadata"),
+        ("scenario", "repository_roster_expired_before_write"),
+        ("scenario", "repository_roster_expired_during_lock"),
         ("scenario", "repository_resource_race"),
         ("scenario", "repository_validation"),
         ("cleanup", "published_database_removal"),
@@ -449,15 +451,21 @@ def test_repository_matrix_timing_labels_have_exact_rust_owners() -> None:
         ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_worker_contract.rs"
     ).read_text(encoding="utf-8")
     labels = re.findall(
-        r'RepositoryMatrix::(?:RosterMetadata|ResourceRace|Validation) => "([a-z_]+)"',
+        r'RepositoryMatrix::(?:RosterMetadata|RosterExpiredBeforeWrite|RosterExpiredDuringLock|ResourceRace|Validation) => "([a-z_]+)"',
         support,
     )
-    assert len(labels) == len(set(labels)) == 3
+    assert len(labels) == len(set(labels)) == 5
     assert set(labels) == GROUPS.REPOSITORY_MATRIX_NAMES
-    assert worker.count("repository_matrix_timer(") == 3
-    for variant in ("RosterMetadata", "ResourceRace", "Validation"):
+    assert worker.count("repository_matrix_timer(") == 4
+    for variant in (
+        "RosterMetadata",
+        "RosterExpiredBeforeWrite",
+        "RosterExpiredDuringLock",
+        "ResourceRace",
+        "Validation",
+    ):
         assert worker.count(f"RepositoryMatrix::{variant}") == 1
-    assert worker.count("timing.success();") == 3
+    assert worker.count("timing.success();") == 4
 
 
 def test_composite_phase_allowlist_matches_exact_instrumented_boundaries() -> None:
