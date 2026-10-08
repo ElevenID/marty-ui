@@ -6227,3 +6227,8 @@ cross-scheme rejection. The exact selected workspace test pass exercised
 these replacements. The local-signing round trips were intentionally
 retired, not restored as production APIs. Continue the full assembled
 regression/security/quality review before publishing Core's grouped PR.
+The separate Core bindings test lane passed 50 active tests with five ignored
+under `USE_ZK_MOCK=1`; the ZKP mock package test lane also exited 0. The
+exact `marty-oid4vci` KMS-only issuer and verifier no-default feature profiles
+both compile at the same SSI pin. These checks do not replace the Linux native
+ZKP security lane or exact wheel inspection.
