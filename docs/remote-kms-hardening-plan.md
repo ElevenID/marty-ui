@@ -6798,3 +6798,23 @@ schema inspection found four `credential_template_service` tables
 The disposable database was removed. This is one service's clean-install
 evidence; assembled platform schema, other JSON stores and exact release
 artifacts remain K10 gates.
+
+2026-10-08 K10 Auth and Device Registration review: Auth's
+`audit_logs.event_metadata` is assembled only from fixed server fields by its
+current writer; `session_history.device_info` is not written by that repository.
+Its TLS private-key files remain transport credentials, not database key
+custody. Device Registration's `preferences` JSON and public-key columns have
+broader direct-repository write paths. The PostgreSQL repository now rejects
+private material in preferences before connection/write and before row
+deserialization, and uses Core's public DER/key-ID validator on direct saves,
+rotations and row reads. A direct-repository test proves private PEM in
+preferences and non-public key bytes are rejected before database access.
+The complete Device Registration package and warnings-denied all-target Clippy
+pass. Its clean-install/live repository contract passed against disposable
+PostgreSQL 16, then passed again after the write-path DRY refactor. The fresh
+schema has four tables (`alembic_version`, `device_key_transitions`,
+`device_registration_keys`, `device_registrations`); its key columns are public
+DER, key ID, version/state and timestamps, with no private-key-named table or
+column. The disposable database was removed. Auth's closed writer provenance
+and Device Registration's per-service test do not replace assembled-platform
+or shipped-artifact K10 qualification.
