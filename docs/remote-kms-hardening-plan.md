@@ -1228,7 +1228,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled; candidate Credentials Rust graph resolves reviewed Core 0.2, native/Python checks compile, and unreachable local-key Rust bindings/tests are removed; old published verification wheel, replacement vectors and artifact qualification remain |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. All functional jobs on the prior source head passed, Rust analysis fixed alert #260, and the new head refreshes a stale failing aggregate CodeQL check; its hosted result is pending. UI and Credentials PRs, final hosted checks, exact artifacts and deployment cutover remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; the SSI fork PR #9 is merged and Core grouped draft PR #355 is open at `d41d87c`. On that head, CodeQL analysis and its aggregate check pass with no open alerts after security review of a test-only false positive; all other completed checks pass, while Fast Rust Preflight is still running. UI and Credentials PRs, final hosted checks, exact artifacts and deployment cutover remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; the Credentials candidate has removed both `keys` ORM models/key-manager paths, historical `issuer_signing_keys` create/drop revisions, a duplicate wallet ORM, and an unused `selective_disclosure_keys` JSON column. Its 46-revision graph, 14 focused tests, fresh ORM schema and disposable PostgreSQL issuance schema pass. Core now rejects private material on direct Open Badge public-key writes; its 50 active storage tests pass. Cross-repository/assembled schema inventory, runtime data-flow review and release-artifact proof remain. |
 
 ### First execution steps
@@ -6558,3 +6558,18 @@ CI revision have not yet been updated to the final artifact. No new failure
 or import regression appeared from removing `KeyPair` and the dead wallet
 methods. The immutable log is
 `artifacts/kms-credentials-core02-python-suite-no-raw-wallet-2026-10-08.log`.
+
+2026-10-08 Core PR #355 CodeQL review at `d41d87c`: the Rust analyzer
+reported alert #261 (`rust/cleartext-transmission`) at the test-only
+`ScopedTransitSigner::request_signature` URL expression. The signer sends
+synthetic certificate/revocation fixture bytes in an HTTPS POST body to
+`127.0.0.1`; the URL includes only the random, non-secret Transit key name.
+`DisposableOpenBao::from_marked_env` verifies the HTTPS loopback endpoint,
+disposable marker and generated CA certificate; the reqwest client pins that
+CA and disables proxies. The Transit key is created non-exportable and the
+scoped token has sign-only policy. This is not a cleartext transmission. Alert
+#261 was dismissed as a false positive with that rationale; the prior alert
+#260 remains fixed, the aggregate CodeQL check `113540624614` now passes,
+and the PR head has no open code-scanning alerts. Fast Rust Preflight job
+`113540261467` was still live in Clippy when checked. Its result and final
+required-check status remain pending; no Core merge or release claim yet.
