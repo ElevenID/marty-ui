@@ -33,6 +33,55 @@ mod diagnostic_tests {
         );
     }
 
+    #[test]
+    fn json_consumer_case_timing_accepts_exact_inventory_only() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-json-consumer-scenarios.json"
+        ))
+        .unwrap();
+        let mut rows = Vec::new();
+        for phase in ["validation", "provider"] {
+            for case in fixture[phase].as_array().unwrap() {
+                rows.push(json!({
+                    "name": format!("json_consumer.{phase}.{}", case["name"].as_str().unwrap()),
+                    "duration_ms": 1,
+                }));
+            }
+        }
+        assert_eq!(rows.len(), 132);
+        let report = json!({"ci_case_timing": rows});
+        assert_eq!(json_consumer_case_timings(&report).unwrap().len(), 132);
+        for changed in [
+            {
+                let mut changed = report.clone();
+                changed["ci_case_timing"][0]["name"] = json!("private-url");
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_case_timing"][0]["duration_ms"] = json!(-1);
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_case_timing"][0]["duration_ms"] = json!(120_001);
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_case_timing"][0]["payload"] = json!("secret");
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_case_timing"].as_array_mut().unwrap().pop();
+                changed
+            },
+        ] {
+            assert!(json_consumer_case_timings(&changed).is_err());
+        }
+    }
+
     fn recovery_rows() -> (Uuid, Vec<(String, Value)>) {
         let (mut database, id, scope) = borrow_fixture();
         database["HostConfig"]["Privileged"] = json!(false);

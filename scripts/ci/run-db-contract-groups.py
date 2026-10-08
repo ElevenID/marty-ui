@@ -37,6 +37,7 @@ TIMING_PHASES = {
     "canvas_serial",
     "canvas_target",
     "image_pull",
+    "oracle_case",
 }
 TIMING_STATUSES = {"ok", "failed"}
 REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
@@ -90,6 +91,17 @@ SCENARIO_NAMES = REST_SCENARIOS | frozenset(
             / f"contracts/canvas-worker-{scenario}-scenarios.json"
         ).read_text(encoding="utf-8")
     )["cases"]
+)
+JSON_CONSUMER_SCENARIOS = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "contracts/canvas-json-consumer-scenarios.json"
+    ).read_text(encoding="utf-8")
+)
+JSON_CONSUMER_CASE_NAMES = frozenset(
+    f"json_consumer.{phase}.{case['name']}"
+    for phase in ("validation", "provider")
+    for case in JSON_CONSUMER_SCENARIOS[phase]
 )
 # Fixed, test-owned repository matrices; never derive timing identities from
 # scenario payloads or include them in the fixture/cleanup phase allowlists.
@@ -180,6 +192,7 @@ TIMING_NAMES = {
     ),
     "fixture_seed": FIXTURE_NAMES,
     "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
+    "oracle_case": JSON_CONSUMER_CASE_NAMES,
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
     "contract": CONTRACT_NAMES,
     "contract_phase": frozenset(
