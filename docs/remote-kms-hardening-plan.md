@@ -6391,3 +6391,12 @@ locally with the KMS-only issuer/verifier/wallet feature selection:
 These prove preparation, selective-disclosure structure, and refusal of
 private or mismatched issuer metadata; they do not alone replace the deleted
 service-level Behave scenarios.
+The broad Credentials retirement candidate was checkpointed locally as
+`4051dd4` on `security/remote-kms-retirement-20261007`: 69 files changed,
+including local issuer-key adapter/test removal, no-private-key clean-install
+revision graph, native owner selection, one Core 0.2 source pin, and CI graph
+checks. The branch had a clean diff check and 19 focused custody/native
+boundary tests passed with Python 3.12 immediately before the commit. This
+is a local candidate, not a qualified PR or release artifact; its Core pin
+still needs the final reviewed Core head, full coverage mapping, and
+published release metadata before the known two metadata assertions can pass.
