@@ -1714,11 +1714,12 @@ speedup is claimed from this generator alone.
 PKG02 follow-up: the opt-in official-release preparation lane builds the two
 distinct self-host roles by digest only after existing stack qualification,
 checks the source-bound image map and Marty attestations, anonymously pulls
-each locked image, and retains only a short-lived artifact explicitly marked
-unqualified. It does not alter the three-role stack transaction or ordinary
-PR gates. Its independent infrastructure refs still lack a reviewed
-provenance/licensing policy, and it neither signs nor qualifies an installable
-bundle. The next release-only gate must bind a packaged Linux ZIP and its
+each locked image, and uploads only a short-lived workflow artifact explicitly
+marked unqualified; the digest-only OCI images remain in GHCR. It does not
+alter the three-role stack transaction or ordinary PR gates. Its independent
+infrastructure refs still lack a reviewed provenance/licensing policy, and it
+neither signs nor qualifies an installable bundle. The next release-only gate
+must bind a packaged Linux ZIP and its
 embedded lock to the exact transaction, extract into a fresh directory, use
 only extracted scripts/configuration with isolated disposable state and
 policy-scoped OpenBao tokens, prove migrations/readiness and one representative
