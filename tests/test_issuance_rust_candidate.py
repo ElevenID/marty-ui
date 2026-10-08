@@ -91,6 +91,8 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
     assert 'POSTGRES_PASSWORD="$postgres_password"' in smoke
     assert smoke.count('PGPASSWORD="$postgres_password"') == 3
     assert 'DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty"' in smoke
+    assert "SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys" in smoke
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in smoke
     assert "access_token_expires_at" in smoke
     assert "ux_issuance_events_oid4vci_notification_id" in smoke
 

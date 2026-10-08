@@ -9,8 +9,8 @@ import sys
 from tempfile import TemporaryDirectory
 
 
-MASTER_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
-SECRET_FILE = "/synthetic-secrets/master-key"
+FORBIDDEN_VALUE = "synthetic-forbidden-local-secret"
+SECRET_FILE = "/synthetic-secrets/signing-api-key"
 STARTED = "Starting canonical Rust service:"
 
 
@@ -28,9 +28,9 @@ CASES = (
     Case(
         "hyphen",
         "canvas-sync-worker",
-        (),
+        (f"INTEGRATION_SECRET_MASTER_KEY={FORBIDDEN_VALUE}",),
         1,
-        "INTEGRATION_SECRET_MASTER_KEY source is required",
+        "legacy integration-secret master-key configuration is forbidden",
         True,
     ),
     Case(
@@ -44,44 +44,44 @@ CASES = (
     Case(
         "underscore",
         "canvas_sync_worker",
-        (),
+        ("INTEGRATION_SECRET_MASTER_KEY_ENV=SYNTHETIC_LOCAL_KEY",),
         1,
-        "INTEGRATION_SECRET_MASTER_KEY source is required",
+        "legacy integration-secret master-key configuration is forbidden",
         True,
     ),
     Case(
-        "direct_key",
+        "invalid_database_url",
         "canvas-sync-worker",
-        (f"INTEGRATION_SECRET_MASTER_KEY={MASTER_KEY}", "DATABASE_URL=not-a-url"),
+        ("SIGNING_KEYS_INTERNAL_API_KEY=synthetic-api-key", "DATABASE_URL=not-a-url"),
         1,
         "Configuration(RelativeUrlWithoutBase)",
         True,
     ),
     Case(
-        "file_key",
+        "raw_master_key_file",
         "canvas-sync-worker",
-        (f"INTEGRATION_SECRET_MASTER_KEY_FILE={SECRET_FILE}", "DATABASE_URL=not-a-url"),
+        ("INTEGRATION_SECRET_MASTER_KEY_FILE=/synthetic-secrets/missing",),
         1,
-        "Configuration(RelativeUrlWithoutBase)",
+        "legacy integration-secret master-key configuration is forbidden",
         True,
     ),
     Case(
-        "conflicting_key_sources",
+        "conflicting_api_key_sources",
         "canvas-sync-worker",
         (
-            f"INTEGRATION_SECRET_MASTER_KEY={MASTER_KEY}",
-            f"INTEGRATION_SECRET_MASTER_KEY_FILE={SECRET_FILE}",
+            "SIGNING_KEYS_INTERNAL_API_KEY=synthetic-direct-api-key",
+            f"SIGNING_KEYS_INTERNAL_API_KEY_FILE={SECRET_FILE}",
         ),
         1,
-        "Both INTEGRATION_SECRET_MASTER_KEY and INTEGRATION_SECRET_MASTER_KEY_FILE are set; choose one.",
+        "Both SIGNING_KEYS_INTERNAL_API_KEY and SIGNING_KEYS_INTERNAL_API_KEY_FILE are set; choose one.",
         False,
     ),
     Case(
         "missing_file",
         "canvas-sync-worker",
-        ("INTEGRATION_SECRET_MASTER_KEY_FILE=/synthetic-secrets/missing",),
+        ("SIGNING_KEYS_INTERNAL_API_KEY_FILE=/synthetic-secrets/missing",),
         1,
-        "Secret file for INTEGRATION_SECRET_MASTER_KEY is not a regular file:",
+        "Secret file for SIGNING_KEYS_INTERNAL_API_KEY is not a regular file:",
         False,
     ),
     Case(
@@ -149,7 +149,7 @@ def exercise_case(image, case, directory):
         status = int(docker("wait", container, timeout=15))
         logs = docker("logs", container)
         # Logs for these fixed synthetic cases must never expose the key.
-        assert MASTER_KEY not in logs, f"{case.name}: synthetic key appeared in logs"
+        assert FORBIDDEN_VALUE not in logs, f"{case.name}: synthetic key appeared in logs"
         assert "synthetic-invalid-operator-value" not in logs
         assert status == case.exit_code, f"{case.name}: unexpected exit {status}"
         assert case.message in logs, (
@@ -168,8 +168,8 @@ def run(image):
     with TemporaryDirectory(prefix="canvas-worker-entrypoint-") as temporary:
         directory = Path(temporary)
         directory.chmod(0o755)
-        key = directory / "master-key"
-        key.write_text(MASTER_KEY + "\r\n", encoding="utf-8")
+        key = directory / "signing-api-key"
+        key.write_text("synthetic-file-api-key\r\n", encoding="utf-8")
         key.chmod(0o444)
         for case in CASES:
             exercise_case(image, case, directory.resolve())

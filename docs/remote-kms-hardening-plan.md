@@ -3033,6 +3033,23 @@ and config `sha256:a52b7b535a2e2dc9b12078a6fdda2bcf7404db344035c89f257da482940c3
 its manifest-list ID changed with the context attestation. Full feature-diff
 review and release qualification remain.
 
+2026-10-07 grouped UI feature CI repair: the broad source review found three
+CI-invoked packaged-image checks still requiring the retired
+`INTEGRATION_SECRET_MASTER_KEY`. This would reject the new native startup before
+CI could qualify the feature PR. The candidate now runs the Issuance image
+smoke and 16 Canvas worker published-schema startup cases through a separate,
+disposable no-key HTTP secret service. It enforces authenticated, identity-bound
+encrypt/decrypt round trips for these packaging checks; the live OpenBao Transit
+probe, not this synthetic service, qualifies cryptographic custody. Nine
+packaged entrypoint cases now assert raw master-key rejection and supported API
+key file preflight. The CI render fixture no longer supplies the retired key.
+Local shared-image evidence: 9/9 entrypoint cases, 16/16 startup cases,
+Issuance image smoke, and 33 focused Python fixture tests passed. This work
+stays in the single broad UI hardening feature PR with the pending service,
+deployment, and contract diff; do not open a narrow smoke-only PR or trigger
+hosted CI for each correction. The packaged image is still a local dirty
+candidate and hosted CI/release qualification remain pending.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch

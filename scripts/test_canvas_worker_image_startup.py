@@ -8,14 +8,13 @@ import sys
 from tempfile import TemporaryDirectory
 import time
 
-from test_canvas_worker_image_entrypoint import MASTER_KEY, docker, owned_container
+from test_canvas_worker_image_entrypoint import docker, owned_container
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DATABASE_NAME = "canvas_published_schema_test"
 PASSWORD = "synthetic-local-only"
 SECRETS = {
-    "INTEGRATION_SECRET_MASTER_KEY": MASTER_KEY,
     "TOKEN_HMAC_KEY": "synthetic-startup-hmac-key",
     "ISSUANCE_API_KEY": "synthetic-startup-api-key",
     "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-startup-api-key",
@@ -84,19 +83,16 @@ def configuration(case, mode):
         "CANVAS_SYNC_WORKER_ID": worker_id,
         "CANVAS_SYNC_WORKER_POLL_SECONDS": "60",
         "CANVAS_PILOT_ORGANIZATION_IDS": "bootstrap-org",
-        "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:1/internal/signing-keys",
+        "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:8017/internal/signing-keys",
         **case["environment"],
     }
     key_source = mode["key_source"]
-    assert key_source in {"direct", "file", "environment"}
+    assert key_source in {"direct", "file"}
     for name, value in SECRETS.items():
         if name == "MARTY_DB_PASSWORD":
             continue
         if key_source == "file":
             environment[f"{name}_FILE"] = f"/synthetic-secrets/{name}"
-        elif key_source == "environment" and name == "INTEGRATION_SECRET_MASTER_KEY":
-            environment[f"{name}_ENV"] = "IMAGE_SELECTED_MASTER_KEY"
-            environment["IMAGE_SELECTED_MASTER_KEY"] = value
         else:
             environment[name] = value
     assert mode["database_source"] in {"direct", "template"}
@@ -243,11 +239,47 @@ def run(image):
                 assert report["status"] == "passed"
                 assert report["migration_revisions"] == pins["migration_revisions"]
                 assert report["worker_sha256"] == pins["observed_source_sha256"]
-            for mode in spec["modes"]:
-                for case in cases:
-                    exercise(
-                        image, postgres, directory, case, mode, expected[case["name"]]
-                    )
+            with owned_container(
+                "--pull=never",
+                "--network",
+                f"container:{postgres}",
+                *HARDENED,
+                "--env",
+                f"SYNTHETIC_API_KEY={SECRETS['SIGNING_KEYS_INTERNAL_API_KEY']}",
+                *mount(
+                    ROOT / "scripts/synthetic_integration_secret_service.py",
+                    "/verification/synthetic_integration_secret_service.py",
+                ),
+                "--entrypoint",
+                "python",
+                pins["observed_image"],
+                "/verification/synthetic_integration_secret_service.py",
+            ) as secret_service:
+                docker("start", secret_service)
+                def remote_ready():
+                    assert running(secret_service), "Remote secret service exited"
+                    try:
+                        docker(
+                            "exec",
+                            secret_service,
+                            "python",
+                            "-c",
+                            'import socket; socket.create_connection(("127.0.0.1", 8017), 1).close()',
+                            timeout=5,
+                        )
+                        return True
+                    except subprocess.CalledProcessError:
+                        return False
+
+                wait_for(
+                    remote_ready,
+                    "synthetic remote secret service",
+                )
+                for mode in spec["modes"]:
+                    for case in cases:
+                        exercise(
+                            image, postgres, directory, case, mode, expected[case["name"]]
+                        )
 
 
 if __name__ == "__main__":
