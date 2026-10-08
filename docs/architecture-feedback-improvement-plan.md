@@ -2260,6 +2260,11 @@ test-source-only pilot is required before considering selective PR CI; the
 workspace-wide Clippy and release-policy jobs remain possible bottlenecks.
 The exact initial PR head was independently reviewed after rebase onto the
 merged worker-only runner; it is not live worker-only evidence.
+The first labeled [PR run 37861477220](https://github.com/ElevenID/marty-ui/actions/runs/37861477220)
+selected all three Rust lanes but its public-protocol job rejected the new
+matrix syntax using a stale exact-string owner guard. The follow-up updates
+that guard to require the PR-only condition and normal-matrix fallback, with
+negative mutation tests; hosted success and worker timings remain pending.
 
 ## Design references
 

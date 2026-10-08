@@ -518,6 +518,22 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
     changes = job("changes")
     service = job("test-rust-services")
     gate = job("ci-gate")
+    strategy_match = re.search(
+        r"(?ms)^    strategy:\n(.*?)(?=^    [a-z][a-z0-9-]*:\n|\Z)", service
+    )
+    matrix_match = (
+        re.search(
+            r"(?ms)^      matrix:\n(.*?)(?=^      [a-z][a-z0-9-]*:\n|\Z)",
+            strategy_match.group(1),
+        )
+        if strategy_match
+        else None
+    )
+    matrix_body = (
+        re.sub(r"(?m)^        #.*\n", "", matrix_match.group(1)).strip("\n")
+        if matrix_match
+        else ""
+    )
     workspace_step = "      - name: Run safe Rust contract groups concurrently\n"
     vector_step = (
         "      - name: Require public protocol vector test execution\n"
@@ -526,13 +542,20 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         "        run: python3 -m scripts.ci.check_public_vector_execution "
         '"$RUNNER_TEMP/rust-workspace.log"\n'
     )
+    diagnostic_matrix = (
+        "        lane: >-\n"
+        "          ${{ fromJSON(github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","worker"]\' || needs.changes.outputs.rust_matrix) }}'
+    )
     required = (
         'rust_matrix=\'["canvas","contracts"]\'' in changes
         and "rust_matrix='[\"contracts\"]'" in changes
         and 'if [[ "${{ github.event_name }}" == merge_group ]]' in changes
         and "needs: changes" in service
         and "if: needs.changes.outputs.rust == 'true'" in service
-        and "lane: ${{ fromJSON(needs.changes.outputs.rust_matrix) }}" in service
+        and matrix_body == diagnostic_matrix
         and "cargo test --locked --workspace --no-run" in service
         and "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance"
         in service
