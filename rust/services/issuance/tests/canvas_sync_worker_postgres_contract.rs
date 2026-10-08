@@ -597,14 +597,17 @@ async fn assert_hinted_retry_persistence(pool: &sqlx::PgPool) {
     // checked by the fast unit matrix, and real HTTPS forwarding remains in
     // the published-process acceptance test. These bounds are not calculated
     // with the production backoff function being tested here.
-    let cases: [(&str, Option<u64>, f64, f64); 7] = [
-        ("http_date_future", Some(60), 59.0, 61.0),
-        ("http_date_past", Some(0), 14.0, 21.0),
-        ("malformed", Some(0), 14.0, 21.0),
-        ("negative", Some(0), 14.0, 21.0),
-        ("zero", Some(0), 14.0, 21.0),
-        ("clamped", Some(86_400), 86_399.0, 86_401.0),
-        ("huge_integer", Some(86_400), 86_399.0, 86_401.0),
+    // Header and HTTP-date shapes have already been normalized before this
+    // repository port. Keep one durable write for each distinct effective hint.
+    let cases: [(&str, Option<u64>, f64, f64); 3] = [
+        ("sixty_second_effective_hint", Some(60), 59.0, 61.0),
+        ("zero_effective_hint", Some(0), 14.0, 21.0),
+        (
+            "day_capped_effective_hint",
+            Some(86_400),
+            86_399.0,
+            86_401.0,
+        ),
     ];
     let repository = PostgresCanvasSyncWorkerRepository::new(pool.clone());
     for (name, _, _, _) in cases {
@@ -625,10 +628,14 @@ async fn assert_hinted_retry_persistence(pool: &sqlx::PgPool) {
         .unwrap();
     }
     let leased = repository
-        .lease_ready("hint-worker", &7_u64.into(), &120_u64.into())
+        .lease_ready("hint-worker", &3_u64.into(), &120_u64.into())
         .await
         .unwrap();
-    assert_eq!(leased.len(), cases.len(), "all seven hint jobs must lease");
+    assert_eq!(
+        leased.len(),
+        cases.len(),
+        "all three effective-hint jobs must lease"
+    );
     for (name, hint, lower, upper) in cases {
         let target_id = format!("hint-target-{name}");
         let job_id = format!("hint-job-{name}");
@@ -649,7 +656,7 @@ async fn assert_hinted_retry_persistence(pool: &sqlx::PgPool) {
             retry_after_seconds: hint,
             force_dead_letter: false,
         };
-        if name == "http_date_future" {
+        if name == "sixty_second_effective_hint" {
             let leased_row: serde_json::Value = sqlx::query_scalar(
                 "SELECT to_jsonb(j) FROM issuance_service.canvas_evidence_sync_jobs j WHERE id = $1",
             )

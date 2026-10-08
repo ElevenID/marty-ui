@@ -3555,6 +3555,40 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
         assert (tmp_path / "github-env").read_text(encoding="utf-8") == expected_env
 
 
+def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = {
+        step.get("name"): step
+        for step in ci["jobs"]["test-rust-services"]["steps"]
+    }
+    compile_step = steps["Compile reusable Rust test executables"]["run"]
+    capture_step = steps["Capture host compiler cache counters after compile"]
+    assert "--network none --read-only" in compile_step
+    assert "--locked --offline" in compile_step
+    assert "bookworm-host-phases.tsv" in compile_step
+    for phase, command in (
+        ("cargo_fetch", "cargo fetch --locked"),
+        ("builder_pull", "docker pull"),
+        ("container_compile", "docker run --rm --network none --read-only"),
+        ("verify_artifacts", "python3 ../scripts/ci/verify-canvas-test-artifacts.py"),
+    ):
+        assert f"run_host_phase {phase} {command}" in compile_step
+    assert 'printf "phase\\telapsed_seconds\\ttarget_bytes\\texit_code\\n"' in compile_step
+    assert 'return "$exit_code"' in compile_step
+    for phase, command in (
+        ("tests", "cargo test"),
+        ("issuance_binaries", "cargo build"),
+        ("gateway_binary", "cargo build"),
+        ("flow_binary", "cargo build"),
+    ):
+        assert f"run_cargo_phase {phase} {command} --locked --offline" in compile_step
+    assert "python3 ../scripts/ci/verify-canvas-test-artifacts.py" in compile_step
+    assert capture_step["if"] == "always()"
+    assert "test ! -L rust/target/bookworm-compile-phases.tsv" in capture_step["run"]
+    assert "-le 4096" in capture_step["run"]
+    assert "rust-build-evidence/bookworm-compile-phases.tsv" in capture_step["run"]
+
+
 def test_optional_cache_stats_failure_cannot_fail_required_rust_lanes(
     tmp_path: Path,
 ) -> None:
