@@ -20,6 +20,30 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     # affect Auth even though Cargo has no reverse dependency on them.
     "marty-flow": [
         {
+            # Applicant submits approved applications to Flow's native webhook.
+            "package": "marty-applicant",
+            "evidence": "rust/services/applicant/src/main.rs",
+            "binding": 'env_value("FLOW_SERVICE_URL", "http://flow:8011")',
+            "runtime_marker": "Arc::new(HttpFlowProvider::new(flow_url, application_auth))",
+            "request_evidence": "rust/services/applicant/src/providers.rs",
+            "request_marker": '"{}/v1/flows/webhooks/application-approved"',
+            "callsite_evidence": "rust/services/applicant/src/service.rs",
+            "callsite_marker": ".issue(&application, &applicant, &reserved_claims, attempt_id)",
+            "provider_evidence": "rust/services/flow/src/http_application.rs",
+            "provider_marker": '"/v1/flows/webhooks/application-approved"',
+            "route_registration_evidence": "rust/services/flow/src/http_read.rs",
+            "route_registration_marker": ".merge(flow_application_routes())",
+            "server_evidence": "rust/services/flow/src/main.rs",
+            "server_marker": ".merge(flow_read_router(http_state))",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "flow",
+            "deployment_marker": 'FLOW_SERVICE_PORT: "8011"',
+            "deployment_consumer_service": "applicant",
+            "deployment_consumer_marker": 'APPLICANT_SERVICE_PORT: "8006"',
+            "deployment_consumer_absent_marker": "FLOW_SERVICE_URL:",
+            "deployment_network_marker": "- marty-network",
+        },
+        {
             "package": "marty-auth",
             "evidence": "rust/services/auth/src/config.rs",
             "binding": "FLOW_GRPC_TARGET",
@@ -35,6 +59,30 @@ OBSERVED_NON_CARGO_CONSUMERS = {
         },
     ],
     "marty-organization": [
+        {
+            # Device registration checks active membership over Organization gRPC
+            # when a request is scoped to an organization.
+            "package": "marty-device-registration",
+            "evidence": "rust/services/device-registration/src/main.rs",
+            "binding": 'env_value("ORG_GRPC_TARGET", "organization:9002")',
+            "runtime_marker": "OrganizationMembershipClient::connect_lazy(",
+            "registration_marker": "router(HttpState {",
+            "request_evidence": "rust/services/device-registration/src/control_plane.rs",
+            "connection_marker": "OrganizationServiceClient::new(endpoint.connect_lazy())",
+            "request_marker": ".get_member(self.request(GetMemberRequest {",
+            "response_marker": '!member.status.eq_ignore_ascii_case("active")',
+            "callsite_evidence": "rust/services/device-registration/src/http.rs",
+            "condition_marker": "if let Some(organization_id) = organization_id {",
+            "callsite_marker": ".require_active(user_id, organization_id)",
+            "provider_evidence": "rust/services/organization/src/grpc_service.rs",
+            "provider_handler_marker": "async fn get_member(",
+            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_registration_evidence": "rust/services/organization/src/main.rs",
+            "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "device-registration",
+            "deployment_marker": "ORG_GRPC_TARGET: organization:9002",
+        },
         {
             "package": "marty-compliance-profile",
             "evidence": "rust/services/compliance-profile/src/config.rs",

@@ -1844,6 +1844,25 @@ their self-host traffic. The planner retains its full-workspace fallback for
 every service change. This is not complete non-Cargo closure, permission to
 skip tests, or a measured speedup.
 
+A3 additional service-consumer observations (2026-10-08 candidate, based on
+UI main `c0b6038d9`): Applicant's configured `FLOW_SERVICE_URL` feeds the
+production `HttpFlowProvider`, which signs and POSTs an approved application
+to Flow's registered `/v1/flows/webhooks/application-approved` route. Device
+Registration's `ORG_GRPC_TARGET` feeds its production Organization membership
+client; organization-scoped device routes require an active membership via
+`get_member`. The base Compose profile declares Flow at port 8011 and
+Applicant on the same network; Applicant's HTTP URL comes from its code default,
+not an explicit Compose variable. Device Registration's Compose environment
+binds `ORG_GRPC_TARGET` to Organization. Neither consumer declares that
+provider as a Cargo dependency.
+The shadow planner records these two edges with request, provider, call-site,
+and scoped deployment-marker regressions. The Device Registration call is
+conditional on organization scope. Applicant already declares Event Stream as
+a Cargo dependency, so that publisher is not added as a non-Cargo edge.
+Service changes still select every Rust package; no required gate or measured
+turnaround changes. Other runtime consumers and non-Cargo inputs remain
+unmapped.
+
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
 assignee, issue/PR, dependency state, exact candidate evidence and next action

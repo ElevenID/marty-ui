@@ -520,6 +520,101 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
         )
 
+    def test_flow_applicant_webhook_is_observed_without_narrowing(self) -> None:
+        self.assert_source_bound_service_edge(
+            producer="marty-flow",
+            consumer="marty-applicant",
+            changed="rust/services/flow/src/http_application.rs",
+            markers=(
+                "binding",
+                "runtime_marker",
+                "request_marker",
+                "callsite_marker",
+                "provider_marker",
+                "route_registration_marker",
+                "server_marker",
+            ),
+        )
+
+    def test_organization_device_registration_membership_is_observed_only(self) -> None:
+        self.assert_source_bound_service_edge(
+            producer="marty-organization",
+            consumer="marty-device-registration",
+            changed="rust/services/organization/src/grpc_service.rs",
+            markers=(
+                "binding",
+                "runtime_marker",
+                "registration_marker",
+                "connection_marker",
+                "request_marker",
+                "response_marker",
+                "condition_marker",
+                "callsite_marker",
+                "provider_handler_marker",
+                "provider_marker",
+                "provider_registration_marker",
+            ),
+        )
+
+    def assert_source_bound_service_edge(
+        self, *, producer: str, consumer: str, changed: str, markers: tuple[str, ...]
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan([changed], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == producer and edge["package"] == consumer
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        marker_sources = {
+            "binding": "evidence",
+            "runtime_marker": "evidence",
+            "registration_marker": "evidence",
+            "connection_marker": "request_evidence",
+            "request_marker": "request_evidence",
+            "response_marker": "request_evidence",
+            "condition_marker": "callsite_evidence",
+            "callsite_marker": "callsite_evidence",
+            "provider_handler_marker": "provider_evidence",
+            "provider_marker": "provider_evidence",
+            "provider_registration_marker": "provider_registration_evidence",
+            "route_registration_marker": "route_registration_evidence",
+            "server_marker": "server_evidence",
+        }
+        for marker in markers:
+            source = marker_sources[marker]
+            with self.subTest(producer=producer, consumer=consumer, marker=marker):
+                source_text = (ROOT / edge[source]).read_text(encoding="utf-8")
+                self.assertIn(edge[marker], source_text)
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        service = compose.split(f"\n  {edge['deployment_service']}:\n", 1)[1]
+        service = re.split(r"(?m)^  [a-z][a-z0-9_-]*:\s*$", service, maxsplit=1)[0]
+        self.assertIn(edge["deployment_marker"], service)
+        if "deployment_network_marker" in edge:
+            self.assertIn(edge["deployment_network_marker"], service)
+        if "deployment_consumer_service" in edge:
+            consumer_service = compose.split(
+                f"\n  {edge['deployment_consumer_service']}:\n", 1
+            )[1]
+            consumer_service = re.split(
+                r"(?m)^  [a-z][a-z0-9_-]*:\s*$", consumer_service, maxsplit=1
+            )[0]
+            self.assertIn(edge["deployment_consumer_marker"], consumer_service)
+            self.assertIn(edge["deployment_network_marker"], consumer_service)
+            if "deployment_consumer_absent_marker" in edge:
+                self.assertNotIn(
+                    edge["deployment_consumer_absent_marker"], consumer_service
+                )
+        self.assertNotIn(
+            producer, {dep["name"] for dep in packages[consumer]["dependencies"]}
+        )
+
     def test_published_gateway_upstream_routes_are_observed_without_narrowing(
         self,
     ) -> None:
@@ -765,6 +860,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-compliance-profile",
                 "marty-deployment-profile",
                 "marty-revocation-profile",
+                "marty-device-registration",
             },
             "marty-credential-template": {
                 "marty-credential-template",
@@ -1209,6 +1305,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-issuance-service",
                 "marty-credential-template",
                 "marty-verification-service",
+                "marty-applicant",
             },
         )
 
