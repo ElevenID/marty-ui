@@ -39,6 +39,7 @@ jobs:
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
       rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
       planner_only: ${{ steps.classify.outputs.planner_only }}
+      rollback_test_only: ${{ steps.classify.outputs.rollback_test_only }}
       release: ${{ steps.classify.outputs.release }}
       verification: ${{ steps.classify.outputs.verification }}
       security: ${{ steps.classify.outputs.security }}
@@ -63,6 +64,7 @@ jobs:
           rust_runtime=false
           rust_matrix='["canvas","contracts"]'
           planner_only=false
+          rollback_test_only=false
           release=false
           verification=false
           security=false
@@ -134,6 +136,17 @@ jobs:
                   -f tests/test_plan_affected_rust.py &&
                   ! -L tests/test_plan_affected_rust.py ]]; then
               planner_only=true
+            fi
+            # The rollback launch harness is a root-pytest-only source, not
+            # an input to deployed rollback scripts or any service image.
+            # A second path, a deletion, or an untrusted file type falls back
+            # to the existing complete PR plan.
+            if [[ "${{ github.event_name }}" == pull_request &&
+                  ${#changed_files[@]} -eq 1 &&
+                  "${changed_files[0]}" == tests/test_beta_worker_launch_rollback.py &&
+                  -f tests/test_beta_worker_launch_rollback.py &&
+                  ! -L tests/test_beta_worker_launch_rollback.py ]]; then
+              rollback_test_only=true
             fi
             # A nonempty PR consisting solely of proven test-only leaves has
             # no production Rust or image input. Keep every actual test owner.
@@ -251,6 +264,14 @@ jobs:
                   # the existing Rust selection; capture scripts stay broad.
                   release=true
                   ;;
+                tests/test_beta_worker_launch_rollback.py)
+                  if [[ "$rollback_test_only" == true ]]; then
+                    release=true
+                    security=true
+                  else
+                    all=true
+                  fi
+                  ;;
                 scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
                   # The shadow planner has no runtime/image consumer. Release
                   # pytest owns its unit tests and the report below; real Rust
@@ -310,6 +331,7 @@ jobs:
             printf 'rust_runtime=%s\n' "$rust_runtime"
             printf 'rust_matrix=%s\n' "$rust_matrix"
             printf 'planner_only=%s\n' "$planner_only"
+            printf 'rollback_test_only=%s\n' "$rollback_test_only"
             printf 'release=%s\n' "$release"
             printf 'verification=%s\n' "$verification"
             printf 'security=%s\n' "$security"
@@ -2391,7 +2413,7 @@ jobs:
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Replay Canvas mirror oracle in exact Credentials release image
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -2416,8 +2438,13 @@ jobs:
         run: >-
           python -m pytest tests/test_plan_affected_rust.py
           tests/test_ci_workflow_performance.py -v --tb=short
+      - name: Run rollback-test-owned PR checks
+        if: needs.changes.outputs.rollback_test_only == 'true'
+        run: >-
+          python -m pytest tests/test_beta_worker_launch_rollback.py
+          tests/test_ci_workflow_performance.py -v --tb=short
       - name: Run repository release checks
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         run: python -m pytest tests -v --tb=short
       - name: Report affected Rust packages in shadow mode
         if: github.event_name == 'pull_request'
@@ -2426,7 +2453,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: python3 scripts/ci/plan_affected_rust.py
       - name: Configure the pinned containerd image store
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
@@ -2437,7 +2464,7 @@ jobs:
               }
             }
       - name: Configure the pinned OCI exporter
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
@@ -2445,13 +2472,13 @@ jobs:
           driver: docker-container
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Require the exact supported OCI backend
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         env:
           MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
           MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
         run: python scripts/check_verification_candidate_backend.py
       - name: Prove the same OCI archive through the future consumer path
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         env:
           MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
         run: >-
@@ -2459,10 +2486,10 @@ jobs:
           tests/test_verification_candidate_backend.py
           tests/test_verification_candidate_workflow.py
       - name: Require a compatible Credentials image for native DIDComm consumers
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         run: python scripts/check_didcomm_native_credentials_release.py
       - name: Require the event-owner migration for native retention
-        if: needs.changes.outputs.planner_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
         run: python scripts/check_issuance_retention_credentials_release.py
 
   test-credential-lifecycle-browser:
@@ -2646,6 +2673,7 @@ jobs:
       RUST_RUNTIME_SELECTED: ${{ needs.changes.outputs.rust_runtime }}
       RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}
       RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
+      ROLLBACK_TEST_ONLY: ${{ needs.changes.outputs.rollback_test_only }}
       VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
       SECURITY_SELECTED: ${{ needs.changes.outputs.security }}
       CHANGES_RESULT: ${{ needs.changes.result }}
@@ -2690,9 +2718,16 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
-          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED"; do
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
+          if [[ "$ROLLBACK_TEST_ONLY" == true ]]; then
+            [[ "${{ github.event_name }}" == pull_request &&
+               "$RELEASE_SELECTED" == true && "$SECURITY_SELECTED" == true &&
+               "$UI_SELECTED" == false && "$PYTHON_SELECTED" == false &&
+               "$RUST_SELECTED" == false && "$RUST_RUNTIME_SELECTED" == false &&
+               "$VERIFICATION_SELECTED" == false ]]
+          fi
           # The aggregate matrix result alone cannot prove both lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
@@ -2700,6 +2735,7 @@ jobs:
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac
           if [[ "${{ github.event_name }}" == merge_group ]]; then
+            [[ "$ROLLBACK_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
                "$RUST_MATRIX" == '["canvas","contracts"]' ]]
             for result in "${results[@]}"; do
