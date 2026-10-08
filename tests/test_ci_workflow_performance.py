@@ -399,6 +399,7 @@ def _classify_changed_paths(
     combined: bool = False,
     event: str = "pull_request",
     include_rust_plan: bool = False,
+    include_planner_plan: bool = False,
     include_shadow: bool = False,
     proof_failure: bool = False,
     fetch_failure: bool = False,
@@ -520,7 +521,10 @@ done < "$SYNTHETIC_PATHS_FILE"
             for key, value in (
                 line.split("=", 1) for line in output.read_text().splitlines()
             )
-            if include_rust_plan or key not in {"rust_runtime", "rust_matrix"}
+            if (
+                (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
+                and (include_planner_plan or key != "planner_only")
+            )
         }
         for output in (
             tmp_path / f"synthetic-actions-output-{index}"
@@ -812,6 +816,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust",
         "rust_runtime",
         "rust_matrix",
+        "planner_only",
         "release",
         "verification",
         "security",
@@ -1661,7 +1666,9 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
-        expected_refs = 2 if path == "tests/test_ci_workflow_performance.py" else 1
+        # The policy owner has one classifier reference, one collection
+        # command, and the mutually exclusive planner-only PR invocation.
+        expected_refs = 3 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -1923,6 +1930,95 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
     assert (
         _classify_changed_paths([paths[0]], tmp_path, event="merge_group")[0]["all"]
         == "true"
+    )
+
+
+def test_planner_only_pr_feedback_retains_full_protected_release_checks(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    changes = workflow["jobs"]["changes"]["outputs"]
+    assert changes["planner_only"] == "${{ steps.classify.outputs.planner_only }}"
+    planner_paths = [
+        "scripts/ci/plan_affected_rust.py",
+        "tests/test_plan_affected_rust.py",
+        "docs/architecture-feedback-improvement-plan.md",
+    ]
+    exact = _classify_changed_paths(
+        planner_paths, tmp_path, combined=True, include_planner_plan=True
+    )[0]
+    assert exact["planner_only"] == exact["release"] == "true"
+    assert exact["all"] == exact["rust"] == "false"
+    for source in planner_paths[:2]:
+        selected = _classify_changed_paths(
+            [source], tmp_path, include_planner_plan=True
+        )[0]
+        assert selected["planner_only"] == selected["release"] == "true"
+    document_only = _classify_changed_paths(
+        [planner_paths[2]], tmp_path, include_planner_plan=True
+    )[0]
+    assert document_only["planner_only"] == "false"
+    empty_diff = _classify_changed_paths(
+        [], tmp_path, combined=True, include_planner_plan=True
+    )[0]
+    assert empty_diff["planner_only"] == "false"
+    for other in (
+        "SELFHOST_BUNDLE.md",
+        "rust/crates/selfhost-bundle/src/lib.rs",
+        ".github/workflows/ci.yml",
+        "tests/test_plan_affected_rust_helper.py",
+    ):
+        mixed = _classify_changed_paths(
+            [planner_paths[0], other],
+            tmp_path,
+            combined=True,
+            include_planner_plan=True,
+        )[0]
+        assert mixed["planner_only"] == "false", other
+    protected = _classify_changed_paths(
+        planner_paths,
+        tmp_path,
+        combined=True,
+        event="merge_group",
+        include_planner_plan=True,
+    )[0]
+    assert protected["planner_only"] == "false"
+    assert protected["all"] == protected["release"] == "true"
+    no_base = _classify_changed_paths(
+        [planner_paths[0]],
+        tmp_path,
+        missing_base=True,
+        include_planner_plan=True,
+    )[0]
+    assert no_base["planner_only"] == "false"
+    assert no_base["all"] == "true"
+
+    release = workflow["jobs"]["test-release-contracts"]
+    steps = {step.get("name"): step for step in release["steps"]}
+    assert steps["Run planner-owned PR checks"]["if"] == (
+        "needs.changes.outputs.planner_only == 'true'"
+    )
+    planner_command = steps["Run planner-owned PR checks"]["run"]
+    assert "tests/test_plan_affected_rust.py" in planner_command
+    assert "tests/test_ci_workflow_performance.py" in planner_command
+    assert steps["Run repository release checks"]["if"] == (
+        "needs.changes.outputs.planner_only != 'true'"
+    )
+    assert steps["Run repository release checks"]["run"] == (
+        "python -m pytest tests -v --tb=short"
+    )
+    for name in (
+        "Replay Canvas mirror oracle in exact Credentials release image",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+        "Require a compatible Credentials image for native DIDComm consumers",
+        "Require the event-owner migration for native retention",
+    ):
+        assert steps[name]["if"] == "needs.changes.outputs.planner_only != 'true'"
+    assert steps["Report affected Rust packages in shadow mode"]["if"] == (
+        "github.event_name == 'pull_request'"
     )
 
 

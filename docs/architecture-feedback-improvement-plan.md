@@ -1703,6 +1703,21 @@ entire workspace. This is observational only: PR, merge-group, and release
 checks are unchanged. Further Canvas case ownership and run-bound parity are
 required before using this plan to skip any PR test.
 
+A6 planner-only PR feedback candidate (2026-10-08): #1162's PR release job
+passed, but its unsharded root Python suite reported 5,590 cases and took
+9m41s for a shadow-planner-and-document change. The source audit found only
+the exact planner script and its test as owner inputs; the complete policy
+test file also checks their workflow classification. A follow-up permits a
+bounded PR path only when the entire diff consists of those two files and this
+coordination document, with at least one planner source and both ordinary
+source files present. That path runs both owning test files and the same shadow
+report. Mixed/unknown inputs fall back to full release checks; merge groups,
+manual/weekly qualification, and releases always execute the complete Python
+suite and image/oracle steps. It is not a release test removal, nor a measured
+speedup until the guarded path passes hosted CI. Local owning validation passed
+158 tests with one Windows symlink skip; independent review and protected CI
+remain required.
+
 Canvas code/migration extraction (INT02-04) follows explicit command/event,
 authorization and data-ownership contracts, not an assumed repo split. Track
 assignee, issue/PR, dependency state, exact candidate evidence and next action
