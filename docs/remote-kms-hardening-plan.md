@@ -6750,4 +6750,7 @@ secret envelope and a four-character hint, and the old plaintext `secret`
 column was absent. The disposable PostgreSQL and OpenBao containers were
 removed. This proves the tested service boundary, not the full assembled
 platform or exact published artifact. The prior note that this disposable
-contract remained open is superseded by this passing run.
+contract remained open is superseded by this passing run. A subsequent
+row-reader cleanup removed duplicate JSON decoding; the complete Notification
+package and strict Clippy passed, and the live PostgreSQL/OpenBao integration
+contract passed again against fresh disposable services after that change.
