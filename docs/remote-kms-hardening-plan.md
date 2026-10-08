@@ -6214,6 +6214,18 @@ a verification-method document store with a direct-write private-material
 guard; its generic `config` table currently has no application writer in the
 crate beyond schema-version handling. Continue reviewing other JSON-bearing
 tables and all direct repository entrypoints before closing K10.
+2026-10-08 persisted DSC result review found a narrower local PEM-only
+check on Redis-backed issuance attachments. It missed JSON-encoded private
+JWK material while the service already had a bounded recursive detector
+covering private JWKs and nested JSON strings. UI commit `e775b8603`
+uses that shared detector on both the attachment and the public result,
+removes the duplicated PEM-only check, and extends the existing Redis
+commit test to reject an encoded private JWK in the attachment and a direct
+private JWK in the result before a valid public certificate commit succeeds.
+The exact ignored test passed against a disposable Redis 7 instance on
+loopback database 13 with Rust 1.97.1; rustfmt and scoped diff checks passed.
+This strengthens the runtime data-flow proof but does not yet establish a
+complete assembled database inventory.
 
 2026-10-08 Core local quality gate: `cargo +1.97.1 fmt --all -- --check`
 and the full branch `git diff --check` pass. Warnings-denied all-target
