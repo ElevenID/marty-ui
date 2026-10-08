@@ -485,6 +485,30 @@ def test_public_ui_build_requires_a_prerendered_root_page() -> None:
     assert "unlinkSync(stagedPath)" in vite_config
 
 
+def test_selfhost_ui_image_carries_its_runtime_assets() -> None:
+    dockerfile = _text("docker/ui.Dockerfile")
+    registry_builder = _text("scripts/build-push-registry.sh")
+    selfhost_stage = dockerfile.split("FROM runtime-base AS selfhost", maxsplit=1)[1].split(
+        "FROM runtime-base AS public", maxsplit=1
+    )[0]
+    selfhost_build = registry_builder.split('"ui-selfhost"', maxsplit=1)[1].split(
+        '"ui"', maxsplit=1
+    )[0]
+
+    assert "COPY --from=builder /workspace/marty-ui/ui/dist-final /opt/marty-ui-static" in selfhost_stage
+    assert "COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh" in selfhost_stage
+    assert (
+        "COPY scripts/ui-selfhost-start.sh /docker-entrypoint.d/40-ui-selfhost.sh"
+        in selfhost_stage
+    )
+    assert "--target selfhost" in selfhost_build
+    assert "--build-arg UI_VARIANT=selfhost" in selfhost_build
+    assert "--build-arg NGINX_CONFIG=nginx.spa.conf" in selfhost_build
+    assert dockerfile.rstrip().endswith(
+        "COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html"
+    )
+
+
 def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     workflow = _text(".github/workflows/cd.yml")
 
