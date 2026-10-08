@@ -1692,8 +1692,24 @@ the draft wires the already-defined dedicated secret in both places. This
 establishes compatibility of that released digest with the isolated profile,
 not a published self-host image lock, least-privilege OpenBao policy, full
 bundle install, or general release qualification. No ordinary PR lane is
-removed and no current CI speedup is claimed. The draft still requires PR and
-protected combined-head validation before merge.
+removed and no current CI speedup is claimed. [#1167](https://github.com/ElevenID/marty-ui/pull/1167)
+passed full PR and protected combined-head validation and merged as
+`fc101c3ec`.
+
+PKG02 image-lock preparation candidate (2026-10-08): a separate reviewed
+offline generator derives the bundle's exact service-to-image map from the
+existing Compose source and one recorded stack release transaction. It binds
+the source stack lock and both Compose inputs to Git blobs at the transaction's
+claimed SHA, maps shared `services` and `db-migrate` to recorded digests,
+requires exact separate `ui-selfhost`/`cloudflared-wrapper` and independent
+issuance/infrastructure references, and rejects missing, extra, or reassigned
+service roles. This prepares the existing packager's image-lock schema; it
+does not build, pull, attest, publish, or qualify an image or installed bundle.
+The caller must render the supplied Compose model from the same verified
+checkout and separately prove provenance, anonymous pulls, and clean-install
+behavior before publication. The `db-migrate` reuse claim is limited to the
+exact digest and isolated profile proven by #1167, not future releases. No CI
+speedup is claimed from this generator alone.
 
 The [#1161 protected run](https://github.com/ElevenID/marty-ui/actions/runs/37719253068)
 measured 7m14s for reusable Rust test compilation, followed serially by
