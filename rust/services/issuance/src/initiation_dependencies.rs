@@ -6,19 +6,15 @@ use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256, Sha384, Sha512};
 use sqlx::{PgPool, Row};
-use tonic::{
-    metadata::AsciiMetadataValue,
-    transport::{Channel, Endpoint},
-    Code, Request,
-};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 
 use crate::{
     client_auth::RegisteredClientRepository,
-    config::normalize_grpc_target,
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
         GetWalletRequest, ListWalletsRequest, TemplateResponse, WalletRegistryEntry,
     },
+    grpc_client_channel,
     initiation::{
         InitiationApplicationClaimsResolver, InitiationClientRepository, InitiationDependencyError,
         InitiationOrganizationValidator, InitiationRegisteredClient,
@@ -55,8 +51,6 @@ pub struct NativeInitiationControlPlane {
     organizations: OrganizationServiceClient<Channel>,
     templates: CredentialTemplateServiceClient<Channel>,
     revocation_profiles: RevocationProfileServiceClient<Channel>,
-    http: Client,
-    credential_template_http_url: Arc<str>,
     service_token: Option<AsciiMetadataValue>,
     timeout: Duration,
 }
@@ -65,10 +59,6 @@ impl std::fmt::Debug for NativeInitiationControlPlane {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("NativeInitiationControlPlane")
-            .field(
-                "credential_template_http_url",
-                &self.credential_template_http_url,
-            )
             .field("service_token_configured", &self.service_token.is_some())
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
@@ -80,7 +70,6 @@ impl NativeInitiationControlPlane {
         organization_target: &str,
         credential_template_target: &str,
         revocation_profile_target: &str,
-        credential_template_http_url: impl Into<Arc<str>>,
         service_token: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, InitiationDependencyError> {
@@ -94,11 +83,6 @@ impl NativeInitiationControlPlane {
                 "service token is not valid ASCII metadata".to_owned(),
             )
         })?;
-        let http = Client::builder()
-            .timeout(timeout)
-            .redirect(Policy::none())
-            .build()
-            .map_err(|_| InitiationDependencyError::Unavailable)?;
         Ok(Self {
             organizations: OrganizationServiceClient::new(channel(organization_target, timeout)?),
             templates: CredentialTemplateServiceClient::new(channel(
@@ -109,8 +93,6 @@ impl NativeInitiationControlPlane {
                 revocation_profile_target,
                 timeout,
             )?),
-            http,
-            credential_template_http_url: credential_template_http_url.into(),
             service_token,
             timeout,
         })
@@ -125,40 +107,6 @@ impl NativeInitiationControlPlane {
                 .insert(SERVICE_TOKEN_HEADER, token.clone());
         }
         request
-    }
-
-    async fn resolve_template_http(
-        &self,
-        template_id: &str,
-    ) -> Result<InitiationTemplate, InitiationDependencyError> {
-        let base = self.credential_template_http_url.trim_end_matches('/');
-        if base.is_empty() {
-            return Err(InitiationDependencyError::Unavailable);
-        }
-        let encoded: String =
-            url::form_urlencoded::byte_serialize(template_id.as_bytes()).collect();
-        let mut request = self
-            .http
-            .get(format!("{base}/v1/credential-templates/{encoded}"));
-        if let Some(token) = &self.service_token {
-            request = request.header(SERVICE_TOKEN_HEADER, token.as_encoded_bytes());
-        }
-        let response = request.send().await.map_err(request_error)?;
-        match response.status() {
-            StatusCode::NOT_FOUND => return Err(InitiationDependencyError::NotFound),
-            status if status.is_client_error() => {
-                let status = status.as_u16();
-                let detail = response.text().await.unwrap_or_default();
-                return Err(InitiationDependencyError::HttpClient { status, detail });
-            }
-            status if !status.is_success() => return Err(InitiationDependencyError::Unavailable),
-            _ => {}
-        }
-        let value: Value = response
-            .json()
-            .await
-            .map_err(|_| InitiationDependencyError::Unavailable)?;
-        template_from_json(template_id, &value)
     }
 }
 
@@ -198,11 +146,8 @@ impl InitiationTemplateResolver for NativeInitiationControlPlane {
             Ok(response) if response.get_ref().id.is_empty() => {
                 Err(InitiationDependencyError::NotFound)
             }
-            Ok(response) => match template_from_grpc(template_id, response.into_inner()) {
-                Ok(template) => Ok(template),
-                Err(_) => self.resolve_template_http(template_id).await,
-            },
-            Err(_) => self.resolve_template_http(template_id).await,
+            Ok(response) => template_from_grpc(template_id, response.into_inner()),
+            Err(status) => Err(grpc_dependency_error(status)),
         }
     }
 }
@@ -669,55 +614,6 @@ fn template_from_grpc(
     })
 }
 
-fn template_from_json(
-    requested_id: &str,
-    value: &Value,
-) -> Result<InitiationTemplate, InitiationDependencyError> {
-    let object = value
-        .as_object()
-        .ok_or_else(|| InitiationDependencyError::Invalid("invalid template response".into()))?;
-    if object.get("id").and_then(Value::as_str) != Some(requested_id) {
-        return Err(InitiationDependencyError::Invalid(
-            "credential template identity mismatch".into(),
-        ));
-    }
-    let validity = object.get("validity_rules").and_then(Value::as_object);
-    let validity_days = positive_or(
-        json_i64(validity, "default_validity_days"),
-        seconds_as_days(json_i64(validity, "ttl_seconds"), DEFAULT_VALIDITY_DAYS),
-    );
-    let renewal_window_days = positive_or(
-        json_i64(validity, "renewal_window_days"),
-        seconds_as_days(
-            json_i64(validity, "reissue_within_seconds"),
-            DEFAULT_RENEWAL_WINDOW_DAYS,
-        ),
-    );
-    Ok(InitiationTemplate {
-        credential_type: json_string(object, "credential_type")
-            .unwrap_or_else(|| "org.iso.18013.5.1.mDL".into()),
-        vct: json_optional_string(object, "vct"),
-        zk_predicate_claims: json_strings(object, "zk_predicate_claims")?,
-        selective_disclosure_claims: json_strings(object, "selective_disclosure_fields")?,
-        credential_payload_format: json_string(object, "credential_payload_format")
-            .unwrap_or_else(|| "w3c_vcdm_v2_sd_jwt".into()),
-        revocation_profile_id: json_optional_string(object, "revocation_profile_id"),
-        issuer_did: json_optional_string(object, "issuer_did"),
-        issuer_algorithm: json_optional_string(object, "issuer_algorithm"),
-        wallet_configs: object
-            .get("wallet_configs")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default(),
-        validity_days,
-        renewable: validity
-            .and_then(|value| value.get("renewable"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        renewal_window_days,
-    })
-}
-
 fn verify_sri(value: Option<&str>, content: &[u8]) -> Result<(), InitiationDependencyError> {
     let value = value
         .ok_or_else(|| InitiationDependencyError::Invalid("invalid_related_resource".into()))?;
@@ -747,20 +643,9 @@ fn verify_sri(value: Option<&str>, content: &[u8]) -> Result<(), InitiationDepen
 }
 
 fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDependencyError> {
-    let target = grpc_endpoint_target(target)?;
-    Endpoint::from_shared(target)
-        .map_err(|_| InitiationDependencyError::Invalid("invalid gRPC target".into()))
-        .map(|endpoint| {
-            endpoint
-                .connect_timeout(timeout)
-                .timeout(timeout)
-                .connect_lazy()
-        })
-}
-
-fn grpc_endpoint_target(target: &str) -> Result<String, InitiationDependencyError> {
-    normalize_grpc_target(target)
-        .ok_or_else(|| InitiationDependencyError::Invalid("invalid gRPC target".into()))
+    grpc_client_channel::endpoint(target, timeout)
+        .map(|endpoint| endpoint.connect_lazy())
+        .map_err(InitiationDependencyError::Invalid)
 }
 
 fn grpc_dependency_error(status: tonic::Status) -> InitiationDependencyError {
@@ -768,14 +653,6 @@ fn grpc_dependency_error(status: tonic::Status) -> InitiationDependencyError {
         Code::NotFound => InitiationDependencyError::NotFound,
         Code::DeadlineExceeded => InitiationDependencyError::Timeout,
         _ => InitiationDependencyError::Unavailable,
-    }
-}
-
-fn request_error(error: reqwest::Error) -> InitiationDependencyError {
-    if error.is_timeout() {
-        InitiationDependencyError::Timeout
-    } else {
-        InitiationDependencyError::Unavailable
     }
 }
 
@@ -795,48 +672,10 @@ fn positive_or(value: i64, fallback: i64) -> i64 {
     }
 }
 
-fn seconds_as_days(value: i64, fallback: i64) -> i64 {
-    if value > 0 {
-        (value / 86_400).max(1)
-    } else {
-        fallback
-    }
-}
-
-fn json_i64(object: Option<&Map<String, Value>>, name: &str) -> i64 {
-    object
-        .and_then(|value| value.get(name))
-        .and_then(Value::as_i64)
-        .unwrap_or_default()
-}
-
-fn json_string(object: &Map<String, Value>, name: &str) -> Option<String> {
-    object
-        .get(name)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-}
-
-fn json_optional_string(object: &Map<String, Value>, name: &str) -> Option<String> {
-    json_string(object, name)
-}
-
-fn json_strings(
-    object: &Map<String, Value>,
-    name: &str,
-) -> Result<Vec<String>, InitiationDependencyError> {
-    let Some(value) = object.get(name) else {
-        return Ok(Vec::new());
-    };
-    serde_json::from_value(value.clone())
-        .map_err(|_| InitiationDependencyError::Invalid(format!("invalid template {name}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::normalize_grpc_target;
     use axum::{http::HeaderMap, response::Json, routing::get, Router};
     use serde_json::json;
 
@@ -845,11 +684,11 @@ mod tests {
     #[tokio::test]
     async fn grpc_targets_preserve_legacy_host_port_configuration() {
         assert_eq!(
-            grpc_endpoint_target("organization:9002").unwrap(),
+            normalize_grpc_target("organization:9002").unwrap(),
             "http://organization:9002"
         );
         assert_eq!(
-            grpc_endpoint_target("https://organization.example:9002").unwrap(),
+            normalize_grpc_target("https://organization.example:9002").unwrap(),
             "https://organization.example:9002"
         );
         channel("organization:9002", Duration::from_secs(1)).unwrap();
@@ -860,12 +699,7 @@ mod tests {
             "organization:9002 ",
             "org name:9002",
         ] {
-            assert_eq!(
-                grpc_endpoint_target(invalid),
-                Err(InitiationDependencyError::Invalid(
-                    "invalid gRPC target".into()
-                ))
-            );
+            assert!(normalize_grpc_target(invalid).is_none());
         }
     }
 
@@ -893,17 +727,9 @@ mod tests {
         }))
     }
 
-    async fn template_conflict() -> (StatusCode, &'static str) {
-        (
-            StatusCode::CONFLICT,
-            "template is not readable in its current state",
-        )
-    }
-
     #[tokio::test]
-    async fn unavailable_grpc_template_uses_authenticated_http_fallback() {
+    async fn unavailable_grpc_template_does_not_downgrade_to_http() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
         let app = Router::new().route(
             "/v1/credential-templates/template-1",
             get(template_fallback),
@@ -915,81 +741,14 @@ mod tests {
             "http://127.0.0.1:1",
             "http://127.0.0.1:1",
             "http://127.0.0.1:1",
-            format!("http://{address}"),
             Some(TEST_SERVICE_TOKEN),
             Duration::from_secs(2),
         )
         .unwrap();
 
-        let template = dependencies.resolve("template-1").await.unwrap();
+        let result = dependencies.resolve("template-1").await;
         server.abort();
-
-        assert_eq!(template.credential_type, "EmployeeCredential");
-        assert_eq!(
-            template.vct.as_deref(),
-            Some("https://credentials.example/employee")
-        );
-        assert_eq!(template.selective_disclosure_claims, ["employee_id"]);
-        assert_eq!(template.wallet_configs, [json!({"wallet_id": "wallet-1"})]);
-        assert_eq!(template.validity_days, 2);
-        assert_eq!(template.renewal_window_days, 1);
-        assert!(template.renewable);
-    }
-
-    #[tokio::test]
-    async fn http_template_client_status_and_detail_are_preserved() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let app = Router::new().route(
-            "/v1/credential-templates/template-1",
-            get(template_conflict),
-        );
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        let dependencies = NativeInitiationControlPlane::connect_lazy(
-            "http://127.0.0.1:1",
-            "http://127.0.0.1:1",
-            "http://127.0.0.1:1",
-            format!("http://{address}"),
-            None,
-            Duration::from_secs(2),
-        )
-        .unwrap();
-
-        let error = dependencies.resolve_template_http("template-1").await;
-        server.abort();
-
-        assert_eq!(
-            error,
-            Err(InitiationDependencyError::HttpClient {
-                status: 409,
-                detail: "template is not readable in its current state".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn http_template_preserves_legacy_validity_fallbacks() {
-        let template = template_from_json(
-            "template-1",
-            &json!({
-                "id": "template-1",
-                "credential_type": "EmployeeCredential",
-                "issuer_did": "did:web:issuer.example",
-                "issuer_algorithm": "ES256",
-                "revocation_profile_id": "profile-1",
-                "validity_rules": {
-                    "ttl_seconds": 172800,
-                    "reissue_within_seconds": 86400,
-                    "renewable": true
-                }
-            }),
-        )
-        .unwrap();
-        assert_eq!(template.validity_days, 2);
-        assert_eq!(template.renewal_window_days, 1);
-        assert!(template.renewable);
+        assert_eq!(result, Err(InitiationDependencyError::Unavailable));
     }
 
     #[test]

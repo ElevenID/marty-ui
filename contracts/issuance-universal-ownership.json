@@ -4,6 +4,12 @@
   "runtime_surface": "contracts/issuance-runtime-surface.json",
   "default_owner": "issuance-native",
   "retained_legacy_owner": "issuance",
+  "beta_candidate": {
+    "issuance_alias_runtime": "rust/services/issuance",
+    "passport_runtime_owner": "issuance-native",
+    "passport_contract": "contracts/issuance-physical-passport-native.json",
+    "acceptance_required_before_python_deletion": true
+  },
   "retained_legacy_http": [
     {"method": "POST", "path": "/v1/passport/applications"},
     {"method": "POST", "path": "/v1/passport/applications/{application_id}/activate"},

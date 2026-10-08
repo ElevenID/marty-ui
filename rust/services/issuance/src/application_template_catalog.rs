@@ -2,20 +2,16 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tonic::{
-    metadata::AsciiMetadataValue,
-    transport::{Channel, Endpoint},
-    Code, Request,
-};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 
 use crate::{
     application_template_domain::CredentialTemplateValidationView,
     application_template_service::{ApplicationTemplateCatalog, ApplicationTemplateCatalogError},
-    config::normalize_grpc_target,
     credential_template_proto::{
         credential_template_service_client::CredentialTemplateServiceClient, GetTemplateRequest,
         TemplateResponse,
     },
+    grpc_client_channel,
 };
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
@@ -88,12 +84,14 @@ impl GrpcApplicationTemplateCatalog {
             .ok_or(ApplicationTemplateCatalogConfigurationError::MissingServiceToken)?
             .parse()
             .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidServiceToken)?;
-        let target = normalize_grpc_target(target)
-            .ok_or(ApplicationTemplateCatalogConfigurationError::InvalidTarget)?;
-        let channel = Endpoint::from_shared(target)
-            .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidTarget)?
-            .connect_timeout(timeout)
-            .timeout(timeout)
+        let channel = grpc_client_channel::endpoint(target, timeout)
+            .map_err(|error| {
+                if error == "invalid gRPC target" {
+                    ApplicationTemplateCatalogConfigurationError::InvalidTarget
+                } else {
+                    ApplicationTemplateCatalogConfigurationError::InvalidTlsConfiguration
+                }
+            })?
             .connect_lazy();
         Ok(Self {
             templates: CredentialTemplateServiceClient::new(channel),
@@ -174,6 +172,8 @@ pub enum ApplicationTemplateCatalogConfigurationError {
     InvalidServiceToken,
     #[error("application-template credential catalog requires a valid gRPC target")]
     InvalidTarget,
+    #[error("application-template credential catalog gRPC TLS configuration is invalid")]
+    InvalidTlsConfiguration,
     #[error("application-template credential catalog dependency timeout must be positive")]
     InvalidTimeout,
 }

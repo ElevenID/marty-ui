@@ -53,6 +53,7 @@ PROTECTED_FILES = (
     "scripts/probe_passport_beta_fence_direct_writes.py",
     "scripts/probe_passport_beta_host.py",
     "scripts/collect_passport_beta_acceptance.py",
+    "scripts/collect_passport_beta_aggregate_acceptance.py",
     "scripts/prepare_official_beta_release.py",
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
@@ -82,6 +83,11 @@ PROTECTED_FILES = (
     "scripts/verify_passport_beta_issuer_profiles.py",
     "scripts/probe_passport_beta_credentials_continuity.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
+    "rust/services/issuance/src/dependency_probe.rs",
+    "rust/services/issuance/src/grpc_client_channel.rs",
+    "rust/services/issuance/src/migration_seed.rs",
+    "rust/services/issuance/migrations/0000_issuance_service_baseline.sql",
+    "rust/services/issuance/migrations/0000_issuance_service_catalog.json",
     "scripts/probe_passport_beta_cutover_snapshot.py",
     "scripts/verify_passport_beta_protected_cutover.py",
     "scripts/collect_passport_python_deletion_cutover.py",
@@ -435,24 +441,28 @@ def merged_deletion_pr(
     return head["sha"], merge_commit
 
 
-def require_deletion_in_signed_image(
+def require_predeletion_signed_image(
     merge_commit: str, image_source_commit: str,
     runner: Callable[[list[str]], str] = run,
 ) -> None:
-    """The selected Credentials image must descend from the deletion merge."""
+    """Keep passport routes available until the beta Rust owner is live."""
     require(SHA.fullmatch(merge_commit) is not None
             and SHA.fullmatch(str(image_source_commit)) is not None,
             "Signed Credentials source is invalid")
+    require(image_source_commit != merge_commit,
+            "Signed Credentials image must predate passport Python deletion")
     comparison = json.loads(runner([
         "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
-        f"{merge_commit}...{image_source_commit}",
+        f"{image_source_commit}...{merge_commit}",
     ]))
     require(isinstance(comparison, dict)
-            and comparison.get("status") in ("identical", "ahead")
+            and comparison.get("status") == "ahead"
+            and type(comparison.get("ahead_by")) is int
+            and comparison["ahead_by"] > 0
             and comparison.get("behind_by") == 0
             and isinstance(comparison.get("merge_base_commit"), dict)
-            and comparison["merge_base_commit"].get("sha") == merge_commit,
-            "Signed Credentials image predates passport Python deletion")
+            and comparison["merge_base_commit"].get("sha") == image_source_commit,
+            "Signed Credentials image must be the predeletion ancestor")
 
 
 def check_authority(
@@ -510,7 +520,7 @@ def check_authority(
         f"{head}\trefs/tags/{tag}^{{}}",
     }, "Published annotated release tag differs from protected source")
     deletion_head, deletion_merge_commit = merged_deletion_pr(runner)
-    require_deletion_in_signed_image(
+    require_predeletion_signed_image(
         deletion_merge_commit, source["issuance_source_commit"], runner)
     require_deletion_lineage(approval["credentials_deletion_head"],
                              deletion_head, runner)

@@ -2006,8 +2006,10 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 "DIDCOMM_TLS_CA_FILE",
                 "DIDCOMM_UNIVERSAL_RESOLVER_URL",
                 "ENVIRONMENT",
+                "GRPC_CA_CERT",
                 "GRPC_SERVICE_TOKEN",
                 "GRPC_SERVICE_TOKEN_FILE",
+                "GRPC_TLS_CA_CERT",
                 "INTEGRATION_SECRET_MASTER_KEY_ENV",
                 "ISSUANCE_GRPC_ENABLED",
                 "ISSUANCE_GRPC_PORT",
@@ -2047,6 +2049,9 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     "CANVAS_MIRROR_WORKER_RETRY_FAILED",
                     "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
                     "CANVAS_PORTABLE_INTEGRATION_ENABLED",
+                    "GRPC_INSECURE_ALLOWED",
+                    "GRPC_TLS_CLIENT_CERT",
+                    "GRPC_TLS_CLIENT_KEY",
                 ]
             && coverage
                 .native_environment_variables
@@ -2082,8 +2087,8 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "issuance runtime mode coverage is incomplete",
     )?;
     require(
-        coverage.deployment == "beta-path-split",
-        "incomplete issuance host must remain beta-path-split",
+        coverage.deployment == "beta-rust-only-candidate",
+        "issuance candidate deployment selector differs",
     )?;
 
     Ok(CoverageSummary {

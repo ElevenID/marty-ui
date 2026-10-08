@@ -123,7 +123,24 @@ def candidate():
         "marty-network": None, "passport-callback-signing": None}
     services["passport-beta-bureau"]["networks"] = {
         "marty-network": None, "passport-callback-signing": None}
-    services["issuance"] = {"image": issuance_image}
+    services["issuance"] = {
+        "image": services_image,
+        "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": [],
+    }
+    services["issuance-migrations"] = {
+        "image": services_image,
+        "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": ["migrate"],
+        "environment": {
+            "SERVICE_NAME": "issuance_native",
+            "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
+        },
+        "depends_on": {
+            "organization": {"condition": "service_healthy"},
+            "credential-template": {"condition": "service_healthy"},
+        },
+    }
     services["auth"]["environment"].update({
         "UI_BASE_URL": BETA_ORIGIN,
         "UI_ADDITIONAL_BASE_URLS": "",
@@ -138,7 +155,12 @@ def candidate():
         BETA_ORIGIN + ",http://localhost:9080,http://localhost:3000,http://localhost:5173")
     services["flow"]["environment"]["PUBLIC_BASE_URL"] = BETA_ORIGIN
     services["signing-keys"]["environment"]["PUBLIC_DOMAIN"] = "beta.elevenidllc.com"
-    services["issuance"]["environment"] = {"ISSUER_BASE_URL": BETA_ORIGIN}
+    services["issuance"]["environment"] = {
+        "ISSUER_BASE_URL": BETA_ORIGIN,
+        "SERVICE_NAME": "issuance_native",
+        "MARTY_SCHEMA_STARTUP_MODE": "validate",
+        "CANVAS_MIRROR_WORKER_ENABLED": "false",
+    }
     services["keycloak"]["environment"] = {
         "KC_HOSTNAME": BETA_ORIGIN, "PUBLIC_DOMAIN": "beta.elevenidllc.com",
         "UI_BASE_URL": BETA_ORIGIN,

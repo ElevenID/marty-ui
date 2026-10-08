@@ -284,8 +284,7 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
         else:
             require(record["Id"] != old.get(name),
                     "Stopped beta application was restarted instead of replaced")
-            expected = (plan["issuance_image"] if name == "issuance"
-                        else plan["services_image"])
+            expected = plan["services_image"]
             require(config.get("Image") == expected,
                     "Aggregate beta runtime image differs from signed release")
             expected_hashes = plan.get("service_config_hashes")
