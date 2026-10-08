@@ -1519,6 +1519,18 @@ The eight source files had no source-only commit in the inspected recent
 history, so no scoped-run saving is claimed until such a future PR produces
 hosted evidence.
 
+A6 current-Canvas-input helper ownership (2026-10-08, local candidate): the
+exact `scripts/ci/canvas_oracle_current_inputs.py` module is imported only by
+the startup, REST, and producer-inventory root Python tests collected in
+Release Contract Tests. It is not a Rust attestation/capture entrypoint, a
+direct CI command, or an included service-image input. A helper-only PR can
+therefore retain its release-test owner without selecting unrelated PR lanes.
+The exact selector has source/consumer and image-context regression checks;
+unknown script siblings and mixed inputs retain their other obligations, and
+merge groups and weekly/manual/stable qualification remain full. The helper
+was introduced in a mixed commit, so there is no comparable helper-only
+normal-run timing yet and no speedup is claimed.
+
 ## A3 merge-group historical-input shadow (2026-10-07, merged)
 
 The merge-group classifier conservatively sets `all=true` while checking the

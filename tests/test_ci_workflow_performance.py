@@ -1490,6 +1490,89 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     )
 
 
+def test_canvas_current_input_helper_has_only_release_test_consumers(
+    tmp_path: Path,
+) -> None:
+    helper = "scripts/ci/canvas_oracle_current_inputs.py"
+    owners = {
+        "tests/test_canvas_worker_startup_input_evidence.py",
+        "tests/test_canvas_worker_rest_input_evidence.py",
+        "tests/test_canvas_worker_oracle_producer_inventory.py",
+    }
+    assert (ROOT / helper).is_file()
+    references = subprocess.run(
+        ["git", "grep", "-l", "-F", "--", "canvas_oracle_current_inputs"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert {
+        path
+        for path in references.stdout.splitlines()
+        if not path.endswith(".md") and path != "tests/test_ci_workflow_performance.py"
+    } == owners | {".github/workflows/ci.yml"}, (
+        "Review a new Canvas helper consumer before narrowing its PR checks"
+    )
+    for path in owners:
+        source = (ROOT / path).read_text(encoding="utf-8")
+        assert "from scripts.ci.canvas_oracle_current_inputs import" in source
+
+    _, workflow = _workflow(CI_PATH)
+    release = workflow["jobs"]["test-release-contracts"]
+    assert any(
+        step.get("run") == "python -m pytest tests -v --tb=short"
+        for step in release["steps"]
+    )
+    assert CI_PATH.read_text(encoding="utf-8").count(helper) == 1
+    for other in (ROOT / ".github/workflows").glob("*.yml"):
+        if other != CI_PATH:
+            assert helper not in other.read_text(encoding="utf-8")
+    for dockerfile, ignore in (
+        ("services/Dockerfile", "services/Dockerfile.dockerignore"),
+        ("rust/services/Dockerfile.ci", "rust/services/Dockerfile.ci.dockerignore"),
+    ):
+        source = (ROOT / dockerfile).read_text(encoding="utf-8")
+        assert helper not in source
+        assert not re.search(r"(?m)^(?:COPY|ADD)\s+(?:--\S+\s+)*(?:\.|scripts/?|scripts/ci/?)\s", source)
+        included = [
+            line
+            for line in (ROOT / ignore).read_text(encoding="utf-8").splitlines()
+            if line.startswith("!scripts/ci/") and line != "!scripts/ci/"
+        ]
+        assert included == (
+            ["!scripts/ci/run-public-rust-build.sh", "!scripts/ci/public-sccache-stats.awk"]
+            if dockerfile == "services/Dockerfile"
+            else ["!scripts/ci/verify-release-cache.sh"]
+        )
+
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for path in (helper, *owners):
+        assert _classify_changed_path(path, tmp_path) == selected
+    assert _classify_changed_path("scripts/ci/new_helper.py", tmp_path)["all"] == "true"
+    assert _classify_changed_paths(
+        [helper, "unknown-new-input.txt"], tmp_path, combined=True
+    )[0] == {key: "true" for key in selected}
+    mixed = _classify_changed_paths(
+        [helper, "rust/services/issuance/src/lib.rs"], tmp_path, combined=True
+    )[0]
+    assert mixed["rust"] == mixed["release"] == "true"
+    assert all(
+        value == "true"
+        for value in _classify_changed_paths([helper], tmp_path, event="merge_group")[
+            0
+        ].values()
+    )
+
+
 def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix(
     tmp_path: Path,
 ) -> None:
