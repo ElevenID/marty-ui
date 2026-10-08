@@ -6909,3 +6909,24 @@ separate signing routes and synthetic acceptance behavior. Do not suppress the
 alert or switch the existing HTTP URL to HTTPS without a serving endpoint.
 The local CI-correction batch does not yet resolve this finding and remains
 un-pushed to avoid another broad run before the transport change is ready.
+
+2026-10-08 Credentials main-line reconciliation: `origin/main` has since
+landed Python issuance and SDK retirement (#311 and #312). The Credentials
+KMS branch merged that main line at `591deb1`, accepted deletion of the
+retired Python source/tests/workflows, and retained its KMS-only Rust binding
+changes. The CI wheel job was reconciled to build both distributions from
+Core PR #355 head `d41d87c`, with a locked graph verifier; no two-revision
+verification compatibility pin remains. The merged Rust Python-feature check,
+native-feature test build, graph verification, source-boundary tests, YAML
+parse, and staged whitespace check pass locally. The Python extension test
+requires a built wheel and the combined post-merge release suite still needs
+qualification. The branch is local, unpushed, and has no PR. Its old 106-file
+diff is no longer representative of the net main-line change; review the new
+Rust/contract/CI diff before opening the grouped PR.
+
+2026-10-08 UI image-job follow-up: all Rust service images built in the first
+hosted run, but the Issuance smoke step failed before printing service logs:
+Docker inspect found no `8005/tcp` mapping after the test container exited.
+The smoke harness needs to report an early container exit, and the packaged
+runtime failure needs local reproduction or captured logs before the next
+hosted run. This is separate from the CodeQL transport finding.

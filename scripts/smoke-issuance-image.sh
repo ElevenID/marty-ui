@@ -84,9 +84,14 @@ docker run --detach \
   --publish 127.0.0.1::8005 \
   "$image" \
   >/dev/null
-port="$(docker inspect \
-  --format '{{(index (index .NetworkSettings.Ports "8005/tcp") 0).HostPort}}' \
-  "$service")"
+port_mapping="$(docker port "$service" 8005/tcp 2>/dev/null || true)"
+port="${port_mapping##*:}"
+if [[ -z "$port_mapping" || ! "$port" =~ ^[0-9]+$ ]]; then
+  docker inspect --format 'Issuance container state: {{.State.Status}}' "$service" || true
+  docker logs "$service" || true
+  docker logs "$secret_service" || true
+  exit 1
+fi
 for attempt in {1..60}; do
   if curl --fail --silent "http://127.0.0.1:${port}/health" \
     | grep --fixed-strings --quiet '"service":"issuance-service"'; then
