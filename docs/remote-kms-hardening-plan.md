@@ -2784,6 +2784,22 @@ commit: `4e7b774`. This removes the issuer engine's local test signing path,
 but other crate-internal `IssuerKey` format and wallet fixtures still remain.
 No hosted CI or PR was triggered for this checkpoint.
 
+2026-10-07 Core VDS-NC and ZK mDoc duplicate local-path reduction: the unused
+test-only `sign_vds_nc(IssuerKey, ...)` wrapper and prepared-envelope
+reconstruction helper are removed; the 18 focused VDS-NC tests passed under
+KMS-only features. The duplicate `sign_zk_mdoc(IssuerKey, ...)` path and its
+private-key fixture tests are removed; predicate rejection tests now invoke
+the shared pure validator, and the remaining signer-contract tests use only
+`sign_zk_mdoc_with_signer`. Five focused ZK mDoc tests and targeted Clippy
+with `-D warnings` passed using `USE_ZK_MOCK=1` in a debug build. Rustfmt and
+diff checks passed. Core commit: `3cb22d5`. A real Longfellow build on this
+Windows host failed before Rust tests because the native compiler could not
+find `openssl/sha.h`; this mock-mode result does not qualify real ZK or remote
+KMS custody. The remaining `TestP256Signer` in the ZK signer-contract tests
+still generates a local private key and needs a live remote replacement on a
+host with the real Longfellow dependencies. No hosted CI or PR was triggered
+for this checkpoint.
+
 - 2026-10-07: Investigation complete; source/history findings recorded above.
   No fresh build, live KMS test or deployment acceptance claimed.
 - 2026-10-07: Plan created on UI branch
