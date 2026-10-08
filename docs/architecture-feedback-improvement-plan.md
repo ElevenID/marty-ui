@@ -2066,6 +2066,29 @@ before that image-build wait; successful-run wall time is not expected to
 improve, and failure frequency is not established. Require hosted PR and
 protected proof before marking this candidate merged.
 
+2026-10-08 A6 outcome: [UI #1183](https://github.com/ElevenID/marty-ui/pull/1183)
+passed independent review, the full PR matrix, and all protected merge-group
+jobs, then merged. The unchanged published-worker preflights now run before
+the public self-host image build. In its protected run, the preflights took
+about 2m03s and the following image build about 8m03s. This moves possible
+preflight failures earlier; it does not shorten a successful Canvas run.
+
+2026-10-08 A0/A3 outcome: [UI #1184](https://github.com/ElevenID/marty-ui/pull/1184)
+passed targeted tests, independent review, scoped PR checks, and the full
+protected merge group, then merged. Its shadow planner records the
+Issuance-to-Auth LTI callback/runtime edge with source-backed guards but does
+not use that observation to narrow any required Rust test selection.
+
+A4 JSON-consumer attribution candidate (2026-10-08): the existing published
+JSON-consumer probe checks 132 validation/provider cases within one 120-second
+deadline, but its timing evidence reports only the aggregate. Record each
+checked-in case's elapsed time beside (not inside) the frozen oracle, validate
+the complete ordered case inventory before logging, and retain only fixed
+case IDs and durations in the short-lived CI timing artifact. Keep the pinned
+preparer, frozen equality, real PostgreSQL/process owner, and deadline. The
+local live probe passed all 132 cases in about 36 seconds; this is attribution,
+not a speedup or authority to remove the historical acceptance owner.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

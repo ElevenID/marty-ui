@@ -49,6 +49,65 @@ fn published_probe_timing_name(script: Option<&str>) -> String {
     }
 }
 
+// The pinned probe returns this metadata beside, never inside, its frozen
+// oracle. Validate every label against the checked-in case order before any
+// value can reach CI logs or the short-retention phase artifact.
+fn json_consumer_case_timings(report: &Value) -> Result<Vec<(String, u64)>, String> {
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-json-consumer-scenarios.json"
+    ))
+    .map_err(|_| "Invalid checked-in JSON consumer scenarios")?;
+    let mut expected = Vec::new();
+    for phase in ["validation", "provider"] {
+        let cases = fixture[phase]
+            .as_array()
+            .ok_or("Invalid JSON consumer case inventory")?;
+        for case in cases {
+            let name = case["name"]
+                .as_str()
+                .ok_or("Invalid JSON consumer case name")?;
+            if name.is_empty()
+                || name.len() > 64
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+            {
+                return Err("Unsafe JSON consumer case name".into());
+            }
+            expected.push(format!("json_consumer.{phase}.{name}"));
+        }
+    }
+    if expected.len() != 132
+        || expected
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != 132
+    {
+        return Err("JSON consumer case inventory changed".into());
+    }
+    let rows = report["ci_case_timing"]
+        .as_array()
+        .ok_or("Missing JSON consumer case timing")?;
+    if rows.len() != expected.len() {
+        return Err("Incomplete JSON consumer case timing".into());
+    }
+    rows.iter()
+        .zip(expected)
+        .map(|(row, name)| {
+            let object = row.as_object().ok_or("Invalid JSON consumer case timing")?;
+            if object.len() != 2 || row["name"].as_str() != Some(name.as_str()) {
+                return Err("Unexpected JSON consumer case timing identity".into());
+            }
+            let duration = row["duration_ms"]
+                .as_u64()
+                .filter(|duration| *duration <= 120_000)
+                .ok_or("Invalid JSON consumer case duration")?;
+            Ok((name, duration))
+        })
+        .collect()
+}
+
 // Only fixed phase labels and elapsed time leave the fixture. Never emit its
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
 pub(super) struct PhaseTimer {
@@ -1783,12 +1842,27 @@ impl PublishedDatabase {
         }
         eprintln!("Published migrations verified; organization dependency is synthetic-minimal");
         if oracle.is_some() {
-            owned.oracle = Some(
-                report
-                    .get(report_key)
-                    .ok_or("Missing published behavior oracle")?
-                    .clone(),
-            );
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published behavior oracle")?;
+            owned.oracle = Some(if script == "json_consumer" {
+                observation
+                    .get("oracle")
+                    .ok_or("Missing published JSON consumer oracle")?
+                    .clone()
+            } else {
+                observation.clone()
+            });
+        }
+        if script == "json_consumer" {
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published JSON consumer diagnostics")?;
+            for (name, duration) in json_consumer_case_timings(observation)? {
+                eprintln!(
+                    "MARTY_CI_PHASE_V1 {{\"phase\":\"oracle_case\",\"name\":\"{name}\",\"duration_ms\":{duration},\"status\":\"ok\"}}"
+                );
+            }
         }
         migration_timing.success();
         Ok(owned)
