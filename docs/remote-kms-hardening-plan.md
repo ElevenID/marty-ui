@@ -6831,3 +6831,21 @@ provisioned OpenBao/Redis backends remained explicitly ignored. The shared
 crate passes formatting and all-target warnings-denied Clippy. This closes
 the identified classifier bypass in source; assembled runtime and shipped
 artifact checks remain open.
+
+2026-10-08 grouped UI feature checkpoint: the 267-file native/deployment
+candidate is now one local feature commit, `2b8198fc2`, on
+`security/remote-kms-hardening-20261007`. It includes the K10 service guards,
+the remote DIDComm and integration-secret paths, Go OpenBao extension,
+reference-only BYOK surface and deployment changes. The four generated
+Windows `%SystemDrive%` cache databases were excluded from staging; all newly
+added self-host example token files contain explicit `CHANGE_ME` placeholders.
+The staged diff had no whitespace errors, and locked Cargo metadata passed the
+production Core/isomdl feature-boundary checker and its nine focused tests.
+The shared classifier's prefixed-field fix passed one combined local test run
+across its crate and ten consuming service packages with exit 0. Some live
+OpenBao/Redis tests in that selection were explicitly ignored without their
+disposable backends. The Core PR #355 remains draft and review-required with
+all current hosted checks green; Credentials is locally committed at
+`ab0e3e8` and has no PR yet. The UI commit is local only, with no UI PR or
+hosted CI run yet. This checkpoint makes the broad change reviewable but does
+not close K8/K9/K10 or the release-artifact gates.
