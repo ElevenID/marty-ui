@@ -765,6 +765,7 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["worker"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
