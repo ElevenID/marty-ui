@@ -7644,3 +7644,57 @@ proof. The focused HTTPS fixture test and exact secret-mount inventory case
 pass locally with Rust 1.95; Linux packaged startup awaits exact-head CI.
 The Rust contracts and plugin-image corrections were already validated
 locally, so send all three lane fixes in one grouped UI PR update.
+
+The grouped UI fixes were pushed at exact head `1e770acb0`; CI run
+`37882379709` is active. Its Rust Lint and Packaging lane found a Clippy
+`duplicate_mod` error because the Canvas test included the shared
+remote-secret fixture directly while its existing `issuance_process` module
+already included the same source. The local correction reuses that canonical
+module path; focused `cargo +1.95.0 clippy --locked --offline -p
+marty-canvas-acceptance --test canvas_published_schema_contract -- -D warnings`
+passes. Hold this correction until the still-running contracts, plugin,
+Canvas and image lanes complete, then batch any additional findings.
+
+Verifier consumer optional-demo recovery is in progress on the isolated
+branch. Public signed DTC and two-DG eMRTD artifacts were generated in the
+disposable pre-hardening checkout with validity through October 2036; that
+checkout's generator source was restored afterward. The hardened branch now
+consumes only those public vectors, validates the trust-package signature and
+current expiry, verifies the DTC chain and eMRTD trusted/tampered outcomes,
+and removes `marty-crypto`, `rcgen`, `getrandom` and `const-oid` from
+`marty-sync`'s optional demo graph. No private-key fields occur in the copied
+artifacts or the hardened sync/Verifier source inventory. The locked optional
+`marty-sync` suite passes 38 cases (one intentionally ignored). On final
+Verifier candidate `7888ea9`, the locked/offline `marty-verifier --all-features`
+check, its complete all-feature test graph (65, 0, 24, 25, 26 and 25 cases),
+and all-target/all-feature Clippy with warnings denied pass. The complete
+default Verifier test graph previously passed as well. Self-review of the
+consumer diff found no remaining local issuer signing or optional demo key
+generation; the only `ring::hmac::sign` use is for a verifier-local liveness
+challenge. These public demo vectors remain synthetic and time-bounded.
+Verifier draft PR [#154](https://github.com/ElevenID/marty-verifier/pull/154)
+groups all four consumer commits and depends on the hardened Core PR #355.
+Its first exact-head CI run completed with 17 successful checks and one
+skipped check, with no failures; PR #154 is ready for review. Core PR #355
+remains its dependency and still requires an approving review.
+
+The isolated Authenticator consumer candidate now pins Verifier `marty-sync`
+to PR #154 head `7888ea9` alongside hardened Core `d41d87c`. Its resolved
+lockfile has no references to the old Core `56cc26c` or old Verifier
+`8d410be`; Cargo's duplicate graph shows the sync crate and bridge sharing
+the same hardened Core and SSI graph. The native Windows `marty-zkp`
+Longfellow C++ build failed before a Rust bridge verdict; an explicitly
+debug-only `USE_ZK_MOCK=1` Rust integration check is running. This does not
+qualify a production ZK artifact or browser wallet flow, and no Authenticator
+PR is open yet.
+
+UI run `37882379709` also exposed a CI-runner artifact-selection failure in
+the Rust contracts lane after its database and live Gateway tests had passed:
+the database runner found two executable hashes for the same
+`document_storage_contract` target, because a later focused Cargo invocation
+rebuilt it with a different feature set. The runner now resolves singleton
+contract executables from the exact workspace Cargo artifact manifest rather
+than counting every executable left in `target/debug/deps`. Bash syntax and
+diff checks pass locally. This is a CI selection correction, not a change to
+the signing-document contract itself; hold it with the local lint correction
+until the still-running Canvas, OpenBao and image lanes finish.
