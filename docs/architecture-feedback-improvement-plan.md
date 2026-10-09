@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 15:14 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-09 16:18 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -51,6 +51,10 @@ image-free exact case before image/database setup, retaining both real
 rendered-process cases. Its PR and protected merge-group CI passed; the
 one-reviewer rule was restored after merge. This is earlier diagnostic
 feedback and duplicate-probe cleanup, not a measured full-job saving.
+UI #1210 repaired Gateway's base-Compose Verification address and guarded all
+15 configured upstream addresses. Its full PR and protected merge-group checks
+passed; main's one-reviewer rule was restored. This is deployment correctness,
+not a CI speedup.
 
 ## Objective and scope
 
@@ -2636,18 +2640,41 @@ in the preceding protected sample. Compilation, image build, and all main
 acceptance targets were slower together, so no attributable end-to-end saving
 is claimed. Main's one-reviewer protection was restored and verified.
 
-## A0/A3 Gateway base-Compose upstream parity (2026-10-09, candidate)
+## A0/A3 Gateway base-Compose upstream parity (2026-10-09, merged)
 
 Gateway's published `/v1/verify` route and `SERVICE_URLS` table select the
 Verification upstream. Kubernetes supplies `http://verification:8012`, but
 base Compose omitted `VERIFICATION_SERVICE_URL`, leaving the gateway container
 with the `http://localhost:8012` development default. Since Verification runs
-as a separate Compose service, that default does not target it. Add the missing
-base-Compose binding and an independent exact-value regression for every one
-of the 15 configured Gateway upstream URLs, scoped to the Gateway environment
-and requiring each target service stanza. This repairs deployment wiring and
-closes one A0/A3 input gap; it does not change check selection or claim a CI
-speedup. Rendered Compose validation and protected checks remain required.
+as a separate Compose service, that default does not target it. [#1210](https://github.com/ElevenID/marty-ui/pull/1210)
+added the missing base-Compose binding and an independent exact-value
+regression for all 15 configured Gateway upstream URLs, scoped to the Gateway
+environment and requiring each target service stanza. The native-runtime
+fixture's closed environment set followed the new binding. Local planner,
+self-host, and supported-Compose checks passed (202 tests, two skips, 348
+subtests); independent review found no P1-P3 issue. Full exact-head
+[PR run](https://github.com/ElevenID/marty-ui/actions/runs/37951482695) and
+[protected run](https://github.com/ElevenID/marty-ui/actions/runs/37955004959)
+passed, and #1210 merged as `953cf5294` at 16:18:10 UTC. Main's one-reviewer
+rule was restored and verified. The PR and protected Canvas jobs took 27m06s
+and 24m28s; the latter included 443 seconds of container compilation and 459
+seconds in published database contracts. This repaired deployment wiring and
+closed one A0/A3 input gap; it did not change check selection or establish a
+CI speedup.
+
+## A0/A3 Gateway Kubernetes upstream parity (2026-10-09, candidate)
+
+The oracle Kubernetes Gateway imports `marty-config` through `envFrom`, but
+that ConfigMap omitted `SIGNING_KEYS_SERVICE_URL`. Gateway's published signing
+route would inherit its `http://localhost:8017` development default, which
+cannot reach the separate Signing Keys Service on port 8017 when its optional
+`07b-signing-keys.yaml` overlay is applied. Add the missing binding and guard
+the exact 15 Gateway upstream targets against
+both the ConfigMap and any explicit Gateway environment overrides. Keep the
+expected addresses independent of production configuration, require the
+optional Signing Keys Service endpoint, and retain all existing checks. This
+is a deployment-correctness slice, not a CI speedup or permission to narrow the
+shadow planner's service-change fallback. Protected CI remains required.
 
 ## Design references
 
