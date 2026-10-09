@@ -9811,3 +9811,23 @@ host, so the changed mobile parser/service tests, analyzer, and device build
 remain unverified. The source changes are still local on both feature branches;
 run exact-head hosted CI after the grouped wallet work is ready. This is no
 release qualification and does not close the KMS-only wallet goal.
+
+2026-10-09 Authenticator presentation-path review correction: Android
+`SpruceIdHandlerRefactored` and iOS `W3CMethodHandler` currently return
+`REMOTE_KMS_REQUIRED` for OID4VP signing/presentation operations. This is a
+fail-closed stub, not evidence of functioning local presentation signing. The
+Flutter completion wrapper nevertheless tried the mDoc channel whenever a
+W3C channel call raised a platform exception, which could reinterpret an
+authorization or signer error as a different protocol. The local mobile
+follow-up now remembers the Rust-selected `oid4vp` versus `mdoc` route for a
+bounded set of selection sessions and completes on that channel only; unknown
+sessions fail closed. No mobile test or device build has yet qualified this
+change. The Core Rust bridge has `wallet_build_and_submit_presentation`, but
+the current caller is unused by the scanner and constructs a request with
+empty `client_id` and `nonce`, so it is not suitable for SD-JWT key binding.
+To close the wallet gate, wire a real Rust presenter from the secure credential
+store and user selection into Core's verified SD-JWT preparation, a trusted
+issuer-key resolver, the bearer-scoped Gateway ES256 signer, and
+`submit_presentation_for_request` with the original request's nonce, audience,
+state, and response mode. Preserve the separate mDoc session path and prove
+both on mobile; add bearer renewal with lost-response recovery before release.
