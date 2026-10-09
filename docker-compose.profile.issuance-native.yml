@@ -38,6 +38,8 @@ services:
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/dev_integration_secret_ca
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       ORG_GRPC_TARGET: organization:9002
       CT_GRPC_TARGET: credential-template:9003
@@ -96,6 +98,8 @@ services:
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    secrets:
+      - dev_integration_secret_ca
     networks:
       - marty-network
   gateway:

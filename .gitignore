@@ -108,6 +108,7 @@ tests/artifacts/
 # Runtime state and generated browser evidence belong in local volumes or CI artifacts.
 .selfhost-state/
 .beta-workload-identity/
+.dev-integration-secret-tls/
 tests/demo-recordings/
 tests/demo-recordings-report/
 

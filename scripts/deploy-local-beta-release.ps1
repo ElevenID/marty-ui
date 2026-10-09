@@ -1035,6 +1035,9 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $PSScriptRoot "ensure-dev-integration-secret-tls.py")
+)
 . (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
 $legacyPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $legacyPostgres) { throw "Beta PostgreSQL container is unavailable" }

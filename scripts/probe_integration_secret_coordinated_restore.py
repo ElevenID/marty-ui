@@ -9,6 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import runpy
+import ssl
 import shutil
 import socket
 import subprocess
@@ -30,6 +32,10 @@ from probe_didcomm_openbao_ha import (
     require_status,
     wait_for,
 )
+
+ensure_tls = runpy.run_path(
+    str(ROOT / "scripts/ensure-dev-integration-secret-tls.py")
+)["ensure_tls"]
 
 CATALOG = json.loads(
     (ROOT / "deploy-config/passport-supported-disposable-infra-images.json").read_text(
@@ -306,14 +312,22 @@ def start_signing(
     haip_token_file: Path,
     redis_port: int,
     key: str,
+    tls_directory: Path,
     log_path: Path,
 ):
     port = free_port()
+    tls_port = free_port()
+    while tls_port == port:
+        tls_port = free_port()
+    ensure_tls(tls_directory, "127.0.0.1")
     environment = os.environ.copy()
     environment.update(
         {
             "MARTY_RELEASE_VERSION": "development",
             "SIGNING_KEYS_SERVICE_PORT": str(port),
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT": str(tls_port),
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": str(tls_directory / "tls.crt"),
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE": str(tls_directory / "tls.key"),
             "SIGNING_KEYS_INTERNAL_API_KEY": key,
             "SIGNING_KEYS_REDIS_URL": f"redis://127.0.0.1:{redis_port}/2",
             "ISSUER_BASE_URL": "https://issuer.example",
@@ -341,7 +355,19 @@ def start_signing(
                 f"http://127.0.0.1:{port}/health", timeout=2
             ) as response:
                 if response.status == 200:
-                    return process, f"http://127.0.0.1:{port}/internal"
+                    context = ssl.create_default_context(
+                        cafile=str(tls_directory / "ca.crt")
+                    )
+                    with urllib.request.urlopen(  # noqa: S310 - loopback TLS
+                        f"https://127.0.0.1:{tls_port}/health",
+                        timeout=2, context=context,
+                    ) as tls_response:
+                        if tls_response.status == 200:
+                            return (
+                                process,
+                                f"http://127.0.0.1:{port}/internal",
+                                f"https://127.0.0.1:{tls_port}/internal",
+                            )
         except (OSError, ValueError):
             pass
         time.sleep(0.25)
@@ -359,13 +385,16 @@ def stop_process(process: subprocess.Popen) -> None:
             process.wait(timeout=10)
 
 
-def rust_phase(phase: str, database_url: str, signing_url: str, key: str) -> None:
+def rust_phase(
+    phase: str, database_url: str, signing_url: str, ca_file: Path, key: str
+) -> None:
     environment = os.environ.copy()
     environment.update(
         {
             "MARTY_KMS_RESTORE_PHASE": phase,
             "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL": database_url,
             "MARTY_TEST_SIGNING_KEYS_INTERNAL_URL": signing_url,
+            "MARTY_TEST_SIGNING_KEYS_INTERNAL_CA_FILE": str(ca_file),
             "MARTY_TEST_SIGNING_KEYS_INTERNAL_API_KEY": key,
         }
     )
@@ -700,19 +729,20 @@ def run() -> None:
                 ),
             )
             api_key = f"disposable-{uuid.uuid4().hex}"
-            signing_process, signing_url = start_signing(
+            signing_process, signing_url, secret_url = start_signing(
                 binary,
                 bao_url,
                 token,
                 haip_token_file,
                 redis_port,
                 api_key,
+                temp / "signing-tls",
                 temp / "signing-source.log",
             )
             flow_haip_phase(
                 pg_name, database_url, signing_url, api_key, temp / "haip-holder.json"
             )
-            rust_phase("write", database_url, signing_url, api_key)
+            rust_phase("write", database_url, secret_url, temp / "signing-tls/ca.crt", api_key)
             stop_process(signing_process)
             signing_process = None
             require_status(bao_url, "POST", "sys/seal", root)
@@ -880,16 +910,20 @@ def run() -> None:
                     is True
                 ),
             )
-            signing_process, signing_url = start_signing(
+            signing_process, signing_url, secret_url = start_signing(
                 binary,
                 restored_bao_url,
                 token,
                 haip_token_file,
                 redis_port,
                 api_key,
+                temp / "signing-tls",
                 temp / "signing-restored.log",
             )
-            rust_phase("read", restored_database_url, signing_url, api_key)
+            rust_phase(
+                "read", restored_database_url, secret_url,
+                temp / "signing-tls/ca.crt", api_key,
+            )
             print("Disposable Rust/PostgreSQL/OpenBao coordinated restore passed")
         finally:
             if signing_process is not None:

@@ -798,6 +798,8 @@ services:
         SERVICE_NAME: signing-keys
     environment:
       SIGNING_KEYS_SERVICE_PORT: "8017"
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/dev_integration_secret_server_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/dev_integration_secret_server_key
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
@@ -806,6 +808,9 @@ services:
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: info
+    secrets:
+      - dev_integration_secret_server_cert
+      - dev_integration_secret_server_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1028,6 +1033,8 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/dev_integration_secret_ca
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
@@ -1050,6 +1057,8 @@ services:
       CANVAS_SYNC_SCHEDULE_LIMIT: ${CANVAS_SYNC_SCHEDULE_LIMIT:-100}
       CANVAS_OAUTH_REVOCATION_BATCH_SIZE: ${CANVAS_OAUTH_REVOCATION_BATCH_SIZE:-25}
       CANVAS_SYNC_WORKER_POLL_SECONDS: ${CANVAS_SYNC_WORKER_POLL_SECONDS:-5}
+    secrets:
+      - dev_integration_secret_ca
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1250,6 +1259,14 @@ services:
     networks:
       - marty-network
     restart: unless-stopped
+
+secrets:
+  dev_integration_secret_ca:
+    file: ./.dev-integration-secret-tls/ca.crt
+  dev_integration_secret_server_cert:
+    file: ./.dev-integration-secret-tls/tls.crt
+  dev_integration_secret_server_key:
+    file: ./.dev-integration-secret-tls/tls.key
 
 volumes:
   postgres_data:

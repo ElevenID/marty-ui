@@ -313,6 +313,7 @@ proves these candidate service paths with synthetic data; hosted CI, an
 actual wallet app, the exact release image and supported deployment cutover
 remain open.
 
+
 2026-10-07 Flow HAIP reissue self-review: a persisted remote key reference
 was locally well-formed but could be reused to publish another request object
 after its actual OpenBao key version disappeared. The candidate now resolves
@@ -6984,3 +6985,26 @@ with DNS SAN `signing-keys`; the disposable chain passed `openssl verify
 local and unpushed. Development Compose certificate provisioning, other process
 fixtures, live OpenBao recovery, certificate rotation, and hosted CodeQL
 remain open.
+
+2026-10-08 development TLS follow-up (local, unpushed): the self-host and
+Kubernetes transport batch was committed at `7adde88bd`. Base Compose and
+the native overlay now mount a generated Signing Keys TLS leaf/key only on
+Signing Keys, and the CA only on native Issuance and Canvas worker. The
+ignored `.dev-integration-secret-tls` directory is provisioned by
+`scripts/ensure-dev-integration-secret-tls.py`; its CA signing key is removed
+after leaf issuance. The helper verifies DNS SAN `signing-keys`, server key
+pairing, chain, and remaining validity; issue, idempotence, simulated renewal,
+and loopback IP-SAN generation passed locally. The beta deploy runner invokes
+it after plan-only exit under its deployment lock. All 12 base native Compose
+models, the conformance and DIDComm Compose gates, 81 passport provisioning
+tests, 275 passport model/ownership tests, and 37 local beta runner tests pass.
+The coordinated live PostgreSQL/Raft recovery probe passed with an actual
+Signing Keys TLS listener and CA-pinned Rust integration-secret client: its
+write phase encrypted through OpenBao, then the read phase recovered the same
+row after OpenBao Raft snapshot and PostgreSQL restoration. The probe also
+passed live DIDComm authcrypt after rotation, VC-API holder-proof cleanup, and
+Flow HAIP checks on their existing routes. Two issuer tests verify leaf
+issuance, renewal, no retained CA signing key, and DNS/IP SAN scoping. These
+are local disposable runtime results; hosted CodeQL, development Compose
+end-to-end runtime, operator certificate rotation, and release artifact
+qualification remain open.

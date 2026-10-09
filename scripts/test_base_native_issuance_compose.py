@@ -36,6 +36,8 @@ NATIVE_ONLY = {
     "SERVICE_NAME": "issuance_native",
     "ENVIRONMENT": "${ENVIRONMENT:-development}",
     "ISSUANCE_GRPC_ENABLED": "true",
+    "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+    "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
     "PASSPORT_NATIVE_HTTP_ENABLED": "${PASSPORT_NATIVE_HTTP_ENABLED:-false}",
     "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
     "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
@@ -117,6 +119,38 @@ def assert_sources(base, profile, runtime):
     legacy = base["services"]["issuance"]["environment"]
     native = profile["services"]["issuance-native"]
     env = native["environment"]
+    signer = base["services"]["signing-keys"]
+    worker = base["services"]["canvas-sync-worker"]
+    assert signer["secrets"] == [
+        "dev_integration_secret_server_cert", "dev_integration_secret_server_key"
+    ]
+    assert signer["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE"] == (
+        "/run/secrets/dev_integration_secret_server_cert"
+    )
+    assert signer["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE"] == (
+        "/run/secrets/dev_integration_secret_server_key"
+    )
+    assert worker["secrets"] == ["dev_integration_secret_ca"]
+    for client in (worker["environment"], env):
+        assert client["INTEGRATION_SECRET_KMS_URL"] == (
+            "https://signing-keys:8018/internal"
+        )
+        assert client["INTEGRATION_SECRET_KMS_CA_FILE"] == (
+            "/run/secrets/dev_integration_secret_ca"
+        )
+    assert native["secrets"] == ["dev_integration_secret_ca"]
+    assert set(base["secrets"]) == {
+        "dev_integration_secret_ca", "dev_integration_secret_server_cert",
+        "dev_integration_secret_server_key",
+    }
+    for secret, file_name in (
+        ("dev_integration_secret_ca", "ca.crt"),
+        ("dev_integration_secret_server_cert", "tls.crt"),
+        ("dev_integration_secret_server_key", "tls.key"),
+    ):
+        assert base["secrets"][secret] == {
+            "file": "./.dev-integration-secret-tls/" + file_name
+        }
     owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
     assert set(legacy) - set(env) - owner_selection == LEGACY_ONLY
     assert set(env) - set(legacy) == set(NATIVE_ONLY) - {"GRPC_SERVICE_TOKEN"}
@@ -185,8 +219,10 @@ def assert_sources(base, profile, runtime):
         "entrypoint",
         "command",
         "environment",
+        "secrets",
         "networks",
     }
+    assert native["secrets"] == ["dev_integration_secret_ca"]
     EXTRACTION["complete_common"](source(EXTRACTION["COMMON"]), runtime)
     text = (
         (ROOT / "rust/services/issuance/src/config.rs")
@@ -234,6 +270,8 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "SERVICE_NAME": "issuance_native",
             "ENVIRONMENT": inputs.get("ENVIRONMENT") or "development",
             "ISSUANCE_GRPC_ENABLED": "true",
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
             "CANVAS_MIRROR_WORKER_ENABLED": inputs.get("CANVAS_MIRROR_WORKER_ENABLED")
             or "false",
             "PASSPORT_NATIVE_HTTP_ENABLED": inputs.get("PASSPORT_NATIVE_HTTP_ENABLED")
@@ -278,6 +316,7 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "timeout": "5s",
             "retries": 3,
         },
+        "secrets": [{"source": "dev_integration_secret_ca", "target": "/run/secrets/dev_integration_secret_ca"}],
         "networks": {"marty-network": None},
         "restart": "unless-stopped",
     }
