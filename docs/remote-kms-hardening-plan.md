@@ -7463,3 +7463,26 @@ Canvas candidate fixes or exact-head gate passed before those jobs finish.
 An isolated Verifier follow-up now has a local public-only Open Badge test
 candidate derived from Core's reviewed signed vector; its test executable
 is still compiling, so validity and wrong-key behavior remain unverified.
+
+Verifier consumer continuation (supersedes the pending Open Badge test
+qualification above): the isolated `marty-verifier` app check passes at the
+hardened Core/SSI/isomdl graph. Its four signed OBv3 tests no longer generate
+or store an Ed25519 private JWK: they consume the reviewed Core public-only
+signature vector, with a document-store public key substitution for the
+negative case. The copied vector's SHA-256 matches Core's source fixture
+(`252ef1a1c2488f46f0cb7c83fe98b09664a90c6461ae0e8ca8d78166fe24743c`).
+All 25 `open_badge_conformance` cases pass on Rust 1.97.1, and targeted
+Rustfmt passes. This is isolated, uncommitted Verifier candidate work; the
+eMRTD and optional demo private-key fixtures, complete test suite, and
+authenticator integration remain.
+
+UI run `37875662633` surfaced one early Release Contract Tests failure:
+6,187 Python tests passed, but a newly merged `main` worker-only CI
+classification test expects a record without the `openbao` field. The KMS
+branch's conservative classifier includes `openbao: false` for those worker
+test-only changes, so the exact-record assertion in `main` is stale only in
+the PR merge graph. `origin/main` has one new commit, `f4926bb4d` (#1195),
+since the UI branch's last main merge. After the other live new-head lanes
+finish, merge that commit and update the test to assert the explicit false
+OpenBao lane in the same grouped follow-up. The other long jobs were still
+live at this checkpoint; do not infer their outcome from this single failure.
