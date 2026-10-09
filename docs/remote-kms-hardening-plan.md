@@ -1225,11 +1225,11 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; UI and Credentials candidates pin Core PR #355 head `d41d87c`; Core's exact hosted checks pass and it is ready for the required review. UI's six no-default-feature native library suites pass (969 active tests, 17 ignored), and Credentials' locked graph and hosted checks pass. An authenticator consumer probe found old direct and transitive Core pins through Verifier `marty-sync`; Verifier's test-only feature selectors no longer resolve against hardened Core. Downstream wallet/Verifier adoption, full consumer packaging and published release artifacts remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 now includes public-only Python DTC tests at `e9a0495`. UI, Credentials, Verifier and Authenticator have local manifest/lock repins to that revision; Verifier's repin is pushed at `4e40ba0`. Authenticator's `marty-sync` dependency is locally repinned to that Verifier head so its locked graph resolves one Core source. UI and Credentials KMS graph checks pass locally after repin; hosted exact-head checks and publishable consumer artifacts remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
-| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 at `fef8da1` pins Core `d41d87c`, excludes LDAP from WASM and rejects isomdl local signing. Its 19 hosted checks pass, alongside local web WASM/package-load and Windows ABI3 wheel/surface checks. The authenticator browser flow has a verified old-Core/Verifier dependency gap; published wheels, release manifest, replacement vectors and artifact qualification remain. |
+| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 at `5eaedab` also removes unverified JWT parser exports; its exact-head 11 CI jobs pass. Local Core repin to `e9a0495` is pending push. Publishable Credentials wheel, browser verification, replacement vectors and release artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core PR #355 at `d41d87c` is ready for review with green hosted checks and one required approval; Credentials draft PR #313 at `fef8da1` is green but needs browser/release qualification. UI draft PR #1192 at `473b46dd1` contains the grouped contracts/Canvas/self-host corrections and has exact-head CI run `37875662633` in progress. The old-head failures remain immutable evidence; new-head acceptance is pending. Release artifacts, supported cutover and recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 at `f9317b67a` passed all 23 exact-head CI jobs in run `37891713276`; local Core repin is pending push. Credentials draft PR #313 at `5eaedab` passed 11 exact-head CI jobs. Core PR #355 has a new public-vector test head `e9a0495` awaiting exact CI/review; Verifier PR #154 at `4e40ba0` awaits checks. Authenticator draft PR #57 at `274ffaf` passed Flutter tests and Android/iOS configuration builds, while quality corrections, Core/Verifier repins and bridge qualification remain. None is release qualified or merged; cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and the named service JSON stores. A disposable PostgreSQL 16 run of the candidate Rust Issuance migration created 31 tables without `issuer_signing_keys`; earlier focused storage checks pass. A read-only local-stack audit found an empty historical `issuer_signing_keys.encrypted_jwk_json` table still present in self-host PostgreSQL; beta has no private-key-named table or column. Full assembled-schema, runtime-write, self-host rebuild/cutover and release-artifact proof remain. |
 
 ### First execution steps
@@ -8256,3 +8256,39 @@ the fail-closed native edits; it does not compile the iOS Swift runtime or
 prove functional KMS wallet behavior. Rust Bridge Codegen run `37895163219`
 is still generating bridge surfaces. The local quality correction is committed
 as `91bac10` and remains unpushed pending that result.
+
+UI PR #1192 exact-head CI run `37891713276` finished successfully: all 23
+jobs passed at `f9317b67a`, including the Canvas isolated database and native
+timeout/TLS parity suites. This qualifies that PR head's hosted checks, but
+the pending Core repin will require a new exact-head run; no release artifact
+or product cutover is implied.
+
+Core PR #355 now carries commit `e9a0495`, which replaces a private-key DTC
+Python test signer with a fixed public signed vector. The previous local
+binding tests passed. Hosted checks on the new head are still running; its
+Organization Quality lane failed because two dependency-health review dates
+expired on 2026-10-08. A local correction re-reviewed RustCrypto RSA release
+tracking and the Affinidi TDK source, updates those reviews to 2026-10-23,
+and passes YAML parse/diff checks. It remains unpushed until the other new-head
+Core checks finish so findings can be batched.
+
+Verifier PR #154 has a pushed Core `e9a0495` repin at `4e40ba0`; its hosted
+checks completed successfully at that head, including CI, organization
+quality, license compliance and open-source policy. Local UI and Credentials manifests, lockfiles and
+graph guards also pin `e9a0495`, and their full locked KMS metadata checks
+pass. Authenticator's first naive direct repin produced two Core revisions
+because `marty-sync` still came from Verifier's prior head. Its local
+`marty-sync` dependency now points to Verifier `4e40ba0`, and full locked
+metadata resolves exactly one Core source across ten Core packages. Do not
+ship or claim graph closure until the final Core correction SHA is repinned
+through all four consumers and the hosted/artifact gates pass.
+
+Authenticator PR #57 Rust Bridge Codegen run `37895163219` failed only at its
+generated-file freshness check: `frb_generated.dart` and `frb_generated.rs`
+held an obsolete content hash. The CI-generated exact diff changes both
+constants to `1509900566`; that correction is local. The exact generator
+version 2.13.0 was installed locally, but generation cannot run without a
+Flutter/Dart SDK on this Windows host. The next hosted run must prove these
+generated files match current bridge source. Local locked bridge tests are
+running after the unified Core/Verifier repin; the first parallel C++ build
+failed before test execution, so a single-job retry is being captured.
