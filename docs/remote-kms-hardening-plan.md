@@ -10138,3 +10138,30 @@ Verifier repin changed only Cargo.toml and seven Core package sources in
 Cargo.lock; unrelated generated schema files remain untouched. The
 Authenticator PR #57 still has nine local unpublished commits so remote-only
 receipt and native-path retirement can land as a broad feature batch.
+
+2026-10-09 Authenticator remote-only receipt candidate: local commit
+`de568f9` repins its Rust graph to Core `cd21cad` and Verifier `cd059ce`,
+adds a one-use Rust pre-authorized OID4VCI receipt session, generated Flutter
+bridge, and the QR offer-handler route. The Rust session keeps the bearer
+token private, accepts only one advertised SD-JWT configuration with JWK
+holder binding and ES256 proof support, rejects required key attestations,
+requires HTTPS offer references and same-origin issuer credential/nonce
+endpoints, and fails closed on batch or deferred responses. The paired
+remote P-256 `presentation_signing` key signs the exact proof input; Rust
+verifies the signature before requesting a credential and verifies the
+issuer signature, `vct`, format, and P-256 `cnf.jwk` against a fresh paired
+Trust Profile snapshot before returning it for secure wallet storage.
+Local Rust `cargo check --lib --locked` and strict Clippy passed under the
+mock-ZK build; four focused Rust receipt tests passed, generated bridge and
+service Dart analysis found no issues, and 15 focused Flutter tests passed.
+The generated bridge needed explicit LLVM, MSVC, and Windows SDK include
+paths on Windows. This is still a local candidate, not a full mobile build
+or physical-device KMS/issuer receipt acceptance. The old handler is replaced
+for one-configuration pre-authorized SD-JWT offers; multi-configuration
+selection, authorization-code/deferred issuance, transaction-code UI, and
+remaining native credential paths require explicit qualification or retirement
+before PR #57 is published. Core exact-head hosted checks and Verifier
+`cd059ce` hosted checks passed; Core PR #355 still requires review. Review
+Core wallet HTTP response-size limits during the native audit: the Rust
+receipt boundary caps returned credential size, but Core currently parses
+issuer HTTP JSON before that cap applies.
