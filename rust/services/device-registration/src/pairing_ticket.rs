@@ -35,6 +35,7 @@ pub struct PairingScope {
     pub pairing_id: String,
     pub user_id: String,
     pub organization_id: String,
+    pub trust_profile_id: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
 }
@@ -51,6 +52,7 @@ pub trait PairingTicketRepository: Send + Sync {
         &self,
         user_id: &str,
         organization_id: &str,
+        trust_profile_id: &str,
     ) -> Result<IssuedPairingTicket, DeviceError>;
     /// A successful redemption consumes the ticket atomically, even on retry.
     async fn take(&self, token: &str) -> Result<Option<PairingScope>, DeviceError>;
@@ -74,10 +76,12 @@ fn digest_key(token: &str) -> Option<String> {
 fn issue_scope(
     user_id: &str,
     organization_id: &str,
+    trust_profile_id: &str,
     ttl_seconds: u64,
 ) -> Result<IssuedPairingTicket, DeviceError> {
     if user_id.trim().is_empty()
         || organization_id.trim().is_empty()
+        || Uuid::parse_str(trust_profile_id).is_err()
         || !(1..=MAX_TTL_SECONDS).contains(&ttl_seconds)
     {
         return Err(DeviceError::BadRequest(
@@ -91,6 +95,7 @@ fn issue_scope(
             pairing_id: Uuid::new_v4().to_string(),
             user_id: user_id.into(),
             organization_id: organization_id.into(),
+            trust_profile_id: trust_profile_id.into(),
             issued_at,
             expires_at: issued_at + Duration::seconds(ttl_seconds as i64),
         },
@@ -118,9 +123,10 @@ impl PairingTicketRepository for MemoryPairingTickets {
         &self,
         user_id: &str,
         organization_id: &str,
+        trust_profile_id: &str,
     ) -> Result<IssuedPairingTicket, DeviceError> {
         for _ in 0..4 {
-            let ticket = issue_scope(user_id, organization_id, self.ttl_seconds)?;
+            let ticket = issue_scope(user_id, organization_id, trust_profile_id, self.ttl_seconds)?;
             let key = digest_key(&ticket.token).expect("issued ticket format");
             let mut scopes = self.scopes.lock().await;
             scopes.retain(|_, scope| scope.expires_at > Utc::now());
@@ -182,10 +188,11 @@ impl PairingTicketRepository for RedisPairingTickets {
         &self,
         user_id: &str,
         organization_id: &str,
+        trust_profile_id: &str,
     ) -> Result<IssuedPairingTicket, DeviceError> {
         let mut connection = self.connection.clone();
         for _ in 0..4 {
-            let ticket = issue_scope(user_id, organization_id, self.ttl_seconds)?;
+            let ticket = issue_scope(user_id, organization_id, trust_profile_id, self.ttl_seconds)?;
             let key = digest_key(&ticket.token).expect("issued ticket format");
             let value = serde_json::to_string(&ticket.scope)
                 .map_err(|_| DeviceError::PairingStore("pairing ticket encoding failed".into()))?;
@@ -229,11 +236,12 @@ impl PairingTicketRepository for RedisPairingTickets {
 #[cfg(test)]
 mod tests {
     use super::*;
+    const PROFILE_ID: &str = "11111111-2222-4333-8444-555555555555";
 
     #[tokio::test]
     async fn ticket_is_secret_scoped_and_single_use() {
         let store = MemoryPairingTickets::new(300);
-        let issued = store.issue("user-a", "org-a").await.unwrap();
+        let issued = store.issue("user-a", "org-a", PROFILE_ID).await.unwrap();
         assert_eq!(issued.token.len(), TOKEN_CHARS);
         assert_ne!(digest_key(&issued.token).unwrap(), issued.token);
         assert!(store.take("wrong").await.unwrap().is_none());
@@ -244,15 +252,19 @@ mod tests {
     #[tokio::test]
     async fn invalid_scope_or_ttl_cannot_issue() {
         assert!(MemoryPairingTickets::new(0)
-            .issue("user", "org")
+            .issue("user", "org", PROFILE_ID)
             .await
             .is_err());
         assert!(MemoryPairingTickets::new(301)
-            .issue("user", "org")
+            .issue("user", "org", PROFILE_ID)
             .await
             .is_err());
         assert!(MemoryPairingTickets::new(300)
-            .issue("", "org")
+            .issue("", "org", PROFILE_ID)
+            .await
+            .is_err());
+        assert!(MemoryPairingTickets::new(300)
+            .issue("user", "org", "not-a-profile-id")
             .await
             .is_err());
     }

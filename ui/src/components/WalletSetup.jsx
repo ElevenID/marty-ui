@@ -25,6 +25,10 @@ import {
   Switch,
   FormControlLabel,
   Divider,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import NotificationsIcon from '@mui/icons-material/Notifications';
 import CheckIcon from '@mui/icons-material/Check';
@@ -33,6 +37,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
+import { listTrustProfiles } from '../services/presentationPolicyApi';
 import {
   buildPairingState,
   formatCountdown,
@@ -65,6 +70,9 @@ const WalletSetup = () => {
   const [pairingId, setPairingId] = useState(null);
   const [qrContent, setQrContent] = useState(null);
   const [expiresIn, setExpiresIn] = useState(300);
+  const [trustProfiles, setTrustProfiles] = useState([]);
+  const [trustProfileId, setTrustProfileId] = useState('');
+  const [profileOrganizationId, setProfileOrganizationId] = useState(null);
 
   // Wallet connection state
   const [walletConnected, setWalletConnected] = useState(false);
@@ -82,7 +90,7 @@ const WalletSetup = () => {
     setQrContent(null);
     setWalletConnected(false);
     try {
-      const ticket = await issueRemotePairingTicket({ organizationId });
+      const ticket = await issueRemotePairingTicket({ organizationId, trustProfileId });
       const apiOrigin = new URL(import.meta.env.VITE_API_URL || window.location.origin, window.location.origin).origin;
       const nextPairingState = buildPairingState({
         pairingCode: ticket.pairing_code,
@@ -99,6 +107,27 @@ const WalletSetup = () => {
     } finally {
       setLoading(false);
     }
+  }, [organizationId, trustProfileId]);
+
+  useEffect(() => {
+    let current = true;
+    setTrustProfiles([]);
+    setTrustProfileId('');
+    setProfileOrganizationId(null);
+    setPairingId(null);
+    setQrContent(null);
+    if (organizationId) {
+      listTrustProfiles({ organization_id: organizationId })
+        .then((profiles) => {
+          if (!current) return;
+          const eligible = profiles.filter((profile) => profile.status === 'active');
+          setTrustProfiles(eligible);
+          setProfileOrganizationId(organizationId);
+          if (eligible.length === 1) setTrustProfileId(eligible[0].id);
+        })
+        .catch(() => { if (current) setError('Could not load Trust Profiles for wallet pairing'); });
+    }
+    return () => { current = false; };
   }, [organizationId]);
 
   const checkWalletStatus = useCallback(async () => {
@@ -149,11 +178,14 @@ const WalletSetup = () => {
     setSuccess(resolveWalletSetupComplete().successMessage);
   }, []);
 
-  // Generate pairing code on mount
+  // Generate a ticket only after the user has an organization-scoped profile.
   useEffect(() => {
-    generatePairingCode();
     checkNotificationPermission();
-  }, [generatePairingCode, checkNotificationPermission]);
+  }, [checkNotificationPermission]);
+
+  useEffect(() => {
+    if (trustProfileId && profileOrganizationId === organizationId) generatePairingCode();
+  }, [trustProfileId, profileOrganizationId, organizationId, generatePairingCode]);
 
   // Countdown timer for QR code expiry
   useEffect(() => {
@@ -245,6 +277,21 @@ const WalletSetup = () => {
                 Open the {branding.authenticatorName} app and scan this QR code to pair your wallet.
               </Typography>
 
+              <FormControl fullWidth sx={{ mb: 2 }}>
+                <InputLabel id="wallet-trust-profile-label">Trust Profile</InputLabel>
+                <Select
+                  labelId="wallet-trust-profile-label"
+                  label="Trust Profile"
+                  value={trustProfileId}
+                  onChange={(event) => setTrustProfileId(event.target.value)}
+                  data-testid="wallet-trust-profile-select"
+                >
+                  {trustProfiles.map((profile) => (
+                    <MenuItem key={profile.id} value={profile.id}>{profile.name || profile.id}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+
               <Card sx={{ maxWidth: 320, mx: 'auto', mb: 2 }}>
                 <CardContent sx={{ textAlign: 'center' }}>
                   {loading ? (
@@ -266,7 +313,7 @@ const WalletSetup = () => {
                       </Typography>
                     </Box>
                   ) : (
-                    <Typography color="error">Failed to generate QR code</Typography>
+                    <Typography color="text.secondary">Select an active Trust Profile to generate a pairing code.</Typography>
                   )}
                 </CardContent>
               </Card>
@@ -276,7 +323,7 @@ const WalletSetup = () => {
                   variant="outlined"
                   startIcon={<RefreshIcon />}
                   onClick={generatePairingCode}
-                  disabled={loading}
+                  disabled={loading || !trustProfileId}
                   data-testid="refresh-qr-button"
                 >
                   Refresh QR

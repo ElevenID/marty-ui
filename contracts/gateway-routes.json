@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 450,
+  "route_count": 451,
   "routes": [
     {
       "include_in_schema": true,
@@ -741,6 +741,12 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/devices/holder-credential-rotations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/devices/wallet-issuer-keys",
       "status_code": 200
     },
     {

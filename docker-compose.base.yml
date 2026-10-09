@@ -1143,6 +1143,7 @@ services:
       DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:-dev-device-registration-gateway-key-change-me}
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:-dev-device-registration-signing-keys-key-change-me}
       SIGNING_KEYS_HOLDER_ORIGIN: http://signing-keys:8017
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/5
       ORG_GRPC_TARGET: organization:9002

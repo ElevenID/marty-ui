@@ -7,10 +7,12 @@ const {
   mockIssueRemotePairingTicket,
   mockLoadRemotePairingStatus,
   mockRegisterWalletPushNotifications,
+  mockListTrustProfiles,
 } = vi.hoisted(() => ({
   mockIssueRemotePairingTicket: vi.fn(),
   mockLoadRemotePairingStatus: vi.fn(),
   mockRegisterWalletPushNotifications: vi.fn(),
+  mockListTrustProfiles: vi.fn(),
 }));
 
 // Stable references — prevent useCallback identity churn
@@ -23,6 +25,10 @@ vi.mock('../../hooks/useAuth', () => ({
 
 vi.mock('../../hooks/useBranding', () => ({
   useBranding: () => MOCK_BRANDING,
+}));
+
+vi.mock('../../services/presentationPolicyApi', () => ({
+  listTrustProfiles: (...args: unknown[]) => mockListTrustProfiles(...args),
 }));
 
 vi.mock('../../application/wallet', async () => {
@@ -48,6 +54,7 @@ describe('WalletSetup', () => {
       pairing_id: '11111111-2222-4333-8444-555555555555',
       expires_at: new Date(Date.now() + 300000).toISOString(),
     });
+    mockListTrustProfiles.mockResolvedValue([{ id: '11111111-2222-4333-8444-555555555555', name: 'Wallet trust', status: 'active' }]);
     mockLoadRemotePairingStatus.mockResolvedValue({ state: 'pending', registration_id: null });
     mockRegisterWalletPushNotifications.mockResolvedValue({
       deviceId: 'device-1',
@@ -72,7 +79,7 @@ describe('WalletSetup', () => {
     render(<WalletSetup />);
 
     await waitFor(() => {
-      expect(mockIssueRemotePairingTicket).toHaveBeenCalledWith({ organizationId: 'org-1' });
+      expect(mockIssueRemotePairingTicket).toHaveBeenCalledWith({ organizationId: 'org-1', trustProfileId: '11111111-2222-4333-8444-555555555555' });
     });
 
     expect(screen.queryByTestId('simulate-pairing-button')).not.toBeInTheDocument();
@@ -83,7 +90,7 @@ describe('WalletSetup', () => {
     mockLoadRemotePairingStatus.mockResolvedValue({ state: 'paired', registration_id: 'registration-1' });
     render(<WalletSetup />);
 
-    await waitFor(() => expect(mockIssueRemotePairingTicket).toHaveBeenCalled());
+    await screen.findByTestId('pairing-qr-code');
     await vi.advanceTimersByTimeAsync(3000);
     await waitFor(() => expect(mockLoadRemotePairingStatus).toHaveBeenCalledWith({ pairingId: '11111111-2222-4333-8444-555555555555' }));
 

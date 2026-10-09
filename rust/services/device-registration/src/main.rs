@@ -13,6 +13,7 @@ use marty_device_registration::{
     pairing_enrollment::PairingEnrollment,
     pairing_ticket::RedisPairingTickets,
     postgres::PostgresDeviceRepository,
+    wallet_issuer_trust::WalletIssuerTrustClient,
     DeviceRepository, DeviceService,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -109,6 +110,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?);
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
+    let wallet_issuer_trust = match token.as_ref() {
+        Some(token) => Some(Arc::new(WalletIssuerTrustClient::new(
+            &env_value("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004"),
+            token.clone(),
+        )?)),
+        None => None,
+    };
     let pairing_confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));
     let holder_credential_rotator = Arc::new(HolderCredentialRotator::new(
         pool.clone(),
@@ -157,6 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             service,
             memberships,
             pairing_tickets,
+            wallet_issuer_trust,
             pairing_confirmations: Some(pairing_confirmations),
             pairing_enrollment,
             holder_signer,

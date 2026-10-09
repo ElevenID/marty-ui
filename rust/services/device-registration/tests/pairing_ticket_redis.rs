@@ -26,7 +26,7 @@ async fn pairing_token_is_not_stored_and_redeems_once_under_race() {
         .await
         .expect("pairing Redis store");
     let ticket = store
-        .issue("user-a", "org-a")
+        .issue("user-a", "org-a", "11111111-2222-4333-8444-555555555555")
         .await
         .expect("pairing ticket");
     let keys: Vec<String> = redis::cmd("KEYS")

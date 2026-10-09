@@ -457,6 +457,9 @@ def assert_models(
     assert preserved["services"]["device-registration"]["environment"].pop(
         "SIGNING_KEYS_HOLDER_ORIGIN"
     ) == "http://signing-keys:8017"
+    assert preserved["services"]["device-registration"]["environment"].pop(
+        "TRUST_PROFILE_SERVICE_URL"
+    ) == "http://trust-profile:8004"
     assert preserved == before, "Unowned self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(before, sort_keys=True, indent=2).splitlines(keepends=True),

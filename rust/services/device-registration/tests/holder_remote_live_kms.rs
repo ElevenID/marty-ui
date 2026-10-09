@@ -18,6 +18,7 @@ use marty_device_registration::{
     pairing_enrollment::{PairingEnrollment, PairingRedeemResult},
     pairing_ticket::{MemoryPairingTickets, PairingTicketRepository},
     postgres::PostgresDeviceRepository,
+    wallet_issuer_trust::WalletIssuerTrustClient,
     DeviceError, DeviceRepository, DeviceService,
 };
 use marty_holder_key_reference::HolderSignature;
@@ -93,8 +94,16 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let user_id = format!("user-{}", Uuid::new_v4());
     let organization_id = Uuid::new_v4().to_string();
     let tickets = Arc::new(MemoryPairingTickets::new(300));
-    let ticket = tickets.issue(&user_id, &organization_id).await.unwrap();
+    let ticket = tickets
+        .issue(
+            &user_id,
+            &organization_id,
+            "11111111-2222-4333-8444-555555555555",
+        )
+        .await
+        .unwrap();
     let pairing_id = ticket.scope.pairing_id.clone();
+    let bound_profile_id = ticket.scope.trust_profile_id.clone();
     let confirmations = PostgresPairingConfirmations::new(pool.clone());
     confirmations.record_issued(&ticket.scope).await.unwrap();
 
@@ -126,6 +135,35 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         credentials.clone(),
         confirmations.clone(),
     ));
+    let trust_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("disposable Trust Profile listener");
+    let trust_origin = format!("http://{}", trust_listener.local_addr().unwrap());
+    let trust_organization_id = organization_id.clone();
+    let trust_app = axum::Router::new().route(
+        "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
+        axum::routing::get(move |axum::extract::Path(profile_id): axum::extract::Path<String>| {
+            let organization_id = trust_organization_id.clone();
+            async move {
+                let now = chrono::Utc::now();
+                axum::Json(json!({
+                    "organization_id": organization_id,
+                    "trust_profile_id": profile_id,
+                    "generated_at": now,
+                    "expires_at": now + chrono::Duration::seconds(30),
+                    "issuer_keys": [{"issuer":"did:example:issuer","algorithm":"EdDSA","public_jwk":{"kty":"OKP","crv":"Ed25519","x":"public"}}]
+                }))
+            }
+        }),
+    );
+    let trust_server = tokio::spawn(async move { axum::serve(trust_listener, trust_app).await });
+    let trust_client = Arc::new(
+        WalletIssuerTrustClient::new(
+            &trust_origin,
+            "disposable-service-token-32-bytes-or-longer".into(),
+        )
+        .unwrap(),
+    );
     let gateway_key = "disposable-gateway-device-registration-key-32-chars";
     let device_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -135,6 +173,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         service: device_service,
         memberships: memberships.clone(),
         pairing_tickets: tickets.clone(),
+        wallet_issuer_trust: Some(trust_client),
         pairing_confirmations: Some(Arc::new(confirmations.clone())),
         pairing_enrollment: Some(enrollment),
         holder_signer: Some(signer.clone()),
@@ -213,6 +252,10 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("premature holder signing response");
     assert_eq!(premature.status(), reqwest::StatusCode::FORBIDDEN);
+    assert!(confirmations
+        .profile_for_bearer(&enrolled.device_credential)
+        .await
+        .is_err());
     let status = http
         .get(format!(
             "{device_origin}/v1/devices/pairing-confirmations/{pairing_id}"
@@ -257,6 +300,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         status.json::<serde_json::Value>().await.unwrap()["state"],
         "paired"
     );
+    let bound = confirmations
+        .profile_for_bearer(&enrolled.device_credential)
+        .await
+        .expect("confirmed bearer profile binding");
+    assert_eq!(bound.user_id, user_id);
+    assert_eq!(bound.organization_id, organization_id);
+    assert_eq!(bound.trust_profile_id, bound_profile_id);
+    let snapshot = http
+        .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .send()
+        .await
+        .expect("paired wallet trust snapshot");
+    assert!(snapshot.status().is_success());
+    assert_eq!(snapshot.headers()["cache-control"], "no-store");
+    let snapshot: serde_json::Value = snapshot.json().await.unwrap();
+    assert_eq!(snapshot["organization_id"], organization_id);
+    assert_eq!(snapshot["trust_profile_id"], bound_profile_id);
     assert!(signer
         .sign(
             "invalid",
@@ -317,6 +379,14 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     verifier.verify(payload, &signature).unwrap();
 
     memberships.0.store(false, Ordering::SeqCst);
+    let denied_trust = http
+        .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .send()
+        .await
+        .expect("revoked membership trust response");
+    assert_eq!(denied_trust.status(), reqwest::StatusCode::FORBIDDEN);
     let revoked_membership = http
         .post(format!("{device_origin}/v1/devices/holder-signatures"))
         .header("x-service-token", gateway_key)
@@ -352,6 +422,26 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("holder credential rotation response");
     assert!(rotated.status().is_success());
+    assert!(confirmations
+        .profile_for_bearer(&enrolled.device_credential)
+        .await
+        .is_err());
+    let stale_snapshot = http
+        .get(format!("{device_origin}/v1/devices/wallet-issuer-keys"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .send()
+        .await
+        .expect("old bearer trust denial");
+    assert_eq!(stale_snapshot.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(
+        confirmations
+            .profile_for_bearer(&replacement)
+            .await
+            .expect("rotated bearer retains selected profile")
+            .trust_profile_id,
+        bound_profile_id
+    );
     assert_eq!(rotated.headers()["cache-control"], "no-store");
     let rotated: serde_json::Value = rotated.json().await.unwrap();
     assert_eq!(rotated["registration_id"], registration.id);
@@ -404,6 +494,10 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("device deactivation")
         .expect("registered device");
+    assert!(confirmations
+        .profile_for_bearer(&replacement)
+        .await
+        .is_err());
     assert!(signer
         .sign(
             &replacement,
@@ -439,16 +533,33 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     assert!(!remaining.contains(&key.provider_reference));
     assert!(!remaining.contains(&presentation.provider_reference));
 
-    let orphan_ticket = tickets.issue(&user_id, &organization_id).await.unwrap();
-    confirmations
-        .record_issued(&orphan_ticket.scope)
+    let wrong_organization = http
+        .post(format!("{device_origin}/v1/devices/pairing-tickets"))
+        .header("x-service-token", gateway_key)
+        .header("x-user-id", &user_id)
+        .json(&json!({"organization_id":Uuid::new_v4().to_string(),"trust_profile_id":bound_profile_id}))
+        .send()
         .await
-        .unwrap();
-    let orphan_pairing_id = orphan_ticket.scope.pairing_id.clone();
+        .expect("cross-organization profile denial");
+    assert_eq!(
+        wrong_organization.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    let orphan_ticket = http
+        .post(format!("{device_origin}/v1/devices/pairing-tickets"))
+        .header("x-service-token", gateway_key)
+        .header("x-user-id", &user_id)
+        .json(&json!({"organization_id":organization_id,"trust_profile_id":bound_profile_id}))
+        .send()
+        .await
+        .expect("server-owned ticket with selected Trust Profile");
+    assert!(orphan_ticket.status().is_success());
+    let orphan_ticket: serde_json::Value = orphan_ticket.json().await.unwrap();
+    let orphan_pairing_id = orphan_ticket["pairing_id"].as_str().unwrap().to_owned();
     let orphan = http
         .post(format!("{device_origin}/v1/devices/pair"))
         .header("x-service-token", gateway_key)
-        .json(&json!({"pairing_code":orphan_ticket.token,"platform":"android"}))
+        .json(&json!({"pairing_code":orphan_ticket["pairing_code"],"platform":"android"}))
         .send()
         .await
         .expect("unconfirmed enrollment response");
@@ -481,6 +592,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         cleanup.run_once().await.expect("orphan key cleanup"),
         (2, 0)
     );
+    trust_server.abort();
     device_server.abort();
     server.abort();
 }

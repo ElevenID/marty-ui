@@ -20,6 +20,7 @@ use crate::{
     pairing_confirmation::PostgresPairingConfirmations,
     pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
     pairing_ticket::PairingTicketRepository,
+    wallet_issuer_trust::WalletIssuerTrustClient,
     CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
 };
 
@@ -28,6 +29,7 @@ pub struct HttpState {
     pub service: Arc<DeviceService>,
     pub memberships: Arc<dyn MembershipAuthorizer>,
     pub pairing_tickets: Arc<dyn PairingTicketRepository>,
+    pub wallet_issuer_trust: Option<Arc<WalletIssuerTrustClient>>,
     pub pairing_confirmations: Option<Arc<PostgresPairingConfirmations>>,
     pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
     pub holder_signer: Option<Arc<HolderSigner>>,
@@ -64,6 +66,7 @@ pub fn router(state: HttpState) -> Router {
             "/v1/devices/holder-credential-rotations",
             axum::routing::post(rotate_holder_credential),
         )
+        .route("/v1/devices/wallet-issuer-keys", get(wallet_issuer_keys))
         .route(
             "/v1/devices/{registration_id}",
             get(get_device).patch(update_device).delete(delete_device),
@@ -137,6 +140,7 @@ struct ListQuery {
 #[serde(deny_unknown_fields)]
 struct PairingTicketRequest {
     organization_id: String,
+    trust_profile_id: String,
 }
 
 async fn issue_pairing_ticket(
@@ -153,12 +157,20 @@ async fn issue_pairing_ticket(
         .memberships
         .require_active(&user_id, organization_id)
         .await?;
+    if uuid::Uuid::parse_str(&body.trust_profile_id).is_err() {
+        return Err(DeviceError::BadRequest("trust_profile_id is required".into()).into());
+    }
+    let trust = state
+        .wallet_issuer_trust
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    trust.fetch(&body.trust_profile_id, organization_id).await?;
     let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
         DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
     })?;
     let ticket = state
         .pairing_tickets
-        .issue(&user_id, organization_id)
+        .issue(&user_id, organization_id, &body.trust_profile_id)
         .await?;
     confirmations.record_issued(&ticket.scope).await?;
     let mut response = Json(json!({
@@ -274,6 +286,41 @@ async fn rotate_holder_credential(
         .rotate(current, &body.replacement_credential)
         .await?;
     let mut response = Json(rotated).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn wallet_issuer_keys(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let bearer = bearer(&headers)?;
+    let confirmations = state
+        .pairing_confirmations
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    let trust = state
+        .wallet_issuer_trust
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    let profile = confirmations.profile_for_bearer(bearer).await?;
+    state
+        .memberships
+        .require_active(&profile.user_id, &profile.organization_id)
+        .await?;
+    let snapshot = trust
+        .fetch(&profile.trust_profile_id, &profile.organization_id)
+        .await?;
+    // Recheck after the remote read so rotation or deactivation during that read fails closed.
+    if confirmations.profile_for_bearer(bearer).await? != profile {
+        return Err(
+            DeviceError::Forbidden("wallet issuer trust authorization changed".into()).into(),
+        );
+    }
+    let mut response = Json(snapshot).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),

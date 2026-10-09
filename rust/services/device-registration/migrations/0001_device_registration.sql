@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS device_registration_service.device_pairing_confirmati
     pairing_id varchar(36) PRIMARY KEY,
     user_id varchar(255) NOT NULL,
     organization_id varchar(36) NOT NULL,
+    trust_profile_id varchar(36) NOT NULL,
     registration_id varchar(36) UNIQUE REFERENCES device_registration_service.device_registrations(id),
     issued_at timestamptz NOT NULL,
     expires_at timestamptz NOT NULL,

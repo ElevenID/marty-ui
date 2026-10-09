@@ -86,6 +86,17 @@ async fn verify(
             "fresh Device Registration schema must allow pairing without push delivery".into(),
         ));
     }
+    let profile_nullable: Option<String> = sqlx::query_scalar(
+        "SELECT is_nullable FROM information_schema.columns WHERE table_schema='device_registration_service' AND table_name='device_pairing_confirmations' AND column_name='trust_profile_id'",
+    )
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(persistence)?;
+    if profile_nullable.as_deref() != Some("NO") {
+        return Err(DeviceError::Persistence(
+            "fresh wallet pairing schema must bind a Trust Profile".into(),
+        ));
+    }
     let version: Option<String> = sqlx::query_scalar(
         "SELECT version_num FROM device_registration_service.alembic_version WHERE version_num=$1",
     )

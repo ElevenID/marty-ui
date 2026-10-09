@@ -7,9 +7,12 @@ import {
 
 const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
-export async function issueRemotePairingTicket({ organizationId }) {
+export async function issueRemotePairingTicket({ organizationId, trustProfileId }) {
   if (!organizationId) throw new Error('Select an organization before pairing');
-  return post('/v1/devices/pairing-tickets', { organization_id: organizationId });
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trustProfileId || '')) {
+    throw new Error('Select a Trust Profile before pairing');
+  }
+  return post('/v1/devices/pairing-tickets', { organization_id: organizationId, trust_profile_id: trustProfileId });
 }
 
 export async function loadRemotePairingStatus({ pairingId }) {

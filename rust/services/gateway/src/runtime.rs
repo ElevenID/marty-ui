@@ -1395,6 +1395,7 @@ async fn proxy_handler(
 #[serde(deny_unknown_fields)]
 struct PairingTicketIssueRequest {
     organization_id: String,
+    trust_profile_id: String,
 }
 
 async fn pairing_ticket_issue_handler(
@@ -1419,6 +1420,9 @@ async fn pairing_ticket_issue_handler(
     if organization_id.is_empty() {
         return detail_response(422, "organization_id is required");
     }
+    if uuid::Uuid::parse_str(&input.trust_profile_id).is_err() {
+        return detail_response(422, "trust_profile_id is required");
+    }
     let membership = match state
         .memberships
         .get_membership(&user_id, organization_id)
@@ -1441,7 +1445,7 @@ async fn pairing_ticket_issue_handler(
         &trusted,
         HttpMethod::Post,
         "/v1/devices/pairing-tickets",
-        json!({"organization_id": organization_id}),
+        json!({"organization_id": organization_id, "trust_profile_id": input.trust_profile_id}),
         BTreeMap::new(),
     )
     .await;
@@ -6425,7 +6429,7 @@ mod tests {
                 .oneshot(
                     builder
                         .body(Body::from(
-                            json!({"organization_id":organization}).to_string(),
+                            json!({"organization_id":organization,"trust_profile_id":"11111111-2222-4333-8444-555555555555"}).to_string(),
                         ))
                         .unwrap(),
                 )
@@ -6444,7 +6448,7 @@ mod tests {
                     .header("cookie", "sessionId=pairing-session")
                     .header("x-user-id", "forged-user")
                     .header("x-service-token", "forged-service-token")
-                    .body(Body::from(r#"{"organization_id":"org-1"}"#))
+                    .body(Body::from(r#"{"organization_id":"org-1","trust_profile_id":"11111111-2222-4333-8444-555555555555"}"#))
                     .unwrap(),
             )
             .await
@@ -6464,7 +6468,7 @@ mod tests {
         );
         assert_eq!(
             serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap(),
-            json!({"organization_id":"org-1"})
+            json!({"organization_id":"org-1","trust_profile_id":"11111111-2222-4333-8444-555555555555"})
         );
     }
 
@@ -6628,6 +6632,39 @@ mod tests {
             Some("Bearer current-opaque-capability")
         );
         assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(
+            calls[0].1.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn wallet_issuer_keys_forwards_only_device_bearer() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/devices/wallet-issuer-keys")
+                    .header("authorization", "Bearer opaque-device-credential")
+                    .header("x-user-id", "forged-user")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "device-registration");
+        assert_eq!(calls[0].1.path, "/v1/devices/wallet-issuer-keys");
+        assert_eq!(
+            calls[0].1.header("authorization"),
+            Some("Bearer opaque-device-credential")
+        );
+        assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(calls[0].1.header("x-organization-id"), None);
         assert_eq!(
             calls[0].1.header("x-service-token"),
             Some("d".repeat(32).as_str())

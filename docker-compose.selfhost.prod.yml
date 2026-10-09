@@ -1112,6 +1112,7 @@ services:
       DEVICE_REGISTRATION_GATEWAY_KEY_FILE: /run/secrets/device_registration_gateway_key
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE: /run/secrets/device_registration_signing_keys_key
       SIGNING_KEYS_HOLDER_ORIGIN: http://signing-keys:8017
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
