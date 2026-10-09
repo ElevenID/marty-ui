@@ -23,8 +23,6 @@ sys.path.insert(0, str(REPO_ROOT / "packages"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from canvas_worker_runtime import classify_worker_launch  # noqa: E402
-from marty_common.migration_profile import normalize_migration_profile  # noqa: E402
-from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID  # noqa: E402
 from marty_devops import DeploymentCatalog  # noqa: E402
 
 
@@ -51,7 +49,7 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OPEN_BADGE_LOGIN_POLICY_ID = MARTY_OPEN_BADGE_LOGIN_POLICY_ID
+OPEN_BADGE_LOGIN_POLICY_ID = "50000000-0000-0000-0000-000000000004"
 TEXT_BUNDLE_SUFFIXES = {".css", ".html", ".js", ".json", ".map", ".txt"}
 ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d+)?")
 
@@ -205,10 +203,10 @@ def validate_google_social_login(env_values: dict[str, str], secret_dir: Path) -
 
 
 def validate_migration_profile(env_values: dict[str, str]) -> str:
-    profile = normalize_migration_profile(env_values.get("MARTY_MIGRATION_PROFILE"))
+    profile = (env_values.get("MARTY_MIGRATION_PROFILE") or "").strip()
     if profile != "selfhost-production":
         raise CheckError(
-            "MARTY_MIGRATION_PROFILE must resolve to selfhost-production for the self-host stack; "
+            "MARTY_MIGRATION_PROFILE must be selfhost-production for the self-host stack; "
             f"current={profile}"
         )
     return f"profile={profile}"

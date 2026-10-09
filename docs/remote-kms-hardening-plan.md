@@ -9334,3 +9334,13 @@ redeemed with a server-created keyless registration, remote holder and
 presenter keys, one-time device bearer delivery, real paired status and
 Authenticator remote signing. Remove the browser simulation and local SDK
 signing-key path in that grouped cutover.
+
+2026-10-09 self-host operator preflight repair: `make selfhost-prod-check`
+still invokes `scripts/check-selfhost-production.py`; it was unusable because
+two imports pointed at the removed `marty_common` Python package. The script
+now requires the supported exact `selfhost-production` migration profile and
+sets its operator error-hint ID to match the Rust presentation-policy catalog's
+seeded OpenBadgeLogin ID. Its `--help` and direct profile validation load, the ten
+targeted Canvas/self-host preflight tests pass, and Python compilation/Ruff
+pass. This restores the preflight command's importability; it is not evidence
+of a healthy live self-host deployment or of the remaining wallet cutover.
