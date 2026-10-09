@@ -10318,3 +10318,15 @@ goal qualified on partial checks.
 one skipped in 11m38s. This covers the combined historical serial workers
 and scoped OpenBao signer probe after the merge conflict resolution; it does
 not replace the pending hosted Canvas/image or live KMS acceptance gates.
+
+2026-10-09 UI release-contract triage: the first hosted grouped head ran
+6,141 release tests successfully, with four failures. Three were stale
+assertions in existing cutover/classifier tests: Device Registration now has
+12 contract routes after remote-holder pairing/signing/renewal, Gateway now
+has 451 routes after the seven wallet proxy routes, and the CI classifier
+returns the new `openbao` output. The corrected expectations passed their
+three focused tests locally. The fourth failure was the independent live
+registry-index check: Docker could not inspect the pinned Postgres digest,
+matching the other Docker Hub pull-limit errors. Keep that availability gate
+intact and rerun it when the registry is available. These corrections are
+local and need exact-head hosted requalification after the current CI run.

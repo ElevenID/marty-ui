@@ -2427,6 +2427,7 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "rust": "false",
         "rust_runtime": "false",
         "rust_matrix": '["canvas","contracts"]',
+        "openbao": "false",
         "planner_only": "false",
         "rollback_test_only": "false",
         "k8s_policy_test_only": "true",

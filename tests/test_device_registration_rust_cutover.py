@@ -45,7 +45,7 @@ def test_only_native_device_registration_runtime_sources_remain() -> None:
 def test_behavior_contract_and_native_crate_are_owned() -> None:
     contract = json.loads(text("contracts/device-registration-service-behavior.json"))
     assert contract["service"] == "device-registration"
-    assert len(contract["routes"]) == 5
+    assert len(contract["routes"]) == 12
     manifest = text("rust/services/device-registration/Cargo.toml")
     assert 'name = "marty-device-registration"' in manifest
     workspace = text("rust/Cargo.toml")
