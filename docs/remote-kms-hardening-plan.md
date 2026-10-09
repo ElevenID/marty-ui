@@ -7055,3 +7055,7 @@ passes 376 tests with two skips; Ruff checks and focused Rustfmt checks pass.
 The broad hosted job, packaged images, and release artifacts still require
 confirmation on a new PR head. Keep these local corrections in one batched
 push after the remaining current-run jobs finish.
+The updated Issuance library also passes local `cargo +1.97.1 clippy
+--locked -p marty-issuance-service --lib -- -D warnings`; focused Rustfmt
+passed for the modified Issuance and Signing Keys files. The old-head plugin
+and service-image jobs remain live at this checkpoint.
