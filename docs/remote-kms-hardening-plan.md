@@ -10048,3 +10048,29 @@ actual-module resolver harness passing 2/2; it leaves full Authenticator Rust
 validation for a suitable hosted/mobile build. Core PR #355 is mergeable but
 branch protection reports `REVIEW_REQUIRED`, while Verifier PR #154 is clean;
 both are still open. Do not bypass the Core review requirement.
+
+2026-10-09 mobile verified-presenter candidate (local, unpublished): Rust now
+has a short-lived, one-use SD-JWT presentation session that rechecks the
+operator-governed issuer-key snapshot, verifies the credential and paired
+holder public JWK through Core, preserves the parsed nonce/audience/state,
+returns only the exact JWS signing input for the remote signer, verifies the
+returned ES256 signature against the paired public key, then builds Core's
+DCQL/Presentation Exchange response. A digest of the entire parsed request
+is returned to Flutter and compared after reparsing before preparation, so a
+remote request object changed after user approval is rejected. The isolated
+actual-source Rust harness passed five tests, including the signed public
+OpenBao vector, changed request state, and one-use invalid-signature denial.
+This is not yet a full Authenticator build or a working mobile route.
+
+The Flutter candidate now stages a user-selected stored SD-JWT, retrieves a
+fresh issuer snapshot and paired public key after approval, calls Rust
+preparation, requests remote exact-input signing, and requires the verifier
+response to accept. Targeted pairing/transport Flutter tests passed 12/12.
+Rust bridge generation on Windows failed twice during native vendored OpenSSL
+`nmake`; a short-target-path generation run is still in progress. Generated
+bridge output, full Flutter analysis, OID4VCI credential receipt, query
+semantics review, and physical-device validation are outstanding. Core local
+`1939d4a` gives VP submission a no-redirect, bounded-time HTTP client so a
+VP token is not forwarded to a redirect target; its focused test and
+wallet-feature Clippy with warnings denied passed. This correction is not yet
+published to Core PR #355 or repinned in consumers.
