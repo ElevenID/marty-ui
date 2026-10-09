@@ -7165,3 +7165,9 @@ container was stopped. The source profile still declares no host-path
 creation; upstream Compose issue
 https://github.com/docker/compose/issues/13602 documents why that directive
 alone cannot serve as an operator-side missing-path preflight.
+The exact generated Credentials web package also initialized with Node 24 via
+`initSync` over the compiled WASM bytes. `get_version()` returned `0.1.79` and
+`health_check()` returned status `ok` with credential-offer and verification
+features. This is a package-load check, not the authenticator browser flow.
+UI Rust Service Images completed successfully at `888e7949b`; the live OpenBao
+plugin image job was still active at this checkpoint.
