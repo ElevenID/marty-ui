@@ -47,7 +47,9 @@ if __package__:
         issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
-    from .qualify_selfhost_migrations import PRIVATE_KEY_SCHEMA_QUERY
+    from .qualify_selfhost_migrations import (
+        PRIVATE_KEY_JSON_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
+    )
 else:
     from check_passport_supported_rust_model import PROJECT
     from check_passport_supported_compose_ownership import (
@@ -77,7 +79,9 @@ else:
         issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
-    from qualify_selfhost_migrations import PRIVATE_KEY_SCHEMA_QUERY
+    from qualify_selfhost_migrations import (
+        PRIVATE_KEY_JSON_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
+    )
 
 from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
@@ -153,7 +157,8 @@ def _assert_disposable_schema(
         "DO $kms_schema$ BEGIN IF EXISTS ("
         + PRIVATE_KEY_SCHEMA_QUERY.strip()
         + ") THEN RAISE EXCEPTION 'private-key storage remains'; "
-        "END IF; END $kms_schema$;"
+        "END IF; END $kms_schema$;\n"
+        + PRIVATE_KEY_JSON_QUERY
     )
     if not run(
         ["docker", "exec", postgres_id, "psql", "-X", "-v", "ON_ERROR_STOP=1",

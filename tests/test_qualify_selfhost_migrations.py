@@ -11,7 +11,8 @@ import subprocess
 import pytest
 
 from scripts.qualify_selfhost_migrations import (
-    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_SCHEMA_QUERY, SCHEMA_INVENTORY_QUERY,
+    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_JSON_QUERY,
+    PRIVATE_KEY_SCHEMA_QUERY, SCHEMA_INVENTORY_QUERY,
     QualificationError,
     _assert_run, native_command, qualify,
     validate_images, validate_model,
@@ -231,7 +232,8 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert report["services_image"] == IMAGES["services"]
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
-    assert sum("psql" in args for args in calls) == 8
+    assert sum("psql" in args for args in calls) == 10
+    assert sum(args[-1] == PRIVATE_KEY_JSON_QUERY for args in calls) == 2
     assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
     assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2
     assert all("marty-device-registration verify-owned-schema" in " ".join(args)
@@ -247,7 +249,13 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert any("down" in args and "--volumes" in args for args in calls)
 
 
-def test_private_key_schema_fails_qualification_and_cleans() -> None:
+@pytest.mark.parametrize(("blocked_query", "failure"), [
+    (PRIVATE_KEY_SCHEMA_QUERY, "created private-key storage"),
+    (PRIVATE_KEY_JSON_QUERY, "Private-key JSON storage scan failed"),
+])
+def test_private_key_storage_fails_qualification_and_cleans(
+    blocked_query: str, failure: str,
+) -> None:
     calls: list[list[str]] = []
 
     def run(args: list[str], environment: dict[str, str], timeout: int = 90
@@ -265,10 +273,13 @@ def test_private_key_schema_fails_qualification_and_cleans() -> None:
         if "psql" in args and "alembic_version" in args[-1]:
             return result(args, "t\n")
         if args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY]:
-            return result(args, "column:issuance_service.issuer_signing_keys.encrypted_jwk_json\n")
+            return result(args, "column:issuance_service.issuer_signing_keys.encrypted_jwk_json\n"
+                          if blocked_query == PRIVATE_KEY_SCHEMA_QUERY else "")
+        if args[-1:] == [PRIVATE_KEY_JSON_QUERY] and blocked_query == PRIVATE_KEY_JSON_QUERY:
+            return result(args, status=1)
         return result(args)
 
-    with pytest.raises(QualificationError, match="created private-key storage"):
+    with pytest.raises(QualificationError, match=failure):
         qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "3" * 16)
     assert any("down" in args and "--volumes" in args for args in calls)
 

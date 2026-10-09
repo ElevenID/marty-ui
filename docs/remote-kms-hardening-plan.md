@@ -10570,3 +10570,22 @@ queued. No hosted result is claimed yet. The prior failed run
 `37994913688` remains immutable evidence and is not overwritten by this
 push. The untracked `rust/crates/canvas-acceptance/%SystemDrive%/` path was
 neither staged nor modified.
+
+2026-10-09 K10 JSON storage self-review: after the published `8ee6790ba`
+batch, the local branch adds a PostgreSQL catalog-driven scan of every
+non-system JSON/JSONB table column to both the exact-image self-host
+migration qualifier and the protected passport producer's pre/post runtime
+write guard. It rejects named private-key fields and nested JWK objects that
+contain both `kty` and private `d`, reporting only schema/table/column. A
+disposable pinned PostgreSQL 15 probe accepted public JSON and rejected both
+a nested private-JWK shape and a named private-key field; no key material was
+generated. Focused tests passed (21, with one Windows `bash -n` stdin case
+excluded because PowerShell supplies UTF-16), and Ruff passed. This new
+guard was also exercised through the protected producer's actual PostgreSQL
+command against a second disposable PostgreSQL 15 database: public JSON was
+accepted and a named forbidden field caused a producer failure. Both owned
+containers were removed after the probes. The source guard is local and has
+not been published or run against a full
+assembled product database. The exact-head UI CI run `37999429439` remains
+in progress; at observation all completed jobs, including Nginx integration,
+UI shards, service tests, security scanning and Rust supply chain, were green.

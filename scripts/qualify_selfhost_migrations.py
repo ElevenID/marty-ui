@@ -55,6 +55,42 @@ WHERE c.relkind IN ('r', 'p', 'm', 'f')
 ORDER BY 1
 LIMIT 20
 """
+PRIVATE_KEY_JSON_QUERY = """
+DO $kms_private_json$
+DECLARE
+    candidate record;
+    found boolean;
+BEGIN
+    FOR candidate IN
+        SELECT n.nspname AS schema_name, c.relname AS table_name,
+               a.attname AS column_name
+        FROM pg_catalog.pg_class AS c
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        JOIN pg_catalog.pg_attribute AS a ON a.attrelid = c.oid
+        WHERE c.relkind IN ('r', 'p', 'm', 'f')
+          AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.atttypid IN ('json'::regtype, 'jsonb'::regtype)
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND left(n.nspname, 3) <> 'pg_'
+    LOOP
+        EXECUTE format(
+            'SELECT EXISTS (SELECT 1 FROM %I.%I WHERE %I::text ~* %L '
+            || 'OR jsonb_path_exists(%I::jsonb, %L::jsonpath))',
+            candidate.schema_name, candidate.table_name,
+            candidate.column_name,
+            '"(private_key|privateKey|private_jwk|privateJwk|encrypted_jwk|encryptedJwk|secret_key|secretKey|key_material|keyMaterial)"[[:space:]]*:',
+            candidate.column_name,
+            '$.** ? (exists(@.kty) && exists(@.d))'
+        ) INTO found;
+        IF found THEN
+            RAISE EXCEPTION 'private-key JSON storage in %.%.%',
+                candidate.schema_name, candidate.table_name,
+                candidate.column_name;
+        END IF;
+    END LOOP;
+END
+$kms_private_json$;
+"""
 SCHEMA_INVENTORY_QUERY = """
 SELECT COALESCE(json_agg(json_build_object(
     'schema', n.nspname, 'table', c.relname,
@@ -352,6 +388,11 @@ def qualify(images: dict[str, str], *,
                 ], environment), "Private-key schema inventory failed").strip()
                 require(not private_schema,
                         "Released self-host migrations created private-key storage")
+                _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-v", "ON_ERROR_STOP=1", "-qAtc",
+                    PRIVATE_KEY_JSON_QUERY,
+                ], environment), "Private-key JSON storage scan failed")
                 raw_inventory = _checked(run([
                     *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
                     "-d", "marty", "-Atqc", SCHEMA_INVENTORY_QUERY,
