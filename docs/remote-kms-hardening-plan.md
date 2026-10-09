@@ -7350,3 +7350,16 @@ scratch container was stopped without touching either running local stack.
 This qualifies only the candidate Issuance migration on a fresh database;
 the assembled release schema, runtime writes, and self-host cutover still
 need K10 proof.
+
+2026-10-08/09 authenticator consumer pin audit: the current
+`marty-authenticator` `origin/main` Rust manifest and lockfile still pin seven
+Marty Core packages to `56cc26c`, predating the hardened Core PR head
+`d41d87c`. Its active Rust source uses `marty-oid4vci` wallet issuance and
+presentation operations, plus verification, mdoc, ZKP and biometrics APIs.
+The Credentials WASM branch's green checks therefore do not prove the
+authenticator's actual browser artifact or Rust bridge has adopted the
+hardened Core. Before K5/K7/K9 closure, qualify an isolated authenticator
+consumer against the hardened Core and new WASM package, then update its
+production pin if that application is included in the KMS-only release.
+Do not restore the retired raw-key exports merely to satisfy dormant web
+wrappers; prove the active wallet flow instead.
