@@ -7363,3 +7363,17 @@ consumer against the hardened Core and new WASM package, then update its
 production pin if that application is included in the KMS-only release.
 Do not restore the retired raw-key exports merely to satisfy dormant web
 wrappers; prove the active wallet flow instead.
+
+UI PR #1192 run `37871998969` subsequently passed both `Rust Service
+Images` and `Test OpenBao DIDComm plugin image` at pushed head `543b9a96c`.
+The plugin job includes the coordinated PostgreSQL and Raft recovery probe.
+Canvas remains live, while the known Rust contracts test correction is held
+locally for one grouped push after Canvas finishes.
+
+The isolated authenticator Core-pin probe first failed dependency resolution:
+its old `isomdl-elevenid` revision provides `isomdl` 0.2, but hardened
+`marty-iso18013` requires 0.3. Matching Core's reviewed isomdl and SSI fork
+patches and updating the locked `aws-lc-rs` selection to 1.18.1 resolved that
+graph conflict. The hardened Rust bridge is now compiling in the separate
+authenticator consumer worktree; no authenticator PR or release claim follows
+from dependency resolution alone.
