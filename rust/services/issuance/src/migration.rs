@@ -242,6 +242,28 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn validate_base_tables(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    let private_key_storage: Option<String> = sqlx::query_scalar(
+        "SELECT 'table:' || table_name
+         FROM information_schema.tables
+         WHERE table_schema = 'issuance_service'
+           AND (table_name = 'issuer_signing_keys' OR table_name ILIKE '%private_key%'
+                OR table_name ILIKE '%private_jwk%' OR table_name ILIKE '%secret_key%')
+         UNION ALL
+         SELECT 'column:' || table_name || '.' || column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'issuance_service'
+           AND (column_name ILIKE '%private_key%' OR column_name ILIKE '%private_jwk%'
+                OR column_name ILIKE '%encrypted_jwk%' OR column_name ILIKE '%secret_key%'
+                OR column_name ILIKE '%key_material%')
+         LIMIT 1",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    if let Some(object) = private_key_storage {
+        return Err(sqlx::Error::Protocol(format!(
+            "issuance schema contains retired private-key storage: {object}"
+        )));
+    }
     let actual: Vec<String> =
         sqlx::query_scalar("SELECT tablename FROM pg_tables WHERE schemaname = 'issuance_service'")
             .fetch_all(&mut *connection)
