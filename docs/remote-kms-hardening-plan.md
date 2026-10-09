@@ -7390,3 +7390,16 @@ gap, not a reason to restore those APIs. Qualify and update the Verifier
 with a shared supported policy-sync component without feature loss, before
 claiming authenticator adoption. The isolated authenticator worktree contains
 diagnostic manifest/lock edits only and has not been published.
+
+An isolated Verifier root probe using Core `d41d87c` reaches a concrete
+manifest incompatibility before compilation: production `src-tauri` enables
+the removed `marty-verification/local-key-operations` and
+`marty-crypto/sod-builder` features, and `marty-sync`'s optional demo-fixture
+path requests them too. Cargo rejects `sod-builder` on the hardened Core
+0.2 crate. Verifier's current `origin/main` still pins an older Core
+`08a0d43`; simply advancing the authenticator's `marty-sync` revision to
+Verifier main would leave a mixed old/new Core graph. Treat Verifier and
+authenticator as explicit downstream consumer work, preserving verifier and
+wallet capabilities while removing obsolete local-signing fixture paths.
+The probe changes are isolated and uncommitted; the three primary feature
+PRs remain the immediate landing path.
