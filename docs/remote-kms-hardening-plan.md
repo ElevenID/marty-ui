@@ -9758,8 +9758,13 @@ Rust parser test is compiling; Flutter/Dart is not installed on this host, so
 the mobile service tests and analyzer remain required CI/host gates.
 The first local Windows Rust bridge test could not reach this QR assertion:
 Longfellow ZK's native compile lacks `openssl/sha.h` on this host. A second
-parser-only run uses the repository's debug-only `USE_ZK_MOCK=1` setting to
-isolate the QR logic; no ZK custody or release claim may be drawn from it.
+parser-only run used the repository's debug-only `USE_ZK_MOCK=1` setting to
+isolate the QR logic, but Windows `openssl-sys` failed while compiling its
+vendored OpenSSL before the QR test executed. Neither local run establishes
+QR correctness, ZK custody, or release qualification. The Authenticator
+candidate was committed locally as `9b8a5ad` without updating draft PR #57;
+run its Rust parser, Flutter service tests, analyzer and mobile build in the
+supported Linux/mobile toolchain after the grouped wallet changes are ready.
 Browser pairing completion must be tied to this exact ticket. Listing an
 arbitrary new or existing device is not proof that the scanned mobile app
 received and stored its bearer. The next grouped UI work should issue a
