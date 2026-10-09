@@ -8480,3 +8480,17 @@ endpoint/token and TLS integration-secret KMS endpoint/CA mounts. The frozen
 whole-model self-host checker enforces these exact additions, and all five
 model cases plus 147 focused Python tests pass locally. Packaged runtime and
 exact-head hosted qualification still need to prove this wiring in an image.
+
+The same review found the passport disposable `issuance-native` Rust process
+had no integration-secret KMS URL/CA, and its `signing-keys` service had no
+TLS integration-secret listener. The stack now mounts its already staged
+short-lived `signing-keys` certificate/key and CA, enables the TLS listener,
+requires both HTTP and CA-verified HTTPS health, and waits for signing-keys
+health before Rust Issuance starts. The protected compose model and live
+ownership checker now enforce the exact KMS URL, TLS files and mounts.
+Negative binding tests and the full related group pass: 217 tests, one skip.
+This is model evidence; actual signed-image startup remains to be exercised.
+
+UI PR #1192 published head `14f115ecc` completed CI run `37899481669`
+successfully, including the final Canvas database contract job. The grouped
+local KMS/Rust-only head still needs its own hosted checks after one push.

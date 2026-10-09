@@ -149,7 +149,9 @@ services:
       BAO_TOKEN_FILE: /run/secrets/bao_token
       PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key]
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, signing_keys_workload_server_cert, signing_keys_workload_server_key, workload_identity_ca_cert]
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -158,7 +160,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: [CMD, curl, --fail, http://localhost:8017/health]
+      test: [CMD-SHELL, "curl --fail http://localhost:8017/health && curl --fail --cacert /run/secrets/workload_identity_ca_cert https://signing-keys:8018/health"]
     networks: [private]
 
   event-stream:
@@ -345,6 +347,8 @@ services:
       # Gateway compatibility routes, which authorize the organization scope.
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       PERSONALIZATION_BUREAU_URL: http://passport-beta-bureau:8020
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/grpc_service_token
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: passport-beta-bureau
@@ -352,10 +356,10 @@ services:
       RP_GRPC_TARGET: revocation-profile:9013
       CT_GRPC_TARGET: credential-template:9003
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, token_hmac_key, passport_beta_reconciliation_operator_token]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, token_hmac_key, passport_beta_reconciliation_operator_token, workload_identity_ca_cert]
     depends_on:
       signing-keys:
-        condition: service_started
+        condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
       issuance-migrations:
@@ -614,6 +618,10 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/pp_workload_server_cert
   pp_workload_server_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/pp_workload_server_key
+  signing_keys_workload_server_cert:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_workload_server_cert
+  signing_keys_workload_server_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_workload_server_key
 
 volumes:
   postgres_data:

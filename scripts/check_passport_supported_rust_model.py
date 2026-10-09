@@ -663,9 +663,12 @@ def validate_model(
                     == "service_healthy" for name in (
                         "credential-template", "trust-profile", "presentation-policy",
                         "deployment-profile", "issuance-native", "signing-keys"))
-            and all(services[name].get("healthcheck", {}).get("test")
-                    == ["CMD", "curl", "--fail", f"http://localhost:{port}/health"]
-                    for name, port in (("issuance-native", 8005), ("signing-keys", 8017))),
+            and services["issuance-native"].get("healthcheck", {}).get("test")
+                == ["CMD", "curl", "--fail", "http://localhost:8005/health"]
+            and services["signing-keys"].get("healthcheck", {}).get("test")
+                == ["CMD-SHELL", "curl --fail http://localhost:8017/health && "
+                    "curl --fail --cacert /run/secrets/workload_identity_ca_cert "
+                    "https://signing-keys:8018/health"],
             "Disposable Flow startup dependencies are incomplete")
     flow_selfhost = {
         "FLOW_CALLBACK_DESTINATIONS": (
@@ -913,12 +916,27 @@ def validate_model(
         and "TOKEN_HMAC_KEY" not in native
         and "INTEGRATION_SECRET_MASTER_KEY" not in native
         and "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
+        and native.get("INTEGRATION_SECRET_KMS_URL")
+            == "https://signing-keys:8018/internal"
+        and native.get("INTEGRATION_SECRET_KMS_CA_FILE")
+            == "/run/secrets/workload_identity_ca_cert"
         and {"token_hmac_key",
-             "passport_beta_reconciliation_operator_token"}
+             "passport_beta_reconciliation_operator_token",
+             "workload_identity_ca_cert"}
         <= {secret.get("source") for secret in services["issuance-native"].get("secrets", [])
             if isinstance(secret, dict)},
         "Disposable native issuance startup secrets are missing",
     )
+    signing_keys_service = services["signing-keys"]
+    require(signing_keys_service["environment"].get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE")
+            == "/run/secrets/signing_keys_workload_server_cert"
+            and signing_keys_service["environment"].get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE")
+            == "/run/secrets/signing_keys_workload_server_key"
+            and {"signing_keys_workload_server_cert",
+                 "signing_keys_workload_server_key", "workload_identity_ca_cert"}
+            <= {secret.get("source") for secret in signing_keys_service.get("secrets", [])
+                if isinstance(secret, dict)},
+            "Disposable signing-key remote-secret TLS custody is incomplete")
     operator_token_holders = {
         name for name, service in services.items()
         if any(item.get("source") == "passport_beta_reconciliation_operator_token"

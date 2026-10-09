@@ -53,7 +53,9 @@ SECRET_MOUNTS = {
     "openbao": ("bao_root_token",),
     "db-migrate": ("marty_db_password", "bao_token"),
     "issuance-migrations": ("marty_db_password",),
-    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key"),
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                     "signing_keys_workload_server_cert", "signing_keys_workload_server_key",
+                     "workload_identity_ca_cert"),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
@@ -68,7 +70,8 @@ SECRET_MOUNTS = {
     "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
-                        "passport_beta_reconciliation_operator_token"),
+                        "passport_beta_reconciliation_operator_token",
+                        "workload_identity_ca_cert"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key",
              "issuance_api_key", "grpc_service_token",
              "flow_application_event_hmac_key"),
@@ -327,6 +330,12 @@ def _ceremony_environment(actual: object, service: str, surface: str) -> None:
                 and "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED" not in environment
                 and (service != "gateway" or environment.get("ENVIRONMENT") == "production"),
                 "Selfhost runtime carries a beta certificate ceremony credential")
+    if service == "signing-keys":
+        require(environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE")
+                == "/run/secrets/signing_keys_workload_server_cert"
+                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE")
+                == "/run/secrets/signing_keys_workload_server_key",
+                "Disposable signing-key remote-secret TLS listener differs")
 
 
 def _status_origin(edge: dict) -> str:
@@ -555,6 +564,11 @@ def verify(record: dict, surface: str, now: datetime,
         elif service == "issuance-native":
             _issuer_origin_environment(config.get("Env"), service, status_origin)
             native_environment = _runtime_environment(config.get("Env"), service)
+            require(native_environment.get("INTEGRATION_SECRET_KMS_URL")
+                    == "https://signing-keys:8018/internal"
+                    and native_environment.get("INTEGRATION_SECRET_KMS_CA_FILE")
+                    == "/run/secrets/workload_identity_ca_cert",
+                    "Disposable Rust Issuance remote-secret KMS binding differs")
             require(native_environment.get("ENVIRONMENT") == "beta"
                     and native_environment.get("PASSPORT_BETA_RECONCILIATION_ENABLED") == "true"
                     and native_environment.get("PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE")

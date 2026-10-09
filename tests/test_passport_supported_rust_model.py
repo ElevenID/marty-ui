@@ -330,6 +330,12 @@ def safe_model(root: Path) -> dict:
             "deployment-profile", "issuance-native", "signing-keys")}
     services["issuance-native"]["healthcheck"] = {
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"]}
+    services["issuance-native"]["environment"].update({
+        "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["issuance-native"]["secrets"].append({
+        "source": "workload_identity_ca_cert"})
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -342,11 +348,20 @@ def safe_model(root: Path) -> dict:
                             "/run/secrets/csca_issue_gateway_key",
                         "PUBLIC_DOMAIN": "localhost:29876",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
-                            "/run/secrets/signing_keys_internal_api_key"},
-        "secrets": [{"source": "signing_keys_internal_api_key"}],
+                            "/run/secrets/signing_keys_internal_api_key",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
+                            "/run/secrets/signing_keys_workload_server_cert",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
+                            "/run/secrets/signing_keys_workload_server_key"},
+        "secrets": [{"source": "signing_keys_internal_api_key"},
+                    {"source": "signing_keys_workload_server_cert"},
+                    {"source": "signing_keys_workload_server_key"},
+                    {"source": "workload_identity_ca_cert"}],
         "depends_on": {"redis": {"condition": "service_healthy"}},
-        "healthcheck": {"test": ["CMD", "curl", "--fail",
-                                 "http://localhost:8017/health"]},
+        "healthcheck": {"test": ["CMD-SHELL",
+                                 "curl --fail http://localhost:8017/health && "
+                                 "curl --fail --cacert /run/secrets/workload_identity_ca_cert "
+                                 "https://signing-keys:8018/health"]},
     }
     services["db-migrate"] = {
         "image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
@@ -433,6 +448,12 @@ def safe_model(root: Path) -> dict:
                     "file": str(root / "secrets/passport_edge_tls_cert")},
                 "passport_edge_tls_key": {
                     "file": str(root / "secrets/passport_edge_tls_key")},
+                "workload_identity_ca_cert": {
+                    "file": str(root / "secrets/workload_identity_ca_cert")},
+                "signing_keys_workload_server_cert": {
+                    "file": str(root / "secrets/signing_keys_workload_server_cert")},
+                "signing_keys_workload_server_key": {
+                    "file": str(root / "secrets/signing_keys_workload_server_key")},
             },
             "configs": {"passport_supported_openbao_start": {
                 "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
