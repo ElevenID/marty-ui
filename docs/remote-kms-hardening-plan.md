@@ -10107,3 +10107,13 @@ generated bindings, paired public-key read, strict one-use signing session,
 legacy Dart route retirement, QR compile repair, and public-only fixture.
 It has not been pushed to PR #57; keep the broad feature batch grouped until
 remote-only credential receipt and the remaining native path audit are ready.
+The next mobile implementation should receive pre-authorized OID4VCI offers
+through Rust's offer/issuer-metadata/token APIs, fetch the issuer's fresh
+Nonce Endpoint value (not currently exposed by the Authenticator bridge),
+prepare Core's `openid4vci-proof+jwt` with the paired public Ed25519
+holder-binding key, obtain the exact-input EdDSA signature from the paired
+remote signer, verify the signature before requesting the credential, then
+verify the returned SD-JWT against the fresh Trust Profile issuer snapshot
+and holder binding before storing it in `WalletCredentialStore`. Preserve
+configuration choice and transaction/deferred semantics or explicitly fail
+closed until implemented; do not revive the native local-key offer handler.
