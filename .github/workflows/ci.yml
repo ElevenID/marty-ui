@@ -1037,8 +1037,10 @@ jobs:
                   --test canvas_oauth_behavior --test issuance-behavior \
                   --no-run --timings --message-format=json
                 # Retain package-specific feature resolution for each binary.
-                 run_cargo_phase issuance_binaries cargo build --locked --offline -p marty-issuance-service \
+                 run_cargo_phase issuance_binaries cargo build --locked --offline \
+                  -p marty-issuance-service -p marty-organization -p marty-credential-template \
                   --bin marty-issuance-service --bin marty-canvas-sync-worker \
+                  --bin marty-organization --bin marty-credential-template \
                   --message-format=json
                  run_cargo_phase gateway_binary cargo build --locked --offline -p marty-gateway --bin marty-gateway \
                   --message-format=json
@@ -1488,27 +1490,21 @@ jobs:
           for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
-          # Executable startup verifies every persisted integration-secret row.
-          # Seed this dedicated database through the production Rust owner so
-          # the complete issuance baseline is present before the process boots.
-          # The owner requires the upstream catalogs even when this smoke
-          # database intentionally contains no organizations or templates.
-          docker exec --interactive "${{ job.services.postgres.id }}" \
-            psql -v ON_ERROR_STOP=1 --username postgres --dbname marty_issuance_executable_smoke_test <<'SQL'
-          CREATE SCHEMA organization_service;
-          CREATE TABLE organization_service.organizations (
-            id text PRIMARY KEY, name text, slug text
-          );
-          CREATE SCHEMA credential_template_service;
-          CREATE TABLE credential_template_service.credential_templates (
-            id text PRIMARY KEY, organization_id text, name text,
-            description text, claims jsonb, issuer_requirements jsonb,
-            status text, created_at timestamptz
-          );
-          SQL
+          # Use the real upstream Rust schema owners. The former hand-made
+          # fixture used a text Organization ID and hid a UUID/text mismatch
+          # in Issuance's fresh application-template seed.
+          for owner in marty-organization marty-credential-template; do
+            test -x "rust/target/debug/$owner"
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+              "rust/target/debug/$owner" migrate
+          done
           test -x rust/target/debug/marty-issuance-service
           DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             rust/target/debug/marty-issuance-service migrate
+          for owner in marty-organization marty-credential-template; do
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+              "rust/target/debug/$owner" verify-owned-schema
+          done
           DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             rust/target/debug/marty-issuance-service verify-owned-schema
           python3 scripts/verify_fresh_kms_issuance_schema.py \

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a released migrations digest against disposable self-host dependencies.
+"""Run released migrations and Rust Issuance images on disposable dependencies.
 
 This is a release-role compatibility probe, not a full bundle installation or
 an OpenBao least-privilege qualification. It never selects an existing stack.
@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "docker-compose.selfhost-migrations-disposable.yml"
 IMAGES = {
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "postgres": "docker.io/library/postgres",
     "redis": "docker.io/library/redis",
     "openbao": "quay.io/openbao/openbao",
@@ -49,6 +50,17 @@ ORDER BY 1
 LIMIT 20
 """
 REDIS_REGISTRY = f"org:{ORG_ID}:signing-key-services"
+NATIVE_BINARIES = (
+    "marty-organization", "marty-credential-template", "marty-issuance-service",
+)
+
+
+def native_command(operation: str) -> str:
+    return ". /app/load-secrets-env.sh; " + " && ".join(
+        ("exec " if index == len(NATIVE_BINARIES) - 1 else "")
+        + f"/usr/local/bin/{binary} {operation}"
+        for index, binary in enumerate(NATIVE_BINARIES)
+    )
 
 
 class QualificationError(ValueError):
@@ -77,7 +89,7 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and set(model) == {"name", "services", "networks", "secrets", "configs"}
             and model["name"] == project
             and set(model.get("services", {})) ==
-            {"postgres", "redis", "openbao", "db-migrate"},
+            {"postgres", "redis", "openbao", "db-migrate", "native-schema-migrate"},
             "Disposable service set changed")
     services = model["services"]
     service_keys = {
@@ -88,9 +100,12 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                     "image", "networks", "secrets"},
         "db-migrate": {"command", "depends_on", "entrypoint", "environment",
                        "image", "networks", "restart", "secrets"},
+        "native-schema-migrate": {"command", "depends_on", "entrypoint", "environment",
+                                  "image", "networks", "restart", "secrets"},
     }
     for name, role in (("postgres", "postgres"), ("redis", "redis"),
-                       ("openbao", "openbao"), ("db-migrate", "migrations")):
+                       ("openbao", "openbao"), ("db-migrate", "migrations"),
+                       ("native-schema-migrate", "services")):
         service = services[name]
         require(set(service) == service_keys[name]
                 and service.get("image") == images[role]
@@ -165,6 +180,20 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                 name: {"condition": "service_healthy", "required": True}
                 for name in ("postgres", "redis", "openbao")},
             "Self-host migration entrypoint, profile or dependencies changed")
+    native = services["native-schema-migrate"]
+    require(native["entrypoint"] == ["/bin/sh", "-ec"]
+            and native["command"] == [native_command("migrate")]
+            and native["environment"] == {
+                "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                "DATABASE_URL_TEMPLATE":
+                    "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"}
+            and native["secrets"] == [{
+                "source": "marty_db_password",
+                "target": "/run/secrets/marty_db_password"}]
+            and native["depends_on"] == {
+                "postgres": {"condition": "service_healthy", "required": True}}
+            and native["restart"] == "no",
+            "Rust services image does not own the disposable native migrations")
     require(model.get("networks") == {"private": {
                 "name": f"{project}_private", "ipam": {}, "internal": True}},
             "Disposable network is not internal")
@@ -244,6 +273,7 @@ def qualify(images: dict[str, str], *,
         environment = os.environ.copy()
         environment.update({
             "PROBE_MIGRATIONS_IMAGE": images["migrations"],
+            "PROBE_SERVICES_IMAGE": images["services"],
             "PROBE_POSTGRES_IMAGE": images["postgres"],
             "PROBE_REDIS_IMAGE": images["redis"],
             "PROBE_OPENBAO_IMAGE": images["openbao"],
@@ -271,6 +301,14 @@ def qualify(images: dict[str, str], *,
                                  "db-migrate"], environment, 900)
                 _checked(migration, "Released self-host migrations failed")
                 _assert_run(migration.stdout + migration.stderr)
+                _checked(run([*compose, "run", "--no-deps", "--rm",
+                              "native-schema-migrate"], environment, 900),
+                         "Released Rust native schema migrations failed")
+                _checked(run([*compose, "run", "--no-deps", "--rm",
+                              "--entrypoint", "/bin/sh", "native-schema-migrate",
+                              "-ec", native_command("verify-owned-schema")],
+                             environment, 900),
+                         "Released Rust native schema verification failed")
                 head = _checked(run([*compose, "exec", "-T", "postgres", "psql",
                                      "-U", "marty", "-d", "marty", "-Atqc",
                                      NOTIFICATION_HEAD], environment),
@@ -280,6 +318,12 @@ def qualify(images: dict[str, str], *,
                 require(ledger is None or head == ledger,
                         "Notification migration head changed on idempotent rerun")
                 ledger = head
+                alembic = _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-Atqc",
+                    "SELECT to_regclass('issuance_service.alembic_version') IS NULL",
+                ], environment), "Issuance historical schema inventory failed").strip()
+                require(alembic == "t", "Released Issuance schema retains Alembic state")
                 private_schema = _checked(run([
                     *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
                     "-d", "marty", "-Atqc", PRIVATE_KEY_SCHEMA_QUERY,
@@ -302,8 +346,10 @@ def qualify(images: dict[str, str], *,
                 ], environment), "OpenBao notification key verification failed").strip()
                 require(transit.splitlines() == ["aes256-gcm96", "false"],
                         "Notification envelope key has unsafe attributes")
-            return {"schema": "marty.selfhost-migrations-qualification/v1",
+            return {"schema": "marty.selfhost-migrations-qualification/v2",
                     "migrations_image": images["migrations"],
+                    "services_image": images["services"],
+                    "native_schemas": "verified",
                     "notification_head": ledger,
                     "private_key_storage": "absent",
                     "profile": "selfhost-production", "runs": "2"}

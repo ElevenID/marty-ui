@@ -12,7 +12,7 @@ use marty_credential_template::{
     http_service::{credential_template_router, CredentialTemplateHttpState},
     migration::{
         migrate_credential_template_schema, reconcile_credential_template_data,
-        CredentialTemplateDataReconciliationConfig,
+        validate_credential_template_schema, CredentialTemplateDataReconciliationConfig,
     },
     registry_application::{
         CredentialTemplateRegistryApplication, CredentialTemplateRegistryRepository,
@@ -37,6 +37,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [command] = arguments.as_slice() {
+        if command == "migrate" || command == "verify-owned-schema" {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            if command == "migrate" {
+                migrate_credential_template_schema(&pool).await?;
+            } else {
+                validate_credential_template_schema(&pool).await?;
+            }
+            pool.close().await;
+            return Ok(());
+        }
+    }
+    if !arguments.is_empty() {
+        return Err("unsupported Credential Template command".into());
+    }
 
     let config = CredentialTemplateServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid Credential Template configuration");

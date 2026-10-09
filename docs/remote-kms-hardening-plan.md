@@ -8849,3 +8849,55 @@ lineage without creating a Rust ledger; its container was also stopped. This
 is direct clean-install evidence for the candidate source and
 new gate, not yet a hosted exact-head or released-image result. The old
 fenced beta installer remains the explicit replacement/retirement dependency.
+
+Release-path audit of that dependency: `prepare_passport_beta_native_migrations.py`
+generates SQL that locks already-present `issuance_service.physical_document_jobs`
+and Flow tables, then creates a Rust ledger claiming the baseline. It does not
+run the signed Rust Issuance binary or create the clean baseline. The routine
+`Passport Fence PostgreSQL` CI lane exercises the fence and synthetic native
+receipt using `SELECT 1`, not the real 0001-0008 bundle; the optional frozen
+schema replay requires an external dump and is skipped without it. Consequently
+green fence/receipt tests cannot authorize the clean KMS-only release. The
+successor gate must run the exact signed services image's Rust `migrate` and
+`verify-owned-schema` commands on a fresh disposable database, check the
+entire assembled catalog and behavior, and bind that evidence to the release
+artifact. Retire the old beta installer and its acceptance/rollback claims
+only after that successor covers the supported passport flow. This audit is
+the reason the local bridge-removal commits remain unpushed.
+
+2026-10-09 signed-image successor candidate (local, unpushed): the disposable
+self-host migration qualifier now requires both an immutable migrations image
+and immutable Rust services image. In one isolated Compose project it runs
+the released migration image twice, then invokes Organization, Credential
+Template and Issuance one-shot `migrate`/`verify-owned-schema` commands from
+the same services image; it checks for Alembic state and private-key table or
+column names across the assembled database after each pass. Exact-image,
+closed-model, replay and cleanup tests pass 8/8; the rendered Compose model
+has no host ports or production mounts. A cached signed pair from main
+revision `78039a29` failed at native Issuance because its migration image
+did not create the Credential Template catalog. That is a valid rejection of
+an older pair, not qualification of the new source head. The probe cleaned
+up its disposable project.
+
+The real upstream-schema follow-up found a product bug obscured by CI's
+hand-made text-ID Organization fixture: the native Organization schema uses
+UUID IDs, but the fresh Issuance application-template seed bound the Marty
+organization ID as text, producing PostgreSQL `uuid = text` error `42883`.
+The candidate parses that constant as a UUID for the Organization query and
+replaces CI's synthetic tables with actual one-shot Rust Organization and
+Credential Template migrations. A fresh disposable PostgreSQL 16 run of all
+three rebuilt binaries now passed `migrate`, `verify-owned-schema`, and the
+KMS catalog inspector **twice** (idempotent), yielding 47 tables in those
+three service schemas and nine Issuance ledger entries. The container was
+stopped. This is direct local source-binary/DB evidence; signed new-head image
+and full assembled product release gates are still pending.
+
+Follow-up validation: 32 focused migration/aggregate Python tests and 45 CI
+owner/Issuance source-contract tests passed after the workflow switched to
+real upstream Rust binaries. The disposable image qualifier's eight tests,
+including actual Compose rendering and failed-native-step cleanup, pass.
+Warnings-denied Clippy passed for all three changed Rust binaries. The
+published UI `a957f5da6` CI run `37919254810` has passed its OpenBao plugin,
+Rust image, Rust contract, release contract and other completed lanes; Canvas
+is still running, so that head is not yet exact-head qualified. The later
+fresh-only source commits are not in that run and remain unpushed.

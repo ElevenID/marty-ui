@@ -21,11 +21,14 @@ pub(super) async fn seed_marty_application_templates(
         ));
     }
 
+    let marty_org_id =
+        Uuid::parse_str(MARTY_ORG_ID).map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+
     let organization_name: Option<String> = sqlx::query_scalar(
         "SELECT COALESCE(NULLIF(name, ''), slug, '')
          FROM organization_service.organizations WHERE id = $1",
     )
-    .bind(MARTY_ORG_ID)
+    .bind(marty_org_id)
     .fetch_optional(&mut *connection)
     .await?;
     let organization_name = organization_name.unwrap_or_default();
