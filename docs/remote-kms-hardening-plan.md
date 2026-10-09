@@ -7932,3 +7932,27 @@ and web cryptographic verification is unavailable. Restore it through a
 public-key/trust-aware verification route with forged-signature negatives
 before shipping the web consumer; do not treat the public-only WASM swap as
 complete wallet feature preservation.
+
+K10 database guard follow-up: the existing Rust Issuance migration PostgreSQL
+contract now queries `information_schema` after applying the service migration
+and rejects `issuer_signing_keys`, private-key-named tables and private JWK/key
+columns in `issuance_service`. It adds no migration script. The test compiled
+locked/offline and passed against a fresh disposable PostgreSQL 16 container
+on a random loopback port; the container was removed. An initial local run
+passed the new schema queries but tripped its pre-existing narrow 1798–1800
+second token-expiry timing assertion. A diagnostic failure message was added;
+the second full run passed. This proves the targeted Issuance schema contract,
+not the assembled product database or the historical selfhost table cleanup.
+Hold the Rust test change for the next grouped UI push after current exact-head
+run `37888791629` has exposed any further findings.
+
+UI run `37888791629` Release Contract Tests failed one source-shape assertion
+after 6,200 tests passed (19 skipped):
+`test_canvas_published_preflight.py` compared the entire isolated database
+workflow step to the pre-disposable-Redis shell block. The test's exact
+expectation now includes the contracts-only nonce guard before the existing
+worker/canvas branch, preserving its full-gate invariant. Its focused pytest,
+Ruff and diff checks pass locally. Rust Lint and Packaging passed on this
+head; Rust contracts, Canvas, OpenBao and images remain live. Group this
+source-assertion correction with the K10 schema guard and any further live
+lane findings before the next push.
