@@ -899,36 +899,6 @@ jobs:
     permissions:
       actions: read
       contents: read
-    services:
-      postgres:
-        image: postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
-        env:
-          POSTGRES_DB: marty_atomic_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d marty_atomic_test"
-          --health-interval 1s
-          --health-timeout 2s
-          --health-retries 30
-      redis:
-        image: redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 2s
-          --health-retries 20
-      openbao:
-        image: quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
-        env:
-          BAO_DEV_ROOT_TOKEN_ID: test-only
-          BAO_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
-        ports:
-          - 8200:8200
     env:
       CARGO_INCREMENTAL: 0
       CARGO_PROFILE_TEST_DEBUG: 0
@@ -941,8 +911,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Prefer cached Docker Hub images without restarting service containers
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - name: Start digest-pinned Rust test services after registry setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          MARTY_RUST_CI_POSTGRES_IMAGE=$(bash scripts/ci/pull-pinned-dockerhub-image.sh \
+            postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c)
+          MARTY_RUST_CI_REDIS_IMAGE=$(bash scripts/ci/pull-pinned-dockerhub-image.sh \
+            redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99)
+          export MARTY_RUST_CI_POSTGRES_IMAGE MARTY_RUST_CI_REDIS_IMAGE
+          docker pull quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
+          docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
+            up -d --wait --wait-timeout 90
+          postgres_id=$(docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml ps -q postgres)
+          redis_id=$(docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml ps -q redis)
+          test -n "$postgres_id"
+          test -n "$redis_id"
+          echo "MARTY_RUST_CI_POSTGRES_ID=$postgres_id" >> "$GITHUB_ENV"
+          echo "MARTY_RUST_CI_REDIS_ID=$redis_id" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
           buildkitd-config: .github/buildkit-ci-mirror.toml
@@ -1612,12 +1600,12 @@ jobs:
         run: |
           set -euo pipefail
           for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_packaged_test marty_passport_bureau_test marty_passport_gateway_test; do
-            docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
+            docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
-          docker exec --interactive "${{ job.services.postgres.id }}" \
+          docker exec --interactive "$MARTY_RUST_CI_POSTGRES_ID" \
             psql --username postgres --dbname marty_issuance_executable_smoke_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
-          docker exec --interactive "${{ job.services.postgres.id }}" \
+          docker exec --interactive "$MARTY_RUST_CI_POSTGRES_ID" \
             psql --username postgres --dbname marty_passport_packaged_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
       - name: Run safe Rust contract groups concurrently
@@ -1709,8 +1697,8 @@ jobs:
         run: |
           set -euo pipefail
           nonce="$(openssl rand -hex 16)"
-          docker exec "${{ job.services.redis.id }}" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
-          docker exec "${{ job.services.redis.id }}" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
+          docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
+          docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
               cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 authenticated_gateway_reaches_remaining_rust_signing_handlers \
@@ -1731,7 +1719,7 @@ jobs:
           set -euo pipefail
           nonce="$(openssl rand -hex 16)"
           for db in 13 14; do
-            docker exec "${{ job.services.redis.id }}" redis-cli -n "$db" SET marty:tests:disposable-guard "$nonce" >/dev/null
+            docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n "$db" SET marty:tests:disposable-guard "$nonce" >/dev/null
           done
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
           export BAO_TOKEN=test-only
@@ -1771,7 +1759,7 @@ jobs:
             --header 'Content-Type: application/json' --request POST \
             --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
             http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
-          redis_nonce="$(docker exec "${{ job.services.redis.id }}" redis-cli -n 14 --raw GET marty:tests:disposable-guard)"
+          redis_nonce="$(docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 --raw GET marty:tests:disposable-guard)"
           [[ "${#redis_nonce}" -ge 16 ]]
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$redis_nonce"
@@ -1920,6 +1908,15 @@ jobs:
           path: ${{ runner.temp }}/canvas-rest-fresh-run.json
           if-no-files-found: error
           retention-days: 14
+      - name: Remove owned Rust test services and volumes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MARTY_RUST_CI_POSTGRES_IMAGE=postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c
+          export MARTY_RUST_CI_REDIS_IMAGE=redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+          docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
+            down --volumes --remove-orphans
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes
@@ -2905,14 +2902,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Prefer cached Docker Hub images without restarting the runner daemon
-        run: bash scripts/ci/configure-dockerhub-mirror.sh
-      - name: Audit Rust advisories, licenses, bans, and sources
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
-          manifest-path: rust/Cargo.toml
-          command: check
-          command-arguments: advisories bans licenses sources
+          toolchain: 1.85.0
+      - name: Audit Rust advisories, licenses, bans, and sources
+        run: bash scripts/ci/run-cargo-deny.sh
 
   ci-gate:
     name: CI Gate
