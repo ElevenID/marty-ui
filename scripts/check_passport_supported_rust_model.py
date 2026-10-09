@@ -936,6 +936,7 @@ def validate_model(
     require(operator_token_holders == {"issuance-native"},
             "Disposable native batch operator token escaped its owner")
     require(gateway.get("GRPC_INSECURE_ALLOWED") == "true"
+            and native.get("GRPC_INSECURE_ALLOWED") == "true"
             and native.get("ENVIRONMENT") == "beta"
             and gateway.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "beta")
             and flow.get("ENVIRONMENT") == ("production" if surface == "selfhost" else "development"),
