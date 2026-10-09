@@ -8502,3 +8502,13 @@ Rust owner, KMS/TLS custody and remaining gates. Its exact-head CI run is
 quality runs were also created at that SHA. At first observation, policy had
 passed, Actions CodeQL was in progress, and the other runs were queued. Do
 not infer release qualification from the earlier `14f115ecc` checks.
+
+The separate Rust-only Issuance PR #1203 subsequently advanced from the
+already integrated `cb10f9248` to `8341eca92`. Its five newer commits remove
+retired Credentials-image CI/SBOM and release gates, update the public stack
+lock and release promotion, and bind the Kubernetes services image to the
+exact attested reference. Its latest exact-head CI is still running, with
+several jobs green and no failures at first review. Do not close #1203 or
+assume those newer release-gate changes are in UI PR #1192; reconcile them in
+one later grouped KMS batch after both active heads are qualified, preserving
+the KMS TLS/custody additions and reviewing the final diff for feature loss.
