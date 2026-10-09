@@ -10098,7 +10098,10 @@ library check initially exposed an existing moved-value compile error in the
 wallet-pairing QR parser; the local fix now passes `cargo check --lib --locked`
 and `cargo clippy --lib --locked -- -D warnings` with a short target path and
 mock ZK build. This is compile evidence, not a real-ZK or physical-device
-qualification. In-crate presenter tests are compiling separately.
+qualification. In-crate presenter tests passed 2/2 under the mock ZK build,
+covering changed request binding, the signed public OpenBao vector, and
+one-use invalid-signature denial. The Windows linker emitted missing static
+OpenSSL PDB debug-symbol warnings, but the test executable linked and passed.
 Authenticator local commit `26bc34e` contains the verified SD-JWT bridge,
 generated bindings, paired public-key read, strict one-use signing session,
 legacy Dart route retirement, QR compile repair, and public-only fixture.
