@@ -7008,3 +7008,18 @@ issuance, renewal, no retained CA signing key, and DNS/IP SAN scoping. These
 are local disposable runtime results; hosted CodeQL, development Compose
 end-to-end runtime, operator certificate rotation, and release artifact
 qualification remain open.
+
+2026-10-08 grouped TLS push and CI follow-up: UI PR #1192 now has head
+`d9240b8fd` with the dedicated TLS transport, deployment wiring, development
+certificate issuer, and live coordinated recovery proof. The new hosted run is
+in progress. Its dependency review found `google.golang.org/grpc` 1.78.0 in
+the OpenBao DIDComm plugin graph; upstream GHSA-hrxh-6v49-42gf lists versions
+below 1.82.1 as affected. Locally upgraded the plugin to 1.83.1, ran `go mod
+tidy`, and passed `go test ./...` in the Go 1.26 container. Hold this correction
+for a batched UI push after reviewing the remaining hosted findings. The
+Credentials candidate also removes WASM `generate_p256_key` and
+`generate_ed25519_key`, but the authenticator web wallet calls them from
+`SpruceIdPlatformServiceWeb.createDid` and `generateKeyPair`. Its
+`create_verifiable_credential` wrapper has no active Dart call site. Review
+and preserve the wallet's holder-key capability without restoring server-side
+issuer private-key APIs before opening the grouped Credentials PR.
