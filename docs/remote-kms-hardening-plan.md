@@ -10074,3 +10074,33 @@ semantics review, and physical-device validation are outstanding. Core local
 VP token is not forwarded to a redirect target; its focused test and
 wallet-feature Clippy with warnings denied passed. This correction is not yet
 published to Core PR #355 or repinned in consumers.
+
+2026-10-09 presenter self-review continuation: the local Authenticator
+candidate now rejects DCQL `meta` and Presentation Exchange filters, optional
+fields, ZK predicates, or format requirements it cannot enforce; unsupported
+requests fail closed instead of presenting an arbitrary stored credential.
+The isolated actual-source Rust harness still passes 5/5, including the
+unsupported-metadata rejection. Dart analysis of the paired transport and
+its tests reports no issues. Windows bridge generation succeeded with a short
+Cargo target path, explicit LLVM path, and MSVC/Windows SDK C include paths.
+The first intermediate bindings were invalid due to missing standard C
+headers; the final generated bridge and presenter service pass Dart analysis
+without issues. Targeted pairing/transport Flutter tests pass 12/12. Three
+new tests prove legacy native credential-offer, VP, and ad hoc presentation
+entry points now fail closed instead of calling local-key handlers. Those
+screens cannot complete until remote-only issuance and presentation
+replacements are wired; the underlying native handlers and other entry
+points still require a full retirement audit. The isolated actual-source
+presenter harness passed 5/5. Do not treat credential-query
+matching, OID4VCI receipt, physical-device signing, or a released image as
+qualified until their respective checks pass. The full Authenticator Rust
+library check initially exposed an existing moved-value compile error in the
+wallet-pairing QR parser; the local fix now passes `cargo check --lib --locked`
+and `cargo clippy --lib --locked -- -D warnings` with a short target path and
+mock ZK build. This is compile evidence, not a real-ZK or physical-device
+qualification. In-crate presenter tests are compiling separately.
+Authenticator local commit `26bc34e` contains the verified SD-JWT bridge,
+generated bindings, paired public-key read, strict one-use signing session,
+legacy Dart route retirement, QR compile repair, and public-only fixture.
+It has not been pushed to PR #57; keep the broad feature batch grouped until
+remote-only credential receipt and the remaining native path audit are ready.
