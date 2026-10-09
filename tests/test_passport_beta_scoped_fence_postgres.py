@@ -31,7 +31,11 @@ ENABLE_APP_LOGIN = ROOT / "scripts/sql/passport-beta-db-enable-app-login.sql"
 RUST_OWNER_TRANSITION = ROOT / "scripts/sql/passport-beta-rust-owner-transition.sql"
 RUST_OWNER_VERIFY = ROOT / "scripts/sql/passport-beta-rust-owner-verify.sql"
 SUBMISSION_INTENT_MIGRATION = ROOT / "rust/services/issuance/migrations/0004_passport_submission_intent.sql"
-POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
+CANONICAL_POSTGRES_IMAGE = "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
+MIRRORED_POSTGRES_IMAGE = "mirror.gcr.io/library/" + CANONICAL_POSTGRES_IMAGE
+POSTGRES_IMAGE = os.environ.get("BETA_FENCE_POSTGRES_IMAGE", CANONICAL_POSTGRES_IMAGE)
+if POSTGRES_IMAGE not in {CANONICAL_POSTGRES_IMAGE, MIRRORED_POSTGRES_IMAGE}:
+    raise ValueError("Disposable PostgreSQL image must retain the exact reviewed digest")
 
 
 def docker(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:

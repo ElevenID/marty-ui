@@ -771,6 +771,13 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install pytest==8.4.2 PyYAML==6.0.3
+      - name: Pull the exact disposable PostgreSQL image with a safe registry fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh \
+            postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c)
+          echo "BETA_FENCE_POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Exercise atomic beta passport fence in disposable PostgreSQL
         env:
           BETA_FENCE_DISPOSABLE_DOCKER: "1"
