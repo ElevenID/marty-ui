@@ -331,6 +331,26 @@ mod tests {
     }
 
     #[test]
+    fn checkout_identity_rejects_checkout_subdirectory_without_writing_artifact() {
+        let root = super::super::canvas_published_database::repository_root();
+        let head = git_rev_parse(&root, &["--verify", "HEAD"]);
+        let subdirectory = root.join("rust/crates/canvas-worker-acceptance");
+        assert!(subdirectory.is_dir());
+        let artifact_dir = tempfile::tempdir().unwrap();
+        let artifact = artifact_dir.path().join(ARTIFACT);
+        let built_evidence = AtomicBool::new(false);
+        assert!(std::panic::catch_unwind(|| {
+            persist_verified_evidence(&subdirectory, &artifact, &json!({"sha": head}), || {
+                built_evidence.store(true, Ordering::SeqCst);
+                json!({})
+            });
+        })
+        .is_err());
+        assert!(!built_evidence.load(Ordering::SeqCst));
+        assert!(!artifact.exists());
+    }
+
+    #[test]
     fn checkout_identity_rejects_unavailable_checkout_without_writing_artifact() {
         let checkout = tempfile::tempdir().unwrap();
         let root = PathBuf::from(checkout.path());
