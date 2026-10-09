@@ -57,6 +57,29 @@ SELFHOST_CASES = (
     "selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed",
     "selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts",
 )
+FLOW_CASES = (
+    "didcomm_flow_grpc_provider_preserves_keyed_admission",
+    "flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http",
+    "flow_rendered_provider_child",
+    "flow_actual_main_boots_rendered_base_and_preserves_public_admission",
+    "flow_rendered_settings_select_native_rpc_and_preserve_legacy_http",
+    "didcomm_http_admission_recovers_real_keyed_reservation",
+    "didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn",
+    "didcomm_admission_recovery::flow_consumer::public_startup::owned_output_child",
+    "didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified",
+)
+# These seven cases occupied one contiguous block in the original 170-case
+# mandatory roster. The other two Flow IDs were discovered but not separately
+# listed by the old grep gate; the new executable checks all nine exactly.
+FLOW_HISTORICAL_ROSTER = (
+    "didcomm_http_admission_recovers_real_keyed_reservation",
+    "didcomm_flow_grpc_provider_preserves_keyed_admission",
+    "flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http",
+    "flow_rendered_settings_select_native_rpc_and_preserve_legacy_http",
+    "flow_actual_main_boots_rendered_base_and_preserves_public_admission",
+    "didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified",
+    "didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn",
+)
 PINS = [
     f"registry.invalid/{name}@sha256:{letter * 64}"
     for name, letter in (("postgres", "a"), ("issuance", "b"))
@@ -101,6 +124,15 @@ def required_registrations():
     # it to exercise every current check without copying another long roster.
     names = re.findall(r"grep -Fx '([^']+): test'", SCRIPT.read_text(encoding="utf-8"))
     assert names and all(target in names for _, target in PREFLIGHTS)
+    flow_block = SCRIPT.read_text(encoding="utf-8").split(
+        "expected_flow_tests=$(printf '%s\\n' ", 1
+    )[1].split(")\n[[", 1)[0]
+    flow_exact = re.findall(r"'([^']+): test'", flow_block)
+    assert set(flow_exact) == set(FLOW_CASES) and len(flow_exact) == 9
+    assert set(FLOW_HISTORICAL_ROSTER) <= set(flow_exact)
+    anchor = "didcomm_unkeyed_grpc_initiation_composes_real_delivery"
+    assert names.count(anchor) == 1
+    names[names.index(anchor):names.index(anchor)] = FLOW_HISTORICAL_ROSTER
     # Keep each mandatory registration's full-mode place without copying it.
     return [name for index, name in enumerate(names) if name not in names[index + 1 :]]
 
@@ -426,9 +458,11 @@ elif [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target ]]; then
 else
   [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
-  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract || "$4" == selfhost_public_image_contract ]] || exit 90
+  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract || "$4" == flow_published_schema_contract || "$4" == selfhost_public_image_contract ]] || exit 90
   if [[ "$4" == canvas_published_worker_contract ]]; then
     [[ "$7" == marty-canvas-worker-acceptance ]] || exit 90
+  elif [[ "$4" == flow_published_schema_contract ]]; then
+    [[ "$7" == marty-flow-acceptance ]] || exit 90
   elif [[ "$4" == selfhost_public_image_contract ]]; then
     [[ "$7" == marty-selfhost-acceptance ]] || exit 90
   else
@@ -441,6 +475,8 @@ else
     printf './contract\n./different-contract\n'
   elif [[ "$4" == canvas_published_worker_contract ]]; then
     printf './worker-contract\n'
+  elif [[ "$4" == flow_published_schema_contract ]]; then
+    printf './flow-contract\n'
   elif [[ "$4" == selfhost_public_image_contract ]]; then
     printf './selfhost-contract\n'
   else
@@ -496,7 +532,7 @@ else
     "$1" == json_consumer_diagnostic_matches_published_boundaries ]]; then
     exit 26
   fi
-  if [[ "$*" == *--test-threads=4* ]]; then
+  if [[ "$*" == *--test-threads=4* || ( "$name" == flow-contract && "$*" == *--test-threads=1* ) ]]; then
     printf 'full target %s\n' "$name"
     printf 'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"%s","duration_ms":1,"status":"ok"}\n' "$name"
     [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
@@ -542,16 +578,22 @@ else
     fi
     if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
       touch "started-$name"
-      other=contract
-      [[ "$name" == contract ]] && other=worker-contract
       for (( attempt=0; attempt<200; attempt++ )); do
-        [[ -f "started-$other" ]] && break
+        [[ -f started-contract && -f started-worker-contract && -f started-flow-contract && -f started-selfhost-contract ]] && break
         sleep 0.05
       done
-      [[ -f "started-$other" ]] || exit 25
+      [[ -f started-contract && -f started-worker-contract && -f started-flow-contract && -f started-selfhost-contract ]] || exit 25
       if [[ "$TEST_FAILURE" == signal ]]; then
         trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
-        [[ "$name" != contract ]] || kill -TERM "$TEST_PARENT_PID"
+        touch "armed-$name"
+        if [[ "$name" == contract ]]; then
+          for (( attempt=0; attempt<200; attempt++ )); do
+            [[ -f armed-contract && -f armed-worker-contract && -f armed-flow-contract && -f armed-selfhost-contract ]] && break
+            sleep 0.05
+          done
+          [[ -f armed-contract && -f armed-worker-contract && -f armed-flow-contract && -f armed-selfhost-contract ]] || exit 25
+          kill -TERM "$TEST_PARENT_PID"
+        fi
         while :; do sleep 0.05; done
       fi
     fi
@@ -572,6 +614,9 @@ fi
         contract.read_bytes() + b"\n# distinct selfhost executable\n"
     )
     selfhost_contract.chmod(0o755)
+    flow_contract = tmp_path / "flow-contract"
+    flow_contract.write_bytes(contract.read_bytes() + b"\n# distinct Flow executable\n")
+    flow_contract.chmod(0o755)
     worker_binary = tmp_path / "worker-binary"
     worker_binary.write_bytes(worker_contract.read_bytes())
     worker_binary.chmod(0o755)
@@ -607,6 +652,7 @@ fi
                     set(required_registrations())
                     | set(MIGRATED_CASES)
                     | set(SELFHOST_CASES)
+                    | set(FLOW_CASES)
                 )
             ]
         )
@@ -627,14 +673,16 @@ fi
         selfhost = [
             line for line in lines if line.partition(": test")[0] in SELFHOST_CASES
         ]
+        flow = [line for line in lines if line.partition(": test")[0] in FLOW_CASES]
         composition = [line for line in composition if line not in selfhost]
         worker = [
-            line for line in lines if line not in composition and line not in selfhost
+            line for line in lines if line not in composition and line not in selfhost and line not in flow
         ]
         if duplicate_across_targets:
             composition.append(f"{TARGET}: test")
         for name, subset in (
             ("contract", composition),
+            ("flow-contract", flow),
             ("worker-contract", worker),
             ("selfhost-contract", selfhost),
         ):
@@ -761,6 +809,21 @@ def test_nested_tiers_select_worker_and_historical_timeout_owners(
     assert ("timeout_consumer_matches_published_socket_behavior" in composition) == (
         arguments == ["full-after-preflights"] and not qualification
     )
+    flow = [
+        call
+        for call in calls
+        if call[:2] == ["child", "flow-contract"] and "--test-threads=4" in call
+    ]
+    assert len(flow) == 1
+    assert '"phase":"canvas_target","name":"flow"' in result.stdout
+
+
+def test_flow_target_failure_fails_complete_canvas_gate(shell_case):
+    result, calls = shell_case(["full"], failure="flow-contract-full")
+    assert result.returncode != 0
+    assert any(call[:2] == ["child", "flow-contract"] for call in calls)
+    assert '"phase":"canvas_target","name":"flow"' in result.stdout
+    assert '"status":"failed"' in result.stdout
 
 
 @pytest.mark.parametrize("timeout_marker", ["missing", "duplicate"])
@@ -1118,16 +1181,21 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     checks = [call[2] for call in calls if call[:2] == ["grep", "-Fx"]]
     serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
     json_serial = "json_consumer_diagnostic_matches_published_boundaries"
-    assert checks == [f"{name}: test" for name in required_registrations()] + [
+    assert checks == [
+        f"{name}: test"
+        for name in required_registrations()
+        if name not in FLOW_HISTORICAL_ROSTER
+    ] + [
         f"{serial}: test",
         f"{json_serial}: test",
         "issuance_named_peers::kms_tests::scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:9] == [
+    assert children[:10] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "selfhost-contract", "1", "--list"],
+        ["child", "flow-contract", "1", "--list"],
         ["child", "contract", "1", "--list", "--skip", json_serial],
         ["child", "worker-contract", "1", "--list", "--skip", serial],
         [
@@ -1160,7 +1228,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[9:]) == sorted(
+    assert sorted(children[10:]) == sorted(
         [
             [
                 "child",
@@ -1183,6 +1251,13 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             [
                 "child",
                 "selfhost-contract",
+                "1",
+                "--nocapture",
+                "--test-threads=4",
+            ],
+            [
+                "child",
+                "flow-contract",
                 "1",
                 "--nocapture",
                 "--test-threads=4",
@@ -1271,13 +1346,16 @@ def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
     assert {call[1] for call in full} == {
         "contract",
         "worker-contract",
+        "flow-contract",
         "selfhost-contract",
     }
     assert "Canvas composition target exit: 0" in result.stdout
     assert "Canvas worker target exit: 0" in result.stdout
+    assert "Flow target exit: 0" in result.stdout
     assert "Selfhost target exit: 0" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" in result.stdout
     assert "full target selfhost-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
 
@@ -1305,17 +1383,21 @@ def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
     assert {call[1] for call in calls if "--test-threads=4" in call} == {
         "contract",
         "worker-contract",
+        "flow-contract",
         "selfhost-contract",
     }
     assert "Canvas composition target exit:" in result.stdout
     assert "Canvas worker target exit:" in result.stdout
+    assert "Flow target exit:" in result.stdout
     assert "Selfhost target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" in result.stdout
     assert "full target selfhost-contract" in result.stdout
     assert {call[1] for call in calls if call[0] == "stopped"} == {
         "contract",
         "worker-contract",
+        "flow-contract",
         "selfhost-contract",
     }
     assert not list(tmp_path.glob("canvas-targets.*"))
@@ -1329,6 +1411,7 @@ def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
     live = result.stdout.split("Canvas composition target exit:", 1)[0]
     assert live.count('"name":"contract"') == 1
     assert live.count('"name":"worker-contract"') == 1
+    assert live.count('"name":"flow-contract"') == 1
     assert live.count('"name":"selfhost-contract"') == 1
     assert (
         result.stdout.count('MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"')
@@ -1358,6 +1441,12 @@ def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
         )
         == 1
     )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"flow-contract"'
+        )
+        == 1
+    )
 
 
 def test_explicit_database_close_cannot_emit_second_cleanup_timing():
@@ -1374,7 +1463,7 @@ def test_explicit_database_close_cannot_emit_second_cleanup_timing():
     assert "self.cleanup()" in source.split("impl Drop for PublishedDatabase {", 1)[1]
 
 
-@pytest.mark.parametrize("failed", ["contract", "worker-contract", "selfhost-contract"])
+@pytest.mark.parametrize("failed", ["contract", "worker-contract", "flow-contract", "selfhost-contract"])
 def test_full_target_failure_is_not_masked_by_other_target(
     shell_case, tmp_path, failed
 ):
@@ -1384,13 +1473,16 @@ def test_full_target_failure_is_not_masked_by_other_target(
     assert {call[1] for call in full} == {
         "contract",
         "worker-contract",
+        "flow-contract",
         "selfhost-contract",
     }
     assert "Canvas composition target exit:" in result.stdout
     assert "Canvas worker target exit:" in result.stdout
+    assert "Flow target exit:" in result.stdout
     assert "Selfhost target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" in result.stdout
     assert "full target selfhost-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
 

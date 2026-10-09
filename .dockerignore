@@ -108,6 +108,16 @@ rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs
 rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs
 rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs
 rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs
+# The Flow acceptance target and its seven support modules are test-only.
+# Root-context release builders do not compile or run this test executable.
+rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs
+rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs
+rust/crates/flow-acceptance/tests/support/flow_admission.rs
+rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs
+rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs
+rust/crates/flow-acceptance/tests/support/flow_public_startup.rs
+rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs
+rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
 # The self-host acceptance executable and fixture support are also test-only.
 rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs

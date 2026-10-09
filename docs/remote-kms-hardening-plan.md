@@ -8772,3 +8772,44 @@ step. The five failed lanes map to the dedicated-credential fixtures described
 above. No failed evidence was rerun or discarded. The next hosted run must use
 the correction head and independently prove all gates; the former green
 prior-head run and the passing OpenBao lane do not qualify that new head.
+
+After publishing correction head `8f7d6bec4`, UI PR #1192 gained a merge
+conflict with `main` commit `859030f8e`, which splits published Flow
+acceptance into `marty-flow-acceptance`. An isolated review worktree resolves
+the four textual conflicts by retaining both workspace members, the KMS
+encrypted-envelope feature, the new Flow test owner and the owned OpenBao
+cleanup path. The split Flow acceptance crate also imports the KMS branch's
+shared HTTPS integration-secret fixture, so its manifest and lockfile need
+`axum-server`, `rustls` and `rcgen` test dependencies. This was caught by a
+combined Canvas/Flow no-run compile; after adding the three dependencies both
+targets compiled. Focused Canvas preflight, Flow-owner and Canvas compile-scope
+Python checks passed 38/38. The merge is prepared locally, not published;
+first preserve the exact-head `8f7d6bec4` CI result, then publish the merge
+as one grouped correction and qualify its own exact head.
+
+The new `8f7d6bec4` CI run `37915227632` contract lane later found one more closed-model fixture:
+`marty-selfhost-bundle` expected Gateway's former three secret mounts and did
+not recognize `DEVICE_REGISTRATION_GATEWAY_KEY_FILE`. The prepared merge now
+requires the fourth dedicated mount, maps the file selector to that mount and
+explicitly forbids the raw credential in the rendered owner environments.
+All six extracted-bundle executable tests pass locally against Docker Compose
+5.4.0, including swapped dedicated-key mount and raw-key negative controls.
+Warnings-denied Clippy passes for the changed self-host bundle test package.
+This is local evidence;
+the current published CI run and the future merge head remain separate gates.
+
+Exact-head UI CI `37915227632` terminated with two worker failures and the
+aggregate gate. The contract lane failed `marty-selfhost-bundle`'s closed model
+on the missing Gateway secret. The Canvas lane passed its Kubernetes renewal
+proof, public image build, DIDComm KMS fixture and other published database
+groups, then failed `selfhost_public_image_loader_isolated` before emitting a
+packaged runtime stage. Source inspection shows that child preflight invokes
+the same `selfhost_prepared::qualify` closed model; this makes the omitted
+Gateway secret the likely common cause, although the Canvas child suppressed
+its precise preflight error. Local bundle tests exercise that preflight and
+pass 6/6 with the correction; the next exact-head hosted Canvas lane must
+confirm the inference. The OpenBao plugin and coordinated PostgreSQL/Raft
+recovery, Rust service images, release contracts, Rust lint/packaging, security
+scanning and other completed CI lanes passed on `8f7d6bec4`. Preserve this
+failed run as immutable evidence; merge reconciliation and the closed-model
+fix are grouped into the next UI PR head.

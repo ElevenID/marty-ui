@@ -60,6 +60,7 @@ find_executable() {
   local package
   case "$target" in
     canvas_published_schema_contract) package=marty-canvas-acceptance ;;
+    flow_published_schema_contract) package=marty-flow-acceptance ;;
     canvas_published_worker_contract) package=marty-canvas-worker-acceptance ;;
     selfhost_public_image_contract) package=marty-selfhost-acceptance ;;
     *) echo "Unknown Canvas contract target: $target" >&2; return 1 ;;
@@ -231,14 +232,9 @@ if [[ -z "$preflight_target" ]]; then
   }
 fi
 printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy: test'
-all_test_names=$(printf '%s\n%s\n%s\n' "$composition_tests" "$worker_tests" "$selfhost_tests" | grep ': test$')
 if [[ -z "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
 fi
-[[ -z $(printf '%s\n' "$all_test_names" | sort | uniq -d) ]] || {
-  echo 'Duplicate Canvas test names across executables' >&2
-  exit 1
-}
 preflight_skips=()
 expected_skipped_worker_tests=0
 if [[ "$mode" == full-after-preflights ]]; then
@@ -280,19 +276,45 @@ if [[ "$mode" == full-after-preflights ]]; then
     expected_skipped_worker_tests=37
   fi
 fi
-for image in "${images[@]}"; do
-  # Stable ordinal only: never put an image reference in timing evidence.
-  if [[ "$image" == "${images[0]}" ]]; then
-    timed image_pull postgres docker pull "$image"
-  else
-    timed image_pull published_probe docker pull "$image"
-  fi
-done
+pull_images() {
+  local image
+  for image in "${images[@]}"; do
+    # Stable ordinal only: never put an image reference in timing evidence.
+    if [[ "$image" == "${images[0]}" ]]; then
+      timed image_pull postgres docker pull "$image"
+    else
+      timed image_pull published_probe docker pull "$image"
+    fi
+  done
+}
 if [[ -n "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | grep -Fx "$preflight_target: test"
+  pull_images
   timed canvas_serial "$mode" "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
   exit 0
 fi
+flow_executable=$(find_executable flow_published_schema_contract)
+flow_tests=$("$flow_executable" --list)
+expected_flow_tests=$(printf '%s\n' \
+  'didcomm_flow_grpc_provider_preserves_keyed_admission: test' \
+  'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test' \
+  'flow_rendered_provider_child: test' \
+  'flow_actual_main_boots_rendered_base_and_preserves_public_admission: test' \
+  'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test' \
+  'didcomm_http_admission_recovers_real_keyed_reservation: test' \
+  'didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn: test' \
+  'didcomm_admission_recovery::flow_consumer::public_startup::owned_output_child: test' \
+  'didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified: test')
+[[ "$(printf '%s\n' "$flow_tests" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected_flow_tests" | LC_ALL=C sort)" ]] || {
+  echo 'Flow executable changed its exact nine-case owner inventory' >&2
+  exit 1
+}
+all_test_names=$(printf '%s\n%s\n%s\n%s\n' "$composition_tests" "$flow_tests" "$worker_tests" "$selfhost_tests" | grep ': test$')
+[[ -z $(printf '%s\n' "$all_test_names" | sort | uniq -d) ]] || {
+  echo 'Duplicate Canvas test names across executables' >&2
+  exit 1
+}
+pull_images
 printf '%s\n' "$all_test_names" | grep -Fx 'heartbeat_readiness_matches_published_python: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_native_renewal_uses_actual_rendered_configuration: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_gateway_composition_isolated: test'
@@ -398,13 +420,6 @@ printf '%s\n' "$all_test_names" | grep -Fx 'renewal_fresh_packaged_main_delivers
 printf '%s\n' "$all_test_names" | grep -Fx 'renewal_packaged_main_recovers_historical_keyed_offer: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_renewal_gateway_selects_native_with_required_owner_read: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_renewal_canvas_preserves_real_association_and_delivery_phases: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_flow_grpc_provider_preserves_keyed_admission: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'flow_actual_main_boots_rendered_base_and_preserves_public_admission: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_historical_keyed_http_recovers_before_fresh_admission_guard: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'didcomm_fresh_gateway_admission_preserves_public_projection_without_legacy_fallback: test'
@@ -470,11 +485,12 @@ serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
 printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
 composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" | grep -c ': test$')
+flow_parallel_tests=$(printf '%s\n' "$flow_tests" | grep -c ': test$')
 worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
 selfhost_parallel_tests=$(printf '%s\n' "$selfhost_tests" | grep -c ': test$')
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
-parallel_tests=$((composition_parallel_tests + worker_parallel_tests + selfhost_parallel_tests))
+parallel_tests=$((composition_parallel_tests + flow_parallel_tests + worker_parallel_tests + selfhost_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
 timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # The packaged renewal cases need an actual non-exportable X25519 sender. Keep
@@ -513,15 +529,17 @@ timed canvas_serial json_consumer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_
 # the parallel group. Forced cancellation still has the runner's usual teardown limits.
 target_logs=$(mktemp -d "${RUNNER_TEMP:?}/canvas-targets.XXXXXX")
 composition_log="$target_logs/composition.log"
+flow_log="$target_logs/flow.log"
 worker_log="$target_logs/worker.log"
 selfhost_log="$target_logs/selfhost.log"
 composition_end="$target_logs/composition.end"
+flow_end="$target_logs/flow.end"
 worker_end="$target_logs/worker.end"
 selfhost_end="$target_logs/selfhost.end"
 cleanup_target_logs() {
   [[ $BASHPID == "$kms_owner_pid" ]] || return 0
   cleanup_canvas_kms
-  rm -f -- "$composition_log" "$worker_log" "$selfhost_log" "$composition_end" "$worker_end" "$selfhost_end"
+  rm -f -- "$composition_log" "$flow_log" "$worker_log" "$selfhost_log" "$composition_end" "$flow_end" "$worker_end" "$selfhost_end"
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
@@ -529,6 +547,7 @@ trap cleanup_target_logs EXIT
 # starts. Create all log files after registering owned cleanup and before any
 # tail follows one, so a scheduling race cannot drop that target's phase rows.
 : > "$composition_log"
+: > "$flow_log"
 : > "$worker_log"
 : > "$selfhost_log"
 relay_target_timing() {
@@ -549,6 +568,11 @@ MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_t
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &
 composition_relay_pid=$!
+flow_started=$(python3 -c 'import time; print(time.monotonic_ns())')
+"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &
+flow_pid=$!
+relay_target_timing "$flow_pid" "$flow_log" "$flow_end" &
+flow_relay_pid=$!
 worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
@@ -572,6 +596,7 @@ drain_target_relays() {
   # Relays observe only the exact Rust child PIDs; they never own cancellation
   # or gate status. Drain before deleting the complete raw diagnostic logs.
   wait "$composition_relay_pid" || true
+  wait "$flow_relay_pid" || true
   wait "$worker_relay_pid" || true
   wait "$selfhost_relay_pid" || true
 }
@@ -580,39 +605,46 @@ report_target_logs() {
   # Phase records were relayed live. Keep the complete diagnostic text in the
   # final replay without presenting those same lines as fresh timing events.
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$composition_log"
+  printf 'Flow target exit: %s\n' "$4"
+  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$flow_log"
   printf 'Canvas worker target exit: %s\n' "$2"
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
   printf 'Selfhost target exit: %s\n' "$3"
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$selfhost_log"
 }
 stop_targets() {
-  local composition_stopped=0 worker_stopped=0 selfhost_stopped=0
+  local composition_stopped=0 flow_stopped=0 worker_stopped=0 selfhost_stopped=0
   trap - INT TERM
-  kill "$composition_pid" "$worker_pid" "$selfhost_pid" 2>/dev/null || true
+  kill "$composition_pid" "$flow_pid" "$worker_pid" "$selfhost_pid" 2>/dev/null || true
   wait "$composition_pid" 2>/dev/null || composition_stopped=$?
+  wait "$flow_pid" 2>/dev/null || flow_stopped=$?
   wait "$worker_pid" 2>/dev/null || worker_stopped=$?
   wait "$selfhost_pid" 2>/dev/null || selfhost_stopped=$?
   drain_target_relays
   report_target_timing composition "$composition_started" "$composition_stopped" "$composition_end"
+  report_target_timing flow "$flow_started" "$flow_stopped" "$flow_end"
   report_target_timing worker "$worker_started" "$worker_stopped" "$worker_end"
   report_target_timing selfhost "$selfhost_started" "$selfhost_stopped" "$selfhost_end"
-  report_target_logs "$composition_stopped" "$worker_stopped" "$selfhost_stopped"
+  report_target_logs "$composition_stopped" "$worker_stopped" "$selfhost_stopped" "$flow_stopped"
   exit "$1"
 }
 trap 'stop_targets 130' INT
 trap 'stop_targets 143' TERM
 composition_status=0
+flow_status=0
 worker_status=0
 selfhost_status=0
 wait "$composition_pid" || composition_status=$?
+wait "$flow_pid" || flow_status=$?
 wait "$worker_pid" || worker_status=$?
 wait "$selfhost_pid" || selfhost_status=$?
 drain_target_relays
 report_target_timing composition "$composition_started" "$composition_status" "$composition_end"
+report_target_timing flow "$flow_started" "$flow_status" "$flow_end"
 report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
 report_target_timing selfhost "$selfhost_started" "$selfhost_status" "$selfhost_end"
-report_target_logs "$composition_status" "$worker_status" "$selfhost_status"
-(( composition_status == 0 && worker_status == 0 && selfhost_status == 0 ))
+report_target_logs "$composition_status" "$worker_status" "$selfhost_status" "$flow_status"
+(( composition_status == 0 && flow_status == 0 && worker_status == 0 && selfhost_status == 0 ))
 timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$composition_log" | wc -l || true)
 [[ "$timeout_completions" == "$((1 - expected_skipped_timeout_tests))" ]] || {
   echo 'Published HTTPX timeout reference did not match the selected qualification tier' >&2

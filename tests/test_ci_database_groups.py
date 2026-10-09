@@ -423,6 +423,7 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         ("cleanup", "published_database_removal"),
         ("contract", "canvas_sync_worker_postgres_contract"),
         ("contract_phase", "renewal_job_outcomes"),
+        ("canvas_target", "flow"),
         ("canvas_target", "selfhost"),
     ):
         marker = json.dumps(

@@ -353,6 +353,7 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "issuance_api_key",
             "openbao_service_token",
             "grpc_service_token",
+            "device_registration_gateway_key",
         ]
         .into_iter()
         .collect(),
@@ -378,6 +379,7 @@ fn secret_field(key: &str) -> Result<&'static str> {
     match key {
         "MARTY_DB_PASSWORD_FILE" => Ok("marty_db_password"),
         "GRPC_SERVICE_TOKEN_FILE" => Ok("grpc_service_token"),
+        "DEVICE_REGISTRATION_GATEWAY_KEY_FILE" => Ok("device_registration_gateway_key"),
         "ISSUANCE_API_KEY_FILE" | "SIGNING_KEYS_INTERNAL_API_KEY_FILE" => Ok("issuance_api_key"),
         "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
         "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
@@ -457,6 +459,7 @@ impl ClosedSelfhostModel {
                 "ISSUANCE_API_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
                 "GRPC_SERVICE_TOKEN",
+                "DEVICE_REGISTRATION_GATEWAY_KEY",
                 "MARTY_DB_PASSWORD",
                 "DATABASE_URL",
                 "INTEGRATION_SECRET_MASTER_KEY",
@@ -1104,6 +1107,10 @@ fn negative_controls(
             json!("/run/secrets/token_hmac_key"),
         ),
         (
+            "/services/gateway/environment/DEVICE_REGISTRATION_GATEWAY_KEY_FILE",
+            json!("/run/secrets/grpc_service_token"),
+        ),
+        (
             "/services/issuance/environment/BAO_ADDR",
             json!("changed-unselected-sibling"),
         ),
@@ -1137,6 +1144,10 @@ fn negative_controls(
     }
     let mut changed = model.full_model.clone();
     changed["services"]["issuance-native"]["environment"]["ISSUANCE_API_KEY"] =
+        json!("raw-must-not-hide-file");
+    assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
+    let mut changed = model.full_model.clone();
+    changed["services"]["gateway"]["environment"]["DEVICE_REGISTRATION_GATEWAY_KEY"] =
         json!("raw-must-not-hide-file");
     assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
 }
