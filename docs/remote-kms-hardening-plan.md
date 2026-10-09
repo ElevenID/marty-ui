@@ -9527,6 +9527,16 @@ Main remains `953cf5294` after a fresh fetch. The locally verified workflow
 fix, latest-main merge and tracker corrections can be published together for
 one new hosted run; the prior failed result remains immutable evidence.
 
+2026-10-09 grouped UI qualification push: branch
+`security/remote-kms-hardening-20261007` and draft PR #1192 now publish
+`6cc8159a5a2e289dc0b51820b43a3fa35aded7a8`, containing the beta
+packaging environment correction, merge of main `953cf5294` and the tracker
+updates. The PR body was refreshed to distinguish the two earlier failed UI
+runs, their passed OpenBao/Canvas/service-image evidence and the still-open
+wallet and release gates. Exact-head CI run `37960926646` was queued after
+the push; its result is not yet known. Do not treat the prior green lanes as
+qualification of this new head.
+
 2026-10-09 pairing authorization interface review: the Auth service session
 record retains creation time and OIDC claims, but its current gRPC
 `ValidateSession` response and Gateway `SessionIdentity` expose user and
