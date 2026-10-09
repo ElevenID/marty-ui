@@ -10,6 +10,7 @@ pub mod holder_key_repository;
 pub mod holder_signer;
 pub mod http;
 pub mod migration;
+pub mod pairing_enrollment;
 pub mod pairing_ticket;
 pub mod postgres;
 pub mod repository;

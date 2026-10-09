@@ -13,7 +13,9 @@ use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    control_plane::MembershipAuthorizer, pairing_ticket::PairingTicketRepository,
+    control_plane::MembershipAuthorizer,
+    pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
+    pairing_ticket::PairingTicketRepository,
     CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
 };
 
@@ -22,6 +24,7 @@ pub struct HttpState {
     pub service: Arc<DeviceService>,
     pub memberships: Arc<dyn MembershipAuthorizer>,
     pub pairing_tickets: Arc<dyn PairingTicketRepository>,
+    pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
     pub release_version: String,
     pub build_revision: String,
     pub gateway_key: String,
@@ -33,6 +36,10 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/v1/devices/pairing-tickets",
             axum::routing::post(issue_pairing_ticket),
+        )
+        .route(
+            "/v1/devices/pair",
+            axum::routing::post(redeem_pairing_ticket),
         )
         .route(
             "/v1/devices/{registration_id}",
@@ -132,6 +139,22 @@ async fn issue_pairing_ticket(
         "expires_at": ticket.scope.expires_at,
     }))
     .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn redeem_pairing_ticket(
+    State(state): State<HttpState>,
+    Json(body): Json<PairingRedeemRequest>,
+) -> Result<Response, ApiError> {
+    let enrollment = state.pairing_enrollment.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("remote holder enrollment is unavailable".into())
+    })?;
+    let enrolled = enrollment.redeem(body).await?;
+    let mut response = Json(enrolled).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),

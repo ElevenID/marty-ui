@@ -5,8 +5,10 @@ use chrono::{DateTime, Utc};
 use marty_holder_key_reference::{HolderKeyScope, HolderSignature, SignHolderKeyRequest};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::sync::Arc;
 
 use crate::{
+    control_plane::MembershipAuthorizer,
     holder_credential::{authorize, HolderCredentialRecord},
     holder_credential_repository,
     holder_key_client::HolderKeyClient,
@@ -22,11 +24,20 @@ const MAX_SIGNING_INPUT_BYTES: usize = 64 * 1024;
 pub struct HolderSigner {
     pool: PgPool,
     client: HolderKeyClient,
+    memberships: Arc<dyn MembershipAuthorizer>,
 }
 
 impl HolderSigner {
-    pub fn new(pool: PgPool, client: HolderKeyClient) -> Self {
-        Self { pool, client }
+    pub fn new(
+        pool: PgPool,
+        client: HolderKeyClient,
+        memberships: Arc<dyn MembershipAuthorizer>,
+    ) -> Self {
+        Self {
+            pool,
+            client,
+            memberships,
+        }
     }
 
     /// Internal only. A public caller must separately establish device enrollment
@@ -80,6 +91,9 @@ impl HolderSigner {
             .await
             .map_err(persistence)?;
         authorize(&credential, bearer, &device, user_id, organization_id, now)?;
+        self.memberships
+            .require_active(&credential.user_id, &credential.organization_id)
+            .await?;
         let key_row = sqlx::query("SELECT * FROM device_registration_service.device_holder_keys WHERE registration_id=$1 AND purpose=$2 AND revoked_at IS NULL FOR UPDATE")
             .bind(&registration_id)
             .bind(purpose)

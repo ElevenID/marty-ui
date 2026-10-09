@@ -1,10 +1,13 @@
 use marty_device_registration::{
     control_plane::{MembershipAuthorizer, OrganizationMembershipClient},
+    holder_credential_repository::PostgresHolderCredentialRepository,
     holder_key_cleanup::HolderKeyCleanup,
     holder_key_client::HolderKeyClient,
+    holder_key_provisioner::HolderKeyProvisioner,
     holder_key_repository::PostgresHolderKeyRepository,
     http::{router, HttpState},
     migration::{migrate, validate},
+    pairing_enrollment::PairingEnrollment,
     pairing_ticket::RedisPairingTickets,
     postgres::PostgresDeviceRepository,
     DeviceRepository, DeviceService,
@@ -63,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     migrate(&pool).await?;
     let repository: Arc<dyn DeviceRepository> =
         Arc::new(PostgresDeviceRepository::new(pool.clone()));
-    let service = Arc::new(DeviceService::new(repository));
+    let service = Arc::new(DeviceService::new(repository.clone()));
     let token = optional_secret("GRPC_SERVICE_TOKEN")?;
     if deployed && token.is_none() {
         return Err("GRPC_SERVICE_TOKEN is required in deployed environments".into());
@@ -86,13 +89,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "holder Signing Keys origin and service credential must be configured together".into(),
         );
     }
-    if let (Some(origin), Some(key)) = (holder_origin, holder_service_key) {
-        if key == gateway_key || token.as_deref() == Some(key.as_str()) {
-            return Err("holder Signing Keys credential must be dedicated".into());
-        }
-        let client = HolderKeyClient::new(&origin, key)?;
-        let cleanup = HolderKeyCleanup::new(PostgresHolderKeyRepository::new(pool), client);
-        tokio::spawn(cleanup.run_forever());
+    if deployed && holder_service_key.is_none() {
+        return Err("remote holder Signing Keys authority is required".into());
     }
     let target = env_value("ORG_GRPC_TARGET", "organization:9002");
     let target = if target.contains("://") {
@@ -108,6 +106,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?);
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
+    let pairing_enrollment = if let (Some(origin), Some(key)) = (holder_origin, holder_service_key)
+    {
+        if key == gateway_key || token.as_deref() == Some(key.as_str()) {
+            return Err("holder Signing Keys credential must be dedicated".into());
+        }
+        let client = HolderKeyClient::new(&origin, key)?;
+        let keys = PostgresHolderKeyRepository::new(pool.clone());
+        let cleanup = HolderKeyCleanup::new(keys.clone(), client.clone());
+        tokio::spawn(cleanup.run_forever());
+        Some(Arc::new(PairingEnrollment::new(
+            pairing_tickets.clone(),
+            memberships.clone(),
+            service.clone(),
+            HolderKeyProvisioner::new(repository, keys, client),
+            PostgresHolderCredentialRepository::new(pool),
+        )))
+    } else {
+        None
+    };
     let port = env_value("DEVICE_REGISTRATION_SERVICE_PORT", "8014").parse()?;
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let listener = TcpListener::bind(address).await?;
@@ -120,6 +137,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             service,
             memberships,
             pairing_tickets,
+            pairing_enrollment,
             release_version,
             build_revision,
             gateway_key,

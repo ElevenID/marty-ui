@@ -9689,3 +9689,25 @@ formatting. This is issue-only; do not present the
 QR to users or claim wallet completion until ticket redemption provisions
 the remote holder key and credential under the registration and revocation
 locks, with disposable OpenBao, PostgreSQL and Redis acceptance.
+
+2026-10-09 local pairing redemption candidate: Device Registration now has a
+dedicated Gateway-authenticated `POST /v1/devices/pair` route that consumes a
+single-use Redis ticket, rechecks active membership, creates a server-owned
+keyless mobile registration, provisions `holder_binding` EdDSA and
+`presentation_signing` ES256 keys through the remote Signing Keys authority,
+and returns only public JWKs plus a digest-stored, one-day device bearer.
+The route rejects a missing Gateway service credential and unavailable KMS
+enrollment; the focused six-test behavior suite passed. A guarded disposable
+OpenBao/PostgreSQL/Redis probe passed the full HTTP redemption, ticket replay
+rejection, both remote-signature verifications, credential rotation, and
+deactivation/deletion lifecycle. It also passed the six managed-prefix and
+provider HMAC checks. Device Registration and Gateway all-target Clippy passed
+with warnings denied. These changes remain local to the grouped UI branch and
+are not covered by published PR #1192 head or its successful 22-job run.
+The signer now checks live active membership after bearer authorization and
+before the remote call. The disposable lifecycle probe proved an unexpired
+bearer cannot sign after membership is revoked, and the repeated all-target
+Clippy check passed. Before wallet cutover, review compensation under failures,
+expose an authorized remote signing path to the mobile wallet, replace the
+wallet's local holder-key behavior and simulated pairing, and qualify the
+exact signed image/release.

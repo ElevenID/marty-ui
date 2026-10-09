@@ -44,6 +44,7 @@ tonic-prost-build.workspace = true
 
 [dev-dependencies]
 ed25519-dalek.workspace = true
+p256.workspace = true
 marty-signing-keys = { path = "../signing-keys" }
 tower.workspace = true
 

@@ -3936,6 +3936,7 @@ dependencies = [
  "marty-holder-key-reference",
  "marty-key-material-policy",
  "marty-signing-keys",
+ "p256",
  "prost",
  "protoc-bin-vendored",
  "rand 0.9.5",

@@ -6469,6 +6469,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn public_pairing_redemption_forwards_ticket_without_client_identity_headers() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pair")
+                    .header("content-type", "application/json")
+                    .header("x-user-id", "forged-user")
+                    .header("x-organization-id", "forged-org")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(r#"{"pairing_code":"opaque-ticket","platform":"android","fcm_token":"push-token"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, request) = &calls[0];
+        assert_eq!(service, "device-registration");
+        assert_eq!(request.path, "/v1/devices/pair");
+        assert_eq!(request.header("x-user-id"), None);
+        assert_eq!(request.header("x-organization-id"), None);
+        assert_eq!(
+            request.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap(),
+            json!({"pairing_code":"opaque-ticket","platform":"android","fcm_token":"push-token"})
+        );
+    }
+
+    #[tokio::test]
     async fn native_passport_gateway_forwards_all_eight_public_routes_with_tenant_key() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let router = gateway_router(runtime_state_with_upstream_and_passport(
