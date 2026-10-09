@@ -10544,3 +10544,20 @@ non-generated coverage ratio is 75.91% (1,494/1,968), still below the 90%
 protected gate; this is not a source-coverage regression conclusion. The
 source commit remains local for the broad PR #57 batch. Real platform secure
 storage and device behavior remain to be qualified.
+
+2026-10-09 grouped UI CI recovery reconciliation: the preserved
+`codex/a6-dockerhub-mirror-20261009` branch's digest-preserving Docker Hub
+cache work was cherry-picked into this KMS integration branch as commits
+`984fdb5c4` through `5e5171e64`, with current KMS workflow conflicts
+resolved in `1f6218f8a`. The retired beta fence test/job stayed removed;
+the current Rust service job retains real Organization, Credential Template,
+and Issuance migrations plus the fresh private-key schema verifier, now using
+fixture container IDs started after mirror setup. The release-contract
+allowlist still requires exact reviewed OCI digests and linux/amd64 indexes;
+its live registry-index test passed locally through the mirror/canonical
+selection. CI fallback policy tests passed (10; 17 POSIX-only skips), the
+non-registry infrastructure policy tests passed (10), workflow-performance
+tests passed (142), candidate-workflow tests passed (15), and the impacted
+Canvas shell scenario passed (2). Ruff, Python compilation, Bash syntax and
+diff checks passed. This is local CI wiring evidence, not an exact-head
+hosted run or released-image K10 proof.
