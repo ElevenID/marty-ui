@@ -7854,6 +7854,15 @@ implemented. Do not qualify or ship the Authenticator consumer from this
 intermediate fail-closed change; rebuild or remove the raw-key WASM surface
 and restore DID/key workflows through authenticated remote custody first.
 
+The Authenticator follow-up additionally removes the Dart WASM wrapper's
+local key-generation, raw-JWK credential-signing and presentation-signing
+methods from both web and non-web stubs, and replaces the loader's wildcard
+global export with an explicit public/verification method list. JavaScript
+syntax and reference/diff checks pass; Flutter/Dart verification is unavailable
+locally. The packaged WASM module itself still includes raw-key exports and
+remains directly fetchable, so this narrows application access but is not the
+required final artifact boundary.
+
 UI run `37885206206` subsequently completed `Test OpenBao DIDComm plugin
 image` successfully, including the coordinated PostgreSQL/Raft restore lane,
 and `Rust Service Images` successfully at pushed head `cf2f701fe`. Canvas
