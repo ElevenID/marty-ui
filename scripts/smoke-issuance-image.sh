@@ -3,6 +3,8 @@ set -euo pipefail
 
 image="${1:?usage: smoke-issuance-image.sh IMAGE}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+postgres_image="$(bash "$repository_root/scripts/ci/pull-pinned-dockerhub-image.sh" \
+  postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f)"
 postgres_password="marty-test"
 suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
 network="issuance-ci-${suffix}"
@@ -47,7 +49,7 @@ docker run --detach \
   --env POSTGRES_USER=marty \
   --env POSTGRES_PASSWORD="$postgres_password" \
   --env POSTGRES_DB=marty \
-  postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f \
+  "$postgres_image" \
   >/dev/null
 for attempt in {1..60}; do
   if docker exec "$postgres" pg_isready \

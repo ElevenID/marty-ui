@@ -10,6 +10,14 @@ fi
 
 canonical=$1
 mirror="mirror.gcr.io/library/${canonical}"
+if docker image inspect "$canonical" >/dev/null 2>&1; then
+    printf '%s\n' "$canonical"
+    exit 0
+fi
+if docker image inspect "$mirror" >/dev/null 2>&1; then
+    printf '%s\n' "$mirror"
+    exit 0
+fi
 if docker pull "$mirror" >&2; then
     printf '%s\n' "$mirror"
     exit 0

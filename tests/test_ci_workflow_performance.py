@@ -261,20 +261,41 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         "run": "python -m pytest -v --tb=short -x",
     }
     rust = document["jobs"]["test-rust-services"]
-    assert set(rust["services"]) == {"postgres", "redis", "openbao"}
+    assert not rust.get("services")
+    fixtures = yaml.safe_load(
+        (ROOT / ".github/compose/rust-ci-fixtures.yml").read_text(encoding="utf-8")
+    )["services"]
+    assert set(fixtures) == {"postgres", "redis", "openbao"}
     for service, port in (("postgres", 5432), ("redis", 6379)):
-        fixture = rust["services"][service]
-        assert fixture["image"].startswith(f"{service}:")
-        assert "@sha256:" in fixture["image"]
+        fixture = fixtures[service]
+        assert fixture["pull_policy"] == "never"
         assert fixture["ports"] == [f"{port}:{port}"]
-        assert "--health-cmd" in fixture["options"]
-    openbao = rust["services"]["openbao"]
+        assert fixture["healthcheck"]["retries"] >= 20
+    openbao = fixtures["openbao"]
     assert openbao["image"].startswith("quay.io/openbao/openbao@sha256:")
+    assert openbao["pull_policy"] == "never"
     assert openbao["ports"] == ["8200:8200"]
-    assert openbao["env"] == {
+    assert openbao["environment"] == {
         "BAO_DEV_ROOT_TOKEN_ID": "test-only",
         "BAO_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
     }
+    setup = next(
+        step for step in rust["steps"]
+        if step.get("name") == "Start digest-pinned Rust test services after registry setup"
+    )
+    for image in (
+        "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+        "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+        openbao["image"],
+    ):
+        assert image in setup["run"]
+    assert "up -d --wait --wait-timeout 90" in setup["run"]
+    cleanup = next(
+        step for step in rust["steps"]
+        if step.get("name") == "Remove owned Rust test services and volumes"
+    )
+    assert cleanup["if"] == "always()"
+    assert "down --volumes --remove-orphans" in cleanup["run"]
     chain_step_name = (
         "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
     )
@@ -1011,9 +1032,16 @@ def test_python_service_cleanup_guard_rejects_weakened_coverage(mutation) -> Non
     elif mutation == "restore-url":
         job["env"] = {"FLOW_POSTGRES_TEST_URL": "postgresql://localhost:5432/unused"}
     elif mutation.startswith("drop-rust-"):
-        del document["jobs"]["test-rust-services"]["services"][
-            mutation.removeprefix("drop-rust-")
-        ]
+        setup = next(
+            step for step in document["jobs"]["test-rust-services"]["steps"]
+            if step.get("name") == "Start digest-pinned Rust test services after registry setup"
+        )
+        setup["run"] = setup["run"].replace(
+            {"postgres": "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+             "redis": "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+             "openbao": "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"}[
+                mutation.removeprefix("drop-rust-")
+            ], "removed")
     elif mutation == "wrong-directory":
         step["working-directory"] = "tests"
     else:
