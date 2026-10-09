@@ -400,6 +400,8 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "store_marker": "MmfApplicantProvisioningStore::new(",
             "jit_marker": "JitUserProvisioner::new(",
             "canvas_marker": "Some(applicant_profile)",
+            "canvas_callsite_evidence": "rust/services/auth/src/canvas_transport.rs",
+            "canvas_call_marker": "provisioner.ensure_profile(&user).await",
             "callsite_evidence": "rust/services/auth/src/application.rs",
             "callsite_marker": ".provision(&identity)",
             "jit_evidence": "rust/services/auth/src/provisioning.rs",

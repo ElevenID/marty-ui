@@ -2002,6 +2002,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "let canvas = Arc::new(",
                 "let credential_state = Arc::new(",
             ),
+            "canvas_call": (
+                "pub async fn finalize(",
+                "let session = Session::create(",
+            ),
             "login": (
                 "pub async fn handle_callback(",
                 "async fn publish_login_events(",
@@ -2029,6 +2033,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("store_marker", "runtime_evidence", "startup"),
             ("jit_marker", "runtime_evidence", "jit_startup"),
             ("canvas_marker", "runtime_evidence", "canvas_startup"),
+            ("canvas_call_marker", "canvas_callsite_evidence", "canvas_call"),
             ("callsite_marker", "callsite_evidence", "login"),
             ("jit_call_marker", "jit_evidence", "jit"),
             ("request_method_marker", "request_evidence", "request"),
