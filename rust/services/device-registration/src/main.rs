@@ -61,6 +61,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if deployed && token.is_none() {
         return Err("GRPC_SERVICE_TOKEN is required in deployed environments".into());
     }
+    let gateway_key = optional_secret("DEVICE_REGISTRATION_GATEWAY_KEY")?
+        .or_else(|| (!deployed).then(|| "dev-device-registration-gateway-key-change-me".into()))
+        .ok_or("DEVICE_REGISTRATION_GATEWAY_KEY is required in deployed environments")?;
+    if gateway_key.len() < 32 {
+        return Err("DEVICE_REGISTRATION_GATEWAY_KEY must contain at least 32 bytes".into());
+    }
+    if token.as_deref() == Some(gateway_key.as_str()) {
+        return Err("DEVICE_REGISTRATION_GATEWAY_KEY must differ from GRPC_SERVICE_TOKEN".into());
+    }
     let target = env_value("ORG_GRPC_TARGET", "organization:9002");
     let target = if target.contains("://") {
         target
@@ -86,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             memberships,
             release_version,
             build_revision,
+            gateway_key,
         }),
     )
     .with_graceful_shutdown(shutdown())

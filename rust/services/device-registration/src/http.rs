@@ -1,6 +1,7 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -8,6 +9,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
 
 use crate::{
@@ -21,6 +23,7 @@ pub struct HttpState {
     pub memberships: Arc<dyn MembershipAuthorizer>,
     pub release_version: String,
     pub build_revision: String,
+    pub gateway_key: String,
 }
 
 pub fn router(state: HttpState) -> Router {
@@ -31,6 +34,7 @@ pub fn router(state: HttpState) -> Router {
             "/v1/devices/{registration_id}",
             get(get_device).patch(update_device).delete(delete_device),
         )
+        .route_layer(middleware::from_fn_with_state(state.clone(), gateway_auth))
         .route("/health", get(health))
         .route("/ready", get(health))
         .route("/startup", get(health))
@@ -38,6 +42,28 @@ pub fn router(state: HttpState) -> Router {
         .route("/metrics", get(metrics))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn gateway_auth(State(state): State<HttpState>, request: Request, next: Next) -> Response {
+    let supplied = request
+        .headers()
+        .get("x-service-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if state.gateway_key.len() < 32
+        || supplied
+            .as_bytes()
+            .ct_eq(state.gateway_key.as_bytes())
+            .unwrap_u8()
+            != 1
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"detail":"Gateway authentication is required"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 #[derive(Debug)]

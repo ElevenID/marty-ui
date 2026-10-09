@@ -535,7 +535,9 @@ def validate_model(
         and gateway.get("ORGANIZATION_SERVICE_URL") == "http://organization:8002"
         and gateway.get("ORG_GRPC_TARGET") == "organization:9002"
         and gateway.get("ES_GRPC_TARGET") == "event-stream:9015"
-        and gateway.get("GRPC_SERVICE_TOKEN_FILE") == "/run/secrets/grpc_service_token",
+        and gateway.get("GRPC_SERVICE_TOKEN_FILE") == "/run/secrets/grpc_service_token"
+        and gateway.get("DEVICE_REGISTRATION_GATEWAY_KEY_FILE")
+        == "/run/secrets/device_registration_gateway_key",
         "Disposable Organization API-key authority is not isolated and ready",
     )
     require(

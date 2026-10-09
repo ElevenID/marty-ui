@@ -79,7 +79,7 @@ SECRET_MOUNTS = {
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
     "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
-                "grpc_service_token"),
+                "grpc_service_token", "device_registration_gateway_key"),
 }
 BASE_CEREMONY_MOUNTS = ("dsc_issue_gateway_key", "csca_issue_gateway_key")
 DATA_MOUNTS = {

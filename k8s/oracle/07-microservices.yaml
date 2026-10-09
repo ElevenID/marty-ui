@@ -48,6 +48,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: DEVICE_REGISTRATION_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_GATEWAY_KEY
             - name: GATEWAY_PORT
               value: "8000"
             - name: AUTH_GRPC_TARGET
@@ -1945,6 +1950,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: GRPC_SERVICE_TOKEN
+            - name: DEVICE_REGISTRATION_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_GATEWAY_KEY
             - name: DEVICE_REGISTRATION_SERVICE_PORT
               value: "8014"
             - name: DATABASE_URL

@@ -272,17 +272,32 @@ async fn deactivated_reregistration_gets_a_new_identity_and_key_history() {
 #[tokio::test]
 async fn http_surface_preserves_routes_identity_and_response_shapes() {
     let (service, _) = service();
+    let gateway_key = "g".repeat(32);
     let app = router(HttpState {
         service: Arc::new(service),
         memberships: Arc::new(AllowMembership),
         release_version: "test".into(),
         build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
     });
+    for supplied in [None, Some("forged-service-token")] {
+        let mut request = Request::builder().uri("/v1/devices");
+        if let Some(token) = supplied {
+            request = request.header("x-service-token", token);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
     let request = Request::builder()
         .method("POST")
         .uri("/v1/devices")
         .header("content-type", "application/json")
         .header("x-user-id", "user-1")
+        .header("x-service-token", &gateway_key)
         .body(Body::from(
             r#"{"device_id":"device-1","platform":"web","fcm_token":"push-token"}"#,
         ))
@@ -298,6 +313,7 @@ async fn http_surface_preserves_routes_identity_and_response_shapes() {
             Request::builder()
                 .uri(format!("/v1/devices/{id}"))
                 .header("x-user-id", "another-user")
+                .header("x-service-token", &gateway_key)
                 .body(Body::empty())
                 .unwrap(),
         )

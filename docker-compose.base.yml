@@ -370,6 +370,7 @@ services:
       SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
+      DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:-dev-device-registration-gateway-key-change-me}
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
@@ -1137,6 +1138,7 @@ services:
     environment:
       <<: *native_issuance_grpc_auth
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
+      DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:-dev-device-registration-gateway-key-change-me}
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/5
       ORG_GRPC_TARGET: organization:9002

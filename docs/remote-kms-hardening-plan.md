@@ -8672,3 +8672,23 @@ holder signing API needs a dedicated Gateway-to-Device Registration credential
 or equivalent signed identity context, with public caller headers stripped
 before injection; reusing the broadly shared gRPC token alone would give
 every holder of that token signing-authority reachability.
+
+2026-10-09 local Gateway-to-Device Registration boundary candidate (not yet
+published): the Rust Gateway reads a dedicated
+`DEVICE_REGISTRATION_GATEWAY_KEY` and injects it only on routes owned by
+Device Registration. The service requires that key on all `/v1/devices`
+routes before reading `x-user-id`; health routes remain separate. The
+configured key must be at least 32 bytes and differ from the shared gRPC
+token and Gateway signing/issuance credentials. Development, beta, self-host
+and Kubernetes bindings now name a separate secret; self-host and Kubernetes
+deployment catalogs/templates include it. The Device Registration behavior
+full suite passed 12/12, including missing and forged token rejection, and
+Gateway's library suite passed 151 tests with one ignored. The deployment catalog's
+five unit checks and Ruff passed after accepting both existing placeholder
+spellings in the template assertion. Warnings-denied Clippy passed for both
+Rust service packages and all targets. Deployment model checks and
+an actual Gateway-to-service probe remain to run before publishing. This
+credential authenticates the Gateway as caller; it does not by itself
+authorize a holder signing request or establish durable device-owned KMS
+keys. The current public device registration API will require a coordinated
+deployment of both services so direct callers receive 401.

@@ -320,6 +320,7 @@ services:
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
+      DEVICE_REGISTRATION_GATEWAY_KEY_FILE: /run/secrets/device_registration_gateway_key
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_GATEWAY_ENABLED: ${PASSPORT_NATIVE_GATEWAY_ENABLED:-false}
@@ -346,6 +347,7 @@ services:
       - issuance_api_key
       - openbao_service_token
       - grpc_service_token
+      - device_registration_gateway_key
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -1105,6 +1107,7 @@ services:
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      DEVICE_REGISTRATION_GATEWAY_KEY_FILE: /run/secrets/device_registration_gateway_key
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -1113,6 +1116,7 @@ services:
     secrets:
       - marty_db_password
       - grpc_service_token
+      - device_registration_gateway_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1263,6 +1267,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
   grpc_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
+  device_registration_gateway_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/device_registration_gateway_key
   notification_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_webhook_secret
   notification_applicant_event_token:

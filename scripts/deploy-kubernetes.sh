@@ -290,7 +290,7 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key token_hmac_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
+  local issuance_api_key token_hmac_key grpc_service_token device_registration_gateway_key flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
   local canvas_credentials_shared_secret openbao_service_token signing_keys_openbao_token didcomm_issuance_openbao_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
@@ -320,6 +320,14 @@ cmd_setup_secrets() {
   token_hmac_key="$(resolve_secret_input TOKEN_HMAC_KEY)"
   require_resolved_secret TOKEN_HMAC_KEY "$token_hmac_key"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
+  device_registration_gateway_key="$(resolve_secret_input DEVICE_REGISTRATION_GATEWAY_KEY)"
+  require_resolved_secret DEVICE_REGISTRATION_GATEWAY_KEY "$device_registration_gateway_key"
+  if (( ${#device_registration_gateway_key} < 32 )); then
+    error "DEVICE_REGISTRATION_GATEWAY_KEY must be at least 32 characters."
+  fi
+  if [[ "$device_registration_gateway_key" == "$grpc_service_token" || "$device_registration_gateway_key" == "$issuance_api_key" ]]; then
+    error "DEVICE_REGISTRATION_GATEWAY_KEY must differ from other service credentials."
+  fi
   notification_webhook_secret="$(resolve_secret_input NOTIFICATION_WEBHOOK_SECRET)"
   notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
   workload_identity_ca_cert="$(resolve_secret_input MARTY_WORKLOAD_IDENTITY_CA_CERT)"
@@ -385,6 +393,7 @@ cmd_setup_secrets() {
     --from-literal=TOKEN_HMAC_KEY="$token_hmac_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
+    --from-literal=DEVICE_REGISTRATION_GATEWAY_KEY="$device_registration_gateway_key" \
     --from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret" \
     --from-literal=NOTIFICATION_APPLICANT_EVENT_TOKEN="$notification_applicant_event_token" \
     --from-literal=FLOW_WEBHOOK_SECRET="$flow_webhook_secret" \

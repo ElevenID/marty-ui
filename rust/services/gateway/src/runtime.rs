@@ -101,6 +101,7 @@ pub struct GatewayRuntimeState {
     pub passport_native_gateway_enabled: bool,
     pub passport_tenant_keys: Option<PassportTenantCredentialSource>,
     pub service_token: Option<String>,
+    pub device_registration_gateway_key: Option<String>,
     pub release_identity: ReleaseIdentity,
     pub maximum_body_bytes: usize,
 }
@@ -212,6 +213,7 @@ impl GatewayRuntimeState {
             passport_native_gateway_enabled: false,
             passport_tenant_keys: None,
             service_token: None,
+            device_registration_gateway_key: None,
             release_identity,
             maximum_body_bytes: DEFAULT_MAXIMUM_BODY_BYTES,
         })
@@ -227,6 +229,19 @@ impl GatewayRuntimeState {
             ));
         }
         self.service_token = service_token;
+        Ok(self)
+    }
+
+    pub fn with_device_registration_gateway_key(
+        mut self,
+        key: String,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if key.len() < 32 {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "device registration gateway key must contain at least 32 bytes".into(),
+            ));
+        }
+        self.device_registration_gateway_key = Some(key);
         Ok(self)
     }
 
@@ -2975,6 +2990,13 @@ fn proxy_overrides(
     identity: &TrustedIdentityContext,
 ) -> ProxyOverrides {
     let mut overrides = ProxyOverrides::default();
+    if route_ownership(path).service == "device-registration" {
+        if let Some(key) = &state.device_registration_gateway_key {
+            overrides
+                .headers
+                .insert("x-service-token".into(), key.clone());
+        }
+    }
     if requires_issuance_service_auth(path) {
         overrides
             .headers
@@ -6939,7 +6961,10 @@ mod tests {
 
     #[test]
     fn service_authenticated_proxies_receive_only_gateway_configured_credentials() {
-        let state = runtime_state();
+        let mut state = runtime_state();
+        Arc::get_mut(&mut state)
+            .expect("unique runtime state")
+            .device_registration_gateway_key = Some("d".repeat(32));
         let identity = TrustedIdentityContext::default();
         for path in [
             "/v1/organizations/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -6952,6 +6977,8 @@ mod tests {
         }
         let applicant = proxy_overrides(&state, "/v1/applicants", &identity);
         assert!(!applicant.headers.contains_key("x-service-token"));
+        let device = proxy_overrides(&state, "/v1/devices", &identity);
+        assert_eq!(device.headers["x-service-token"], "d".repeat(32));
     }
 
     #[test]
