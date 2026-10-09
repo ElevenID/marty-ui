@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+from scripts import prepare_passport_beta_native_migrations as legacy_sql
+
 
 ROOT = Path(__file__).resolve().parents[1]
 OPERATORS = (
@@ -21,3 +23,10 @@ def test_retired_operator_has_only_a_terminal_diagnostic(name: str) -> None:
     assert len(statements) == 1
     assert statements[0].startswith("throw 'Historical passport beta ")
     assert statements[0].endswith("fresh Rust-owned deployment path'")
+
+
+def test_retired_sql_handoff_cannot_construct_or_stage_migrations() -> None:
+    for obsolete in ("build_sql", "checked_migrations", "stage_sql"):
+        assert not hasattr(legacy_sql, obsolete)
+    with pytest.raises(legacy_sql.NativeMigrationError, match="retired"):
+        legacy_sql.prepare(Path("unused-manifest"), Path("unused-receipt"))

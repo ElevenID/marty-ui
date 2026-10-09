@@ -8951,3 +8951,12 @@ This is still an intermediate source change: historical Python SQL builders,
 receipt consumers and manual beta acceptance workflows remain in the tree and
 need cleanup/replacement before the grouped PR is publishable. No protected
 beta host or signed new-head image was exercised by these tests.
+The follow-up removed `build_sql`, `checked_migrations`, image SQL reads and
+`stage_sql` from the historical beta native-migration module, together with
+its disposable SQL-bundle tests. Its remaining `prepare()` is a terminal
+error; `checked_receipt()` remains temporarily because read-only historical
+maintenance/aggregate modules import it. Focused maintenance, aggregate,
+fence-authority and retired-operator tests pass 87/87; release-transaction,
+qualifier and CI-gate tests pass 32/32. This removes the old bundle assembly
+capability, but does not yet retire every historical receipt consumer or beta
+workflow. Supported fresh Rust schema paths remain the release target.
