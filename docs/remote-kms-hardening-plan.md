@@ -9953,3 +9953,38 @@ to the paired bearer organization, fetch this internal projection, and expose
 a bounded public bearer endpoint; mobile must refresh it online for each
 presentation and pass it through Core's strict resolver. No physical wallet
 trust acceptance is claimed.
+
+2026-10-09 paired wallet issuer trust binding (local UI `890ffde5d`, not yet
+published in grouped draft PR #1192): Wallet Setup now loads active profiles
+for the selected organization, requires a selected Trust Profile before issuing
+a QR ticket, and passes that exact UUID through Gateway. Device Registration
+requires active membership and fetches a fresh, service-authenticated,
+size-bounded public issuer-key projection before issuing the single-use ticket.
+The fresh-only Device Registration schema and durable confirmation row store
+`trust_profile_id` alongside the user and organization; schema verification
+requires that non-null column. No legacy migration or private-key table was
+added. A new bearer-only `GET /v1/devices/wallet-issuer-keys` resolves the
+profile from the confirmed pairing row rather than a mobile-supplied ID. It
+requires a current digest-backed credential, active registration, matching
+user/organization, live membership, and an unexpired non-revoked bearer;
+it rechecks the bearer after fetching the snapshot. Gateway exposes that
+fixed route, strips forged identity/service headers, and forwards only the
+bearer under its own service credential. The returned public-only snapshot is
+`no-store`, limited to 256 KiB and 256 keys, with exact profile/organization
+and one-minute validity checks. Trust Profile revocation/status decisions are
+refetched online, so a stale cached decision is not an authorization source.
+
+Local validation: Device Registration 9 library and 8 behavior tests passed;
+Gateway 159 library tests passed with one existing ignored test; all-target
+Device Registration and Gateway Clippy passed with warnings denied; Wallet
+Setup/use-case tests 4/4 and TypeScript build check passed. The guarded
+disposable OpenBao/PostgreSQL/Redis probe passed, including HTTP ticket issue
+with a selected profile, confirmed bearer snapshot read, cross-organization
+denial, membership denial, bearer-rotation denial, and deactivation denial.
+Base and self-host Compose model checks passed. This qualifies this local
+server/UI boundary only. Authenticator still must fetch this snapshot through
+the paired bearer for each presentation, enforce expiry and trusted issuer
+resolution through Core, and finish actual OID4VCI receipt and OID4VP
+presentation. The Core resolver is still local, mobile Dart/device acceptance
+is absent, and grouped PR heads/exact release artifacts have not been updated
+or qualified for this batch.
