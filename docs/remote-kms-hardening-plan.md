@@ -10504,3 +10504,16 @@ The commit remains local for a grouped Authenticator PR #57 push. Self-review
 found the wallet card-state preference persistence still serializes Flutter
 objects and addresses cards by title in one toggle path; repair and test it
 before claiming wallet feature preservation or publishing the mobile batch.
+
+2026-10-09 wallet preference self-review correction: local Authenticator
+commit `b3f7c76` saves only versioned issuer ordering, verified receipt IDs,
+and expired IDs in secure storage. Reload reconciles those preferences with
+current receipts, so newly received credentials appear without restoring
+stale credential copies. Reorder, expired selection, and deletion use receipt
+identity; cards with the same title no longer share hide/unhide actions or
+selection. The focused reload test proves issuer/card order, one-card expiry,
+new receipt inclusion, and cross-issuer move rejection. Full Flutter analysis
+has no issues; 177 tests pass with four skips. Non-generated line coverage is
+77.04% (1,366/1,773), still below the protected 90% gate. This Authenticator
+commit remains local and unpushed for the broad PR #57 batch; mobile-device
+review and remote-KMS end-to-end acceptance remain open.
