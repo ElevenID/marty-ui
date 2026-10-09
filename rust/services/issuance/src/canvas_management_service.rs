@@ -1239,7 +1239,11 @@ impl CanvasPlatformManagementService {
                     self.lti_probe_config.ttl,
                     Utc::now(),
                 )?,
-                Err(CanvasLtiMetadataProbeError::Provider(error)) => {
+                Err(
+                    error @ (CanvasLtiMetadataProbeError::Provider(_)
+                    | CanvasLtiMetadataProbeError::PrivateKeyMaterial),
+                ) => {
+                    let error = error.to_string();
                     platform.record_lti_probe_failure(error.clone(), Utc::now());
                     self.repository
                         .save_lti_installation(
@@ -1345,6 +1349,9 @@ impl CanvasPlatformManagementService {
         .await
         .map_err(|error| match error {
             CanvasLtiMetadataProbeError::Provider(error) => operation.probe_error(error),
+            CanvasLtiMetadataProbeError::PrivateKeyMaterial => {
+                operation.probe_error("Canvas metadata contains private key material".to_owned())
+            }
             CanvasLtiMetadataProbeError::EndpointMismatch => {
                 CanvasPlatformManagementError::LtiMetadataEndpointMismatch
             }

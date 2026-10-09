@@ -4220,6 +4220,7 @@ dependencies = [
  "marty-crypto",
  "marty-didcomm",
  "marty-emrtd-issuance",
+ "marty-key-material-policy",
  "marty-oid4vci",
  "marty-passport-auth",
  "marty-platform-clock",

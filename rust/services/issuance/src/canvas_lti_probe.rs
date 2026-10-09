@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use marty_key_material_policy::contains_private_key;
 use marty_oid4vci::lti::{
     canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
     CanvasLtiPlatformProbe,
@@ -105,6 +106,8 @@ pub enum CanvasLtiMetadataProbeError {
     Provider(String),
     #[error("Canvas metadata probe returned endpoints outside the persisted trust profile")]
     EndpointMismatch,
+    #[error("Canvas metadata contains private key material")]
+    PrivateKeyMaterial,
 }
 
 /// Probe one Canvas origin and reject metadata outside its persisted trust
@@ -138,6 +141,11 @@ pub async fn probe_canvas_lti_metadata(
         || probe.jwks_uri != expected.jwks_uri
     {
         return Err(CanvasLtiMetadataProbeError::EndpointMismatch);
+    }
+    if contains_private_key(&probe.jwks_json)
+        || contains_private_key(&probe.raw_openid_configuration)
+    {
+        return Err(CanvasLtiMetadataProbeError::PrivateKeyMaterial);
     }
     Ok(probe)
 }
@@ -213,6 +221,47 @@ mod tests {
             endpoint_drift,
             CanvasLtiMetadataProbeError::EndpointMismatch
         );
+    }
+
+    #[tokio::test]
+    async fn shared_probe_rejects_private_material_before_persistence() {
+        let config = config();
+        let mut public_probe = probe("https://sso.canvaslms.com/api/lti/security/jwks");
+        public_probe.jwks_json = json!({"keys": [{"kty": "EC", "crv": "P-256", "x": "public"}]});
+        public_probe.raw_openid_configuration =
+            json!({"token_endpoint_auth_methods_supported": ["private_key_jwt"]});
+        assert!(probe_canvas_lti_metadata(
+            "https://canvas.example.edu",
+            "hosted_global",
+            &config,
+            &FixedProbe(public_probe),
+        )
+        .await
+        .is_ok());
+        for (jwks, metadata) in [
+            (
+                json!({"keys": [{"kty": "EC", "crv": "P-256", "d": "forbidden"}]}),
+                json!({"issuer": "https://canvas.instructure.com"}),
+            ),
+            (
+                json!({"keys": [{"kty": "EC", "crv": "P-256"}]}),
+                json!({"metadata": {"private_key": "forbidden"}}),
+            ),
+        ] {
+            let mut candidate = probe("https://sso.canvaslms.com/api/lti/security/jwks");
+            candidate.jwks_json = jwks;
+            candidate.raw_openid_configuration = metadata;
+            let error = probe_canvas_lti_metadata(
+                "https://canvas.example.edu",
+                "hosted_global",
+                &config,
+                &FixedProbe(candidate),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error, CanvasLtiMetadataProbeError::PrivateKeyMaterial);
+            assert!(!error.to_string().contains("forbidden"));
+        }
     }
 
     #[test]
