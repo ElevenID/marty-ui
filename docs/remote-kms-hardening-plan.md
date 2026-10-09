@@ -10165,3 +10165,18 @@ before PR #57 is published. Core exact-head hosted checks and Verifier
 Core wallet HTTP response-size limits during the native audit: the Rust
 receipt boundary caps returned credential size, but Core currently parses
 issuer HTTP JSON before that cap applies.
+
+2026-10-09 native mobile path audit finding: Android's registered SpruceID
+W3C/PKI/JWT/mDoc/wallet channels route holder signing to explicit
+`REMOTE_KMS_REQUIRED` errors; iOS does the same for the corresponding W3C
+and PKI operations. The Dart-only `spruce_id_sdk` channel used by
+`initializeHolderSDK`, ad hoc signing, and related legacy SDK wrappers has
+no Android or iOS registration in the inspected native registries. These
+wrappers do not constitute a working fallback, but they still advertise
+unsupported capabilities and need to be retired or replaced in the broad
+Authenticator PR. `initializeSDK(enableAdvancedFeatures: true)` currently
+calls the unregistered holder initialization route; inspect all public
+callers and preserve any required non-signing wallet/session behavior before
+removing this API. The QR SD-JWT route uses the verified Rust bridge and
+does not traverse those native signing channels. This is a source audit,
+not mobile artifact or physical-device acceptance.
