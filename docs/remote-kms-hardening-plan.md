@@ -7074,3 +7074,23 @@ and design an opaque wallet/device key operation before releasing the new WASM
 artifact. The upgraded Go OpenBao plugin also passed `go vet ./...` in the Go
 1.26 container. Both old-head hosted image jobs were still live when checked;
 do not infer success from their elapsed time.
+Authenticator call-graph follow-up: no current Dart view or service calls
+`SpruceIdClient.createDid`, `SpruceIdPlatformServiceWeb.generateKeyPair`, or
+the WASM `createPresentation`/`createVerifiableCredential` wrappers. The
+visible credential-selection presentation path uses
+`spruceIdClientExtendedProvider` and `createPresentationSDK` through its
+platform service. Thus the removed WASM exports are an exposed API/consumer
+compatibility risk, not yet evidence of a regression in the active wallet
+presentation flow. There are no public deployments and no compatibility
+requirement, but final wallet qualification must show the active path and
+the new WASM artifact still initialize and work; do not reintroduce raw-key
+exports solely to satisfy dormant wrappers.
+Packaging check: `marty-authenticator`'s production Flutter Dockerfile copies
+only Flutter's built web output; the explicit `local_wasm_overrides/marty_rs`
+asset copy appears in its web-test Dockerfile, while `web/index.html` loads
+`marty_wasm_loader.js` from that asset path. No product Dart call site for
+the four retired raw-key WASM methods was found. This weakens the claim that
+their removal breaks an actively shipped wallet feature, but does not prove
+the browser build works; test the exact authenticator artifact and its active
+presentation path before closing wallet preservation. The removed methods
+remain retired in the Credentials candidate.
