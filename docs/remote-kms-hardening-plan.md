@@ -7197,3 +7197,50 @@ and opened as draft PR #313 at `c5329260`, based on current `main` with no
 behind commits. Its hosted Rust, WASM, Python-wheel, dependency and security
 checks are queued. Keep both PRs draft until all required checks, cross-repo
 wallet compatibility, and exact release-artifact gates are satisfied.
+
+2026-10-08/09 grouped PR qualification follow-up: Credentials PR #313 head
+`c5329260` exposed two CI assumptions after raw-key retirement. Fast Rust
+Preflight's inverse `cargo tree -i sd-jwt-rs` selector is ambiguous because the
+resolved graph has sd-jwt-rs 0.7.1 and 0.8.0. The local correction checks the
+complete locked feature tree for each native, Python, WASM and full-WASM
+surface; all four tree checks pass locally and none selects the forbidden
+isomdl local signing or sd-jwt-rs acceleration/mock features. Its Nextest job
+also treated the deliberately empty native binding unit-test suite as an
+error. The local correction uses `cargo test --lib` and retains `cargo test
+--doc`; both pass with zero Rust tests while dedicated Python/WASM behavior
+jobs remain. These changes are committed locally as `99e0cc0` and have not
+yet been pushed, so hosted requalification is still required.
+
+UI PR #1192 head `81ab5df4d` passed the prior Release Contract correction
+except for one stale assertion expecting the old OID4VCI SQL fixture in CI;
+the current dedicated smoke database is seeded through the production Rust
+Issuance `migrate` command. The corrected assertion passes its 11-test local
+suite. The contracts lane found a standalone Canvas worker test still
+expecting startup without remote integration-secret KMS configuration. Its
+replacement requires a nonzero startup with `InvalidConfig` when that
+configuration is absent. The existing PostgreSQL-backed worker process tests
+retain real remote KMS and signal coverage; the replacement itself requires
+Linux hosted qualification. UI `main` advanced with the additive Canvas
+worker diagnostic lane (#1194), making this PR unmergeable until reconciled.
+Merged current `main` locally, resolved the one CI workflow conflict while
+preserving the diagnostic lane and KMS fixture environment, and passed 213
+focused workflow/contract Python tests plus YAML step-shape verification.
+The merged UI head `cf87ca204` remains local until the current hosted jobs
+finish, allowing any additional fixes to be batched into one push.
+An existing locally built `marty-issuance:kms-tls-local` image confirmed the
+new worker assertion's failure mode: with a signing-only API token and no
+remote integration-secret KMS URL, the actual worker exits 1 with
+`Error: InvalidConfig`; this is image behavior for an earlier candidate, and
+the source test still needs the new hosted run.
+
+K10 static DDL pass at these candidate heads: the UI SQL migrations' key-named
+tables are `device_registration_keys` (public DER/KID and lifecycle metadata)
+and `organization_service.api_keys` (prefix and hash), while
+`organization_integration_secrets` stores a remote opaque envelope. No
+private-key table declaration appeared in the current Credentials DDL/ORM
+search. The checked-in `contracts/issuance-runtime-surface.json` still records
+historical Python `issuer_signing_keys` revision names and paths; those
+revision files are absent from the current runtime migration directory, so
+the snapshot is historical metadata rather than an executable clean-install
+table creator. This static inventory does not replace the pending assembled
+fresh PostgreSQL schema and runtime-write audit.

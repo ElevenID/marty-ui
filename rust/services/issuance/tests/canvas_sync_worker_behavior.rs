@@ -139,15 +139,12 @@ fn standalone_process_rejects_missing_remote_kms_even_with_signing_key_fallback(
 
     let binary = env!("CARGO_BIN_EXE_marty-canvas-sync-worker");
     let mut child = Command::new(binary)
+        .env_clear()
         .env("DATABASE_URL", "postgresql://127.0.0.1:9/marty")
         .env(
             "SIGNING_KEYS_INTERNAL_API_KEY",
             "signing-only-deployment-key",
         )
-        .env_remove("ISSUANCE_API_KEY")
-        .env_remove("ISSUANCE_API_KEY_FILE")
-        .env_remove("INTEGRATION_SECRET_KMS_URL")
-        .env_remove("INTEGRATION_SECRET_KMS_CA_FILE")
         .env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
         .env(
             "CANVAS_LTI_TOOL_ISSUER_DID",
