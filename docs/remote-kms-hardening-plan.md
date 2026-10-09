@@ -10796,3 +10796,19 @@ still below the 90% gate. These mobile commits remain local for one grouped
 PR update; the liveness custody and actual native/device checks remain open.
 UI #1192's published head still has no completed failure; only Canvas and
 the OpenBao plugin image job are pending at this observation.
+
+2026-10-09 document-submission fail-closed correction: local Authenticator
+commit `e501700` removes the review screen's hard-coded successful
+authentication and two-second simulated submission. The button is disabled
+unless an unexpired native challenge with payload and explicit authentication
+and submission handlers are provided; handler denial, expiry, or submission
+failure cannot mark verification pending. The production navigation currently
+provides neither handler, so the screen truthfully reports that submission is
+unavailable. This prevents a false success but does not implement actual
+production document verification. Tests cover supplied-handler success,
+missing handlers, expired challenge, declined authentication, and submission
+failure; full Dart analysis passed and the Flutter suite passed 194 tests
+with four skips. Non-generated coverage is 87.85% (1,765/2,009), below the
+90% gate. Real server-side, KMS-backed liveness challenge custody and
+authenticated submission remain mandatory before release; this test callback
+does not count as production acceptance. The mobile batch remains local.
