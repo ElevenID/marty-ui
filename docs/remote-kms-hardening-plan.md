@@ -8545,3 +8545,11 @@ tests and Ruff pass. The broader private-key-name scan found only synthetic
 rejection markers and TLS/certificate-device proof test key generation in the
 sampled UI paths; this narrow correction is not an exhaustive test-custody
 closure claim. It remains local until the current hosted UI run finishes.
+
+A repository-wide search of test-named Python files for
+`generate_private_key`, `Ed25519PrivateKey`, `X25519PrivateKey`, and
+`private_bytes` found remaining generation in the common gRPC TLS fixture and
+passport issuer/certificate-chain tests. Those tests exercise certificate
+creation or PKI verification, rather than an application signing-key custody
+path. Keep their cryptographic test material isolated from product key storage
+and do not use this source scan as proof of shipped KMS-only custody.
