@@ -18,14 +18,23 @@ BIN_TARGETS = (
     ("marty-gateway", "marty-gateway", "bin"),
     ("marty-flow", "marty-flow", "bin"),
 )
+WORKER_TEST_TARGETS = (TEST_TARGETS[0],)
+WORKER_BIN_TARGETS = (BIN_TARGETS[1],)
 
 
-def verify(artifacts: Path, target_directory: Path) -> None:
+def verify(
+    artifacts: Path, target_directory: Path, *, worker_only: bool = False
+) -> None:
     debug = target_directory.resolve() / "debug"
     records = [
         json.loads(line) for line in artifacts.read_text(encoding="utf-8").splitlines()
     ]
-    for package, target, kind in (*TEST_TARGETS, *BIN_TARGETS):
+    required = (
+        (*WORKER_TEST_TARGETS, *WORKER_BIN_TARGETS)
+        if worker_only
+        else (*TEST_TARGETS, *BIN_TARGETS)
+    )
+    for package, target, kind in required:
         matches = {
             (record["executable"], record["profile"].get("test"))
             for record in records
@@ -52,8 +61,12 @@ def verify(artifacts: Path, target_directory: Path) -> None:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4) or (
+        len(sys.argv) == 4 and sys.argv[1] != "--worker-only"
+    ):
         raise SystemExit(
-            "Usage: verify-canvas-test-artifacts.py ARTIFACTS TARGET_DIRECTORY"
+            "Usage: verify-canvas-test-artifacts.py [--worker-only] ARTIFACTS TARGET_DIRECTORY"
         )
-    verify(Path(sys.argv[1]), Path(sys.argv[2]))
+    worker_only = len(sys.argv) == 4
+    offset = 1 + worker_only
+    verify(Path(sys.argv[offset]), Path(sys.argv[offset + 1]), worker_only=worker_only)

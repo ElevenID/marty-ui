@@ -354,6 +354,19 @@ def compatibility_ci(workflow):
     )
     for value in required:
         assert value in script
+    worker_branch, remaining = compile_script.split(
+        'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
+    )
+    _, canvas_branch = remaining.split("\nelse\n", 1)
+    assert 'if [[ "${{ matrix.lane }}" == worker ]]; then' in worker_branch
+    for value in (
+        "docker run --rm --network none --read-only",
+        "--test canvas_published_worker_contract --no-run",
+        "--bin marty-canvas-sync-worker --message-format=json",
+        '--worker-only "$artifacts" target',
+    ):
+        assert value in worker_branch
+    assert worker_branch.count("--network none") == 1
     for value in (
         'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }\' ../services/Dockerfile',
         "[[ ${#builder_images[@]} == 1 ]]",
@@ -370,8 +383,8 @@ def compatibility_ci(workflow):
         "--no-run --timings --message-format=json",
         "python3 ../scripts/ci/verify-canvas-test-artifacts.py",
     ):
-        assert value in compile_script
-    assert compile_script.count("--network none") == 1
+        assert value in canvas_branch
+    assert canvas_branch.count("--network none") == 1
     assert "docker run" not in script and "cargo build" not in script
     assert script.count("MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE=%s") == 1
     names = [step.get("name") for step in job["steps"]]
@@ -397,6 +410,7 @@ def compatibility_ci(workflow):
         "conditional",
         "builder",
         "network",
+        "canvas_network",
         "workspace",
         "target",
         "gateway",
@@ -438,7 +452,21 @@ def test_runtime_ci_builds_closed_bookworm_compatible_child_artifacts(fault):
             if item.get("name") == "Compile reusable Rust test executables"
         )
         compile_step["run"] = compile_step["run"].replace(
-            "--network none", "--network host"
+            "--network none", "--network host", 1
+        )
+    elif fault == "canvas_network":
+        compile_step = next(
+            item
+            for item in steps
+            if item.get("name") == "Compile reusable Rust test executables"
+        )
+        worker, remainder = compile_step["run"].split(
+            'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
+        )
+        compile_step["run"] = (
+            worker
+            + 'elif [[ "${{ matrix.lane }}" == contracts ]]; then'
+            + remainder.replace("--network none", "--network host", 1)
         )
     elif fault == "workspace":
         compile_step = next(

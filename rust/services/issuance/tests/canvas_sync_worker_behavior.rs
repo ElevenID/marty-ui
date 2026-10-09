@@ -129,8 +129,9 @@ fn configuration_matches_frozen_defaults_bounds_and_failures() {
 
 #[cfg(unix)]
 #[test]
-fn standalone_process_handles_sigterm_and_signing_key_fallback() {
+fn standalone_process_rejects_missing_remote_kms_even_with_signing_key_fallback() {
     use std::{
+        io::Read,
         process::{Command, Stdio},
         thread,
         time::{Duration, Instant},
@@ -145,6 +146,8 @@ fn standalone_process_handles_sigterm_and_signing_key_fallback() {
         )
         .env_remove("ISSUANCE_API_KEY")
         .env_remove("ISSUANCE_API_KEY_FILE")
+        .env_remove("INTEGRATION_SECRET_KMS_URL")
+        .env_remove("INTEGRATION_SECRET_KMS_CA_FILE")
         .env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
         .env(
             "CANVAS_LTI_TOOL_ISSUER_DID",
@@ -154,33 +157,33 @@ fn standalone_process_handles_sigterm_and_signing_key_fallback() {
         .env("CANVAS_PILOT_ORGANIZATION_IDS", "org-1")
         .env("CANVAS_SYNC_WORKER_POLL_SECONDS", "60")
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("standalone worker starts with the deployed signing-only key projection");
 
-    thread::sleep(Duration::from_millis(750));
-    assert!(
-        child.try_wait().expect("worker status").is_none(),
-        "worker must survive startup without ISSUANCE_API_KEY"
-    );
-    let signal = Command::new("kill")
-        .args(["-TERM", &child.id().to_string()])
-        .status()
-        .expect("send SIGTERM");
-    assert!(signal.success());
-
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if let Some(status) = child.try_wait().expect("worker status after SIGTERM") {
+        if let Some(status) = child.try_wait().expect("worker status") {
+            let mut stderr = String::new();
+            child
+                .stderr
+                .take()
+                .expect("captured startup error")
+                .read_to_string(&mut stderr)
+                .expect("read startup error");
             assert!(
-                status.success(),
-                "worker did not shut down cleanly: {status}"
+                !status.success(),
+                "worker must reject startup without remote integration-secret custody"
+            );
+            assert!(
+                stderr.contains("InvalidConfig"),
+                "worker must reject missing remote KMS configuration before database access"
             );
             break;
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
-            panic!("worker did not exit after SIGTERM");
+            panic!("worker did not reject startup without remote integration-secret custody");
         }
         thread::sleep(Duration::from_millis(50));
     }

@@ -40,6 +40,12 @@ OID4VP_TEST_TARGETS = (
 )
 OID4VP_TEST_ROOT = "rust/crates/oid4vp-contract/tests/"
 OID4VP_CORPUS = "contracts/oid4vp-authenticated-contract-v1.json"
+WORKER_TEST_ROOT = "rust/crates/canvas-worker-acceptance/tests/"
+WORKER_TEST_FILES = (
+    "canvas_published_worker_contract.rs",
+    "support/canvas_rest_requalification.rs",
+    "support/canvas_startup_attestation.rs",
+)
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -318,6 +324,45 @@ def test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts() -> None
         assert not _is_ignored(OID4VP_CORPUS, lines)
     root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert not _is_ignored(OID4VP_TEST_ROOT + "unreviewed.rs", root_lines)
+
+
+def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
+    assert _tracked_paths(ROOT, WORKER_TEST_ROOT) == [
+        WORKER_TEST_ROOT + name for name in WORKER_TEST_FILES
+    ]
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["package"]["autotests"] is False
+    assert "build" not in manifest["package"]
+    assert manifest["test"] == [
+        {
+            "name": "canvas_published_worker_contract",
+            "path": "tests/canvas_published_worker_contract.rs",
+        }
+    ]
+    target = (ROOT / (WORKER_TEST_ROOT + WORKER_TEST_FILES[0])).read_text(
+        encoding="utf-8"
+    )
+    for name in WORKER_TEST_FILES[1:]:
+        assert target.count(f'#[path = "{name}"]') == 1
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for name in WORKER_TEST_FILES:
+            path = WORKER_TEST_ROOT + name
+            assert _is_ignored(path, lines), (
+                f"Docker COPY includes {ignore_path}: {path}"
+            )
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1
+        assert not _is_ignored(
+            "rust/services/issuance/src/canvas_sync_worker.rs", lines
+        )
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(WORKER_TEST_ROOT + "support/unreviewed.rs", root_lines)
 
 
 def test_oid4vp_verified_path_proof_rejects_new_rust_consumer(
