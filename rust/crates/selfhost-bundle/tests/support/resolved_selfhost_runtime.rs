@@ -944,11 +944,14 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
             }
         }
     }
-    for owner in ["issuance-native", "flow"] {
+    for (owner, scheme) in [
+        ("issuance-native", "postgresql"),
+        ("flow", "postgresql+asyncpg"),
+    ] {
         assert_eq!(
             mapped.environments[owner]["DATABASE_URL_TEMPLATE"],
             format!(
-                "postgresql+asyncpg://marty:$${{MARTY_DB_PASSWORD}}@127.0.0.1:{}/marty",
+                "{scheme}://marty:$${{MARTY_DB_PASSWORD}}@127.0.0.1:{}/marty",
                 endpoints.port(Role::Database)
             )
         );

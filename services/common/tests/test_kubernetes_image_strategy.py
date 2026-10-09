@@ -106,7 +106,7 @@ def test_kubernetes_worker_uses_catalog_native_per_service_image():
     assert "/marty-ui/issuance:${IMAGE_TAG}" not in block
 
 
-def test_kubernetes_external_issuance_and_migration_keep_the_same_pin():
+def test_kubernetes_rust_issuance_and_migration_keep_the_same_pin():
     api = k8s_deployment_blocks(K8S_DIR / "07-microservices.yaml")["issuance"]
     migration = (K8S_DIR / "06a-issuance-migrations.yaml").read_text(encoding="utf-8")
     for block in (api, migration):
@@ -116,11 +116,11 @@ def test_kubernetes_external_issuance_and_migration_keep_the_same_pin():
     catalog = DeploymentCatalog.load(REPO_ROOT)
     assert (
         catalog.service_field("issuance", "artifact_role")
-        == "marty-credentials-issuance"
+        == "marty-ui-services"
     )
     assert (
         catalog.service_field("issuance-migrations", "artifact_role")
-        == "marty-credentials-issuance"
+        == "marty-ui-services"
     )
 
 
