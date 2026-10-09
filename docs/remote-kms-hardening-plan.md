@@ -7059,3 +7059,18 @@ The updated Issuance library also passes local `cargo +1.97.1 clippy
 --locked -p marty-issuance-service --lib -- -D warnings`; focused Rustfmt
 passed for the modified Issuance and Signing Keys files. The old-head plugin
 and service-image jobs remain live at this checkpoint.
+
+2026-10-08 additional consumer and security review: the Credentials WASM diff
+removes four names referenced by the authenticator's web interop:
+`generate_p256_key`, `generate_ed25519_key`, `create_presentation`, and
+`create_verifiable_credential`. The first two are called by the exported
+`SpruceIdPlatformServiceWeb.createDid`/`generateKeyPair` path; the latter two
+appear in wrappers without a direct Dart call site found in the current
+authenticator tree. Core's KMS-only wallet exposes public-key proof
+preparation/completion but no local holder-key generator, so simply restoring
+the removed Credentials implementation would reverse its private-key surface
+retirement. Preserve this as an explicit cross-repo wallet compatibility gate
+and design an opaque wallet/device key operation before releasing the new WASM
+artifact. The upgraded Go OpenBao plugin also passed `go vet ./...` in the Go
+1.26 container. Both old-head hosted image jobs were still live when checked;
+do not infer success from their elapsed time.
