@@ -213,15 +213,19 @@ def validate_selection(
     selected: set[str],
     mode: str,
     qualification: str,
-    serial_test: str,
+    *serial_tests: str,
 ) -> None:
-    require(serial_test in original, "Canvas serial worker owner missing")
+    require(
+        len(serial_tests) >= 1 and len(serial_tests) == len(set(serial_tests)),
+        "Canvas serial worker owner list invalid",
+    )
+    require(set(serial_tests) <= original, "Canvas serial worker owner missing")
     require(
         selected <= original,
         "Canvas selected worker list contains an unregistered case",
     )
     omitted = original - selected
-    expected = {serial_test}
+    expected = set(serial_tests)
     if mode == "full-after-preflights":
         require(qualification in {"0", "1"}, "Unknown Canvas qualification flag")
         expected.update(entry["test"] for entry in inventory["preflights"])
@@ -313,7 +317,7 @@ def main() -> int:
         )
     else:
         require(
-            len(sys.argv) == 5 and sys.argv[1] == "--selected",
+            len(sys.argv) >= 5 and sys.argv[1] == "--selected",
             "Invalid Canvas selection guard invocation",
         )
         original_output, separator, selected_output = sys.stdin.buffer.read().partition(
