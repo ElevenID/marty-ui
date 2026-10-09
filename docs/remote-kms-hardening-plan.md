@@ -9024,6 +9024,8 @@ runtime reader or writer for that key. The candidate removes its creation,
 authorization and disposable requirement while retaining purpose-bound
 OID4VP request signing and the separate integration-secret envelope. The
 focused OID4VP, supported OpenBao, infra-rehearsal and webhook suites pass
-24/24; Ruff and diff whitespace checks pass. This is source-level dead-key
+24/24; broader beta selector, local release runner and Signing Keys cutover
+checks pass 167/167 with two Windows skips. Ruff and diff whitespace checks
+pass. This is source-level dead-key
 retirement, not proof that all other secret classes or released images satisfy
 the KMS-only boundary.
