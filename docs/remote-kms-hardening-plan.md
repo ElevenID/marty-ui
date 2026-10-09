@@ -8576,16 +8576,51 @@ Do not transfer the earlier head's green result to this combined head. The
 local tracker follow-up is held for a later grouped push to avoid restarting
 CI for a documentation-only correction.
 
-2026-10-09 Authenticator legacy-plugin retirement: the root Flutter
+2026-10-09 Authenticator retired-source cleanup: the root Flutter
 `pubspec.yaml`/lock and active `lib`, Android, iOS, macOS and CI source graph
 had no reference to `local_plugins/pi-authenticator-legacy`; only a README
 cleanup note referenced it. That unused plugin nevertheless retained Java
 `SecretKeyWrapper` private-key loading/signing and Swift private-key import
 code. With no public deployment or migration requirement, the Authenticator
-candidate removes its 89 tracked files and the stale README note. A complete
-repository text search finds no remaining plugin identifier, `git diff --check`
-passes, and the mobile/desktop custody source guard passes. Flutter is not
-installed locally, so hosted source/build checks are still needed after a
-grouped Authenticator push. This removal does not implement remote holder
+candidate removes its 89 tracked files and the stale README note. A wider
+scan found an unreferenced `AppDelegate.swift.original` backup containing
+local signing-key calls, plus an unreferenced Python Flask backend pair that
+accepted private JWKs and could emit fabricated fallback signatures. These
+three files are removed too; the existing CI source guard now refuses all four
+retired paths. Repository references to their identifiers are gone outside
+the guard, `git diff --check`, Node syntax, and the custody guard pass. Flutter
+is not installed locally, so hosted source/build checks are still needed
+after a grouped Authenticator push. This removal does not implement remote holder
 signing, trusted verification, wallet persistence or mDoc sessions; PR #57
 remains draft and must not be released as feature complete.
+
+Remote-holder ownership trace for the next implementation: Gateway authenticates
+Bearer sessions and forwards trusted `x-user-id` to Device Registration;
+Device Registration owns active user/device records, public DER key versions,
+and its PS256 registration/rotation challenge. Signing Keys' existing
+`holder-keys` route only stores a supplied public JWK, while its internal
+VC-API holder-proof route creates a one-request OpenBao key and deletes it.
+Neither establishes a durable device-owned KMS signing reference. The current
+Authenticator Dart service surface delegates signing to platform channels and
+does not expose a Gateway session-backed holder-signing client. Implementing
+remote holder signing therefore needs a new authenticated client and a server
+contract that checks user, organization and active device ownership before
+scoped KMS create/sign/rotate/revoke; merely replacing a platform method with
+the current public-JWK registration or ephemeral VC-API proof would leave the
+wallet unable to sign or would bypass device authorization. Review the
+Device Registration PS256 proof key's own custody against the KMS-only policy
+before reusing that proof as authorization for remote signing.
+
+Implementation seam: Signing Keys already centralizes managed OpenBao Transit
+`create_managed_openbao`, `read_managed_openbao`, `sign`, and
+`rotate_openbao` with an active, non-exportable public-metadata check. Reuse
+that Rust adapter for durable holder keys rather than copying the one-request
+VC-API provider's direct Transit calls. Add a scoped key-reference and
+deletion/revocation operation, but keep those internal until Device
+Registration's trusted Gateway identity, organization membership, active
+registration and device-binding checks authorize each operation. Persist only
+reference/version/public metadata; never a JWK `d` member, PEM private key or
+raw Transit token. The current registration challenge verifies a PS256 device
+key but does not itself prove KMS custody of that key, so accepting it as the
+holder-signing authorization proof would need separate qualification or a
+replacement device-bound session mechanism.
