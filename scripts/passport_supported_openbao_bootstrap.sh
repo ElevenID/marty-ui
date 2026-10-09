@@ -74,8 +74,7 @@ for spec in \
     cred-dsc-marty-primary:ecdsa-p256 \
     "$csca_key":ecdsa-p256 \
     "$dsc_key":ecdsa-p256 \
-    passport-artifact-marty-aes256:aes256-gcm96 \
-    flow-response-envelope-marty-aes256:aes256-gcm96; do
+    passport-artifact-marty-aes256:aes256-gcm96; do
     key=${spec%%:*}
     expected_type=${spec#*:}
     if [ "$(bao read -field=type "transit/keys/$key")" != "$expected_type" ] ||

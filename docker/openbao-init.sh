@@ -101,10 +101,8 @@ bao write -address="${BAO_ADDR}" -f transit/keys/cred-encrypt-marty-aes \
 bao write -address="${BAO_ADDR}" -f transit/keys/auth-session-es256 \
     type=ecdsa-p256 2>/dev/null || echo "  auth-session-es256 already exists"
 
-# Purpose-bound, non-exportable envelope keys.  Keep these separate from
+# Purpose-bound, non-exportable envelope keys. Keep these separate from
 # credential encryption so ciphertext cannot be replayed across domains.
-bao write -address="${BAO_ADDR}" -f transit/keys/flow-response-envelope-marty-aes256 \
-    type=aes256-gcm96 exportable=false 2>/dev/null || echo "  flow-response-envelope-marty-aes256 already exists"
 bao write -address="${BAO_ADDR}" -f transit/keys/integration-secret-envelope-marty-aes256 \
     type=aes256-gcm96 exportable=false allow_plaintext_backup=false 2>/dev/null || \
     echo "  integration-secret-envelope-marty-aes256 already exists"
@@ -248,15 +246,6 @@ path "transit/keys/auth-*" {
 }
 
 # Purpose-bound envelope operations.  Key configuration remains operator-only.
-path "transit/encrypt/flow-response-envelope-marty-aes256" {
-  capabilities = ["create", "update"]
-}
-path "transit/decrypt/flow-response-envelope-marty-aes256" {
-  capabilities = ["create", "update"]
-}
-path "transit/keys/flow-response-envelope-marty-aes256" {
-  capabilities = ["read"]
-}
 path "transit/encrypt/integration-secret-envelope-marty-aes256" {
   capabilities = ["create", "update"]
 }

@@ -9014,3 +9014,16 @@ All eight files parse as JSON and the mobile/desktop custody source guard
 passes. Neither cleanup supplies durable remote holder signing or wallet
 feature parity; do not publish the Authenticator branch as a KMS-only wallet
 on the strength of those source removals.
+
+Local UI bootstrap cleanup: the `flow-response-envelope-marty-aes256`
+Transit key was still provisioned by the Python migration/bootstrap runner,
+the OpenBao initializer, and the disposable passport checker, with service
+policy allowing encrypt/decrypt. The runner explicitly described it as a KEK
+for per-flow private-key envelopes. A repository-wide source search found no
+runtime reader or writer for that key. The candidate removes its creation,
+authorization and disposable requirement while retaining purpose-bound
+OID4VP request signing and the separate integration-secret envelope. The
+focused OID4VP, supported OpenBao, infra-rehearsal and webhook suites pass
+24/24; Ruff and diff whitespace checks pass. This is source-level dead-key
+retirement, not proof that all other secret classes or released images satisfy
+the KMS-only boundary.
