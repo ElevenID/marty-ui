@@ -253,6 +253,7 @@ def assert_models(
             continue
         assert service["environment"].pop("INTEGRATION_SECRET_KMS_URL") == tls_url
         assert service["environment"].pop("INTEGRATION_SECRET_KMS_CA_FILE") == tls_ca_file
+        assert isinstance(service["secrets"], list)
         assert service["secrets"].count(tls_ca_mount) == 1
         service["secrets"].remove(tls_ca_mount)
     signer_tls = preserved["services"]["signing-keys"]

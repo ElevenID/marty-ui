@@ -86,13 +86,21 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 8
+    assert len(entries) == len({v["name"] for v in entries}) == 10
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
         "SIGNING_KEYS_SERVICE_PORT": {
             "name": "SIGNING_KEYS_SERVICE_PORT",
             "value": "8017",
+        },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+            "value": "/run/secrets/integration-secret-tls/tls.crt",
+        },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
+            "value": "/run/secrets/integration-secret-tls/tls.key",
         },
         "SIGNING_KEYS_REDIS_URL": {
             "name": "SIGNING_KEYS_REDIS_URL",
@@ -121,13 +129,25 @@ def signing_inventory(values):
     assert actual == expected
     assert selected["image"] == "${MARTY_SERVICES_IMAGE}"
     assert selected["envFrom"] == []
+    assert selected["volumeMounts"] == [{
+        "name": "integration-secret-tls",
+        "mountPath": "/run/secrets/integration-secret-tls",
+        "readOnly": True,
+    }]
+    assert value["spec"]["template"]["spec"]["volumes"] == [{
+        "name": "integration-secret-tls",
+        "secret": {"secretName": "signing-keys-integration-secret-server-tls"},
+    }]
     assert len(value["spec"]["template"]["spec"]["containers"]) == 1
     assert value["spec"]["selector"]["matchLabels"] == {"app": "signing-keys"}
     service = next(v for v in values if v["kind"] == "Service")
     assert service["spec"] == {
         "type": "ClusterIP",
         "selector": {"app": "signing-keys"},
-        "ports": [{"name": "http", "port": 8017, "targetPort": 8017}],
+        "ports": [
+            {"name": "http", "port": 8017, "targetPort": 8017},
+            {"name": "secret-tls", "port": 8018, "targetPort": 8018},
+        ],
     }
     for name in ("livenessProbe", "readinessProbe"):
         assert selected[name]["httpGet"] == {"path": "/health", "port": 8017}
@@ -275,15 +295,30 @@ def native_inventory(value):
         "name": "DIDCOMM_KMS_TOKEN_FILE",
         "value": "/run/secrets/didcomm-kms/token",
     }
-    assert selected["volumeMounts"] == [{
-        "name": "didcomm-kms-token",
-        "mountPath": "/run/secrets/didcomm-kms",
-        "readOnly": True,
-    }]
-    assert value["spec"]["template"]["spec"].get("volumes") == [{
-        "name": "didcomm-kms-token",
-        "secret": {"secretName": "marty-secrets", "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}]},
-    }]
+    assert selected["volumeMounts"] == [
+        {
+            "name": "didcomm-kms-token",
+            "mountPath": "/run/secrets/didcomm-kms",
+            "readOnly": True,
+        },
+        {
+            "name": "integration-secret-ca",
+            "mountPath": "/run/secrets/integration-secret-ca",
+            "readOnly": True,
+        },
+    ]
+    assert value["spec"]["template"]["spec"].get("volumes") == [
+        {
+            "name": "didcomm-kms-token",
+            "secret": {"secretName": "marty-secrets", "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}]},
+        },
+        {
+            "name": "integration-secret-ca",
+            "secret": {"secretName": "signing-keys-integration-secret-ca"},
+        },
+    ]
+    assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_URL")["value"] == "https://signing-keys:8018/internal"
+    assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_CA_FILE")["value"] == "/run/secrets/integration-secret-ca/ca.crt"
     assert value["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
 
 

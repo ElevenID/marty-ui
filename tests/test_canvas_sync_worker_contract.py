@@ -249,7 +249,18 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         **kubernetes_contract["literal_environment"],
         "SERVICE_NAME": "canvas_sync_worker",
         "CANVAS_SYNC_PROCESSOR": "",
+        "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/integration-secret-ca/ca.crt",
     }
+    assert container["volumeMounts"] == [{
+        "name": "integration-secret-ca",
+        "mountPath": "/run/secrets/integration-secret-ca",
+        "readOnly": True,
+    }]
+    assert deployment["spec"]["template"]["spec"]["volumes"] == [{
+        "name": "integration-secret-ca",
+        "secret": {"secretName": "signing-keys-integration-secret-ca"},
+    }]
 
     migration = yaml_document("k8s/oracle/06a-issuance-migrations.yaml")
     assert migration["kind"] == "Job"

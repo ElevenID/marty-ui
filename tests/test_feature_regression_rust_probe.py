@@ -126,10 +126,6 @@ def test_probe_manifest_has_one_fixed_binary_and_real_candidate_dependency() -> 
         "features": ["feature-regression-observer"],
     }
     assert manifest["patch"]["crates-io"] == {
-        "isomdl": {
-            "git": "https://github.com/ElevenID/isomdl-elevenid",
-            "rev": "671044c9495aec101bf0cd381669d5ed6f64dd11",
-        },
         "ssi-jwt": {"path": "../../../rust/third_party/ssi-jwt"},
     }
     assert manifest["profile"]["dev"] == {

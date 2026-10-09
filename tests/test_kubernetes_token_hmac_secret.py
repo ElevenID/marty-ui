@@ -90,6 +90,8 @@ def harness(tmp_path):
         "REGISTRY_HOST": "registry.example.invalid",
         "IMAGE_PULL_SECRET_NAME": "synthetic-pull-secret",
         "FLOW_WEBHOOK_SECRET": "synthetic-flow-webhook-at-least-thirty-two-bytes",
+        "SIGNING_KEYS_WORKLOAD_SERVER_CERT": "synthetic-signing-keys-server-certificate",
+        "SIGNING_KEYS_WORKLOAD_SERVER_KEY": "synthetic-signing-keys-server-private-key",
         "PYTHONPATH": str(ROOT / "packages"),
     }
     if os.name == "nt":
@@ -136,7 +138,7 @@ kubectl() {
       [[ "$4" == synthetic-pull-secret ]] || return 92 ;;
     create:secret:generic)
       case "$4" in
-        marty-secrets|presentation-policy-workload-tls|flow-workload-tls|flow-server-workload-tls|auth-workload-tls|applicant-workload-tls|verification-workload-tls|deployment-profile-workload-tls|compliance-profile-workload-tls) ;;
+        marty-secrets|signing-keys-integration-secret-server-tls|signing-keys-integration-secret-ca|presentation-policy-workload-tls|flow-workload-tls|flow-server-workload-tls|auth-workload-tls|applicant-workload-tls|verification-workload-tls|deployment-profile-workload-tls|compliance-profile-workload-tls) ;;
         *) return 93 ;;
       esac ;;
     apply:-f:-) [[ $# == 3 ]] || return 94 ;;
@@ -223,7 +225,7 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     )
     assert (
         len([call for call in calls if call[:3] == ["create", "secret", "generic"]])
-        == 9
+        == 11
     )
 
 

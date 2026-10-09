@@ -91,6 +91,12 @@ def models():
     after["secrets"]["didcomm_issuance_openbao_token"] = {
         "file": "/synthetic/didcomm_issuance_openbao_token"
     }
+    for suffix in ("cert", "key"):
+        name = f"signing_keys_workload_server_{suffix}"
+        after["secrets"][name] = {"file": f"/synthetic/{name}"}
+        after["services"]["signing-keys"]["environment"][
+            f"SIGNING_KEYS_INTEGRATION_SECRET_TLS_{suffix.upper()}_FILE"
+        ] = f"/run/secrets/{name}"
     after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
         "/run/secrets/signing_keys_openbao_token"
     )
@@ -100,6 +106,11 @@ def models():
             "target": "/run/secrets/signing_keys_openbao_token",
         }
     ]
+    for suffix in ("cert", "key"):
+        name = f"signing_keys_workload_server_{suffix}"
+        after["services"]["signing-keys"]["secrets"].append(
+            {"source": name, "target": f"/run/secrets/{name}"}
+        )
     after["services"]["db-migrate"]["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = (
         "/run/secrets/notification_openbao_token"
     )
@@ -156,6 +167,8 @@ def models():
             "SERVICE_NAME": "issuance_native",
             "DIDCOMM_KMS_ADDR": "${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}",
             "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm_issuance_openbao_token",
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/workload_identity_ca_cert",
             "ISSUANCE_GRPC_ENABLED": "true",
             "RP_GRPC_TARGET": "revocation-profile:9013",
             **GATE["NATIVE_ADDITIVE"],
@@ -165,6 +178,10 @@ def models():
             {
                 "source": "didcomm_issuance_openbao_token",
                 "target": "/run/secrets/didcomm_issuance_openbao_token",
+            },
+            {
+                "source": "workload_identity_ca_cert",
+                "target": "/run/secrets/workload_identity_ca_cert",
             },
         ],
         "depends_on": {

@@ -258,7 +258,17 @@ impl KmsIntegrationSecretCipher {
         operation: &str,
         request: &T,
     ) -> Result<Value, KmsIntegrationSecretError> {
-        let mut endpoint = self.base_url.clone();
+        // Build each request from a literal HTTPS origin. The configured URL
+        // supplies only its validated host, port, and path; no operation can
+        // inherit a plaintext scheme from mutable configuration.
+        let mut endpoint = Url::parse("https://localhost")
+            .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+        endpoint
+            .set_host(self.base_url.host_str())
+            .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
+        endpoint
+            .set_port(self.base_url.port())
+            .map_err(|_| KmsIntegrationSecretError::InvalidConfig)?;
         endpoint.set_path(&format!(
             "{}/integration-secrets/{operation}",
             self.base_url.path().trim_end_matches('/')

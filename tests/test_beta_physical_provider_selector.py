@@ -38,6 +38,8 @@ def model(tmp_path: Path) -> dict:
         "flow_workload_client_cert", "flow_workload_client_key",
         "flow_workload_server_cert", "flow_workload_server_key",
         "workload_identity_ca_cert",
+        "dev_integration_secret_ca", "dev_integration_secret_server_cert",
+        "dev_integration_secret_server_key",
     )
     secrets = {}
     for index, name in enumerate(secret_names):
@@ -86,14 +88,22 @@ def model(tmp_path: Path) -> dict:
             "DATABASE_URL": "postgresql+asyncpg://marty:beta-physical-secret-3333333333333333333333333333333333333333@postgres:5432/marty",
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
-        }, "secrets": ["passport_physical_provider_api_key"]},
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
+        }, "secrets": ["passport_physical_provider_api_key",
+                        "dev_integration_secret_ca"]},
         "signing-keys": {"networks": {"marty-network": {}}, "environment": {
             "ENVIRONMENT": "beta",
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
             "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": CSCA,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
-        }},
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
+                "/run/secrets/dev_integration_secret_server_cert",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
+                "/run/secrets/dev_integration_secret_server_key",
+        }, "secrets": ["dev_integration_secret_server_cert",
+                       "dev_integration_secret_server_key"]},
         "openbao": {"networks": {"marty-network": {},
                                   "passport-provider-signing": {}}},
         "passport-callback-signer-supported": {"image": IMAGE,

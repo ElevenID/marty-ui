@@ -7036,3 +7036,22 @@ centralized in the workspace manifest; `cargo +1.97.1 test --offline -p
 marty-canvas-acceptance -p marty-canvas-worker-acceptance --no-run` passes
 locally. These fixes are local until remaining hosted jobs complete, then
 will be pushed together with the gRPC advisory correction.
+
+2026-10-08 UI broad-contract and CodeQL follow-up: the pushed TLS PR run
+reported one new high CodeQL alert at the integration-secret HTTP send because
+the request endpoint inherited a dynamic URL scheme. The local correction now
+constructs each endpoint from a literal HTTPS origin, copies only the
+validated host/port/path, and retains constructor HTTPS validation,
+`https_only(true)`, disabled redirects, and peer verification. The focused
+certificate-verified integration-secret round trip passed both tests locally;
+hosted CodeQL must confirm the alert clears. The release-contract job also
+found 23 failures and 63 errors from frozen Compose/Kubernetes/beta fixtures
+that predated the TLS deployment changes. Updated the exact self-host signer
+cert/key and client CA inventory, Kubernetes signer/native/Canvas mounts and
+ports, beta physical-provider TLS inventory, developer TLS setup for clean
+beta CI checkouts, Kubernetes secret publication harness, and the standalone
+Rust probe's current patch graph. The combined affected Python suite now
+passes 376 tests with two skips; Ruff checks and focused Rustfmt checks pass.
+The broad hosted job, packaged images, and release artifacts still require
+confirmation on a new PR head. Keep these local corrections in one batched
+push after the remaining current-run jobs finish.
