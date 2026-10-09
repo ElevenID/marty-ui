@@ -673,7 +673,7 @@ spec:
         - name: ocir-secret
       containers:
         - name: issuance
-          image: ${MARTY_SERVICES_IMAGE}
+          image: ${MARTY_ISSUANCE_IMAGE}
           imagePullPolicy: Always
           command: ['/usr/local/bin/marty-issuance-service']
           envFrom:

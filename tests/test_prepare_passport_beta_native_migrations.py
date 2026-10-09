@@ -64,6 +64,14 @@ def test_checked_in_inventory_and_protected_ledger_cover_same_issuance_sql():
     assert "('0001_flow_schema')" not in payload
 
 
+def test_disposable_marker_without_issuance_sql_has_valid_baseline_ledger():
+    target = {"system_id": "123", "database_oid": "456",
+              "fence_epoch": "7", "container_id": "c" * 64}
+    payload = build_sql(target, (("disposable.sql", b"SELECT 1;\n"),), "b" * 40)
+    assert (b"INSERT INTO issuance_service.rust_schema_migrations (version) VALUES\n"
+            b"    ('issuance_service_baseline_v1');\n") in payload
+
+
 def test_sql_normalization_rejects_meta_commands_and_bad_line_endings():
     assert normalized_sql(b"SELECT 1;\r\n", "reviewed.sql") == b"SELECT 1;\n"
     with pytest.raises(NativeMigrationError, match="psql command"):

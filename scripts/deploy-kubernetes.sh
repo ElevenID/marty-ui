@@ -191,7 +191,10 @@ prepare_kubernetes_native_issuance() {
   esac
   K8S_NATIVE_ISSUANCE_BIN="${K8S_NATIVE_ISSUANCE_BIN:-${REPO_ROOT}/rust/target/release/kubernetes-native-issuance}"
   command -v "$K8S_NATIVE_ISSUANCE_BIN" >/dev/null 2>&1 || { error "Required native issuance deployment executable is unavailable."; return 1; }
-  export K8S_ISSUANCE_NATIVE_ENABLED MARTY_SERVICES_IMAGE
+  # Retain the reviewed issuance template variable while binding it to the
+  # exact signed Rust services digest. No external issuance image is accepted.
+  MARTY_ISSUANCE_IMAGE="$MARTY_SERVICES_IMAGE"
+  export K8S_ISSUANCE_NATIVE_ENABLED MARTY_SERVICES_IMAGE MARTY_ISSUANCE_IMAGE
   "$K8S_NATIVE_ISSUANCE_BIN" validate || return 1
   require_kubernetes_services_release || return 1
   K8S_NATIVE_RENDERED_MODEL="$(envsubst < "${K8S_DIR}/07-microservices.yaml" | "$K8S_NATIVE_ISSUANCE_BIN" render --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR")" || return 1

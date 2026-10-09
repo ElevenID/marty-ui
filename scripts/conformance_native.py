@@ -207,7 +207,7 @@ def validate_model(
         ):
             require(
                 env.get(key) == previous.get(key),
-                "Native and legacy issuance configuration is not paired",
+                f"Native and issuance alias configuration is not paired: {key}",
             )
         for key in REQUIRED_ENVIRONMENT:
             require(

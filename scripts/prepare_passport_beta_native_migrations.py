@@ -203,6 +203,12 @@ def build_sql(
         payload.extend(f"\n-- protected native migration: {relative}\n".encode("ascii"))
         payload.extend(data)
         payload.extend(b"\n")
+    issuance_versions = [
+        Path(relative).stem for relative, _ in migrations
+        if relative.startswith("rust/services/issuance/migrations/")
+    ]
+    ledger_rows = ["    ('issuance_service_baseline_v1')"]
+    ledger_rows.extend(f"    ('{version}')" for version in issuance_versions)
     payload.extend((
         "\n-- Privileged, atomic handoff to the read-only Rust schema verifier.\n"
         "CREATE TABLE issuance_service.rust_schema_migrations (\n"
@@ -214,11 +220,7 @@ def build_sql(
         "REVOKE ALL ON issuance_service.rust_schema_migrations FROM PUBLIC, marty;\n"
         "GRANT SELECT ON issuance_service.rust_schema_migrations TO marty;\n"
         "INSERT INTO issuance_service.rust_schema_migrations (version) VALUES\n"
-        "    ('issuance_service_baseline_v1'),\n"
-        + ",\n".join(
-            f"    ('{Path(relative).stem}')" for relative, _ in migrations
-            if relative.startswith("rust/services/issuance/migrations/")
-        ) + ";\n"
+        + ",\n".join(ledger_rows) + ";\n"
         "\n-- Commit evidence in the same transaction as every native migration.\n"
         "CREATE TABLE passport_cutover.native_migration_receipt (\n"
         "    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),\n"

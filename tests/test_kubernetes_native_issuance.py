@@ -191,6 +191,9 @@ def test_signing_existing_service_and_kubernetes_dependency_sources_are_connecte
     assert "OPENBAO_SERVICE_TOKEN=" in script
     assert "check_kubernetes_services_release.py" in script
     preflight = script.split("prepare_kubernetes_native_issuance() {", 1)[1].split("\n}", 1)[0]
+    assert preflight.index('MARTY_ISSUANCE_IMAGE="$MARTY_SERVICES_IMAGE"') < preflight.index(
+        'export K8S_ISSUANCE_NATIVE_ENABLED MARTY_SERVICES_IMAGE MARTY_ISSUANCE_IMAGE'
+    ) < preflight.index("require_kubernetes_services_release")
     assert preflight.index("require_kubernetes_services_release") < preflight.index(
         'K8S_NATIVE_RENDERED_MODEL="$(envsubst'
     )
@@ -384,7 +387,7 @@ def test_existing_three_way_management_identity_and_legacy_owner_are_preserved()
             if v["name"] == "ISSUANCE_API_KEY"
         ] == [key]
     alias = deployment(original, "issuance")
-    assert owner(alias)["image"] == "${MARTY_SERVICES_IMAGE}"
+    assert owner(alias)["image"] == "${MARTY_ISSUANCE_IMAGE}"
     assert owner(alias)["command"] == ["/usr/local/bin/marty-issuance-service"]
     assert alias["spec"]["selector"]["matchLabels"] == {"app": "issuance"}
     assert {v["containerPort"] for v in owner(alias)["ports"]} == {8005, 9005}
