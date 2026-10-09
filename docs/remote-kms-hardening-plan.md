@@ -10718,3 +10718,30 @@ Authenticator build passed the earlier OpenSSL path failure but stopped in
 bundled Longfellow C++ for absent
 `openssl/sha.h`, absent `zstd.h`, and MSVC `adc`/`sbb` errors, before Rust tests;
 hosted Linux/Android qualification is still required.
+
+2026-10-09 grouped mobile receipt review: local Authenticator commit `9f340fa`
+refreshes `cardStateProvider` after the scanner closes, so a newly verified
+durable receipt appears without issuing the offer twice. It also selects a
+card within an issuer group by receipt ID instead of display title, preserving
+the correct card when titles match. Two explicit widget acceptance tests in
+`acceptance_test/document_view_receipt_refresh_test.dart` passed when invoked
+directly. They remain outside the default coverage suite; hosted CI does not
+yet run that separate invocation. Local commit `b82cea1` adds native
+verification-channel forwarding and fail-closed error tests. The default
+Flutter suite passed 187 tests with four skips; non-generated line coverage
+is 81.95% (1,612/1,967), still below the protected 90% gate. Full Dart
+analysis passed. Local commit `1083626` then retires the unused
+`credentialsProvider` and its provider-only Spruce wallet wiring: that dead
+path loaded an obsolete store and unconditionally inserted sample credentials,
+including on errors. The active `WalletCredentialStore`/`cardStateProvider`
+receipt path remains and the full Flutter suite and analysis still pass. No
+new mobile head has been published, and native Linux/Android and physical
+device behavior remain unqualified.
+
+UI grouped correction was published to draft PR #1192 at exact head
+`148d85b8f4a09eb52cc6a8b37d57b1de1314007d`. At this checkpoint its
+release-contract job passed while the Rust contracts, Canvas, OpenBao plugin
+image, Rust service image, and Rust CodeQL jobs remain pending. No completed
+job has failed at this head; do not treat the whole run as green until it is
+terminal. Core #355, Verifier #154, and Credentials #313 retain their
+previously green exact-head checks and remain unmerged.
