@@ -406,6 +406,7 @@ def _classify_changed_paths(
     include_rust_plan: bool = False,
     include_planner_plan: bool = False,
     include_rollback_plan: bool = False,
+    include_k8s_plan: bool = False,
     include_shadow: bool = False,
     proof_failure: bool = False,
     fetch_failure: bool = False,
@@ -535,6 +536,7 @@ done < "$SYNTHETIC_PATHS_FILE"
                 (include_rust_plan or key not in {"rust_runtime", "rust_matrix"})
                 and (include_planner_plan or key != "planner_only")
                 and (include_rollback_plan or key != "rollback_test_only")
+                and (include_k8s_plan or key != "k8s_policy_test_only")
             )
         }
         for output in (
@@ -1036,6 +1038,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "openbao",
         "planner_only",
         "rollback_test_only",
+        "k8s_policy_test_only",
         "release",
         "verification",
         "security",
@@ -2104,8 +2107,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
-        # command, and two mutually exclusive test-source-only PR invocations.
-        expected_refs = 4 if path == "tests/test_ci_workflow_performance.py" else 1
+        # command, and three mutually exclusive test-source-only PR invocations.
+        expected_refs = 5 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -2264,11 +2267,18 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "tests/test_conformance_native.py",
         "tests/test_passport_supported_disposable_compose.py",
         "tests/test_gateway_rust_cutover.py",
+        "tests/test_issuance_consumer_bindings.py",
+        "tests/test_kubernetes_app_service_coverage.py",
+        "tests/test_check_kubernetes_services_release.py",
+        "tests/test_kubernetes_token_hmac_secret.py",
+        "tests/test_passport_supported_k8s_deployment.py",
+        "tests/test_passport_supported_consumer_routing.py",
     )
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
-        assert ci_source.count(path) == 1, f"other direct CI consumer: {path}"
+        expected_references = 3 if path in candidates[-6:] else 1
+        assert ci_source.count(path) == expected_references, f"other direct CI consumer: {path}"
         for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
             if other_workflow != CI_PATH:
                 assert path not in other_workflow.read_text(encoding="utf-8")
@@ -2285,6 +2295,12 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
     assert _classify_changed_paths(candidates, tmp_path) == [expected] * len(candidates)
     assert (
         _classify_changed_path("tests/test_gateway_rust_cutover_helpers.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("tests/test_kubernetes_app_service_coverage_helpers.py", tmp_path)[
             "all"
         ]
         == "true"
@@ -2376,6 +2392,117 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
     )
 
 
+def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert workflow["jobs"]["changes"]["outputs"]["k8s_policy_test_only"] == (
+        "${{ steps.classify.outputs.k8s_policy_test_only }}"
+    )
+    cohort = (
+        "tests/test_issuance_consumer_bindings.py",
+        "tests/test_kubernetes_app_service_coverage.py",
+        "tests/test_check_kubernetes_services_release.py",
+        "tests/test_kubernetes_token_hmac_secret.py",
+        "tests/test_passport_supported_k8s_deployment.py",
+        "tests/test_passport_supported_consumer_routing.py",
+    )
+
+    def classify(paths, **kwargs):
+        return _classify_changed_paths(
+            paths,
+            tmp_path,
+            combined=True,
+            include_rust_plan=True,
+            include_planner_plan=True,
+            include_rollback_plan=True,
+            include_k8s_plan=True,
+            **kwargs,
+        )[0]
+
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "rust_runtime": "false",
+        "rust_matrix": '["canvas","contracts"]',
+        "planner_only": "false",
+        "rollback_test_only": "false",
+        "k8s_policy_test_only": "true",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    for path in cohort:
+        assert classify([path]) == expected
+    assert classify(list(cohort)) == expected
+    assert classify([])["k8s_policy_test_only"] == "false"
+    assert classify([cohort[0], cohort[0]])["k8s_policy_test_only"] == "false"
+    for other in (
+        "docs/architecture-feedback-improvement-plan.md",
+        "tests/test_passport_supported_consumer_routing_helpers.py",
+        "k8s/oracle/07-microservices.yaml",
+        "scripts/deploy-kubernetes.sh",
+        ".github/workflows/ci.yml",
+    ):
+        selected = classify([cohort[0], other])
+        assert selected["k8s_policy_test_only"] == "false", other
+        assert selected["release"] == "true", other
+    protected = classify([cohort[0]], event="merge_group")
+    assert protected["all"] == protected["release"] == "true"
+    assert protected["k8s_policy_test_only"] == "false"
+    assert classify([cohort[0]], event="push")["k8s_policy_test_only"] == "false"
+    no_base = classify([cohort[0]], missing_base=True)
+    assert no_base["all"] == "true"
+    assert no_base["k8s_policy_test_only"] == "false"
+
+    absent = tmp_path / "absent-k8s-policy-source"
+    absent.mkdir()
+    assert classify([cohort[0]], working_directory=absent)[
+        "k8s_policy_test_only"
+    ] == "false"
+    linked = tmp_path / "linked-k8s-policy-source"
+    (linked / "tests").mkdir(parents=True)
+    try:
+        (linked / cohort[0]).symlink_to(ROOT / cohort[0])
+    except (OSError, NotImplementedError):
+        pass  # Windows without symlink privilege; protected Linux checks it.
+    else:
+        assert classify([cohort[0]], working_directory=linked)[
+            "k8s_policy_test_only"
+        ] == "false"
+
+    steps = {
+        step.get("name"): step
+        for step in workflow["jobs"]["test-release-contracts"]["steps"]
+    }
+    bounded = steps["Run Kubernetes policy test-source PR checks"]
+    assert bounded["if"] == "needs.changes.outputs.k8s_policy_test_only == 'true'"
+    assert bounded["run"].split() == [
+        "python", "-m", "pytest", *cohort,
+        "tests/test_ci_workflow_performance.py", "-v", "--tb=short",
+    ]
+    full_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true'"
+    )
+    for name in (
+        "Replay Canvas mirror oracle in exact Credentials release image",
+        "Run repository release checks",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+    ):
+        assert steps[name]["if"] == full_only
+        assert not steps[name].get("continue-on-error", False)
+    assert steps["Run repository release checks"]["run"] == (
+        "python -m pytest tests -v --tb=short"
+    )
+
+
 def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     tmp_path: Path,
 ) -> None:
@@ -2446,7 +2573,8 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     assert "tests/test_ci_workflow_performance.py" in planner_command
     complete_only = (
         "needs.changes.outputs.planner_only != 'true' && "
-        "needs.changes.outputs.rollback_test_only != 'true'"
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true'"
     )
     assert steps["Run repository release checks"]["if"] == complete_only
     assert steps["Run repository release checks"]["run"] == (
@@ -2558,7 +2686,8 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
     )
     full_only = (
         "needs.changes.outputs.planner_only != 'true' && "
-        "needs.changes.outputs.rollback_test_only != 'true'"
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true'"
     )
     for name in (
         "Replay Canvas mirror oracle in exact Credentials release image",
@@ -2869,7 +2998,7 @@ def _assert_required_canvas_target_completion(published: str) -> None:
         == 1
     )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((3 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in published
     )
     assert (
@@ -3203,7 +3332,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -3290,7 +3419,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
         )
         == 1
     )
@@ -3388,8 +3517,8 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" unrelated_filter --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" unrelated_filter --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4',
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(

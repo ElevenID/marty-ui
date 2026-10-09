@@ -41,6 +41,7 @@ jobs:
       openbao: ${{ steps.classify.outputs.openbao }}
       planner_only: ${{ steps.classify.outputs.planner_only }}
       rollback_test_only: ${{ steps.classify.outputs.rollback_test_only }}
+      k8s_policy_test_only: ${{ steps.classify.outputs.k8s_policy_test_only }}
       release: ${{ steps.classify.outputs.release }}
       verification: ${{ steps.classify.outputs.verification }}
       security: ${{ steps.classify.outputs.security }}
@@ -67,6 +68,7 @@ jobs:
           openbao=false
           planner_only=false
           rollback_test_only=false
+          k8s_policy_test_only=false
           release=false
           verification=false
           security=false
@@ -149,6 +151,31 @@ jobs:
                   -f tests/test_beta_worker_launch_rollback.py &&
                   ! -L tests/test_beta_worker_launch_rollback.py ]]; then
               rollback_test_only=true
+            fi
+            # These six exact policy-test leaves have one root-pytest owner.
+            # Only a nonempty PR of regular, unique files may use its bounded
+            # source suite; manifests, scripts and protected heads stay full.
+            if [[ "${{ github.event_name }}" == pull_request &&
+                  ${#changed_files[@]} -gt 0 ]]; then
+              k8s_policy_test_only=true
+              seen_k8s_policy_paths=()
+              for path in "${changed_files[@]}"; do
+                case "$path" in
+                  tests/test_issuance_consumer_bindings.py|tests/test_kubernetes_app_service_coverage.py|tests/test_check_kubernetes_services_release.py|tests/test_kubernetes_token_hmac_secret.py|tests/test_passport_supported_k8s_deployment.py|tests/test_passport_supported_consumer_routing.py) ;;
+                  *) k8s_policy_test_only=false; break ;;
+                esac
+                if [[ ! -f "$path" || -L "$path" ]]; then
+                  k8s_policy_test_only=false
+                  break
+                fi
+                for previous in "${seen_k8s_policy_paths[@]}"; do
+                  if [[ "$path" == "$previous" ]]; then
+                    k8s_policy_test_only=false
+                    break
+                  fi
+                done
+                seen_k8s_policy_paths+=("$path")
+              done
             fi
             # A nonempty PR consisting solely of proven test-only leaves has
             # no production Rust or image input. Keep every actual test owner.
@@ -348,6 +375,12 @@ jobs:
                   # job. Production inputs and unknown test siblings stay broad.
                   release=true
                   ;;
+                tests/test_issuance_consumer_bindings.py|tests/test_kubernetes_app_service_coverage.py|tests/test_check_kubernetes_services_release.py|tests/test_kubernetes_token_hmac_secret.py|tests/test_passport_supported_k8s_deployment.py|tests/test_passport_supported_consumer_routing.py)
+                  # These exact Kubernetes/consumer policy test sources run in
+                  # root release pytest. Their source scripts, manifests, and
+                  # unknown test siblings keep their existing broad selection.
+                  release=true
+                  ;;
                 tests/test_signing_response_reference.py|tests/test_token_rate_reference.py|tests/test_canvas_url_template_reference.py)
                   # Frozen-reference guards are collected by root release
                   # pytest only. Their corpora and native Rust consumers keep
@@ -432,6 +465,7 @@ jobs:
             printf 'openbao=%s\n' "$openbao"
             printf 'planner_only=%s\n' "$planner_only"
             printf 'rollback_test_only=%s\n' "$rollback_test_only"
+            printf 'k8s_policy_test_only=%s\n' "$k8s_policy_test_only"
             printf 'release=%s\n' "$release"
             printf 'verification=%s\n' "$verification"
             printf 'security=%s\n' "$security"
@@ -2641,7 +2675,7 @@ jobs:
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Replay Canvas mirror oracle in exact Credentials release image
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -2671,8 +2705,19 @@ jobs:
         run: >-
           python -m pytest tests/test_beta_worker_launch_rollback.py
           tests/test_ci_workflow_performance.py -v --tb=short
+      - name: Run Kubernetes policy test-source PR checks
+        if: needs.changes.outputs.k8s_policy_test_only == 'true'
+        run: >-
+          python -m pytest
+          tests/test_issuance_consumer_bindings.py
+          tests/test_kubernetes_app_service_coverage.py
+          tests/test_check_kubernetes_services_release.py
+          tests/test_kubernetes_token_hmac_secret.py
+          tests/test_passport_supported_k8s_deployment.py
+          tests/test_passport_supported_consumer_routing.py
+          tests/test_ci_workflow_performance.py -v --tb=short
       - name: Run repository release checks
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         run: python -m pytest tests -v --tb=short
       - name: Report affected Rust packages in shadow mode
         if: github.event_name == 'pull_request'
@@ -2681,7 +2726,7 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: python3 scripts/ci/plan_affected_rust.py
       - name: Configure the pinned containerd image store
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70 # v5.5.0
         with:
           version: v29.7.2
@@ -2692,7 +2737,7 @@ jobs:
               }
             }
       - name: Configure the pinned OCI exporter
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v6.2.0
         with:
@@ -2700,13 +2745,13 @@ jobs:
           driver: docker-container
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
       - name: Require the exact supported OCI backend
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         env:
           MARTY_BUILDX_DRIVER: ${{ steps.buildx.outputs.driver }}
           MARTY_BUILDX_NODES_JSON: ${{ steps.buildx.outputs.nodes }}
         run: python scripts/check_verification_candidate_backend.py
       - name: Prove the same OCI archive through the future consumer path
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         env:
           MARTY_RUN_VERIFICATION_CANDIDATE_DOCKER_TESTS: "1"
         run: >-

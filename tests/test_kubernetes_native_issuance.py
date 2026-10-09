@@ -73,6 +73,9 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     )
     historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', "")
     historical = historical.replace('  PERSONALIZATION_BUREAU_URL: ""\n', "")
+    signing_keys_url = '  SIGNING_KEYS_SERVICE_URL: "http://signing-keys:8017"\n'
+    assert source.count(signing_keys_url) == 1
+    historical = historical.replace(signing_keys_url, "")
     original = historical.replace(anchor, anchor + binding)
     assert original.count(binding) == 2
     # This historical parser overwrites the identical duplicate; the actual

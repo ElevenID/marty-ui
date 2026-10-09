@@ -13,9 +13,29 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts" / "ci"))
 import plan_affected_rust as planner  # noqa: E402 - sys.path selects the repo-owned CI script
+
+GATEWAY_UPSTREAM_TARGETS = {
+    "AUTH_SERVICE_URL": "http://auth:8001",
+    "ORGANIZATION_SERVICE_URL": "http://organization:8002",
+    "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+    "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+    "ISSUANCE_SERVICE_URL": "http://issuance:8005",
+    "APPLICANT_SERVICE_URL": "http://applicant:8006",
+    "NOTIFICATION_SERVICE_URL": "http://notification:8007",
+    "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
+    "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
+    "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+    "FLOW_SERVICE_URL": "http://flow:8011",
+    "VERIFICATION_SERVICE_URL": "http://verification:8012",
+    "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
+    "DEVICE_REGISTRATION_SERVICE_URL": "http://device-registration:8014",
+    "SIGNING_KEYS_SERVICE_URL": "http://signing-keys:8017",
+}
 
 
 class AffectedRustPlannerTests(unittest.TestCase):
@@ -911,35 +931,18 @@ class AffectedRustPlannerTests(unittest.TestCase):
 
     def test_base_compose_wires_every_configured_gateway_upstream(self) -> None:
         # An in-container localhost default cannot reach a sibling service.
-        expected = {
-            "AUTH_SERVICE_URL": "http://auth:8001",
-            "ORGANIZATION_SERVICE_URL": "http://organization:8002",
-            "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
-            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
-            "ISSUANCE_SERVICE_URL": "http://issuance:8005",
-            "APPLICANT_SERVICE_URL": "http://applicant:8006",
-            "NOTIFICATION_SERVICE_URL": "http://notification:8007",
-            "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
-            "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
-            "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
-            "FLOW_SERVICE_URL": "http://flow:8011",
-            "VERIFICATION_SERVICE_URL": "http://verification:8012",
-            "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
-            "DEVICE_REGISTRATION_SERVICE_URL": "http://device-registration:8014",
-            "SIGNING_KEYS_SERVICE_URL": "http://signing-keys:8017",
-        }
         config = (ROOT / "rust/services/gateway/src/config.rs").read_text(
             encoding="utf-8"
         )
         table = config.split("const SERVICE_URLS:", 1)[1].split("\n];", 1)[0]
         bindings = re.findall(r'"([A-Z_]+_SERVICE_URL)"', table)
-        self.assertEqual(len(bindings), len(expected))
-        self.assertEqual(set(bindings), set(expected))
+        self.assertEqual(len(bindings), len(GATEWAY_UPSTREAM_TARGETS))
+        self.assertEqual(set(bindings), set(GATEWAY_UPSTREAM_TARGETS))
 
         compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
         gateway = compose.split("\n  gateway:\n", 1)[1]
         gateway = re.split(r"(?m)^  [a-z][a-z0-9_-]*:\s*$", gateway, maxsplit=1)[0]
-        for binding, url in expected.items():
+        for binding, url in GATEWAY_UPSTREAM_TARGETS.items():
             with self.subTest(binding=binding):
                 self.assertEqual(
                     re.findall(
@@ -950,6 +953,86 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 )
                 service = url.split("://", 1)[1].split(":", 1)[0]
                 self.assertIn(f"\n  {service}:\n", compose)
+
+    def test_oracle_kubernetes_wires_every_configured_gateway_upstream(self) -> None:
+        configmap = (ROOT / "k8s/oracle/01-configmap.yaml").read_text(
+            encoding="utf-8"
+        )
+        configmaps = [
+            document
+            for document in yaml.safe_load_all(configmap)
+            if document
+            and document.get("kind") == "ConfigMap"
+            and document.get("metadata", {}).get("name") == "marty-config"
+        ]
+        self.assertEqual(len(configmaps), 1)
+        deployment = (ROOT / "k8s/oracle/07-microservices.yaml").read_text(
+            encoding="utf-8"
+        )
+        deployments = [
+            document
+            for document in yaml.safe_load_all(deployment)
+            if document
+            and document.get("kind") == "Deployment"
+            and document.get("metadata", {}).get("name") == "gateway"
+        ]
+        self.assertEqual(len(deployments), 1)
+        containers = deployments[0]["spec"]["template"]["spec"]["containers"]
+        gateways = [
+            container for container in containers if container.get("name") == "gateway"
+        ]
+        self.assertEqual(len(gateways), 1)
+        gateway = gateways[0]
+        self.assertEqual(
+            gateway.get("envFrom"), [{"configMapRef": {"name": "marty-config"}}]
+        )
+        for binding, url in GATEWAY_UPSTREAM_TARGETS.items():
+            with self.subTest(binding=binding):
+                self.assertEqual(
+                    re.findall(
+                        rf'(?m)^  {re.escape(binding)}: "(https?://[^"\s]+)"$',
+                        configmap,
+                    ),
+                    [url],
+                )
+                self.assertEqual(configmaps[0]["data"].get(binding), url)
+                overrides = [
+                    variable
+                    for variable in gateway.get("env", [])
+                    if variable.get("name") == binding
+                ]
+                self.assertLessEqual(len(overrides), 1)
+                if overrides:
+                    self.assertEqual(
+                        overrides[0],
+                        {
+                            "name": binding,
+                            "valueFrom": {
+                                "configMapKeyRef": {
+                                    "name": "marty-config",
+                                    "key": binding,
+                                }
+                            },
+                        },
+                    )
+        signing_services = [
+            document
+            for document in yaml.safe_load_all(
+                (ROOT / "k8s/oracle/07b-signing-keys.yaml").read_text(
+                    encoding="utf-8"
+                )
+            )
+            if document
+            and document.get("kind") == "Service"
+            and document.get("metadata", {}).get("name") == "signing-keys"
+        ]
+        self.assertEqual(len(signing_services), 1)
+        self.assertTrue(
+            any(
+                port.get("port") == 8017 and port.get("targetPort") == 8017
+                for port in signing_services[0]["spec"]["ports"]
+            )
+        )
 
     def test_auth_gateway_session_grpc_edge_is_source_backed_and_shadow_only(
         self,

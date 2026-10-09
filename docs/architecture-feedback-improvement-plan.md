@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 15:14 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-09 17:33 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -51,6 +51,17 @@ image-free exact case before image/database setup, retaining both real
 rendered-process cases. Its PR and protected merge-group CI passed; the
 one-reviewer rule was restored after merge. This is earlier diagnostic
 feedback and duplicate-probe cleanup, not a measured full-job saving.
+UI #1210 repaired Gateway's base-Compose Verification address and guarded all
+15 configured upstream addresses. Its full PR and protected merge-group checks
+passed; main's one-reviewer rule was restored. This is deployment correctness,
+not a CI speedup.
+UI #1211 retained two timing-sensitive published Canvas worker references but
+serialized them after observed shutdown-bound failures under parallel load.
+UI #1212 repaired the oracle Kubernetes Gateway Signing Keys binding and
+guarded its parsed ConfigMap/container environment. Both passed full PR and
+protected queue checks and merged; main's one-reviewer rule was restored and
+verified. These are reliability and deployment-correctness changes, not
+measured CI speedups.
 
 ## Objective and scope
 
@@ -816,6 +827,22 @@ had a 12m43s preflight and 18m26s Windows lane. The jobs already run in
 parallel and feed the same CI gate. A new preflight job would add runner and
 cache startup without shortening either observed critical path, so A7 remains
 deferred pending evidence that its position on the critical path changes.
+
+2026-10-09 refresh: three successful revisions of Core's still-open security
+[PR #355](https://github.com/ElevenID/marty-core/pull/355) now place preflight
+on the *PR* critical path: [run 37946893659](https://github.com/ElevenID/marty-core/actions/runs/37946893659)
+had 14.6m preflight versus 11.6m affected tests; earlier
+[runs 37900258708](https://github.com/ElevenID/marty-core/actions/runs/37900258708)
+and [37897508392](https://github.com/ElevenID/marty-core/actions/runs/37897508392)
+had 14.6m/11.7m and 12.0m/10.2m. The latest preflight spent about 440 seconds
+on the exact KMS/public-key graph and 163 seconds on disposable OpenBao
+issuer signing. These are revisions of one large security PR, not independent
+workloads or proof that another job reduces total time. The latest protected
+[#354 run](https://github.com/ElevenID/marty-core/actions/runs/37828982922)
+still had a 17.1m feature-matrix lane alongside 16.9m preflight and 15.7m
+Windows. A7 remains deferred until a post-#355 representative run and a
+no-duplicate-compilation split design show an actual critical-path benefit;
+all security, feature, benchmark, and platform obligations remain required.
 
 ## Next renewal decomposition: bounded obligations (unpublished)
 
@@ -2636,18 +2663,114 @@ in the preceding protected sample. Compilation, image build, and all main
 acceptance targets were slower together, so no attributable end-to-end saving
 is claimed. Main's one-reviewer protection was restored and verified.
 
-## A0/A3 Gateway base-Compose upstream parity (2026-10-09, candidate)
+## A0/A3 Gateway base-Compose upstream parity (2026-10-09, merged)
 
 Gateway's published `/v1/verify` route and `SERVICE_URLS` table select the
 Verification upstream. Kubernetes supplies `http://verification:8012`, but
 base Compose omitted `VERIFICATION_SERVICE_URL`, leaving the gateway container
 with the `http://localhost:8012` development default. Since Verification runs
-as a separate Compose service, that default does not target it. Add the missing
-base-Compose binding and an independent exact-value regression for every one
-of the 15 configured Gateway upstream URLs, scoped to the Gateway environment
-and requiring each target service stanza. This repairs deployment wiring and
-closes one A0/A3 input gap; it does not change check selection or claim a CI
-speedup. Rendered Compose validation and protected checks remain required.
+as a separate Compose service, that default does not target it. [#1210](https://github.com/ElevenID/marty-ui/pull/1210)
+added the missing base-Compose binding and an independent exact-value
+regression for all 15 configured Gateway upstream URLs, scoped to the Gateway
+environment and requiring each target service stanza. The native-runtime
+fixture's closed environment set followed the new binding. Local planner,
+self-host, and supported-Compose checks passed (202 tests, two skips, 348
+subtests); independent review found no P1-P3 issue. Full exact-head
+[PR run](https://github.com/ElevenID/marty-ui/actions/runs/37951482695) and
+[protected run](https://github.com/ElevenID/marty-ui/actions/runs/37955004959)
+passed, and #1210 merged as `953cf5294` at 16:18:10 UTC. Main's one-reviewer
+rule was restored and verified. The PR and protected Canvas jobs took 27m06s
+and 24m28s; the latter included 443 seconds of container compilation and 459
+seconds in published database contracts. This repaired deployment wiring and
+closed one A0/A3 input gap; it did not change check selection or establish a
+CI speedup.
+
+## A0/A3 Gateway Kubernetes upstream parity (2026-10-09, merged)
+
+The oracle Kubernetes Gateway imports `marty-config` through `envFrom`, but
+that ConfigMap omitted `SIGNING_KEYS_SERVICE_URL`. Gateway's published signing
+route would inherit its `http://localhost:8017` development default, which
+cannot reach the separate Signing Keys Service on port 8017 when its optional
+`07b-signing-keys.yaml` overlay is applied. [#1212](https://github.com/ElevenID/marty-ui/pull/1212)
+added the missing binding and a parsed-YAML guard for the exact 15 Gateway
+upstream targets, the actual Gateway container's ConfigMap import and explicit
+environment overrides, and the optional Signing Keys Service endpoint. The
+expected addresses remain independent of production configuration. The frozen
+historical ConfigMap hash reconstruction removes exactly the new binding.
+Focused Python checks passed (110 tests, one skip, 363 subtests); the reviewer
+found no remaining P1-P3 issue. Full exact-head [PR run](https://github.com/ElevenID/marty-ui/actions/runs/37959076710)
+and combined-head [protected run](https://github.com/ElevenID/marty-ui/actions/runs/37963117844)
+passed. The PR merged as `f50cc7c56` at 17:32:34 UTC, and main's one-reviewer
+rule was restored and verified. The PR and protected Canvas jobs took 31m06s
+and 30m49s; these are not comparable evidence of an attributable saving.
+This deployment-correctness slice did not narrow the shadow planner's
+service-change fallback or remove any check.
+
+## A6 published Canvas worker reference reliability (2026-10-09, merged)
+
+Two pinned worker references missed their existing 10-second SIGINT shutdown
+bound under parallel Canvas load on different exact-main runs. [#1211](https://github.com/ElevenID/marty-ui/pull/1211)
+kept both required references and their original bounds, but ran them serially
+before excluding them from the parallel worker target. The frozen oracles and
+native preflights remain; the exact case roster and timing-phase guards were
+updated. Its full [protected run](https://github.com/ElevenID/marty-ui/actions/runs/37962807792)
+passed and it merged as `1afa80a5e` at 17:28:48 UTC. Its protected Canvas job
+took 30m20s. This addresses observed flakiness; it does not establish a CI
+speedup or authorize weaker timing semantics.
+
+## A6 Kubernetes/consumer policy test-source ownership (2026-10-09, merged)
+
+Six exact root Python test sources covering issuance consumer bindings,
+Kubernetes service coverage and signed release selection, token-secret shell
+doubles, supported passport Kubernetes, and consumer routing are collected by
+the existing Release Contract Tests root pytest step (122 collected and 122
+passed locally). Repository references show no second named workflow/script
+invocation; the service-image Dockerfile guard rejects root test copies, while
+UI and browser images build from their separate `ui` and `tests` contexts.
+These test files are not runtime inputs. Route PRs changing only these exact
+sources to their existing release-test owner; keep production scripts,
+manifests, unknown siblings, and mixed changes on the conservative classifier
+path. Synthetic classifier tests require the exact result tuple, a broad
+unknown-sibling fallback, mixed source selection, and full merge-group
+selection. This does not remove a test or narrow any deployed-source check.
+[#1213](https://github.com/ElevenID/marty-ui/pull/1213) passed exact-head and
+[protected CI](https://github.com/ElevenID/marty-ui/actions/runs/37970884691),
+then merged as `5c6844d44`. The protected Canvas step spent 602 seconds on
+reusable Rust test compilation, 369 seconds on the public self-host image,
+and 648 seconds in its database group. Against #1212's 618/375/647 seconds,
+these are different combined heads and runner conditions, not an attributable
+speedup or regression.
+
+The first actual exact-source [PR #1214](https://github.com/ElevenID/marty-ui/pull/1214)
+ran all eleven `test_passport_supported_consumer_routing.py` cases and the
+release owner's full root pytest; its [PR CI run](https://github.com/ElevenID/marty-ui/actions/runs/37974689079)
+reached the aggregate gate in 9m17s with 6,116 passed and 19 skipped root
+tests. CodeQL, open-source policy, and public protocol checks also passed.
+Its full [protected merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/37975973978)
+passed every required check, and #1214 merged as `b44c482dc`. This proves
+scoped feedback for this exact test-only path, not a general pipeline saving.
+
+The next reviewed local candidate runs all six named Kubernetes/consumer
+test sources plus workflow-policy tests for a nonempty PR changing only those
+regular files. It skips the unchanged frozen Credentials mirror replay and
+OCI archive proof in that PR path; unknown, mixed, deleted, symlinked, and
+protected merge-group inputs retain the complete release job. The exact
+proposed command passed 268 local cases in 93 seconds on the #1214 main base,
+including all five new passport-consumer cases. The standalone workflow-policy
+suite passed all 141 cases. A pre-rebase 263-case run exposed and then cleared
+a stale policy reference count; it is not the final validation result.
+The full protected gate and an actual later source-only PR are still needed
+before attributing a hosted feedback saving to this second narrowing.
+
+Latest protected timing comparison: #1210's Canvas run `37955004959` spent
+482 seconds compiling reusable tests, 318 seconds building the public
+self-host image, and 459 seconds in database contracts. #1212's combined-head
+run `37963117844` spent 618, 375, and 647 seconds in those phases. The
+`json_depth`, `json_consumer`, and `worker_startup` migration/seed events all
+slowed together; #1211 also changed the combined head. These are different
+load/code conditions, not an attributable regression or a reason to delete
+one named case. A further fixture-reuse change needs case ownership and
+isolation proof under comparable runs.
 
 ## Design references
 
