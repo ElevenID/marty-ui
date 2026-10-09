@@ -10812,3 +10812,17 @@ with four skips. Non-generated coverage is 87.85% (1,765/2,009), below the
 90% gate. Real server-side, KMS-backed liveness challenge custody and
 authenticated submission remain mandatory before release; this test callback
 does not count as production acceptance. The mobile batch remains local.
+
+2026-10-09 active mobile offer API retirement: local Authenticator commit
+`9c3231f` removes `keyId` from the live OID4VC offer interface, client
+wrapper, and verified service implementation, and removes the now-obsolete
+negative test that supplied a local holder key. Full Dart analysis passed;
+the Flutter suite passed 193 tests with four skips and non-generated
+coverage is 87.85% (1,764/2,008). Older unsupported SDK wrappers and
+negative tests still name local keys; these must be retired from interfaces,
+implementations, and tests as a coherent later mobile cleanup, rather than
+being accepted as the final KMS-only API. No mobile updates are published.
+At UI PR #1192's exact published head, the OpenBao DIDComm plugin image job
+passed along with Rust contracts, service images, release contracts, and
+Rust CodeQL. Canvas Rust service tests are the only remaining pending check
+at this observation; the entire run is not yet terminal.
