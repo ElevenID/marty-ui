@@ -10198,3 +10198,18 @@ published Core `cd21cad` remains the checked head. The 8 MiB credential
 response bound preserves larger mDoc payloads while Authenticator applies
 its tighter 1 MiB SD-JWT receipt limit after Core parsing. Physical-device
 and real-issuer qualification remain required.
+
+2026-10-09 Authenticator legacy channel retirement: local commit `07ea30a`
+removes the unregistered `spruce_id_sdk` and credential-monitor channels from
+the extended platform service. Their holder initialization, ad hoc key and
+signing, batch/validation, capability, secure-channel, and monitoring methods
+now fail explicitly instead of constructing `default-key` requests for a
+nonexistent handler. `SpruceIdClientExtended.initializeSDK` initializes its
+base service and, when advanced features are requested, requires an existing
+confirmed remote holder pairing by reading only the pinned public P-256 key;
+it rejects legacy local holder configuration. Targeted Dart analysis passed
+with no issues, and the remote-only entry-point suite passed 4/4. This is a
+local, unpushed Authenticator batch addition for PR #57. Other registered
+W3C/JWT/mDoc/wallet channel entry points and the credential-selection view
+still need a source and artifact audit; this commit does not qualify a mobile
+build or physical-device wallet behavior.
