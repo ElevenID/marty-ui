@@ -2651,13 +2651,6 @@ jobs:
           python -m pytest -q tests/test_verification_candidate_build.py
           tests/test_verification_candidate_backend.py
           tests/test_verification_candidate_workflow.py
-      - name: Require a compatible Credentials image for native DIDComm consumers
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
-        run: python scripts/check_didcomm_native_credentials_release.py
-      - name: Require the event-owner migration for native retention
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true'
-        run: python scripts/check_issuance_retention_credentials_release.py
-
   test-credential-lifecycle-browser:
     name: MIP 0.5 Credential Lifecycle Browser Gate
     needs: changes

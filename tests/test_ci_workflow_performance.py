@@ -2378,8 +2378,6 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
         "Configure the pinned OCI exporter",
         "Require the exact supported OCI backend",
         "Prove the same OCI archive through the future consumer path",
-        "Require a compatible Credentials image for native DIDComm consumers",
-        "Require the event-owner migration for native retention",
     ):
         assert steps[name]["if"] == complete_only
     assert steps["Report affected Rust packages in shadow mode"]["if"] == (
@@ -2489,8 +2487,6 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "Configure the pinned OCI exporter",
         "Require the exact supported OCI backend",
         "Prove the same OCI archive through the future consumer path",
-        "Require a compatible Credentials image for native DIDComm consumers",
-        "Require the event-owner migration for native retention",
     ):
         assert steps[name]["if"] == full_only
         assert not steps[name].get("continue-on-error", False)

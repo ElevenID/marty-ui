@@ -206,6 +206,10 @@ def test_rejects_unrecorded_transaction_and_mismatched_issuance(tmp_path: Path) 
     external["issuance-migrations"] = reference("issuance", "8")
     with pytest.raises(builder.ImageLockError, match="extra Compose"):
         build(tmp_path, external_services=external)
+    external.pop("issuance-migrations")
+    external["issuance"] = reference("issuance", "8")
+    with pytest.raises(builder.ImageLockError, match="extra Compose"):
+        build(tmp_path, external_services=external)
     model["services"]["gateway"]["build"] = {"context": "."}
     with pytest.raises(builder.ImageLockError, match="image-only"):
         build(tmp_path, model=model)

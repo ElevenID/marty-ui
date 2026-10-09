@@ -153,9 +153,6 @@ def _stack_manifest() -> dict:
         _component("marty-verification-python", "ElevenID/marty-core", MARTY_CORE_SHA),
         _component("marty-iso18013-python", "ElevenID/marty-core", MARTY_CORE_SHA),
         _component(
-            "marty-credentials-issuance", "ElevenID/marty-credentials", "6" * 40, "oci"
-        ),
-        _component(
             "marty-integration-tests",
             "ElevenID/marty-integration-tests",
             "7" * 40,
@@ -425,6 +422,19 @@ def test_promotion_rejects_incomplete_stack_component_set(tmp_path: Path) -> Non
     ).hexdigest()
 
     with pytest.raises(EvidenceError, match="missing required components: marty-blog"):
+        promote(args)
+
+
+def test_promotion_rejects_retired_credentials_image(tmp_path: Path) -> None:
+    args = _promotion_args(tmp_path)
+    manifest = json.loads(args.stack_manifest.read_text(encoding="utf-8"))
+    manifest["components"].append(_component(
+        "marty-credentials-issuance", "ElevenID/marty-credentials", "6" * 40, "oci"
+    ))
+    _write_json(args.stack_manifest, manifest)
+    args.stack_manifest_sha256 = hashlib.sha256(args.stack_manifest.read_bytes()).hexdigest()
+
+    with pytest.raises(EvidenceError, match="retired external issuance image"):
         promote(args)
 
 
