@@ -8646,3 +8646,29 @@ DIDComm rotation, Go plugin integration, HAIP Flow, and both pre/post-restore
 Rust integration-secret reads passed. The probe removed its labeled Docker
 containers and volumes. Device authorization, durable holder references,
 wallet functionality and signed-image acceptance remain open.
+
+Holder API boundary review: `marty-device-registration` currently derives its
+HTTP identity solely from `x-user-id`, then checks active organization
+membership. Gateway supplies that header after authenticating and authorizing
+the public request, but the Device Registration service itself has no
+cryptographic caller proof on that HTTP header. Its deployment also has no
+Signing Keys internal client URL/key today. A new private-key signing route
+must therefore not simply be added to the Device Registration HTTP router:
+direct service access could forge a user header and turn KMS into a signing
+oracle. Establish an authenticated Gateway-to-service identity assertion or
+revalidate the Bearer session in the service, then check active registration,
+user and organization before handing a scoped reference to Signing Keys.
+Signing Keys must accept only internal authenticated holder operations; the
+mobile client must never receive an OpenBao token. The current clean-install
+Device Registration schema has only public device-key records and transition
+history; any durable holder metadata must remain reference/public-only, with
+no private-key table or removal migration. This is an implementation gate,
+not an authorization mechanism already present in the candidate.
+Gateway's current `requires_gateway_service_token` list omits Device
+Registration, although the service-token override exists for other Rust
+services. Device Registration receives `GRPC_SERVICE_TOKEN` for its outbound
+membership client, but does not authenticate inbound `x-service-token`. A
+holder signing API needs a dedicated Gateway-to-Device Registration credential
+or equivalent signed identity context, with public caller headers stripped
+before injection; reusing the broadly shared gRPC token alone would give
+every holder of that token signing-authority reachability.
