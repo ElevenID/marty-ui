@@ -4,7 +4,7 @@ use marty_device_registration::{
     holder_key_client::HolderKeyClient,
     holder_key_repository::PostgresHolderKeyRepository,
     http::{router, HttpState},
-    migration::migrate,
+    migration::{migrate, validate},
     postgres::PostgresDeviceRepository,
     DeviceRepository, DeviceService,
 };
@@ -27,6 +27,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    if let [command] = arguments.as_slice() {
+        if command == "migrate" || command == "verify-owned-schema" {
+            let database_url =
+                required("DATABASE_URL")?.replacen("postgresql+asyncpg://", "postgresql://", 1);
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            if command == "migrate" {
+                migrate(&pool).await?;
+            } else {
+                validate(&pool).await?;
+            }
+            pool.close().await;
+            return Ok(());
+        }
+    }
+    if !arguments.is_empty() {
+        return Err("unsupported Device Registration command".into());
+    }
     let environment = env_value("ENVIRONMENT", "development").to_ascii_lowercase();
     let deployed = !matches!(
         environment.as_str(),

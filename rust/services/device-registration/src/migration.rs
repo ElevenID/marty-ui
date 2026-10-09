@@ -19,6 +19,19 @@ pub async fn migrate(pool: &PgPool) -> Result<(), DeviceError> {
     Ok(())
 }
 
+/// Check the installed Device Registration schema without creating or
+/// modifying tables. Release qualification runs this against the exact image.
+pub async fn validate(pool: &PgPool) -> Result<(), DeviceError> {
+    let mut transaction = pool.begin().await.map_err(persistence)?;
+    sqlx::query("SET TRANSACTION READ ONLY")
+        .execute(&mut *transaction)
+        .await
+        .map_err(persistence)?;
+    verify(&mut transaction).await?;
+    transaction.rollback().await.map_err(persistence)?;
+    Ok(())
+}
+
 async fn verify(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<(), DeviceError> {

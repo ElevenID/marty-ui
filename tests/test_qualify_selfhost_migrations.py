@@ -165,6 +165,9 @@ def test_model_rejects_profile_network_port_or_secret_escape(tmp_path: Path) -> 
         lambda m: m["services"]["native-schema-migrate"].update(ports=["5432:5432"]),
         lambda m: m["services"]["native-schema-migrate"].update(
             command=["/usr/local/bin/marty-issuance-service serve"]),
+        lambda m: m["services"]["native-schema-migrate"].update(
+            command=[native_command("migrate").replace(
+                "/usr/local/bin/marty-device-registration migrate && ", "")]),
         lambda m: m["networks"]["private"].update(internal=False),
         lambda m: m["secrets"]["bao_root_token"].update(file="/production/token"),
     ):
@@ -224,6 +227,8 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert sum("psql" in args for args in calls) == 6
     assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
     assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2
+    assert all("marty-device-registration verify-owned-schema" in " ".join(args)
+               for args in calls if "verify-owned-schema" in " ".join(args))
     assert sum(args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY] for args in calls) == 2
     assert all("printf '\\n'" in " ".join(args) for args in calls
                if "bao read" in " ".join(args))

@@ -61,7 +61,7 @@ services:
   native-schema-migrate:
     image: ${PROBE_SERVICES_IMAGE:?pin released Rust services image by digest}
     entrypoint: [/bin/sh, -ec]
-    command: [. /app/load-secrets-env.sh; /usr/local/bin/marty-organization migrate && /usr/local/bin/marty-credential-template migrate && exec /usr/local/bin/marty-issuance-service migrate]
+    command: [. /app/load-secrets-env.sh; /usr/local/bin/marty-organization migrate && /usr/local/bin/marty-credential-template migrate && /usr/local/bin/marty-device-registration migrate && exec /usr/local/bin/marty-issuance-service migrate]
     environment:
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty

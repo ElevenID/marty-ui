@@ -51,7 +51,8 @@ LIMIT 20
 """
 REDIS_REGISTRY = f"org:{ORG_ID}:signing-key-services"
 NATIVE_BINARIES = (
-    "marty-organization", "marty-credential-template", "marty-issuance-service",
+    "marty-organization", "marty-credential-template",
+    "marty-device-registration", "marty-issuance-service",
 )
 
 

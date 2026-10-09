@@ -9549,6 +9549,37 @@ isolate the frozen historical comparison so it cannot serve as custody proof
 or ship in a product image. Preserve Canvas regression coverage when retiring
 the oracle path. The exact-head Canvas pass does not close this finding.
 
+2026-10-09 K10 exact-image coverage expansion (local candidate): the
+digest-pinned self-host migration qualifier previously ran only Organization,
+Credential Template and Issuance native schema owners. Device Registration now
+contains the fresh reference-only holder credential, key, provision and
+deletion ledgers, so the qualifier must run it too. Its Rust binary now has
+`migrate` and read-only `verify-owned-schema` commands. The disposable Compose
+model and verifier command include it between Credential Template and
+Issuance, and the model test rejects omission. Focused Python qualification
+tests passed (8), Rust Device Registration library tests passed (6), and the
+binary check compiled. On disposable PostgreSQL 15, the fresh-schema/runtime
+custody test passed, followed by idempotent binary migration and the read-only
+verification command; the resulting schema contained exactly the six expected
+Device Registration tables, with no retired device-key tables. This is local
+source evidence. The exact signed services image, all-database inventory and
+runtime writes still require release qualification before K10 can close.
+
+At published UI head `6cc8159a5`, hosted run `37960926646` passed Rust
+Lint and Packaging, including the beta Compose render that failed at
+`c138f9528`; the grouped synthetic service-credential correction is therefore
+qualified for that lane. At this checkpoint 16 CI jobs had passed and five
+long jobs (OpenBao plugin, contracts, release contracts, service images and
+Canvas) were still live. The new Device Registration schema-qualifier change
+above is local and is not included in this hosted result. Its targeted
+all-target Clippy passed with warnings denied, and the actual disposable
+Compose YAML command exactly matched the verifier's canonical native command.
+The verification transaction now sets PostgreSQL `READ ONLY` before querying.
+A second disposable PostgreSQL 15 run passed fresh migration and read-only
+verification, then injected the retired `device_registration_keys` table;
+the same verification command exited nonzero with the expected fresh-schema
+error. The container was discarded after the probe.
+
 2026-10-09 pairing authorization interface review: the Auth service session
 record retains creation time and OIDC claims, but its current gRPC
 `ValidateSession` response and Gateway `SessionIdentity` expose user and
