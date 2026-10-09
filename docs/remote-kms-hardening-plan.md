@@ -8469,3 +8469,14 @@ reintroduces retired key storage. Its negative fixture injects
 `issuer_signing_keys.encrypted_jwk_json` and fails; all 17 focused collector
 tests pass locally. This adds a full-database acceptance gate but is not yet a
 successful run against the combined signed release artifacts.
+
+Self-host Rust-only integration review found that the retained `issuance`
+HTTP alias runs the same Rust binary as `issuance-native`, whose startup
+unconditionally verifies remote integration-secret custody, but the alias
+lacked `INTEGRATION_SECRET_KMS_URL` and its CA file. The alias also retained
+DIDComm capability without the dedicated remote token binding. The compose
+candidate now gives both Issuance processes the same scoped DIDComm KMS
+endpoint/token and TLS integration-secret KMS endpoint/CA mounts. The frozen
+whole-model self-host checker enforces these exact additions, and all five
+model cases plus 147 focused Python tests pass locally. Packaged runtime and
+exact-head hosted qualification still need to prove this wiring in an image.

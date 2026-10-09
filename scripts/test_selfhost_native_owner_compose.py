@@ -248,7 +248,8 @@ def assert_models(
         "source": "workload_identity_ca_cert",
         "target": tls_ca_file,
     }
-    for service in [native, preserved["services"].get("canvas-sync-worker")]:
+    for service in [native, preserved["services"].get("issuance"),
+                    preserved["services"].get("canvas-sync-worker")]:
         if service is None:
             continue
         assert service["environment"].pop("INTEGRATION_SECRET_KMS_URL") == tls_url
@@ -272,17 +273,18 @@ def assert_models(
     assert {key: legacy_after.pop(key) for key in SHARED_ADDITIONS} == shared_additions
     assert legacy_after.pop("DIDCOMM_DELIVERY_OWNER") == "native"
     assert legacy_after.pop("ISSUANCE_NATIVE_SERVICE_URL") == "http://issuance-native:8005"
-    assert native["environment"].pop("DIDCOMM_KMS_ADDR") == didcomm_kms_addr
-    assert native["environment"].pop("DIDCOMM_KMS_TOKEN_FILE") == (
-        "/run/secrets/didcomm_issuance_openbao_token"
-    )
     didcomm_mount = {
         "source": "didcomm_issuance_openbao_token",
         "target": "/run/secrets/didcomm_issuance_openbao_token",
     }
-    assert isinstance(native["secrets"], list)
-    assert native["secrets"].count(didcomm_mount) == 1
-    native["secrets"].remove(didcomm_mount)
+    for service in [native, preserved["services"]["issuance"]]:
+        assert service["environment"].pop("DIDCOMM_KMS_ADDR") == didcomm_kms_addr
+        assert service["environment"].pop("DIDCOMM_KMS_TOKEN_FILE") == (
+            "/run/secrets/didcomm_issuance_openbao_token"
+        )
+        assert isinstance(service["secrets"], list)
+        assert service["secrets"].count(didcomm_mount) == 1
+        service["secrets"].remove(didcomm_mount)
     assert preserved["secrets"].pop("didcomm_issuance_openbao_token")["file"].endswith(
         "/didcomm_issuance_openbao_token"
     )

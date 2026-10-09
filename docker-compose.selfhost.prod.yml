@@ -574,6 +574,10 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
+      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
     secrets:
       - marty_db_password
       - openbao_service_token
@@ -581,6 +585,8 @@ services:
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
+      - didcomm_issuance_openbao_token
+      - workload_identity_ca_cert
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
