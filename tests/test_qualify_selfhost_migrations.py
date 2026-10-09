@@ -11,7 +11,9 @@ import subprocess
 import pytest
 
 from scripts.qualify_selfhost_migrations import (
-    ROOT, QualificationError, _assert_run, qualify, validate_images, validate_model,
+    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_SCHEMA_QUERY, QualificationError,
+    _assert_run, qualify,
+    validate_images, validate_model,
 )
 
 
@@ -172,6 +174,8 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
         if args[-1:] == ["db-migrate"]:
             return result(args, SUCCESS)
         if "psql" in args:
+            if args[-1] == PRIVATE_KEY_SCHEMA_QUERY:
+                return result(args)
             return result(args, "20260808_0002\n")
         if "redis-cli" in args:
             return result(args, "1\n")
@@ -181,11 +185,35 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
 
     report = qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "1" * 16)
     assert report["runs"] == "2"
+    assert report["private_key_storage"] == "absent"
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
-    assert sum("psql" in args for args in calls) == 2
+    assert sum("psql" in args for args in calls) == 4
+    assert sum(args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY] for args in calls) == 2
     assert all("printf '\\n'" in " ".join(args) for args in calls
                if "bao read" in " ".join(args))
+    assert any("down" in args and "--volumes" in args for args in calls)
+
+
+def test_private_key_schema_fails_qualification_and_cleans() -> None:
+    calls: list[list[str]] = []
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[-3:] == ["config", "--format", "json"]:
+            return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
+                                                args[args.index("--project-name") + 1])))
+        if args[-1:] == ["db-migrate"]:
+            return result(args, SUCCESS)
+        if args[-1:] == [NOTIFICATION_HEAD]:
+            return result(args, "20260808_0002\n")
+        if args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY]:
+            return result(args, "column:issuance_service.issuer_signing_keys.encrypted_jwk_json\n")
+        return result(args)
+
+    with pytest.raises(QualificationError, match="created private-key storage"):
+        qualify(IMAGES, run=run, project="marty-selfhost-migrate-probe-" + "3" * 16)
     assert any("down" in args and "--volumes" in args for args in calls)
 
 

@@ -32,6 +32,22 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 NOTIFICATION_HEAD = (
     "SELECT version_num FROM notification_service.alembic_version LIMIT 1"
 )
+PRIVATE_KEY_SCHEMA_QUERY = """
+SELECT 'table:' || table_schema || '.' || table_name
+FROM information_schema.tables
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+  AND (table_name = 'issuer_signing_keys' OR table_name ILIKE '%private_key%'
+       OR table_name ILIKE '%private_jwk%' OR table_name ILIKE '%secret_key%')
+UNION ALL
+SELECT 'column:' || table_schema || '.' || table_name || '.' || column_name
+FROM information_schema.columns
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+  AND (column_name ILIKE '%private_key%' OR column_name ILIKE '%private_jwk%'
+       OR column_name ILIKE '%encrypted_jwk%' OR column_name ILIKE '%secret_key%'
+       OR column_name ILIKE '%key_material%')
+ORDER BY 1
+LIMIT 20
+"""
 REDIS_REGISTRY = f"org:{ORG_ID}:signing-key-services"
 
 
@@ -264,6 +280,12 @@ def qualify(images: dict[str, str], *,
                 require(ledger is None or head == ledger,
                         "Notification migration head changed on idempotent rerun")
                 ledger = head
+                private_schema = _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-Atqc", PRIVATE_KEY_SCHEMA_QUERY,
+                ], environment), "Private-key schema inventory failed").strip()
+                require(not private_schema,
+                        "Released self-host migrations created private-key storage")
                 redis = _checked(run([*compose, "exec", "-T", "redis", "redis-cli",
                                       "-n", "2", "EXISTS", REDIS_REGISTRY], environment),
                                  "KMS registry verification failed").strip()
@@ -283,6 +305,7 @@ def qualify(images: dict[str, str], *,
             return {"schema": "marty.selfhost-migrations-qualification/v1",
                     "migrations_image": images["migrations"],
                     "notification_head": ledger,
+                    "private_key_storage": "absent",
                     "profile": "selfhost-production", "runs": "2"}
         finally:
             if started:
