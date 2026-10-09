@@ -7995,3 +7995,8 @@ substantive lanes are now terminal; Release Contract Tests is the only failed
 one, and the aggregate CI Gate is queued. Push the single grouped follow-up
 containing the corrected workflow assertion and real Issuance private-key
 schema guard, then require a fresh exact-head CI rollup.
+
+Grouped UI follow-up `f9317b67a` is pushed to PR #1192, and CI run
+`37891713276` is queued for that exact head. Its result is pending. The prior
+`d2b56df78` run finished with only the release source-assertion lane failed;
+the native, Canvas, OpenBao and image lanes passed on that prior head.
