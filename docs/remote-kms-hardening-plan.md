@@ -9389,3 +9389,18 @@ ambiguous old `device_authentication`. The `marty-verification` and
 passed locally. The unused UI copy of the old challenge vector is also
 deleted in the grouped UI branch. These changes are local branch evidence;
 Core PR/publication, consumer repin and exact-artifact qualification remain.
+
+2026-10-09 production-root Core repin: Core PR #355 now publishes the
+`7c50d31` head. UI branch commit `fa3080c22` pins every workspace Core crate,
+including Issuance, to that revision; full Rust workspace `cargo check`,
+Device Registration tests and the disposable OpenBao/PostgreSQL/Redis holder
+lifecycle probe passed on the repin. Credentials PR #313 now publishes
+`daf1164`, with all Core crates pinned to `7c50d31`; its native check,
+25 library tests and all-target Clippy passed. Verifier PR #154 now publishes
+`206f80e`, similarly pinned to one Core revision; `marty-sync` check and its
+35 focused tests passed. Authenticator's direct Core pin has been updated,
+and its `marty-sync` pin now targets Verifier `206f80e`, removing the older
+transitive Core revision from the lockfile. Authenticator's Windows bridge
+build is still under investigation after vendored C++/OpenSSL compiler failures;
+the graph repin is not yet qualified or published. These consumer PRs remain
+open, and exact release artifacts and wallet acceptance remain required.
