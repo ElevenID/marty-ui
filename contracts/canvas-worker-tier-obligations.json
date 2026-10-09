@@ -55,6 +55,15 @@
   "native_validation": {
     "test": "worker_validation_matches_frozen_published_process",
     "historical_test": "worker_validation_reference_matches_published_process",
+    "policy_test": "canvas_sync_worker_postgres::validation_policy_tests::all_published_repository_validation_decisions_have_one_fast_owner",
+    "repository_database_test": "worker_validation_repository_matches_frozen_errors",
+    "repository_database_cases": [
+      "binding_platform_mismatch",
+      "platform_archived",
+      "stale_configuration",
+      "application_removed_after_target_read",
+      "candidate_removed_after_target_read"
+    ],
     "routine": [
       "invalid_roster_batch",
       "invalid_roster_limit",
@@ -68,18 +77,18 @@
       "candidate_removed_after_target_read"
     ],
     "full_only": [
-      {"case": "incomplete_logical_key", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "binding_platform_mismatch", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "target_disabled", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "platform_disabled", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "platform_archived", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "binding_disabled", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "binding_archived", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "stale_configuration", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "application_missing", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
-      {"case": "candidate_missing", "fast_owners": ["worker_validation_repository_matches_frozen_errors", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]}
+      {"case": "incomplete_logical_key", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "binding_platform_mismatch", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "target_disabled", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "platform_disabled", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "platform_archived", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "binding_disabled", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "binding_archived", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "stale_configuration", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "application_missing", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
+      {"case": "candidate_missing", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]}
     ],
-    "disposition": "Routine runs seven processor/process cases, two actual PostgreSQL lock races, and the prohibited-metadata privacy boundary. Full qualification retains all 20 native cases and the separate unchanged historical-reference test. The ten full-only cases have distinct fast real-PostgreSQL repository and actual worker-port owners; these do not prove process, HTTPS, OAuth, or lock-race behavior. This is a candidate pending hosted routine and full pilots, not execution evidence."
+    "disposition": "Routine runs seven processor/process cases, two actual PostgreSQL lock races, and the prohibited-metadata privacy boundary. Full qualification retains all 20 native cases and the separate unchanged historical-reference test. The thirteen repository validation decisions have one fast typed-snapshot owner; five distinct released-schema PostgreSQL cases retain scope, disable, generation and reference-existence adapter proofs. The ten full-only cases also retain the actual worker-port owner. Neither lower layer proves process, HTTPS, OAuth, or lock-race behavior. Hosted routine and full qualification remain required."
   },
   "historical_disposition": {
     "layer": "published-process/database compatibility integration",

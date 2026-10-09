@@ -150,6 +150,18 @@ def selected_validation_cases(cases, reference, inventory, tier, qualification="
         declared.get("test") != "worker_validation_matches_frozen_published_process"
         or declared.get("historical_test")
         != "worker_validation_reference_matches_published_process"
+        or declared.get("policy_test")
+        != "canvas_sync_worker_postgres::validation_policy_tests::all_published_repository_validation_decisions_have_one_fast_owner"
+        or declared.get("repository_database_test")
+        != "worker_validation_repository_matches_frozen_errors"
+        or declared.get("repository_database_cases")
+        != [
+            "binding_platform_mismatch",
+            "platform_archived",
+            "stale_configuration",
+            "application_removed_after_target_read",
+            "candidate_removed_after_target_read",
+        ]
         or len(routine) != 10
         or set(routine) != ROUTINE_VALIDATION_CASES
         or len(full_only) != 10
@@ -158,7 +170,7 @@ def selected_validation_cases(cases, reference, inventory, tier, qualification="
         or any(
             entry.get("fast_owners")
             != [
-                "worker_validation_repository_matches_frozen_errors",
+                "all_published_repository_validation_decisions_have_one_fast_owner",
                 "terminal_validation_errors_reach_actual_worker_dead_letter_port",
             ]
             for entry in full_only

@@ -237,10 +237,13 @@ def validate_selection(
 
 
 def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
-    """Require one real successful harness row for each lane's fast owner."""
+    """Require real successful harness rows for each lane's declared owners."""
     owners = {
-        "contracts": "canvas_sync_worker::retry_handoff_tests::terminal_validation_errors_reach_actual_worker_dead_letter_port",
-        "canvas": "worker_validation_repository_matches_frozen_errors",
+        "contracts": [
+            "canvas_sync_worker::retry_handoff_tests::terminal_validation_errors_reach_actual_worker_dead_letter_port",
+            "canvas_sync_worker_postgres::validation_policy_tests::all_published_repository_validation_decisions_have_one_fast_owner",
+        ],
+        "canvas": ["worker_validation_repository_matches_frozen_errors"],
     }
     require(lane in owners, "Unknown Canvas fast-owner execution lane")
     native = inventory.get("native_validation", {})
@@ -250,6 +253,19 @@ def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
         == "worker_validation_reference_matches_published_process",
         "Wrong native validation test owner",
     )
+    require(
+        native.get("policy_test") == owners["contracts"][1]
+        and native.get("repository_database_test") == owners["canvas"][0]
+        and native.get("repository_database_cases")
+        == [
+            "binding_platform_mismatch",
+            "platform_archived",
+            "stale_configuration",
+            "application_removed_after_target_read",
+            "candidate_removed_after_target_read",
+        ],
+        "Wrong native validation policy or database owner",
+    )
     full_only = native.get("full_only", [])
     require(
         len(full_only) == 10
@@ -257,7 +273,7 @@ def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
         and all(
             entry.get("fast_owners")
             == [
-                "worker_validation_repository_matches_frozen_errors",
+                "all_published_repository_validation_decisions_have_one_fast_owner",
                 "terminal_validation_errors_reach_actual_worker_dead_letter_port",
             ]
             for entry in full_only
@@ -268,12 +284,14 @@ def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
         match
         for line in log.splitlines()
         if (match := re.fullmatch(r"test (\S+) \.\.\. (\S+)", line.strip()))
-        and match.group(1) == owners[lane]
+        and match.group(1) in owners[lane]
     ]
-    require(
-        len(rows) == 1 and rows[0].group(2) == "ok",
-        f"Canvas {lane} fast owner did not execute exactly once and pass: {owners[lane]}",
-    )
+    for owner in owners[lane]:
+        matches = [row for row in rows if row.group(1) == owner]
+        require(
+            len(matches) == 1 and matches[0].group(2) == "ok",
+            f"Canvas {lane} fast owner did not execute exactly once and pass: {owner}",
+        )
 
 
 def main() -> int:
@@ -284,7 +302,7 @@ def main() -> int:
         path = Path(sys.argv[3])
         require(path.is_file(), "Missing Canvas fast-owner execution log")
         validate_fast_owner_execution(inventory, lane, path.read_text(encoding="utf-8"))
-        print(f"Canvas {lane} fast owner executed exactly once and passed")
+        print(f"Canvas {lane} fast owners executed exactly once and passed")
     elif len(sys.argv) == 1:
         listed = listed_test_names(sys.stdin.read())
         validate(inventory, listed)
