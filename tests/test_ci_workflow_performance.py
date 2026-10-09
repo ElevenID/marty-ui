@@ -2188,6 +2188,12 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "tests/test_conformance_native.py",
         "tests/test_passport_supported_disposable_compose.py",
         "tests/test_gateway_rust_cutover.py",
+        "tests/test_issuance_consumer_bindings.py",
+        "tests/test_kubernetes_app_service_coverage.py",
+        "tests/test_check_kubernetes_services_release.py",
+        "tests/test_kubernetes_token_hmac_secret.py",
+        "tests/test_passport_supported_k8s_deployment.py",
+        "tests/test_passport_supported_consumer_routing.py",
     )
     ci_source = CI_PATH.read_text(encoding="utf-8")
     for path in candidates:
@@ -2208,6 +2214,12 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
     assert _classify_changed_paths(candidates, tmp_path) == [expected] * len(candidates)
     assert (
         _classify_changed_path("tests/test_gateway_rust_cutover_helpers.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
+    assert (
+        _classify_changed_path("tests/test_kubernetes_app_service_coverage_helpers.py", tmp_path)[
             "all"
         ]
         == "true"
