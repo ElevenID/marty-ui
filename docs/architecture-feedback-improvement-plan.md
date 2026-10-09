@@ -2164,6 +2164,19 @@ runtime behavior, CI selection, required gates, or the service-wide fail-closed
 fallback. The wider non-Cargo input graph remains unmapped; no speedup is
 claimed.
 
+## A0/A3 Organization-to-Auth JIT provisioning gRPC witness (2026-10-08 local candidate)
+
+The existing Organization-to-Auth shadow edge records only Auth's configured
+target and startup connection. Auth's JIT provisioner also uses an Organization
+gRPC client to add the authenticated principal to the default organization,
+read membership context, and optionally read the organization name before
+creating a session. This slice records those request, callsite, token, server,
+and deployment witnesses on that one existing edge. A source-scoped mutation
+regression guards the chain while the planner remains observational and
+service changes still select the full Rust workspace. This does not prove
+cross-service wire compatibility or the complete non-Cargo graph, change any
+CI gate or skip, or establish a speedup.
+
 ## A5 REST fresh-run provenance boundary (2026-10-08 candidate)
 
 [UI #1186](https://github.com/ElevenID/marty-ui/pull/1186) merged the
