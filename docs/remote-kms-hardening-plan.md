@@ -8624,3 +8624,25 @@ raw Transit token. The current registration challenge verifies a PS256 device
 key but does not itself prove KMS custody of that key, so accepting it as the
 holder-signing authorization proof would need separate qualification or a
 replacement device-bound session mechanism.
+
+2026-10-09 holder lifecycle Rust foundation: `marty-signing-keys::kms` now has
+an internal managed OpenBao delete operation. It validates the managed
+provider, origin URL, mount/key-reference path components and token, enables
+Transit deletion, then deletes the key. If the final delete fails after
+permission changes, the existing active-custody metadata check rejects that
+key for further managed signing until cleanup is retried. The VC-API ephemeral
+holder-proof provider now reuses this operation and one service-config builder
+for normal, failed-create and stale-key cleanup, removing duplicate direct
+Transit deletion code. A mock Transit test proves config-before-delete,
+rejects path traversal before any request, and prevents delete after config
+failure. The Signing Keys library suite passed 135 tests with eight ignored,
+targeted warnings-denied Clippy and direct Rustfmt passed, and the diff is
+clean. The new operation is internal only; it neither authorizes a user/device
+nor persists a durable holder reference. The local disposable
+`probe_integration_secret_coordinated_restore.py` then completed against real
+OpenBao, PostgreSQL and Redis: the scoped VC-API holder proof signed,
+verified and deleted its ephemeral Transit key with the refactored path;
+DIDComm rotation, Go plugin integration, HAIP Flow, and both pre/post-restore
+Rust integration-secret reads passed. The probe removed its labeled Docker
+containers and volumes. Device authorization, durable holder references,
+wallet functionality and signed-image acceptance remain open.

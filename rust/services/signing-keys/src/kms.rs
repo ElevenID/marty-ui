@@ -633,6 +633,68 @@ pub async fn create_managed_openbao(request: ProviderRequest) -> Result<Value, K
     read_managed_openbao(request).await
 }
 
+/// Revoke a managed Transit key after the caller has authorized its scoped
+/// reference. A failed delete leaves `deletion_allowed=true`, which makes all
+/// managed signing and metadata checks fail closed until deletion is retried.
+pub async fn delete_managed_openbao(request: ProviderRequest) -> Result<(), KmsError> {
+    let config = &request.service_config;
+    validate_managed_openbao(config)?;
+    let endpoint = required(config, "endpoint", "Managed OpenBao endpoint is required")?;
+    let endpoint_url = reqwest::Url::parse(endpoint)
+        .map_err(|_| KmsError::InvalidConfig("Managed OpenBao endpoint is invalid".into()))?;
+    if !matches!(endpoint_url.scheme(), "http" | "https")
+        || !endpoint_url.username().is_empty()
+        || endpoint_url.password().is_some()
+        || endpoint_url.path() != "/"
+        || endpoint_url.query().is_some()
+        || endpoint_url.fragment().is_some()
+    {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao endpoint must be an origin URL".into(),
+        ));
+    }
+    let mount = string(config, "mount").unwrap_or("transit");
+    let key_reference = required(config, "key_reference", "Managed key reference is required")?;
+    if ![mount, key_reference].iter().all(|part| {
+        !part.is_empty()
+            && part.len() <= 200
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    }) {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao mount or key reference is invalid".into(),
+        ));
+    }
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao access is not configured for the signing service".into(),
+        ));
+    }
+    let key_url = format!(
+        "{}/v1/{mount}/keys/{key_reference}",
+        endpoint.trim_end_matches('/')
+    );
+    let client = Client::new();
+    send_json_or_empty(
+        client
+            .post(format!("{key_url}/config"))
+            .timeout(HTTP_TIMEOUT)
+            .header("X-Vault-Token", &token)
+            .json(&json!({"deletion_allowed": true})),
+    )
+    .await?;
+    send_json_or_empty(
+        client
+            .delete(&key_url)
+            .timeout(HTTP_TIMEOUT)
+            .header("X-Vault-Token", &token),
+    )
+    .await?;
+    Ok(())
+}
+
 async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
     let endpoint = required(
         config,
@@ -1513,6 +1575,89 @@ mod tests {
         })
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn managed_delete_enables_revocation_before_removing_the_remote_key() {
+        use std::sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        };
+
+        let enabled = Arc::new(AtomicBool::new(false));
+        let allow_config = Arc::new(AtomicBool::new(true));
+        let deleted = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new()
+            .route(
+                "/v1/transit/keys/holder-key/config",
+                axum::routing::post({
+                    let enabled = Arc::clone(&enabled);
+                    let allow_config = Arc::clone(&allow_config);
+                    move |axum::Json(body): axum::Json<Value>| {
+                        let enabled = Arc::clone(&enabled);
+                        let allow_config = Arc::clone(&allow_config);
+                        async move {
+                            if body["deletion_allowed"] != true
+                                || !allow_config.load(Ordering::SeqCst)
+                            {
+                                return StatusCode::BAD_REQUEST;
+                            }
+                            enabled.store(true, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            )
+            .route(
+                "/v1/transit/keys/holder-key",
+                axum::routing::delete({
+                    let enabled = Arc::clone(&enabled);
+                    let deleted = Arc::clone(&deleted);
+                    move || {
+                        let enabled = Arc::clone(&enabled);
+                        let deleted = Arc::clone(&deleted);
+                        async move {
+                            if !enabled.load(Ordering::SeqCst) {
+                                return StatusCode::CONFLICT;
+                            }
+                            deleted.fetch_add(1, Ordering::SeqCst);
+                            StatusCode::NO_CONTENT
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = json!({
+            "id": "managed-openbao-transit", "service_type": "openbao-transit",
+            "endpoint": endpoint, "mount": "transit", "key_reference": "holder-key",
+            "auth_reference": "fixture-token"
+        });
+        let mut invalid_reference = config.clone();
+        invalid_reference["key_reference"] = json!("../issuer-key");
+        assert!(delete_managed_openbao(ProviderRequest {
+            service_config: invalid_reference,
+        })
+        .await
+        .is_err());
+        assert!(!enabled.load(Ordering::SeqCst));
+        delete_managed_openbao(ProviderRequest {
+            service_config: config.clone(),
+        })
+        .await
+        .expect("authorized managed key must be revoked in Transit");
+        assert_eq!(deleted.load(Ordering::SeqCst), 1);
+        allow_config.store(false, Ordering::SeqCst);
+        assert!(delete_managed_openbao(ProviderRequest {
+            service_config: config,
+        })
+        .await
+        .is_err());
+        assert_eq!(deleted.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 
     #[tokio::test]

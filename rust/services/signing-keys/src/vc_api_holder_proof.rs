@@ -138,12 +138,12 @@ impl OpenBaoHolderProofProvider {
             .await
         {
             // A timed-out create may have succeeded remotely. Try to delete it.
-            let _ = self.enable_deletion_and_delete(&client, &key_url).await;
+            let _ = self.delete_key(&key_name).await;
             return Err(error);
         }
 
         let result = self.issue_with_key(&key_name, &request).await;
-        let cleanup = self.enable_deletion_and_delete(&client, &key_url).await;
+        let cleanup = self.delete_key(&key_name).await;
         if cleanup.is_err() {
             tracing::error!(key_reference = %key_name, "ephemeral VC-API holder key cleanup failed");
             return Err(HolderProofError::Provider);
@@ -189,33 +189,14 @@ impl OpenBaoHolderProofProvider {
             if timestamp > cutoff || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
                 continue;
             }
-            let key_url = format!("{}/v1/transit/keys/{name}", self.endpoint);
-            self.enable_deletion_and_delete(&client, &key_url).await?;
+            self.delete_key(name).await?;
             deleted += 1;
         }
         Ok(deleted)
     }
 
-    async fn enable_deletion_and_delete(
-        &self,
-        client: &Client,
-        key_url: &str,
-    ) -> Result<(), HolderProofError> {
-        self.post(
-            client,
-            &format!("{key_url}/config"),
-            &json!({"deletion_allowed":true}),
-        )
-        .await?;
-        self.delete(client, key_url).await
-    }
-
-    async fn issue_with_key(
-        &self,
-        key_name: &str,
-        request: &HolderProofRequest,
-    ) -> Result<String, HolderProofError> {
-        let config = json!({
+    fn service_config(&self, key_name: &str) -> Value {
+        json!({
             "id":"managed-openbao-transit",
             "service_type":"openbao-transit",
             "endpoint":self.endpoint,
@@ -223,7 +204,23 @@ impl OpenBaoHolderProofProvider {
             "key_reference":key_name,
             "algorithm":"EdDSA",
             "auth_reference":self.token,
-        });
+        })
+    }
+
+    async fn delete_key(&self, key_name: &str) -> Result<(), HolderProofError> {
+        kms::delete_managed_openbao(ProviderRequest {
+            service_config: self.service_config(key_name),
+        })
+        .await
+        .map_err(|_| HolderProofError::Provider)
+    }
+
+    async fn issue_with_key(
+        &self,
+        key_name: &str,
+        request: &HolderProofRequest,
+    ) -> Result<String, HolderProofError> {
+        let config = self.service_config(key_name);
         let metadata = kms::read_managed_openbao(ProviderRequest {
             service_config: config.clone(),
         })
@@ -286,21 +283,6 @@ impl OpenBaoHolderProofProvider {
             .timeout(TIMEOUT)
             .header("X-Vault-Token", &self.token)
             .json(body)
-            .send()
-            .await
-            .map_err(|_| HolderProofError::Provider)?;
-        response
-            .status()
-            .is_success()
-            .then_some(())
-            .ok_or(HolderProofError::Provider)
-    }
-
-    async fn delete(&self, client: &Client, url: &str) -> Result<(), HolderProofError> {
-        let response = client
-            .delete(url)
-            .timeout(TIMEOUT)
-            .header("X-Vault-Token", &self.token)
             .send()
             .await
             .map_err(|_| HolderProofError::Provider)?;
