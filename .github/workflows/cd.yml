@@ -844,7 +844,7 @@ jobs:
           --requirement requirements/official-py312.lock
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json@1.6
@@ -1370,17 +1370,17 @@ jobs:
           path: transaction/release-transaction.json
           if-no-files-found: error
           retention-days: 90
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
