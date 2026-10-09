@@ -10020,3 +10020,13 @@ yet called by a presenter. The Authenticator Rust test attempt reached the
 Longfellow C++ build and emitted tool-execution failures; await its terminal
 result before classifying the attempt. Neither transport nor resolver adapter
 constitutes OID4VCI receipt, verified OID4VP, or physical-device acceptance.
+
+2026-10-09 mobile resolver prerequisite: Authenticator local `be64bba`
+adds strict Rust conversion of the paired public issuer-key snapshot into
+Core's `TrustedSdJwtIssuerKeys` resolver. It requires a bounded JSON response,
+non-empty organization, UUID profile, one-minute freshness window, 1–256
+keys, and Core's public-JWK/algorithm/exact-identity validation. A disposable
+isolated Rust harness importing the actual module and current Core source
+passed both positive and negative tests (2/2); `cargo fmt --check` passed.
+This adapter is not yet invoked by an OID4VP presenter. The complete
+Authenticator Rust build and Dart/mobile checks remain outstanding.
