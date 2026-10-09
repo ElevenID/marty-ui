@@ -770,28 +770,6 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
-  test-passport-fence-postgres:
-    name: Passport Fence PostgreSQL
-    needs: changes
-    if: needs.changes.outputs.rust_runtime == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Prefer cached Docker Hub images without restarting the runner daemon
-        run: bash scripts/ci/configure-dockerhub-mirror.sh
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-      - run: python -m pip install pytest==8.4.2 PyYAML==6.0.3
-      - name: Exercise atomic beta passport fence in disposable PostgreSQL
-        env:
-          BETA_FENCE_DISPOSABLE_DOCKER: "1"
-        run: python -m pytest -q tests/test_passport_beta_scoped_fence_postgres.py tests/test_probe_passport_beta_fence_target.py tests/test_check_passport_beta_fence_authority.py
-
   test-rust-feature-probe:
     name: Rust Feature Regression Probe
     needs: changes

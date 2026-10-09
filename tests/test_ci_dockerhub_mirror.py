@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
 import tomllib
 
+import pytest
 import yaml
 
 
@@ -75,3 +78,89 @@ def test_release_oci_backend_keeps_containerd_and_adds_only_mirror() -> None:
         "registry-mirrors": ["https://mirror.gcr.io"],
     }
     assert not docker.get("continue-on-error", False)
+
+
+def test_disposable_postgres_prefers_exact_cache_digest_with_canonical_fallback() -> None:
+    script = (ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'docker pull "$mirror"' in script
+    assert 'docker pull "$canonical"' in script
+    assert script.index('docker pull "$mirror"') < script.index(
+        'docker pull "$canonical"'
+    )
+    job = JOBS["test-passport-fence-postgres"]
+    pull = next(
+        step for step in job["steps"]
+        if step.get("name") == "Pull the exact disposable PostgreSQL image with a safe registry fallback"
+    )
+    assert not pull.get("continue-on-error", False)
+    assert (
+        "postgres:15-alpine@sha256:"
+        "fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
+    ) in pull["run"]
+    assert 'echo "BETA_FENCE_POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"' in pull["run"]
+    test_source = (ROOT / "tests/test_passport_beta_scoped_fence_postgres.py").read_text(
+        encoding="utf-8"
+    )
+    assert "if POSTGRES_IMAGE not in {CANONICAL_POSTGRES_IMAGE, MIRRORED_POSTGRES_IMAGE}:" in test_source
+
+
+@pytest.mark.skipif(os.name != "posix", reason="stub Docker requires POSIX executable PATH")
+@pytest.mark.parametrize(
+    ("mode", "expected_status", "expected_prefix"),
+    [
+        ("mirror", 0, "mirror.gcr.io/library/"),
+        ("fallback", 0, ""),
+        ("fail", 1, ""),
+    ],
+)
+def test_pinned_pull_executes_safe_fallback(
+    mode: str, expected_status: int, expected_prefix: str, tmp_path: Path
+) -> None:
+    canonical = (
+        "postgres:15-alpine@sha256:"
+        "fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
+    )
+    docker_stub = tmp_path / "docker"
+    docker_stub.write_text("""#!/usr/bin/env bash
+mock_docker() {
+  if [[ "$DOCKER_TEST_MODE" == mirror ]]; then
+    [[ "$2" == mirror.gcr.io/library/* ]]
+  elif [[ "$DOCKER_TEST_MODE" == fallback ]]; then
+    [[ "$2" != mirror.gcr.io/library/* ]]
+  else
+    return 1
+  fi
+}
+mock_docker "$@"
+""", encoding="utf-8")
+    docker_stub.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "scripts/ci/pull-pinned-dockerhub-image.sh", canonical],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "DOCKER_TEST_MODE": mode,
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == expected_status, result.stderr
+    assert result.stdout.strip() == (
+        expected_prefix + canonical if expected_status == 0 else ""
+    )
+
+
+def test_pinned_pull_rejects_unpinned_input_before_docker() -> None:
+    result = subprocess.run(
+        ["bash", "scripts/ci/pull-pinned-dockerhub-image.sh", "postgres:latest"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert "Expected one digest-pinned" in result.stderr
