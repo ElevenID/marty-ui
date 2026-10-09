@@ -4,6 +4,32 @@ mod diagnostic_tests {
     use serde_json::json;
 
     #[test]
+    fn published_postgres_registry_fallback_keeps_the_frozen_digest() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let canonical = fixture["observed_postgres_image"].as_str().unwrap();
+        let mirrored = format!("mirror.gcr.io/library/{canonical}");
+        assert_eq!(selected_postgres_image(&fixture, None).unwrap(), canonical);
+        assert_eq!(
+            selected_postgres_image(&fixture, Some(canonical)).unwrap(),
+            canonical
+        );
+        assert_eq!(
+            selected_postgres_image(&fixture, Some(&mirrored)).unwrap(),
+            mirrored
+        );
+        for untrusted in [
+            "postgres:latest",
+            "mirror.gcr.io/library/postgres:latest",
+            "mirror.gcr.io/library/postgres@sha256:deadbeef",
+        ] {
+            assert!(selected_postgres_image(&fixture, Some(untrusted)).is_err());
+        }
+    }
+
+    #[test]
     fn worker_matrix_timing_ids_are_bounded_and_contain_only_case_identity() {
         assert_eq!(
             worker_matrix_timing_name("worker-retry-after", "http_date_future").unwrap(),
@@ -189,9 +215,10 @@ mod diagnostic_tests {
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
         .unwrap();
+        let postgres_image = ci_postgres_image(&fixture).unwrap();
         let info = json!({
             "Id": id,
-            "Config": { "Labels": { LABEL: scope }, "Image": fixture["observed_postgres_image"],
+            "Config": { "Labels": { LABEL: scope }, "Image": postgres_image,
                 "Env": ["POSTGRES_USER=oracle", "POSTGRES_PASSWORD=synthetic-local-only", "POSTGRES_DB=canvas_published_schema_test"] },
             "Mounts": [],
             "HostConfig": {"Tmpfs": {"/var/lib/postgresql/data": "rw", "/var/run/postgresql": "rw"}},

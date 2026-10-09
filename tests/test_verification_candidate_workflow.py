@@ -32,27 +32,35 @@ def consumer_workflow() -> tuple[str, dict[str, object]]:
     return source, yaml.safe_load(source)
 
 
-def assert_supported_containerd_store(job: dict[str, object]) -> None:
+def assert_supported_containerd_store(
+    job: dict[str, object], *, ci_mirror: bool = False
+) -> None:
     steps = job["steps"]
     assert isinstance(steps, list)
     setup_docker = next(step for step in steps if step.get("uses") == SETUP_DOCKER)
     assert setup_docker["with"]["version"] == "v29.7.2"
-    assert json.loads(setup_docker["with"]["daemon-config"]) == {
+    expected_config: dict[str, object] = {
         "features": {"containerd-snapshotter": True}
     }
+    if ci_mirror:
+        expected_config["registry-mirrors"] = ["https://mirror.gcr.io"]
+    assert json.loads(setup_docker["with"]["daemon-config"]) == expected_config
 
 
-def assert_supported_backend(job: dict[str, object]) -> None:
-    assert_supported_containerd_store(job)
+def assert_supported_backend(job: dict[str, object], *, ci_mirror: bool = False) -> None:
+    assert_supported_containerd_store(job, ci_mirror=ci_mirror)
     steps = job["steps"]
     assert isinstance(steps, list)
     setup_buildx = next(step for step in steps if step.get("uses") == SETUP_BUILDX)
     assert setup_buildx["id"] == "buildx"
-    assert setup_buildx["with"] == {
+    expected_buildx: dict[str, object] = {
         "version": "v0.36.1",
         "driver": "docker-container",
         "driver-opts": f"image={BUILDKIT_IMAGE}",
     }
+    if ci_mirror:
+        expected_buildx["buildkitd-config"] = ".github/buildkit-ci-mirror.toml"
+    assert setup_buildx["with"] == expected_buildx
     probe = next(
         step
         for step in steps
@@ -486,7 +494,7 @@ def test_supported_containerd_candidate_contract_is_a_required_ci_lane() -> None
         if str(step.get("uses", "")).startswith("actions/setup-python@")
     )
     assert setup_python["with"]["python-version"] == "3.12.10"
-    assert_supported_backend(job)
+    assert_supported_backend(job, ci_mirror=True)
     steps = job["steps"]
     commands = "\n".join(str(step.get("run", "")) for step in steps)
     candidate_step = next(

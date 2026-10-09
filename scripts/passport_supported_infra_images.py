@@ -32,19 +32,26 @@ def require(ok: bool, message: str) -> None:
 
 
 def registry_index(reference: str) -> dict:
-    try:
-        result = subprocess.run(
-            ["docker", "buildx", "imagetools", "inspect", reference, "--raw"],
-            check=True, capture_output=True, text=True, encoding="utf-8",
-            timeout=60,
-        )
-        require(len(result.stdout) <= 4 * 1024 * 1024,
-                "Infrastructure registry index is oversized")
-        index = json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise InfraImageError("Infrastructure registry digest is unavailable") from exc
-    require(isinstance(index, dict), "Infrastructure registry index is invalid")
-    return index
+    candidates = [reference]
+    if reference.startswith("docker.io/library/"):
+        candidates.insert(0, reference.replace("docker.io/", "mirror.gcr.io/", 1))
+    last_error: Exception | None = None
+    for candidate in candidates:
+        try:
+            result = subprocess.run(
+                ["docker", "buildx", "imagetools", "inspect", candidate, "--raw"],
+                check=True, capture_output=True, text=True, encoding="utf-8",
+                timeout=60,
+            )
+            require(len(result.stdout) <= 4 * 1024 * 1024,
+                    "Infrastructure registry index is oversized")
+            index = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            last_error = exc
+            continue
+        require(isinstance(index, dict), "Infrastructure registry index is invalid")
+        return index
+    raise InfraImageError("Infrastructure registry digest is unavailable") from last_error
 
 
 def qualified_images(

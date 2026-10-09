@@ -16,9 +16,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Audit Rust advisories, licenses, bans, and sources
-        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
-          manifest-path: rust/Cargo.toml
-          command: check
-          command-arguments: advisories bans licenses sources
+          toolchain: 1.95.0
+      - name: Audit Rust advisories, licenses, bans, and sources
+        run: bash scripts/ci/run-cargo-deny.sh
