@@ -381,7 +381,9 @@ async fn gateway_transit_read(
     };
     Json(json!({"data": {
         "latest_version": 1, "type": key_type, "supports_signing": true,
-        "soft_deleted": false,
+        "soft_deleted": false, "exportable": false,
+        "allow_plaintext_backup": false, "deletion_allowed": false,
+        "imported_key": false,
         "keys": {"1": {"name": key_type, "public_key": material}}
     }}))
     .into_response()

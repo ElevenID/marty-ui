@@ -7486,3 +7486,20 @@ since the UI branch's last main merge. After the other live new-head lanes
 finish, merge that commit and update the test to assert the explicit false
 OpenBao lane in the same grouped follow-up. The other long jobs were still
 live at this checkpoint; do not infer their outcome from this single failure.
+
+UI run `37875662633` Rust contracts subsequently failed the authenticated
+Gateway managed-key route acceptance: the first authorized create returned
+409 instead of 200. The production Signing Keys service now rejects KMS key
+metadata unless OpenBao explicitly reports a non-exportable, non-imported key
+with plaintext backup and deletion disabled. The Gateway test's synthetic
+Transit read response omitted those four booleans, so its generated key was
+correctly classified as invalid. The local correction adds only the OpenBao
+metadata to that fixture; it does not loosen the production custody check.
+Targeted Rustfmt and `git diff --check` pass. The exact ignored Gateway
+acceptance case now passes locally with Rust 1.95 against a separately
+launched disposable Redis database 13 carrying its ownership sentinel; that
+container was stopped after the test. The case still needs hosted
+requalification. The Release Contract classifier expectation was also
+corrected locally after merging current `main`; all 139 tests in its file
+pass. Hold both corrections until the still-running Canvas, plugin-image, and
+service-image lanes finish, then send one grouped PR update.
