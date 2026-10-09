@@ -42,7 +42,10 @@ def docker(*args: str, timeout: int = 90) -> str:
         ["docker", *args], capture_output=True, text=True, check=False, timeout=timeout
     )
     if result.returncode:
-        raise RuntimeError(f"Disposable Docker operation failed: {args[0]}")
+        raise RuntimeError(
+            f"Disposable Docker operation failed: {args[0]} "
+            f"(exit {result.returncode}): {result.stderr.strip()[-1200:]}"
+        )
     return result.stdout.strip()
 
 

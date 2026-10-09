@@ -868,6 +868,9 @@ def run() -> None:
                     raise RuntimeError("OpenBao snapshot restore failed")
             docker("stop", bao_name)
             containers.remove(bao_name)
+            # A disposable --rm container can linger briefly after stop; the
+            # restored Raft process gets a distinct name to avoid that race.
+            bao_name = f"kms-restore-bao-final-{suffix}"
             containers.append(bao_name)
             restored_bao_url = start_bao(bao_name, restored_state)
             wait_for(

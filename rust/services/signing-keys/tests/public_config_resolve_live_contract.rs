@@ -314,8 +314,8 @@ async fn managed_config_resolve_does_not_revive_retired_tuple_binding() {
         json!({"key_purpose": "lti_tool_signing", "algorithm": "ES256"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["service"]["key_reference"], "legacy-shared-key");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(reads.load(Ordering::SeqCst), 0);
 
     let mut connection = store.connection();
     let _: () = redis::cmd("DEL")

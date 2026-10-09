@@ -7601,3 +7601,28 @@ chain assertions. The full `marty-verifier --tests --no-run` graph now
 compiles with the hardened Core pins. Workspace Rustfmt and diff checks pass;
 the full test execution, optional demo-fixture feature and authenticator
 wallet integration remain separate gates. No Verifier PR yet.
+
+Verifier's full default `marty-verifier --tests` run subsequently passed: its
+six executed targets reported 58, 0, 24, 25, 26 and 25 passing cases, with no
+failures. This does not qualify the optional `demo-fixtures` feature or the
+authenticator graph.
+
+UI exact-head run `37879061558` passed Release Contract, authenticated
+Gateway Signing acceptance and other fast lanes, but the Rust contracts lane
+failed in `managed_config_resolve_does_not_revive_retired_tuple_binding`.
+The assertion expected HTTP 200 for an unscoped `legacy-shared-key` in a
+managed LTI profile; the hardened live resolver correctly returned 404. The
+test now requires 404 and zero KMS reads, and passes against disposable Redis
+with Rust 1.95. The plugin-image lane independently passed packaged plugin
+storage and live Raft snapshot export/recovery, then failed in the Rust
+integration-secret coordinated-restore probe while starting OpenBao after a
+forced Raft snapshot restore. Its Docker helper previously suppressed stderr;
+local correction reports bounded Docker stderr and gives the final restored
+process a distinct name to avoid a possible `--rm` container-removal race.
+The full local coordinated-restore reprobe passed on Windows against disposable
+Docker PostgreSQL, Redis and OpenBao: Rust signed/holder, DIDComm, Flow and
+integration-secret tests passed before the PostgreSQL/Raft restore, and the
+final Rust secret read passed afterward. The original hosted Docker failure
+had no diagnostic stderr, so the exact hosted cause is still unproven. The UI
+Canvas lane remains live; hold these corrections for a grouped PR update and
+require exact-head hosted requalification.
