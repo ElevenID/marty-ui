@@ -1,10 +1,11 @@
 //! Purpose-scoped, non-exportable OpenBao holder operations.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use marty_holder_key_reference::belongs_to;
+pub use marty_holder_key_reference::{
+    CreateHolderKeyRequest, HolderKeyScope, SignHolderKeyRequest,
+};
 use marty_key_material_policy::contains_private_key;
 use reqwest::Url;
-use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 
@@ -20,32 +21,6 @@ pub enum HolderKeyError {
     Unavailable,
     #[error("managed holder KMS operation failed")]
     Provider,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HolderKeyScope {
-    pub organization_id: String,
-    pub registration_id: String,
-    pub purpose: String,
-    pub provider_reference: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CreateHolderKeyRequest {
-    pub scope: HolderKeyScope,
-    pub algorithm: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SignHolderKeyRequest {
-    pub scope: HolderKeyScope,
-    pub algorithm: String,
-    pub key_version: u64,
-    pub public_jwk: Value,
-    pub payload_b64: String,
 }
 
 #[derive(Clone)]
@@ -74,12 +49,7 @@ impl OpenBaoManagedHolderKeys {
     }
 
     fn validate_scope(scope: &HolderKeyScope) -> Result<(), HolderKeyError> {
-        if !belongs_to(
-            &scope.provider_reference,
-            &scope.organization_id,
-            &scope.registration_id,
-            &scope.purpose,
-        ) {
+        if !scope.valid() {
             return Err(HolderKeyError::Invalid);
         }
         Ok(())

@@ -2,6 +2,7 @@ use marty_device_registration::{
     challenge::{ChallengeRepository, MemoryChallengeRepository, RedisChallengeRepository},
     control_plane::{MembershipAuthorizer, OrganizationMembershipClient},
     holder_key_cleanup::HolderKeyCleanup,
+    holder_key_client::HolderKeyClient,
     holder_key_repository::PostgresHolderKeyRepository,
     http::{router, HttpState},
     migration::migrate,
@@ -86,7 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         if key == gateway_key || token.as_deref() == Some(key.as_str()) {
             return Err("holder Signing Keys credential must be dedicated".into());
         }
-        let cleanup = HolderKeyCleanup::new(PostgresHolderKeyRepository::new(pool), &origin, key)?;
+        let client = HolderKeyClient::new(&origin, key)?;
+        let cleanup = HolderKeyCleanup::new(PostgresHolderKeyRepository::new(pool), client);
         tokio::spawn(cleanup.run_forever());
     }
     let target = env_value("ORG_GRPC_TARGET", "organization:9002");

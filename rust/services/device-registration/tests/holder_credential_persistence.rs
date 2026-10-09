@@ -5,7 +5,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use marty_device_registration::{
     holder_credential::{authorize, issue},
     holder_credential_repository::{
@@ -13,17 +13,67 @@ use marty_device_registration::{
     },
     holder_key::{new_reference, HolderKeyRecord},
     holder_key_cleanup::HolderKeyCleanup,
+    holder_key_client::HolderKeyClient,
+    holder_key_provisioner::HolderKeyProvisioner,
     holder_key_repository::PostgresHolderKeyRepository,
     migration,
     postgres::PostgresDeviceRepository,
     CreateRegistration, DeviceRegistration, DeviceRepository, Platform,
 };
+use marty_holder_key_reference::CreateHolderKeyRequest;
 use sqlx::{postgres::PgPoolOptions, Row};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
 use uuid::Uuid;
+
+fn keyless_registration(now: DateTime<Utc>) -> DeviceRegistration {
+    DeviceRegistration::new(
+        format!("user-{}", Uuid::new_v4()),
+        CreateRegistration {
+            user_id: None,
+            organization_id: Some(Uuid::new_v4().to_string()),
+            device_id: Uuid::new_v4().to_string(),
+            platform: Platform::Web,
+            fcm_token: "synthetic-push-token".into(),
+            app_version: None,
+            os_version: None,
+            device_model: None,
+            preferences: Default::default(),
+            public_key_der: None,
+            public_key_kid: None,
+            key_valid_from: None,
+            key_valid_until: None,
+            is_active: true,
+        },
+        now,
+    )
+}
+
+async fn disposable_create(
+    headers: HeaderMap,
+    Json(request): Json<CreateHolderKeyRequest>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if headers
+        .get("x-device-registration-key")
+        .and_then(|value| value.to_str().ok())
+        != Some("disposable-device-signing-key-32-chars")
+        || !request.scope.valid()
+        || request.algorithm != "EdDSA"
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(Json(serde_json::json!({
+        "status":"active", "type":"ed25519", "latest_version":1,
+        "selected_version":"1", "exportable":false,
+        "allow_plaintext_backup":false, "deletion_allowed":false,
+        "public_jwk":{
+            "kty":"OKP", "crv":"Ed25519", "x":URL_SAFE_NO_PAD.encode([7_u8;32]),
+            "kid":request.scope.provider_reference,
+        }
+    })))
+}
 
 async fn disposable_revoke(
     State(fail_once): State<Arc<AtomicBool>>,
@@ -66,26 +116,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
     let holder_keys = PostgresHolderKeyRepository::new(pool.clone());
     let now = Utc::now() - Duration::seconds(10);
     let registration = devices
-        .save(DeviceRegistration::new(
-            format!("user-{}", Uuid::new_v4()),
-            CreateRegistration {
-                user_id: None,
-                organization_id: Some(Uuid::new_v4().to_string()),
-                device_id: Uuid::new_v4().to_string(),
-                platform: Platform::Web,
-                fcm_token: "synthetic-push-token".into(),
-                app_version: None,
-                os_version: None,
-                device_model: None,
-                preferences: Default::default(),
-                public_key_der: None,
-                public_key_kid: None,
-                key_valid_from: None,
-                key_valid_until: None,
-                is_active: true,
-            },
-            now,
-        ))
+        .save(keyless_registration(now))
         .await
         .expect("keyless registration");
 
@@ -261,6 +292,16 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         now,
     )
     .expect("provider metadata projection");
+    assert!(holder_keys.bind(first_key.clone(), now).await.is_err());
+    holder_keys
+        .reserve(
+            &registration.id,
+            "holder_binding",
+            "EdDSA",
+            &first_reference,
+        )
+        .await
+        .expect("reserve first remote name");
     holder_keys
         .bind(first_key.clone(), now)
         .await
@@ -291,6 +332,15 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         now + Duration::seconds(1),
     )
     .expect("second provider metadata");
+    holder_keys
+        .reserve(
+            &registration.id,
+            "holder_binding",
+            "EdDSA",
+            &second_reference,
+        )
+        .await
+        .expect("reserve replacement remote name");
     holder_keys
         .bind(second_key.clone(), now + Duration::seconds(1))
         .await
@@ -333,6 +383,16 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         "holder_binding",
     )
     .unwrap();
+    let failed_reference = duplicate_id.provider_reference.clone();
+    holder_keys
+        .reserve(
+            &registration.id,
+            "holder_binding",
+            "EdDSA",
+            &duplicate_id.provider_reference,
+        )
+        .await
+        .expect("reserve failed-binding remote name");
     assert!(holder_keys
         .bind(duplicate_id, now + Duration::seconds(2))
         .await
@@ -422,12 +482,9 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         )
         .await
     });
-    let cleanup = HolderKeyCleanup::new(
-        holder_keys.clone(),
-        &origin,
-        "disposable-device-signing-key-32-chars".into(),
-    )
-    .expect("cleanup client");
+    let client = HolderKeyClient::new(&origin, "disposable-device-signing-key-32-chars".into())
+        .expect("cleanup client");
+    let cleanup = HolderKeyCleanup::new(holder_keys.clone(), client);
     assert_eq!(
         cleanup.run_once().await.expect("failed remote attempt"),
         (0, 1)
@@ -447,6 +504,24 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         cleanup.run_once().await.expect("successful remote retry"),
         (1, 0)
     );
+    sqlx::query("UPDATE device_registration_service.device_holder_key_provisions SET reserved_at=now()-interval '2 minutes',cleanup_after=now()-interval '1 minute',retry_after=now()-interval '1 minute' WHERE provider_reference=$1 AND bound_at IS NULL")
+        .bind(&failed_reference)
+        .execute(&pool)
+        .await
+        .expect("advance abandoned provision");
+    assert_eq!(
+        cleanup
+            .run_once()
+            .await
+            .expect("abandoned remote name cleanup"),
+        (1, 0)
+    );
+    let cleaned: bool = sqlx::query_scalar("SELECT cleaned_at IS NOT NULL FROM device_registration_service.device_holder_key_provisions WHERE provider_reference=$1")
+        .bind(&failed_reference)
+        .fetch_one(&pool)
+        .await
+        .expect("abandoned provision status");
+    assert!(cleaned);
     holder_keys
         .mark_deleted(&pending[1].provider_reference, Utc::now())
         .await
@@ -471,4 +546,72 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         )
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn reserved_remote_key_binds_only_after_dedicated_service_creation() {
+    let Ok(database_url) = std::env::var("DEVICE_REGISTRATION_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("disposable PostgreSQL");
+    migration::migrate(&pool).await.expect("fresh schema");
+    let devices: Arc<dyn DeviceRepository> = Arc::new(PostgresDeviceRepository::new(pool.clone()));
+    let registration = devices
+        .save(keyless_registration(Utc::now()))
+        .await
+        .expect("keyless registration");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("disposable managed-key service");
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/internal/device-registration/holder-keys/create",
+                post(disposable_create),
+            ),
+        )
+        .await
+    });
+    let client = HolderKeyClient::new(&origin, "disposable-device-signing-key-32-chars".into())
+        .expect("dedicated client");
+    let keys = PostgresHolderKeyRepository::new(pool.clone());
+    let provisioner = HolderKeyProvisioner::new(devices, keys.clone(), client);
+    let key = provisioner
+        .provision(
+            &registration.user_id,
+            registration.organization_id.as_deref().unwrap(),
+            &registration.id,
+            "holder_binding",
+            "EdDSA",
+        )
+        .await
+        .expect("reserve and bind remote public metadata");
+    assert!(key.valid_for(&registration));
+    assert_eq!(
+        keys.current(&registration.id, "holder_binding")
+            .await
+            .expect("current key")
+            .expect("bound key")
+            .provider_reference,
+        key.provider_reference
+    );
+    let bound: bool = sqlx::query_scalar("SELECT bound_at IS NOT NULL FROM device_registration_service.device_holder_key_provisions WHERE provider_reference=$1")
+        .bind(&key.provider_reference)
+        .fetch_one(&pool)
+        .await
+        .expect("durable binding");
+    assert!(bound);
+    assert!(keys
+        .expired_provisions(100)
+        .await
+        .expect("cleanup queue")
+        .iter()
+        .all(|entry| entry.provider_reference != key.provider_reference));
+    server.abort();
 }

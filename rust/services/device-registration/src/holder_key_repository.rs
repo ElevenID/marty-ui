@@ -4,10 +4,12 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::{
+    holder_credential::eligible,
     holder_key::HolderKeyRecord,
     postgres::{persistence, registration},
     DeviceError,
 };
+use marty_holder_key_reference::belongs_to;
 
 #[derive(Clone)]
 pub struct PostgresHolderKeyRepository {
@@ -43,6 +45,57 @@ impl PostgresHolderKeyRepository {
         Self { pool }
     }
 
+    /// Reserve the exact remote name before creating a key. An interrupted
+    /// create is reconciled by the stale-provision cleanup worker.
+    pub async fn reserve(
+        &self,
+        registration_id: &str,
+        purpose: &str,
+        algorithm: &str,
+        provider_reference: &str,
+    ) -> Result<(), DeviceError> {
+        let mut transaction = self.pool.begin().await.map_err(persistence)?;
+        let row = sqlx::query(
+            "SELECT * FROM device_registration_service.device_registrations WHERE id=$1 FOR UPDATE",
+        )
+        .bind(registration_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(persistence)?;
+        let registration =
+            row.as_ref().map(registration).transpose()?.ok_or_else(|| {
+                DeviceError::Forbidden("managed holder key scope is invalid".into())
+            })?;
+        let organization_id = registration
+            .organization_id
+            .as_deref()
+            .ok_or_else(|| DeviceError::Forbidden("managed holder key scope is invalid".into()))?;
+        if !eligible(&registration)
+            || !matches!(algorithm, "EdDSA" | "ES256")
+            || !belongs_to(
+                provider_reference,
+                organization_id,
+                registration_id,
+                purpose,
+            )
+        {
+            return Err(DeviceError::Forbidden(
+                "managed holder key scope is invalid".into(),
+            ));
+        }
+        sqlx::query("INSERT INTO device_registration_service.device_holder_key_provisions (provider_reference,registration_id,user_id,organization_id,purpose,algorithm,reserved_at,cleanup_after,retry_after) VALUES ($1,$2,$3,$4,$5,$6,now(),now()+interval '1 minute',now()+interval '1 minute')")
+            .bind(provider_reference)
+            .bind(registration_id)
+            .bind(&registration.user_id)
+            .bind(organization_id)
+            .bind(purpose)
+            .bind(algorithm)
+            .execute(&mut *transaction)
+            .await
+            .map_err(persistence)?;
+        transaction.commit().await.map_err(persistence)
+    }
+
     /// Bind a provider-created key only to a live, keyless registration.
     /// The caller must compensate in OpenBao if this transaction fails.
     pub async fn bind(&self, key: HolderKeyRecord, now: DateTime<Utc>) -> Result<(), DeviceError> {
@@ -61,6 +114,21 @@ impl PostgresHolderKeyRepository {
         if !key.valid_for(&registration) || key.created_at > now {
             return Err(DeviceError::Forbidden(
                 "managed holder key scope is invalid".into(),
+            ));
+        }
+        let reserved = sqlx::query("SELECT 1 FROM device_registration_service.device_holder_key_provisions WHERE provider_reference=$1 AND registration_id=$2 AND user_id=$3 AND organization_id=$4 AND purpose=$5 AND algorithm=$6 AND bound_at IS NULL AND cleaned_at IS NULL AND cleanup_after > now() FOR UPDATE")
+            .bind(&key.provider_reference)
+            .bind(&key.registration_id)
+            .bind(&key.user_id)
+            .bind(&key.organization_id)
+            .bind(&key.purpose)
+            .bind(&key.algorithm)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(persistence)?;
+        if reserved.is_none() {
+            return Err(DeviceError::Forbidden(
+                "managed holder key reservation is invalid".into(),
             ));
         }
         revoke_and_queue(
@@ -82,6 +150,11 @@ impl PostgresHolderKeyRepository {
             .bind(&key.public_x)
             .bind(&key.public_y)
             .bind(key.created_at)
+            .execute(&mut *transaction)
+            .await
+            .map_err(persistence)?;
+        sqlx::query("UPDATE device_registration_service.device_holder_key_provisions SET bound_at=now() WHERE provider_reference=$1 AND bound_at IS NULL AND cleaned_at IS NULL")
+            .bind(&key.provider_reference)
             .execute(&mut *transaction)
             .await
             .map_err(persistence)?;
@@ -198,6 +271,81 @@ impl PostgresHolderKeyRepository {
         now: DateTime<Utc>,
     ) -> Result<(), DeviceError> {
         sqlx::query("UPDATE device_registration_service.device_holder_key_deletions SET attempts=attempts+1,retry_after=GREATEST($2, queued_at)+interval '30 seconds' WHERE provider_reference=$1 AND deleted_at IS NULL")
+            .bind(provider_reference)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(persistence)?;
+        Ok(())
+    }
+
+    pub async fn expired_provisions(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PendingHolderKeyDeletion>, DeviceError> {
+        if !(1..=100).contains(&limit) {
+            return Err(DeviceError::BadRequest(
+                "invalid holder cleanup batch size".into(),
+            ));
+        }
+        let rows = sqlx::query("SELECT provider_reference,registration_id,organization_id,purpose FROM device_registration_service.device_holder_key_provisions WHERE bound_at IS NULL AND cleaned_at IS NULL AND cleanup_after <= now() AND retry_after <= now() ORDER BY retry_after,provider_reference LIMIT $1")
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(persistence)?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(PendingHolderKeyDeletion {
+                    provider_reference: row.try_get("provider_reference").map_err(persistence)?,
+                    registration_id: row.try_get("registration_id").map_err(persistence)?,
+                    organization_id: row.try_get("organization_id").map_err(persistence)?,
+                    purpose: row.try_get("purpose").map_err(persistence)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn abandon_provision(&self, provider_reference: &str) -> Result<(), DeviceError> {
+        sqlx::query("UPDATE device_registration_service.device_holder_key_provisions SET cleanup_after=GREATEST(reserved_at+interval '1 second',now()),retry_after=GREATEST(reserved_at+interval '1 second',now()) WHERE provider_reference=$1 AND bound_at IS NULL AND cleaned_at IS NULL")
+            .bind(provider_reference)
+            .execute(&self.pool)
+            .await
+            .map_err(persistence)?;
+        Ok(())
+    }
+
+    pub async fn mark_provision_cleaned(
+        &self,
+        provider_reference: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), DeviceError> {
+        let result = sqlx::query("UPDATE device_registration_service.device_holder_key_provisions SET cleaned_at=GREATEST($2,cleanup_after) WHERE provider_reference=$1 AND bound_at IS NULL AND cleaned_at IS NULL AND cleanup_after <= now()")
+            .bind(provider_reference)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(persistence)?;
+        if result.rows_affected() != 1 {
+            let cleaned: Option<bool> = sqlx::query_scalar("SELECT cleaned_at IS NOT NULL FROM device_registration_service.device_holder_key_provisions WHERE provider_reference=$1 AND bound_at IS NULL")
+                .bind(provider_reference)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(persistence)?;
+            if cleaned != Some(true) {
+                return Err(DeviceError::Conflict(
+                    "holder provision is not pending cleanup".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn postpone_provision(
+        &self,
+        provider_reference: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), DeviceError> {
+        sqlx::query("UPDATE device_registration_service.device_holder_key_provisions SET retry_after=GREATEST($2,cleanup_after)+interval '30 seconds' WHERE provider_reference=$1 AND bound_at IS NULL AND cleaned_at IS NULL AND cleanup_after <= now()")
             .bind(provider_reference)
             .bind(now)
             .execute(&self.pool)

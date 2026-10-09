@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::{holder_credential::eligible, DeviceError, DeviceRegistration};
 use marty_holder_key_reference::belongs_to;
+use marty_key_material_policy::contains_private_key;
 
 pub use marty_holder_key_reference::new_reference;
 
@@ -52,6 +53,7 @@ impl HolderKeyRecord {
         now: DateTime<Utc>,
     ) -> Result<Self, DeviceError> {
         if !eligible(registration)
+            || contains_private_key(metadata)
             || !matches!(purpose, "holder_binding" | "presentation_signing")
             || !matches!(algorithm, "EdDSA" | "ES256")
             || !registration
@@ -261,6 +263,17 @@ mod tests {
         )
         .is_err());
         metadata["public_jwk"].as_object_mut().unwrap().remove("d");
+        metadata["private_jwk"] = json!({"kty":"OKP","d":"private-key-material"});
+        assert!(HolderKeyRecord::from_provider(
+            &registration,
+            "holder_binding",
+            "EdDSA",
+            &reference,
+            &metadata,
+            Utc::now(),
+        )
+        .is_err());
+        metadata.as_object_mut().unwrap().remove("private_jwk");
         metadata["exportable"] = json!(true);
         assert!(HolderKeyRecord::from_provider(
             &registration,

@@ -1,9 +1,57 @@
 //! Canonical scoped names for remotely held signing keys.
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 pub const MAX_REFERENCE_BYTES: usize = 128;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HolderKeyScope {
+    pub organization_id: String,
+    pub registration_id: String,
+    pub purpose: String,
+    pub provider_reference: String,
+}
+
+impl HolderKeyScope {
+    pub fn valid(&self) -> bool {
+        belongs_to(
+            &self.provider_reference,
+            &self.organization_id,
+            &self.registration_id,
+            &self.purpose,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateHolderKeyRequest {
+    pub scope: HolderKeyScope,
+    pub algorithm: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignHolderKeyRequest {
+    pub scope: HolderKeyScope,
+    pub algorithm: String,
+    pub key_version: u64,
+    pub public_jwk: Value,
+    pub payload_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HolderSignature {
+    pub signature_b64: String,
+    pub signature_encoding: String,
+    #[serde(default)]
+    pub transcoded_signature_b64: Option<String>,
+}
 
 fn namespace(purpose: &str) -> Option<&'static str> {
     match purpose {

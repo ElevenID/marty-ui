@@ -113,6 +113,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_key_one_current
 CREATE INDEX IF NOT EXISTS ix_device_holder_key_scope
     ON device_registration_service.device_holder_keys(user_id, organization_id, registration_id);
 
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_key_provisions (
+    provider_reference varchar(128) PRIMARY KEY,
+    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    purpose varchar(32) NOT NULL CONSTRAINT ck_device_holder_provision_purpose CHECK (purpose IN ('holder_binding','presentation_signing')),
+    algorithm varchar(16) NOT NULL CONSTRAINT ck_device_holder_provision_algorithm CHECK (algorithm IN ('EdDSA','ES256')),
+    reserved_at timestamptz NOT NULL,
+    cleanup_after timestamptz NOT NULL,
+    retry_after timestamptz NOT NULL,
+    bound_at timestamptz,
+    cleaned_at timestamptz,
+    CONSTRAINT ck_device_holder_provision_times CHECK (
+        cleanup_after > reserved_at AND retry_after >= cleanup_after
+        AND (bound_at IS NULL OR (bound_at >= reserved_at AND cleaned_at IS NULL))
+        AND (cleaned_at IS NULL OR (cleaned_at >= cleanup_after AND bound_at IS NULL))
+    ),
+    CONSTRAINT ck_device_holder_provision_reference CHECK (
+        (purpose='holder_binding' AND provider_reference ~ '^cred-holder-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$') OR
+        (purpose='presentation_signing' AND provider_reference ~ '^cred-presenter-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$')
+    )
+);
+CREATE INDEX IF NOT EXISTS ix_device_holder_provisions_cleanup
+    ON device_registration_service.device_holder_key_provisions(retry_after)
+    WHERE bound_at IS NULL AND cleaned_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_one_unbound_provision
+    ON device_registration_service.device_holder_key_provisions(registration_id, purpose)
+    WHERE bound_at IS NULL AND cleaned_at IS NULL;
+
 CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_key_deletions (
     provider_reference varchar(128) PRIMARY KEY REFERENCES device_registration_service.device_holder_keys(provider_reference) ON DELETE RESTRICT,
     queued_at timestamptz NOT NULL,

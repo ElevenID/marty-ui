@@ -9216,3 +9216,23 @@ signing are also not yet called by Device Registration, and provisioning
 compensation remains open. The HTTP retry test proves scheduling behavior;
 the separate OpenBao probe proves actual remote deletion. Neither is an
 end-to-end wallet acceptance test.
+
+2026-10-09 local holder creation compensation: Device Registration and Signing
+Keys now share the strict Rust holder-key request/scope contract. Device
+Registration has one dedicated client for create/sign/revoke, reused by its
+cleanup worker. Before a remote create, the repository reserves the scoped
+reference in a fresh-schema provision ledger. Binding public KMS metadata
+requires that live reservation in the same transaction that retires the old
+key; an expired, failed or interrupted unbound reservation is eligible for
+the remote cleanup worker. The internal provisioner checks the exact user,
+organization and active keyless registration, reserves, calls Signing Keys,
+validates non-exportable public metadata and binds it; on an ordinary error it
+accelerates cleanup, while a process crash still leaves the original durable
+deadline. Fresh PostgreSQL tests passed reservation-required binding,
+rollback, stale-provision cleanup and a disposable dedicated-client create
+call. This client and provisioner have no public enrollment route yet. The
+test create service returns synthetic metadata, so live combined Device
+Registration-to-Signing Keys-to-OpenBao behavior still needs acceptance.
+The Device Registration client and binding projection also reject private
+material anywhere in returned metadata, rather than checking only the
+projected public JWK.
