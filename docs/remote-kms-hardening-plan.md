@@ -7377,3 +7377,16 @@ patches and updating the locked `aws-lc-rs` selection to 1.18.1 resolved that
 graph conflict. The hardened Rust bridge is now compiling in the separate
 authenticator consumer worktree; no authenticator PR or release claim follows
 from dependency resolution alone.
+
+Authenticator probe follow-up: Cargo's locked inverse graph exposes a second
+old Core path through `marty-sync` pinned to Marty Verifier `8d410be`; that
+Verifier revision still depends on Core `56cc26c`. It selects a second
+`marty-oid4vci`/`marty-verification` 0.1.61 graph, old `isomdl` 0.2 and
+`ssi-claims-core` 0.1.3 beside the new Core 0.2 graph. The resulting mixed
+SSI build reports missing `ssi_crypto::SignatureError`/related APIs after
+the KMS-only fork removed local signing. This is a real consumer-integration
+gap, not a reason to restore those APIs. Qualify and update the Verifier
+`marty-sync` dependency to the hardened Core graph, or replace that dependency
+with a shared supported policy-sync component without feature loss, before
+claiming authenticator adoption. The isolated authenticator worktree contains
+diagnostic manifest/lock edits only and has not been published.
