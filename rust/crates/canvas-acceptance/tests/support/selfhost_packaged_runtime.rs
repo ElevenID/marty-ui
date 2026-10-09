@@ -543,7 +543,11 @@ async fn snapshot(pool: &sqlx::PgPool) -> Result<Value, String> {
         .fetch_one(pool).await.map_err(|_| ERROR.to_owned())
 }
 
-fn write_synthetic_secrets(directory: &Path, case: SecretCase) -> Result<Vec<String>, String> {
+fn write_synthetic_secrets(
+    directory: &Path,
+    case: SecretCase,
+    kms_ca_pem: &str,
+) -> Result<Vec<String>, String> {
     require(
         std::fs::read_dir(directory)
             .map_err(|_| ERROR)?
@@ -570,7 +574,7 @@ fn write_synthetic_secrets(directory: &Path, case: SecretCase) -> Result<Vec<Str
             "synthetic-selfhost-canvas-shared-secret",
         ),
         ("grpc_service_token", SERVICE_TOKEN),
-        ("workload_identity_ca_cert", KMS_CA_CERT),
+        ("workload_identity_ca_cert", kms_ca_pem),
     ];
     if case == SecretCase::Empty {
         values[5].1 = "";
@@ -711,6 +715,12 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
     let repo = repo.as_path();
     eprintln!("{STAGE_PREFIX}database:provision");
     let pool = provision(database).await?;
+    let gateway = super::selfhost_runtime_sidecar::network_gateway(database)?;
+    let kms = super::remote_integration_secret::container_server(
+        gateway,
+        super::selfhost_runtime_sidecar::MANAGEMENT_KEY,
+    )
+    .await?;
     let result = async {
         for case in [
             SecretCase::Correct,
@@ -727,13 +737,14 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
             let mut prepared = super::selfhost_prepared::prepare(repo, &extracted.extracted);
             prepared.retain_for_parent(&super::selfhost_runtime_sidecar::parent_scratch()?);
             record_stage(case, "write-secrets");
-            let secrets = write_synthetic_secrets(&prepared.secret_directory, case)?;
+            let secrets = write_synthetic_secrets(&prepared.secret_directory, case, &kms.ca_pem)?;
             record_stage(case, "snapshot-before");
             let before = snapshot(&pool).await?;
             extracted.verify_unchanged();
             prepared.verify_sources();
             record_stage(case, "native-prepare");
-            let mut service = OwnedNative::prepare(&prepared, database, &image, case)?;
+            let mut service =
+                OwnedNative::prepare(&prepared, database, &image, case, &kms.base_url)?;
             let operation = run_service(&mut service, repo, case, &secrets);
             if operation.is_ok() {
                 record_stage(case, "cleanup");
@@ -776,7 +787,7 @@ mod tests {
     #[test]
     fn synthetic_secret_inputs_cover_packaged_issuance_mounts() {
         let directory = tempfile::tempdir().unwrap();
-        write_synthetic_secrets(directory.path(), SecretCase::Correct).unwrap();
+        write_synthetic_secrets(directory.path(), SecretCase::Correct, KMS_CA_CERT).unwrap();
         let actual = std::fs::read_dir(directory.path())
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())

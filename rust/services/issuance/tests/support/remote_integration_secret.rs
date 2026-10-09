@@ -4,6 +4,7 @@
 
 use std::{
     collections::HashMap,
+    net::Ipv4Addr,
     path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
 };
@@ -161,6 +162,90 @@ fn server() -> &'static TestServer {
             _tempdir: tempdir,
         }
     })
+}
+
+/// Packaging-only remote endpoint reachable from the owned Docker bridge.
+/// Live OpenBao custody is qualified separately by the restore contract.
+#[allow(dead_code)] // Shared fixture is included by tests without a container.
+pub(crate) struct ContainerServer {
+    pub base_url: String,
+    pub ca_pem: String,
+}
+
+#[allow(dead_code)] // Shared fixture is included by tests without a container.
+pub(crate) async fn container_server(
+    gateway: Ipv4Addr,
+    api_key: &'static str,
+) -> Result<ContainerServer, String> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let certified = rcgen::generate_simple_self_signed(vec![gateway.to_string()])
+        .map_err(|_| "Disposable remote-secret TLS fixture failed")?;
+    let ca_pem = certified.cert.pem();
+    let key_pem = certified.signing_key.serialize_pem();
+    let listener = std::net::TcpListener::bind((gateway, 0))
+        .map_err(|_| "Disposable remote-secret listener failed")?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|_| "Disposable remote-secret listener failed")?;
+    let port = listener
+        .local_addr()
+        .map_err(|_| "Disposable remote-secret listener failed")?
+        .port();
+    let server_cert = ca_pem.clone();
+    std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("disposable remote-secret runtime");
+        runtime.block_on(async {
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+                server_cert.into_bytes(),
+                key_pem.into_bytes(),
+            )
+            .await
+            .expect("disposable remote-secret TLS");
+            axum_server::from_tcp_rustls(listener, tls)
+                .expect("disposable remote-secret listener")
+                .serve(router_for(api_key).into_make_service())
+                .await
+                .expect("disposable remote-secret server");
+        });
+    });
+    let base_url = format!("https://{gateway}:{port}/internal");
+    let cipher = KmsIntegrationSecretCipher::new_with_ca_pem(
+        Url::parse(&base_url).map_err(|_| "Disposable remote-secret URL failed")?,
+        api_key,
+        Some(ca_pem.as_bytes()),
+    )
+    .map_err(|_| "Disposable remote-secret client failed")?;
+    for _ in 0..40 {
+        if let Ok(envelope) = cipher
+            .encrypt(
+                "marty-system",
+                "fixture-probe",
+                "system",
+                "startup_proof",
+                "probe",
+            )
+            .await
+        {
+            if cipher
+                .decrypt(
+                    "marty-system",
+                    "fixture-probe",
+                    "system",
+                    "startup_proof",
+                    &envelope,
+                )
+                .await
+                .is_ok_and(|plaintext| plaintext == "probe")
+            {
+                return Ok(ContainerServer { base_url, ca_pem });
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    Err("Disposable remote-secret fixture did not become ready".into())
 }
 
 pub fn base_url() -> Url {

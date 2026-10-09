@@ -2,6 +2,21 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
+#[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
+mod remote_integration_secret;
+
+#[tokio::test]
+async fn packaged_remote_secret_fixture_requires_verified_https() {
+    let fixture = remote_integration_secret::container_server(
+        std::net::Ipv4Addr::LOCALHOST,
+        selfhost_runtime_sidecar::MANAGEMENT_KEY,
+    )
+    .await
+    .unwrap();
+    assert!(fixture.base_url.starts_with("https://127.0.0.1:"));
+    assert!(fixture.ca_pem.starts_with("-----BEGIN CERTIFICATE-----"));
+    assert!(fixture.ca_pem.contains("-----END CERTIFICATE-----"));
+}
 #[path = "../../selfhost-bundle/tests/support/extracted_bundle.rs"]
 mod selfhost_extracted;
 #[path = "support/selfhost_packaged_runtime.rs"]

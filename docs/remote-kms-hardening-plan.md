@@ -7626,3 +7626,21 @@ final Rust secret read passed afterward. The original hosted Docker failure
 had no diagnostic stderr, so the exact hosted cause is still unproven. The UI
 Canvas lane remains live; hold these corrections for a grouped PR update and
 require exact-head hosted requalification.
+
+UI run `37879061558` has completed with three failed lanes. The Canvas lane
+passed 145 isolated database cases and failed one packaged selfhost loader
+case after `correct:await-health`; its separate worker target passed 111.
+The previous CA-file correction let the native container create and start.
+Source review identified the next real dependency: Issuance now performs a
+remote integration-secret encrypt/decrypt proof before health, while this
+isolated packager fixture removed service dependencies and had no reachable
+HTTPS Signing Keys endpoint. The test harness now starts the existing
+synthetic remote-secret fixture on the owned Docker bridge gateway, generates
+ephemeral transport TLS for that fixture, verifies its encrypt/decrypt route,
+mounts the matching public CA, and points only the isolated Compose copy at
+that endpoint. This is **packaging behavior only**, not KMS custody evidence;
+the separate live OpenBao/PostgreSQL/Raft restore probe remains the custody
+proof. The focused HTTPS fixture test and exact secret-mount inventory case
+pass locally with Rust 1.95; Linux packaged startup awaits exact-head CI.
+The Rust contracts and plugin-image corrections were already validated
+locally, so send all three lane fixes in one grouped UI PR update.
