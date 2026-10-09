@@ -9377,3 +9377,15 @@ material. The fresh-schema custody check is included in the disposable
 OpenBao/PostgreSQL/Redis probe. This is source and local integration evidence;
 Core device-auth fixtures, public wallet pairing/signing, and operator
 deployment qualification remain open.
+
+2026-10-09 retired Core registration proof removal: Core branch
+`security/remote-kms-fixture-20261007` commit `7c50d31` removes the
+device-registration PS256 challenge verifier, Python bindings, contract and
+RSA-generating fixture. The distinct mdoc DeviceAuthentication verifier and
+its tests remain intact. Native diagnostics now identify that retained
+capability as `mdoc_device_authentication_verification`, rather than the
+ambiguous old `device_authentication`. The `marty-verification` and
+`marty-bindings` test suites, native diagnostics test and all-target Clippy
+passed locally. The unused UI copy of the old challenge vector is also
+deleted in the grouped UI branch. These changes are local branch evidence;
+Core PR/publication, consumer repin and exact-artifact qualification remain.
