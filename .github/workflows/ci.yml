@@ -611,6 +611,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -763,6 +765,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -819,7 +823,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Expose public image compiler cache credentials
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
@@ -926,7 +934,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting service containers
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config: .github/buildkit-ci-mirror.toml
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -2068,7 +2080,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
       - name: Verify self-host native owner preservation
@@ -2696,6 +2712,7 @@ jobs:
           version: v29.7.2
           daemon-config: |
             {
+              "registry-mirrors": ["https://mirror.gcr.io"],
               "features": {
                 "containerd-snapshotter": true
               }
@@ -2708,6 +2725,7 @@ jobs:
           version: v0.36.1
           driver: docker-container
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Require the exact supported OCI backend
         if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true'
         env:
@@ -2880,6 +2898,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Prefer cached Docker Hub images without restarting the runner daemon
+        run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Audit Rust advisories, licenses, bans, and sources
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25
         with:
