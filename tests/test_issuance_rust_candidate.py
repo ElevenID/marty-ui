@@ -100,10 +100,11 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
 def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
     workflow = text(".github/workflows/ci.yml")
     executable = text("rust/services/issuance/tests/executable_smoke.rs")
-    fixture = "rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql"
 
     assert "marty_issuance_executable_smoke_test" in workflow
-    assert fixture in workflow
+    assert "CREATE TABLE organization_service.organizations" in workflow
+    assert "CREATE TABLE credential_template_service.credential_templates" in workflow
+    assert "rust/target/debug/marty-issuance-service migrate" in workflow
     assert (
         "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
         "marty_issuance_executable_smoke_test"
