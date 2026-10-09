@@ -10488,3 +10488,19 @@ reviewed Docker Hub digest and live registry-index requirement remain intact;
 the next grouped UI push should run after registry availability recovers or
 after a separately reviewed, provenance-preserving mirror change. Local
 schema-gate/tracker commits after this head have not had hosted CI.
+
+2026-10-09 mobile wallet orchestration qualification: local Authenticator
+commit `ea7a152` introduces a typed, production-default Rust bridge port so
+Dart receipt and presentation coordination can be tested without duplicating
+cryptography or generating local private keys. Behavioral tests prove that a
+Rust-rejected receipt is not stored, a completed Rust receipt reaches the
+wallet, unsupported mDoc routing never parses/presents, and explicit
+credential/disclosure approval is exact and single-use before remote signing.
+The fake bridge exercises Dart orchestration only; it is not a KMS custody or
+cryptographic acceptance proof. Full Flutter analysis is clean and the suite
+passes 176 tests with four skips. Local non-generated coverage is 73.11%
+(1,264/1,729), up from 65.95%, but remains below the protected 90% gate.
+The commit remains local for a grouped Authenticator PR #57 push. Self-review
+found the wallet card-state preference persistence still serializes Flutter
+objects and addresses cards by title in one toggle path; repair and test it
+before claiming wallet feature preservation or publishing the mobile batch.
