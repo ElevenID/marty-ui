@@ -9289,3 +9289,15 @@ disposable database clock can differ; any production bearer issuance endpoint
 must likewise use database time or a verified clock-skew policy. This is an
 internal service boundary only. Public enrollment/pairing authorization and
 wallet use are still unimplemented and must be qualified before exposure.
+
+2026-10-09 local clock-safe bearer issuance: the PostgreSQL credential
+repository now owns one internal `issue_for_registration` operation. It locks
+the live registration, enforces the caller's user/organization scope, reads
+PostgreSQL `clock_timestamp()`, creates the one-time random bearer, and
+atomically revokes the old digest and stores the new digest before returning
+the bearer. The old externally supplied-record `replace` path and issuance
+share the same locked insert helper, including the lifetime/revocation schema
+checks. The guarded disposable probe passed both the live OpenBao holder
+lifecycle (including wrong-scope refusal and credential rotation) and the
+existing PostgreSQL credential-durability tests. There is still no public
+issuance route; its caller authorization policy remains a release gate.

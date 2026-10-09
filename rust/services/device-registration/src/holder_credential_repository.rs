@@ -1,14 +1,16 @@
 //! Durable digest-only storage for device bearer credentials.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
 use crate::{
-    holder_credential::{authorize, valid_record_for, HolderCredentialRecord},
+    holder_credential::{
+        authorize, issue, valid_record_for, HolderCredentialRecord, IssuedHolderCredential,
+    },
     postgres::{persistence, registration},
     DeviceError, DeviceRepository,
 };
@@ -139,6 +141,65 @@ impl PostgresHolderCredentialRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+
+    /// Internal issuance boundary. The caller must separately prove enrollment
+    /// authority before receiving this one-time bearer; no public route calls it.
+    pub async fn issue_for_registration(
+        &self,
+        registration_id: &str,
+        user_id: &str,
+        organization_id: &str,
+        lifetime: Duration,
+    ) -> Result<IssuedHolderCredential, DeviceError> {
+        let mut transaction = self.pool.begin().await.map_err(persistence)?;
+        let row = sqlx::query(
+            "SELECT * FROM device_registration_service.device_registrations WHERE id=$1 FOR UPDATE",
+        )
+        .bind(registration_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(persistence)?
+        .ok_or_else(|| DeviceError::Forbidden("holder device credential is invalid".into()))?;
+        let device = registration(&row)?;
+        if device.user_id != user_id || device.organization_id.as_deref() != Some(organization_id) {
+            return Err(DeviceError::Forbidden(
+                "holder device credential is invalid".into(),
+            ));
+        }
+        let now: DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(persistence)?;
+        let issued = issue(&device, now, lifetime)?;
+        replace_locked(&mut transaction, &issued.record, now).await?;
+        transaction.commit().await.map_err(persistence)?;
+        Ok(issued)
+    }
+}
+
+async fn replace_locked(
+    transaction: &mut Transaction<'_, Postgres>,
+    record: &HolderCredentialRecord,
+    now: DateTime<Utc>,
+) -> Result<(), DeviceError> {
+    sqlx::query("UPDATE device_registration_service.device_holder_credentials SET revoked_at=GREATEST($2,issued_at) WHERE registration_id=$1 AND revoked_at IS NULL")
+        .bind(&record.registration_id)
+        .bind(now)
+        .execute(&mut **transaction)
+        .await
+        .map_err(persistence)?;
+    sqlx::query("INSERT INTO device_registration_service.device_holder_credentials (id, registration_id, user_id, organization_id, token_sha256, issued_at, expires_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL)")
+        .bind(&record.id)
+        .bind(&record.registration_id)
+        .bind(&record.user_id)
+        .bind(&record.organization_id)
+        .bind(record.token_sha256.as_slice())
+        .bind(record.issued_at)
+        .bind(record.expires_at)
+        .execute(&mut **transaction)
+        .await
+        .map_err(persistence)?;
+    Ok(())
 }
 
 pub(crate) fn stored(row: &sqlx::postgres::PgRow) -> Result<HolderCredentialRecord, DeviceError> {
@@ -182,23 +243,7 @@ impl HolderCredentialRepository for PostgresHolderCredentialRepository {
                 "holder device credential is invalid".into(),
             ));
         }
-        sqlx::query("UPDATE device_registration_service.device_holder_credentials SET revoked_at=$2 WHERE registration_id=$1 AND revoked_at IS NULL")
-            .bind(&record.registration_id)
-            .bind(now)
-            .execute(&mut *transaction)
-            .await
-            .map_err(persistence)?;
-        sqlx::query("INSERT INTO device_registration_service.device_holder_credentials (id, registration_id, user_id, organization_id, token_sha256, issued_at, expires_at, revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,NULL)")
-            .bind(&record.id)
-            .bind(&record.registration_id)
-            .bind(&record.user_id)
-            .bind(&record.organization_id)
-            .bind(record.token_sha256.as_slice())
-            .bind(record.issued_at)
-            .bind(record.expires_at)
-            .execute(&mut *transaction)
-            .await
-            .map_err(persistence)?;
+        replace_locked(&mut transaction, &record, now).await?;
         transaction.commit().await.map_err(persistence)
     }
 

@@ -4,18 +4,12 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use ed25519_dalek::{Signature, VerifyingKey};
 use marty_device_registration::{
-    holder_credential::issue,
-    holder_credential_repository::{
-        HolderCredentialRepository, PostgresHolderCredentialRepository,
-    },
-    holder_key_cleanup::HolderKeyCleanup,
-    holder_key_client::HolderKeyClient,
+    holder_credential_repository::PostgresHolderCredentialRepository,
+    holder_key_cleanup::HolderKeyCleanup, holder_key_client::HolderKeyClient,
     holder_key_provisioner::HolderKeyProvisioner,
-    holder_key_repository::PostgresHolderKeyRepository,
-    holder_signer::HolderSigner,
-    migration::migrate,
-    postgres::PostgresDeviceRepository,
-    CreateRegistration, DeviceRegistration, DeviceRepository, Platform,
+    holder_key_repository::PostgresHolderKeyRepository, holder_signer::HolderSigner,
+    migration::migrate, postgres::PostgresDeviceRepository, CreateRegistration, DeviceRegistration,
+    DeviceRepository, Platform,
 };
 use marty_signing_keys::{
     kms::{read_managed_openbao, ProviderRequest},
@@ -109,17 +103,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("real non-exportable OpenBao key binding");
     assert!(key.valid_for(&registration));
-    let database_now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&pool)
-        .await
-        .expect("database credential issue time");
-    let credential = issue(&registration, database_now, chrono::Duration::hours(1))
-        .expect("new scoped device bearer");
     let credentials = PostgresHolderCredentialRepository::new(pool.clone());
-    credentials
-        .replace(credential.record, database_now)
+    assert!(credentials
+        .issue_for_registration(
+            &registration.id,
+            "wrong-user",
+            key.organization_id.as_str(),
+            chrono::Duration::hours(1),
+        )
         .await
-        .expect("persist only bearer digest");
+        .is_err());
+    let credential = credentials
+        .issue_for_registration(
+            &registration.id,
+            &registration.user_id,
+            key.organization_id.as_str(),
+            chrono::Duration::hours(1),
+        )
+        .await
+        .expect("issue bearer from database clock and store only its digest");
     let signer = HolderSigner::new(pool.clone(), client.clone());
     let payload = b"exact managed holder proof";
     assert!(signer
@@ -153,16 +155,15 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         Signature::from_slice(&URL_SAFE_NO_PAD.decode(signature.signature_b64).unwrap()).unwrap();
     verifying.verify_strict(payload, &signature).unwrap();
 
-    let database_now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
-        .fetch_one(&pool)
+    let replacement = credentials
+        .issue_for_registration(
+            &registration.id,
+            &registration.user_id,
+            key.organization_id.as_str(),
+            chrono::Duration::hours(1),
+        )
         .await
-        .expect("database credential rotation time");
-    let replacement = issue(&registration, database_now, chrono::Duration::hours(1))
-        .expect("rotated device bearer");
-    credentials
-        .replace(replacement.record, database_now)
-        .await
-        .expect("atomically rotate bearer digest");
+        .expect("atomically rotate bearer using database clock");
     assert!(signer
         .sign(
             &credential.bearer,
