@@ -340,12 +340,18 @@ def compatibility_ci(workflow):
         'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
     )
     _, canvas_branch = remaining.split("\nelse\n", 1)
-    assert 'if [[ "${{ matrix.lane }}" == worker ]]; then' in worker_branch
+    assert (
+        'if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow ]]; then'
+        in worker_branch
+    )
     for value in (
         "docker run --rm --network none --read-only",
         "--test canvas_published_worker_contract --no-run",
         "--bin marty-canvas-sync-worker --message-format=json",
         '--worker-only "$artifacts" target',
+        "--test flow_published_schema_contract --no-run",
+        "--bin marty-flow --message-format=json",
+        '--flow-only "$artifacts" target',
     ):
         assert value in worker_branch
     assert worker_branch.count("--network none") == 1
