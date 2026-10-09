@@ -2,6 +2,7 @@ pub mod challenge;
 pub mod control_plane;
 pub mod domain;
 pub mod holder_credential;
+pub mod holder_credential_repository;
 pub mod http;
 pub mod migration;
 pub mod postgres;

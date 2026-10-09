@@ -9087,3 +9087,16 @@ KMS holder key. Complete transactional credential rotation/revocation,
 reference-only key persistence, authenticated Device Registration-to-Signing
 Keys operations, Gateway session binding and mobile/web wallet behavior
 before calling this accepted custody.
+
+2026-10-09 local holder-credential durability follow-up: the Rust Device
+Registration fresh schema now has a digest-only `device_holder_credentials`
+table scoped to registration, user and organization, with a single-current
+index, bounded lifetime and revocation constraints. A repository rotates the
+current digest in one PostgreSQL transaction under the registration row lock;
+explicit revocation and device deactivation revoke it. The credential lookup
+returns only digest and scope metadata. A disposable PostgreSQL integration
+test passed issuance storage, authorization, rotation, wrong-scope rejection,
+transaction rollback on duplicate ID, explicit revocation and deactivation
+revocation. This is local, unpushed evidence. It does not establish an
+authenticated enrollment route, a durable KMS holder key, holder signing or
+wallet acceptance; those remain release blockers.

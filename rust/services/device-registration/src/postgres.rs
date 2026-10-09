@@ -21,7 +21,7 @@ impl PostgresDeviceRepository {
     }
 }
 
-fn persistence(error: sqlx::Error) -> DeviceError {
+pub(crate) fn persistence(error: sqlx::Error) -> DeviceError {
     DeviceError::Persistence(error.to_string())
 }
 
@@ -46,7 +46,7 @@ fn validate_public_projection(der: Option<&str>, kid: Option<&str>) -> Result<()
     }
 }
 
-fn registration(row: &PgRow) -> Result<DeviceRegistration, DeviceError> {
+pub(crate) fn registration(row: &PgRow) -> Result<DeviceRegistration, DeviceError> {
     let platform = match row
         .try_get::<String, _>("platform")
         .map_err(persistence)?
@@ -345,6 +345,8 @@ impl DeviceRepository for PostgresDeviceRepository {
             .fetch_one(&mut *transaction)
             .await
             .map_err(persistence)?;
+        sqlx::query("UPDATE device_registration_service.device_holder_credentials SET revoked_at=GREATEST($2, issued_at) WHERE registration_id=$1 AND revoked_at IS NULL")
+            .bind(id).bind(now).execute(&mut *transaction).await.map_err(persistence)?;
         sqlx::query("UPDATE device_registration_service.device_registration_keys SET state='REVOKED',revoked_at=$2 WHERE registration_id=$1 AND state IN ('CURRENT','RETIRING')").bind(id).bind(now).execute(&mut *transaction).await.map_err(persistence)?;
         sqlx::query("UPDATE device_registration_service.device_registrations SET is_active=false,public_key_der=NULL,public_key_kid=NULL,key_valid_from=NULL,key_valid_until=NULL,key_version=NULL,updated_at=$2 WHERE id=$1").bind(id).bind(now).execute(&mut *transaction).await.map_err(persistence)?;
         sqlx::query("INSERT INTO device_registration_service.device_key_transitions (id,registration_id,event,from_version,to_version,committed_at) VALUES ($1,$2,'KEYS_REVOKED',$3,NULL,$4)").bind(Uuid::new_v4().to_string()).bind(id).bind(current.key_version.map(|value| value as i64)).bind(now).execute(&mut *transaction).await.map_err(persistence)?;

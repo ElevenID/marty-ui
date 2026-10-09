@@ -49,6 +49,22 @@ fn eligible(registration: &DeviceRegistration) -> bool {
         && registration.key_version.is_none()
 }
 
+pub(crate) fn valid_record_for(
+    record: &HolderCredentialRecord,
+    registration: &DeviceRegistration,
+    now: DateTime<Utc>,
+) -> bool {
+    eligible(registration)
+        && record.registration_id == registration.id
+        && record.user_id == registration.user_id
+        && registration.organization_id.as_deref() == Some(record.organization_id.as_str())
+        && record.revoked_at.is_none()
+        && record.issued_at <= now
+        && record.expires_at > now
+        && record.expires_at > record.issued_at
+        && record.expires_at - record.issued_at <= Duration::seconds(MAX_LIFETIME_SECONDS)
+}
+
 pub fn issue(
     registration: &DeviceRegistration,
     now: DateTime<Utc>,
@@ -103,14 +119,8 @@ pub fn authorize(
         || !bearer
             .bytes()
             .all(|value| value.is_ascii_alphanumeric() || value == b'-' || value == b'_')
-        || !eligible(registration)
-        || record.revoked_at.is_some()
-        || now < record.issued_at
-        || now >= record.expires_at
-        || record.registration_id != registration.id
-        || record.user_id != registration.user_id
+        || !valid_record_for(record, registration, now)
         || record.user_id != user_id
-        || registration.organization_id.as_deref() != Some(record.organization_id.as_str())
         || record.organization_id != organization_id
     {
         return Err(DeviceError::Forbidden(INVALID.into()));

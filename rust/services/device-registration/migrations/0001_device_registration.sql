@@ -69,6 +69,25 @@ CREATE INDEX IF NOT EXISTS ix_device_registrations_organization_id ON device_reg
 CREATE INDEX IF NOT EXISTS ix_device_registrations_device_id ON device_registration_service.device_registrations(device_id);
 CREATE INDEX IF NOT EXISTS ix_device_registrations_user_org ON device_registration_service.device_registrations(user_id, organization_id);
 
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_credentials (
+    id varchar(36) PRIMARY KEY,
+    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    token_sha256 bytea NOT NULL CONSTRAINT ck_device_holder_token_digest CHECK (octet_length(token_sha256) = 32),
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    revoked_at timestamptz,
+    CONSTRAINT uq_device_holder_token_digest UNIQUE (token_sha256),
+    CONSTRAINT ck_device_holder_lifetime CHECK (expires_at > issued_at AND expires_at <= issued_at + interval '30 days'),
+    CONSTRAINT ck_device_holder_revocation CHECK (revoked_at IS NULL OR revoked_at >= issued_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_one_current
+    ON device_registration_service.device_holder_credentials(registration_id)
+    WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_device_holder_scope
+    ON device_registration_service.device_holder_credentials(user_id, organization_id, registration_id);
+
 INSERT INTO device_registration_service.device_registration_keys
     (id, registration_id, key_version, public_key_der, public_key_kid, state, valid_from, valid_until, revoked_at, created_at)
 SELECT r.id, r.id, 1, r.public_key_der, r.public_key_kid,
