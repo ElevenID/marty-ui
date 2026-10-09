@@ -7520,3 +7520,8 @@ work is isolated and uncommitted, with no Verifier PR yet.
 UI run `37875662633` later passed both `Test OpenBao DIDComm plugin image`
 and `Rust Service Images`. Canvas remains live at this checkpoint. The two
 known failed lanes have local corrections and are held for the grouped push.
+UI `main` then advanced through `fb93db737` (#1196), adding an exact checkout
+root rejection case to Canvas worker startup attestation. The KMS branch
+merged it locally without conflicts. The focused new test passes on Windows
+with Rust 1.95 (`marty-canvas-worker-acceptance`, one executed case); this
+merge is held with the same correction batch while Canvas remains live.
