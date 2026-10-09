@@ -7589,3 +7589,15 @@ passed `Release Contract Tests`, including the corrected OpenBao classifier
 expectation. Rust lint/packaging and the feature-regression probe also
 passed. Rust contracts, Canvas, OpenBao plugin image and service images
 remain live at this checkpoint; do not claim those gates yet.
+Verifier eMRTD consumer correction `1a53fa6`: the app-layer conformance
+suite now loads immutable signed public SOD/CSCA vectors for one, two and
+five data groups, verifies every requested DG byte against its vector, and
+uses an independent public CSCA for wrong-anchor rejection. The historical
+generator ran only in a disposable, detached pre-hardening worktree and was
+restored there after emitting public artifacts; no private key or generator
+source was committed to the hardened consumer branch. All 25 eMRTD cases
+pass on Rust 1.97.1, preserving single/multi-DG, tamper, SOD signature and
+chain assertions. The full `marty-verifier --tests --no-run` graph now
+compiles with the hardened Core pins. Workspace Rustfmt and diff checks pass;
+the full test execution, optional demo-fixture feature and authenticator
+wallet integration remain separate gates. No Verifier PR yet.
