@@ -8433,3 +8433,19 @@ This Rust-only branch also carries a `merge_issuance_heads` to
 `issuance_event_owner` bridge for existing beta data. It is not needed for a
 fresh KMS-only database and needs an explicit no-migration review before the
 combined candidate can be considered the user-requested clean cutover.
+
+2026-10-09 K10 merged-source fresh Issuance check: built the combined
+`marty-issuance-service` binary and ran `migrate` against an isolated PostgreSQL
+16 database with only the required upstream organization and credential-template
+catalogs seeded. It created 31 `issuance_service` tables and 10 Rust migration
+ledger entries, with no Alembic table, `issuer_signing_keys` table, or columns
+named `private_key`, `encrypted_jwk`, `secret_key`, or `key_material`. The
+`organization_integration_secrets` table remains for opaque encrypted
+integration-secret ciphertext; its name is not evidence of private-key storage.
+The first read-only `verify-owned-schema` run exposed a fresh-install bug: it
+unconditionally queried the absent historical Alembic table. The local
+integration correction now checks Alembic only when that table exists; the
+rebuilt verifier passed against the same fresh database. This is candidate
+source and one-owner database evidence, not the assembled stack's full schema,
+runtime-write, or shipped-image qualification. The verifier correction and
+merged Rust-only head remain local until the prior UI CI run finishes.

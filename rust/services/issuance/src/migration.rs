@@ -202,14 +202,20 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("SET TRANSACTION READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    let heads: Vec<String> =
-        sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
-            .fetch_all(&mut *transaction)
+    let has_alembic: bool =
+        sqlx::query_scalar("SELECT to_regclass('issuance_service.alembic_version') IS NOT NULL")
+            .fetch_one(&mut *transaction)
             .await?;
-    if heads.as_slice() != [ALEMBIC_FINAL_HEAD] {
-        return Err(sqlx::Error::Protocol(format!(
-            "issuance Alembic head differs from {ALEMBIC_FINAL_HEAD}: {heads:?}"
-        )));
+    if has_alembic {
+        let heads: Vec<String> =
+            sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
+                .fetch_all(&mut *transaction)
+                .await?;
+        if heads.as_slice() != [ALEMBIC_FINAL_HEAD] {
+            return Err(sqlx::Error::Protocol(format!(
+                "issuance Alembic head differs from {ALEMBIC_FINAL_HEAD}: {heads:?}"
+            )));
+        }
     }
     let mut actual: Vec<String> =
         sqlx::query_scalar("SELECT version FROM issuance_service.rust_schema_migrations")
