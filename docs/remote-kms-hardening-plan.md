@@ -9490,3 +9490,16 @@ packaged Canvas worker startup gate. The first merged-head run finished with
 22 successful checks, one skipped check, five substantive failures described
 above, and the dependent CI Gate failure. The next grouped push will qualify
 the standalone lockfile and both exact signing-template inventories together.
+
+2026-10-09 UI correction head `c138f9528` was pushed to draft PR #1192 with
+those three source fixes; the PR body now describes the current grouped scope,
+local evidence and open wallet/release gates. Its exact-head CI run
+`37955356572` passed the frozen Rust Feature Regression Probe. Rust Lint and
+Packaging reached a later beta Compose render and failed because that job's
+synthetic environment omitted the still-required
+`DEVICE_REGISTRATION_SIGNING_KEYS_KEY` service credential. The local workflow
+correction supplies a distinct synthetic value; executing the entire workflow
+packaging-render script through Git Bash with the job's declared environment
+passes. The remaining contracts, Canvas and release jobs are still live, so
+this correction is held for one grouped follow-up push. The earlier failed
+run and this new failure remain separate, immutable evidence.
