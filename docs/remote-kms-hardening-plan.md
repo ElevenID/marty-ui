@@ -9916,3 +9916,18 @@ verified issuer and `cnf.jwk`, a signed KB-JWT with original nonce/audience,
 state-preserving submission, rotation/revocation denial, and physical-device
 negative cases. The earlier mobile pairing and renewal probes do not prove
 these gates.
+
+2026-10-09 shared issuer resolver prerequisite (local Core `9abc621`,
+unpublished grouped candidate): `marty-oid4vci` now exposes
+`TrustedSdJwtIssuerKeys`, an explicit public-only resolver that matches the
+issuer, optional protected `kid`, and JOSE algorithm exactly. Construction
+rejects empty or duplicate identity tuples, private/malformed JWKs,
+incompatible key families, and inconsistent JWK `kid`. The browser test wallet
+uses this Core resolver instead of a separate local matching implementation.
+Core's 14 SD-JWT presentation tests passed, including the new resolver's
+successful verified preparation and negative cases; wallet-feature Clippy
+with warnings denied and the test-wallet binary check passed. No mobile
+issuer trust source is delivered yet. Publish/batch the Core feature before
+repinning Authenticator to this revision, then wire only an authenticated,
+operator-governed snapshot into this resolver. Do not treat the test-wallet
+environment configuration as mobile trust provenance.
