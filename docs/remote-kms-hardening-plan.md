@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 at `fef8da1` pins Core `d41d87c`, excludes LDAP from WASM and rejects isomdl local signing. Its 19 hosted checks pass, alongside local web WASM/package-load and Windows ABI3 wheel/surface checks. The authenticator browser flow has a verified old-Core/Verifier dependency gap; published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core PR #355 at `d41d87c` is ready for review with green hosted checks and one required approval; Credentials draft PR #313 at `fef8da1` is green but needs browser/release qualification. UI draft PR #1192 at `543b9a96c` passed service images, OpenBao plugin recovery and release contracts but failed one stale Rust contracts assertion and three Canvas cases. The local grouped batch corrects that assertion and the diagnosed Canvas fixture gaps; exact new-head CI is pending. Release artifacts, supported cutover and recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core PR #355 at `d41d87c` is ready for review with green hosted checks and one required approval; Credentials draft PR #313 at `fef8da1` is green but needs browser/release qualification. UI draft PR #1192 at `473b46dd1` contains the grouped contracts/Canvas/self-host corrections and has exact-head CI run `37875662633` in progress. The old-head failures remain immutable evidence; new-head acceptance is pending. Release artifacts, supported cutover and recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and the named service JSON stores. A disposable PostgreSQL 16 run of the candidate Rust Issuance migration created 31 tables without `issuer_signing_keys`; earlier focused storage checks pass. A read-only local-stack audit found an empty historical `issuer_signing_keys.encrypted_jwk_json` table still present in self-host PostgreSQL; beta has no private-key-named table or column. Full assembled-schema, runtime-write, self-host rebuild/cutover and release-artifact proof remain. |
 
 ### First execution steps
@@ -7450,6 +7450,16 @@ evidence; hosted Rust lint remains the exact-head gate.
 The isolated Verifier probe now passes `cargo +1.97.1 check --offline -p
 marty-sync` against Core `d41d87c` and the reviewed SSI/isomdl fork pins after
 removing the obsolete feature requests from its dev-dependency and optional
-demo-fixture declarations. This proves the normal policy-sync crate compiles,
-not that Verifier tests, its application binary, or the authenticator wallet
-are qualified. Its old local-signing fixture tests still need migration.
+demo-fixture declarations. The normal Verifier Tauri application also passes
+`cargo +1.97.1 check --locked --offline -p marty-verifier -q` in this isolated
+worktree. Neither check qualifies Verifier tests or the authenticator wallet;
+the old local-signing fixture tests still need migration.
+
+The UI correction batch was pushed once as PR #1192 head `473b46dd1` after
+run `37871998969` completed. New CI run `37875662633` is active; 17 jobs
+have passed at the observed checkpoint, with contracts, Canvas, OpenBao
+plugin, service images and release contracts still live. Do not claim the
+Canvas candidate fixes or exact-head gate passed before those jobs finish.
+An isolated Verifier follow-up now has a local public-only Open Badge test
+candidate derived from Core's reviewed signed vector; its test executable
+is still compiling, so validity and wrong-key behavior remain unverified.
