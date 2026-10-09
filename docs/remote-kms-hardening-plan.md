@@ -8236,3 +8236,15 @@ Bridge Codegen `37895163219` and policy/quality runs have started or queued;
 none is qualified until terminal. Keep PR #57 draft and do not release the
 feature-reduced candidate. The current UI run `37891713276` remains live in
 the Canvas isolated database contract step with 21 earlier jobs passing.
+
+Authenticator PR #57's first hosted Flutter Test run `37895163573` passed at
+`274ffaf`. The quality lanes exposed two specific corrections: the Flutter
+formatter wants a multiline `UnsupportedError` in
+`spruce_platform_service_web.dart`, and `dependency-health.yml` had a stale
+`2026-10-01` review date for `permission_handler`. Both are corrected locally
+but intentionally unpushed while Android/iOS and bridge checks finish, so
+the next push can batch any further CI findings. The dependency review now
+records the 2026-10-09 upstream 13.x compileSdk 37 requirement against the
+app's current compileSdk 36, with review due 2026-10-23; it no longer asserts
+that Android SDK 37 is unavailable without current evidence. This remains a
+tracked dependency exception, not a KMS feature qualification.
