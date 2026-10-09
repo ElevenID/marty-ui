@@ -9931,3 +9931,25 @@ issuer trust source is delivered yet. Publish/batch the Core feature before
 repinning Authenticator to this revision, then wire only an authenticated,
 operator-governed snapshot into this resolver. Do not treat the test-wallet
 environment configuration as mobile trust provenance.
+
+2026-10-09 authoritative wallet issuer trust source correction (local UI
+candidate): the native Trust Profile service already owns operator-managed,
+organization-scoped issuer relationships and public `verification_keys`,
+including DID assertion-method pinning and registry freshness checks. Its
+`/internal/v1/trust-profiles/{profile_id}` decision route includes this
+material, so a new trust store or a Signing Keys identity-list proxy is not
+the right source. The local service batch adds service-authenticated
+`GET /internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys`. It projects
+only an explicitly selected active, compliant profile with
+`CREDENTIAL_ISSUER` purpose and `SD_JWT_VC` support, then includes keys only
+for current trusted relationships and non-revoked, valid issuers under the
+profile's allowed/denied issuer and algorithm policy. Ambiguous key identity,
+inconsistent JOSE algorithm, unsupported key family, or an empty result fails
+closed. The response is public-key-only, `no-store`, and expires after one
+minute. Trust Profile HTTP tests 8/8, surface tests 2/2, and all-target
+Clippy with warnings denied passed locally. This is a service-only building
+block: Device Registration still needs to bind an operator-selected profile
+to the paired bearer organization, fetch this internal projection, and expose
+a bounded public bearer endpoint; mobile must refresh it online for each
+presentation and pass it through Core's strict resolver. No physical wallet
+trust acceptance is claimed.

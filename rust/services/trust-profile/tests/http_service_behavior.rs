@@ -8,8 +8,8 @@ use marty_trust_profile::{
     IssuerEntityComplianceStatus, IssuerEntityType, MemoryTrustProfileRepository,
     TrustAuthorizationError, TrustProfile, TrustProfileApplication, TrustProfileControlPlane,
     TrustProfileHttpState, TrustProfileIssuer, TrustProfileRepository, TrustProfileStatus,
-    TrustProfileType, TrustRegistrySyncError, TrustRegistrySynchronizer, TrustRelationshipStatus,
-    TrustSource, TrustSourceType,
+    TrustProfileType, TrustPurpose, TrustRegistrySyncError, TrustRegistrySynchronizer,
+    TrustRelationshipStatus, TrustSource, TrustSourceType, TrustedAssertionFormat,
 };
 use mmf_security::ServiceTokenAuthenticator;
 use serde_json::{json, Map, Value};
@@ -334,6 +334,153 @@ async fn internal_decisions_fail_closed_with_the_legacy_service_contract() {
         body(response).await["detail"],
         "Trust Profile registry source has no supported sync protocol"
     );
+}
+
+#[tokio::test]
+async fn wallet_issuer_key_projection_requires_active_trust_and_filters_denied_issuers() {
+    let repository = Arc::new(MemoryTrustProfileRepository::default());
+    let now = Utc::now();
+    let mut selected = profile("Wallet SD-JWT");
+    selected.status = TrustProfileStatus::Active;
+    selected.compliance_status = ComplianceStatus::Compliant;
+    selected.trust_purposes = Some(vec![TrustPurpose::CredentialIssuer]);
+    selected.trusted_assertion_formats = Some(vec![TrustedAssertionFormat::Jwt]);
+    selected.supported_formats = vec!["SD_JWT_VC".into()];
+    repository.save_profile(&selected, None).await.unwrap();
+    let issuer = IssuerEntity {
+        id: Uuid::new_v4(),
+        organization_id: Some("org-1".into()),
+        issuer_id: "did:web:trusted.example".into(),
+        issuer_type: IssuerEntityType::Organization,
+        display_name: "Trusted".into(),
+        description: None,
+        is_system_issuer: false,
+        compliance_status: IssuerEntityComplianceStatus::Compliant,
+        accreditation_body: None,
+        accreditations: vec![],
+        accreditation_date: None,
+        valid_from: now - Duration::minutes(1),
+        valid_until: Some(now + Duration::days(1)),
+        trust_anchor_id: None,
+        metadata: json!({"verification_keys": [{
+            "kty": "EC", "crv": "P-256", "kid": "did:web:trusted.example#key-1",
+            "x": "public-x", "y": "public-y"
+        }]}),
+        revoked_at: None,
+        revocation_reason: None,
+        revoked_by: None,
+        created_at: now,
+        updated_at: now,
+    };
+    repository.save_issuer_entity(&issuer).await.unwrap();
+    repository
+        .save_profile_issuer(&TrustProfileIssuer {
+            id: Uuid::new_v4(),
+            trust_profile_id: selected.id,
+            issuer_id: issuer.id,
+            trust_level: 100,
+            relationship_status: TrustRelationshipStatus::Trusted,
+            cascade_revocation_policy: CascadeRevocationPolicy::NotifyOnly,
+            metadata: json!({}),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let response = request(
+        service_with_repository(Arc::clone(&repository)),
+        "GET",
+        &format!(
+            "/internal/v1/trust-profiles/{}/wallet-issuer-keys",
+            selected.id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let snapshot = body(response).await;
+    assert_eq!(snapshot["organization_id"], "org-1");
+    assert_eq!(snapshot["trust_profile_id"], selected.id.to_string());
+    assert_eq!(snapshot["issuer_keys"][0]["issuer"], issuer.issuer_id);
+    assert_eq!(snapshot["issuer_keys"][0]["algorithm"], "ES256");
+    assert_eq!(
+        snapshot["issuer_keys"][0]["key_id"],
+        "did:web:trusted.example#key-1"
+    );
+    assert_eq!(snapshot["issuer_keys"].as_array().unwrap().len(), 1);
+    let generated =
+        chrono::DateTime::parse_from_rfc3339(snapshot["generated_at"].as_str().unwrap()).unwrap();
+    let expires =
+        chrono::DateTime::parse_from_rfc3339(snapshot["expires_at"].as_str().unwrap()).unwrap();
+    assert_eq!(expires - generated, Duration::minutes(1));
+
+    let mut denied = issuer.clone();
+    denied.id = Uuid::new_v4();
+    denied.issuer_id = "did:web:denied.example".into();
+    denied.metadata = json!({"verification_keys": [{"kty":"EC","crv":"P-256","kid":"denied"}]});
+    repository.save_issuer_entity(&denied).await.unwrap();
+    repository
+        .save_profile_issuer(&TrustProfileIssuer {
+            id: Uuid::new_v4(),
+            trust_profile_id: selected.id,
+            issuer_id: denied.id,
+            trust_level: 100,
+            relationship_status: TrustRelationshipStatus::Denied,
+            cascade_revocation_policy: CascadeRevocationPolicy::NotifyOnly,
+            metadata: json!({}),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .unwrap();
+    let response = request(
+        service_with_repository(Arc::clone(&repository)),
+        "GET",
+        &format!(
+            "/internal/v1/trust-profiles/{}/wallet-issuer-keys",
+            selected.id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 200);
+    assert_eq!(
+        body(response).await["issuer_keys"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut revoked = issuer.clone();
+    revoked.revoked_at = Some(now);
+    repository.save_issuer_entity(&revoked).await.unwrap();
+    let response = request(
+        service_with_repository(Arc::clone(&repository)),
+        "GET",
+        &format!(
+            "/internal/v1/trust-profiles/{}/wallet-issuer-keys",
+            selected.id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 403);
+
+    selected.status = TrustProfileStatus::Suspended;
+    repository.save_profile(&selected, None).await.unwrap();
+    let response = request(
+        service_with_repository(repository),
+        "GET",
+        &format!(
+            "/internal/v1/trust-profiles/{}/wallet-issuer-keys",
+            selected.id
+        ),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), 403);
 }
 
 #[tokio::test]
