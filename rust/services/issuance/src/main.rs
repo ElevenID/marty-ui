@@ -182,6 +182,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             pool.close().await;
             return Ok(());
         }
+        (Some("verify-owned-schema"), None) => {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let options = database_url
+                .parse::<sqlx::postgres::PgConnectOptions>()?
+                .disable_statement_logging();
+            let pool = sqlx::postgres::PgPoolOptions::new()
+                .max_connections(1)
+                .connect_with(options)
+                .await?;
+            migration::verify_owned_schema(&pool).await?;
+            pool.close().await;
+            return Ok(());
+        }
         (Some("probe-dependencies"), None) => {
             let config = IssuanceServiceConfig::from_env()?;
             dependency_probe::probe(&config)
@@ -194,7 +207,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "issuance service accepts only migrate or probe-dependencies subcommands",
+                "issuance service accepts only migrate, verify-owned-schema or probe-dependencies subcommands",
             )
             .into());
         }

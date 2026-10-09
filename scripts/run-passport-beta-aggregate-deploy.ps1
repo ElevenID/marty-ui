@@ -335,9 +335,10 @@ function Invoke-SignedIssuanceMigration {
     $arguments += @('-f', '-', 'run', '--rm', '--no-deps', '--no-build',
         'issuance-migrations')
     $script:plan.image_override | & docker @arguments | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'Signed Rust issuance migration failed' }
+    if ($LASTEXITCODE -ne 0) { throw 'Signed Rust issuance schema verification failed' }
     $expected = @(
         'issuance_service_baseline_v1',
+        '0000_merge_issuance_heads_bridge',
         '0001_oid4vci_public_protocol', '0002_physical_document_jobs',
         '0003_passport_bureau_provider_binding', '0004_passport_submission_intent',
         '0005_passport_submission_provenance', '0006_passport_beta_batch_identity',
@@ -882,9 +883,6 @@ try {
     $script:productionRecoveryReady = $true
     $null = Assert-ProductionContinuity
     $env:MARTY_SERVICES_IMAGE = [string]$script:plan.services_image
-    # Compose resolves the base file before the signed Rust override replaces
-    # its issuance image. Bind the pinned historical image for parsing only.
-    $env:MARTY_ISSUANCE_IMAGE = [string]$script:plan.issuance_image
     $env:MARTY_UI_RELEASE_IMAGE = [string]$script:plan.ui_image
     $expectedBuildVars = @(
         'MARTY_COMMON_URI', 'MARTY_COMMON_DIGEST',

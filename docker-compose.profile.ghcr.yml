@@ -45,6 +45,12 @@ services:
     environment:
       SERVICE_NAME: verification
 
+  issuance-migrations:
+    <<: *service-image
+    build: !reset null
+    environment:
+      SERVICE_NAME: issuance_native
+
   revocation-profile-migrate:
     <<: *service-image
     build: !reset null
@@ -124,10 +130,10 @@ services:
       SERVICE_NAME: flow
 
   issuance:
-    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
-    pull_policy: always
+    <<: *service-image
+    build: !reset null
     environment:
-      SERVICE_NAME: issuance
+      SERVICE_NAME: issuance_native
 
   issuance-native:
     <<: *service-image

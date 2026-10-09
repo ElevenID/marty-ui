@@ -425,7 +425,8 @@ function Get-OfficialReleasePlan {
         --manifest $manifestPath `
         --checksums $checksumsPath `
         --recorder-revision $RecorderRevision `
-        --expected-ui-revision (git -C $script:RepoRoot rev-parse HEAD) 2>&1
+        --expected-ui-revision (git -C $script:RepoRoot rev-parse HEAD) `
+        --rust-only 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "Official stack release validation failed: $($output -join ' ')"
     }
@@ -957,7 +958,6 @@ $martyVerification = Get-StackArtifact "marty-verification-python" "python" "mar
 $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
 $martyApiCore = Get-StackArtifact "marty-api-core" "npm" "marty-cli"
 $martyBlog = Get-StackArtifact "marty-blog" "npm" "marty-blog"
-$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci" "marty-credentials"
 
 $backupDir = Join-Path $script:ArtifactDir "backup"
 $preflightBackupDir = Join-Path $script:ArtifactDir "preflight-backup"
@@ -1045,12 +1045,8 @@ $applicationImageArguments = @{
     Services = $script:SelectedApplicationServices
     ReleaseVersion = $releaseVersion
     OfficialStackRelease = [bool]$OfficialStackRelease
-    IssuanceReference = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
-    IssuanceDigest = [string]$martyIssuance.Digest
-    UseRustIssuance = [bool]$EnablePassportNative
 }
 if ($OfficialStackRelease) {
-    $applicationImageArguments.IssuanceDigest = [string]$officialPlan.images.issuance.digest
     $applicationImageArguments.ServicesReference = [string]$officialPlan.images.services.reference
     $applicationImageArguments.ServicesDigest = [string]$officialPlan.images.services.digest
 }
@@ -1086,7 +1082,6 @@ $env:MARTY_VERIFICATION_URI = $martyVerification.Uri
 $env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest
 $env:MARTY_ISO18013_URI = $martyIso18013.Uri
 $env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
-$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
 }
@@ -1190,13 +1185,6 @@ if ($OfficialStackRelease) {
     Assert-OfficialImageLabels -Reference $env:MARTY_SERVICES_IMAGE -Role "services" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
     Assert-OfficialImageLabels -Reference $migrationImage -Role "migrations" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
     Assert-OfficialImageLabels -Reference $uiImage -Role "UI" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
-    if (-not $EnablePassportNative) {
-        Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
-        Assert-OfficialImageLabels -Reference $env:MARTY_ISSUANCE_IMAGE -Role "issuance" -ExpectedVersion "v$($martyIssuance.Version)" -ExpectedRevision $martyIssuance.Commit
-    }
-}
-elseif (-not $EnablePassportNative) {
-    Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)
 }
 foreach ($service in @("postgres", "redis", "openbao", "keycloak", "applicant", "gateway")) {
     $container = Get-ComposeContainerId -Service $service
@@ -1334,9 +1322,8 @@ try {
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
     $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
-    $copyIssuanceUrl = if ($EnablePassportNative) { "postgresql://marty:$copyPassword@${copyContainer}:5432/marty" } else { "postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty" }
+    $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
     $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
-    if (-not $EnablePassportNative) { $rehearsalIssuanceVerify += @("python", "manage_migrations.py", "current") }
     Invoke-ComposeLogged `
         -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
@@ -1475,9 +1462,6 @@ try {
         -Phase "maintenance_quiesced" `
         -WritersStopped $true `
         -RedisPassword $redisPassword
-    $restoreScript = Join-Path $script:RepoRoot "scripts\restore-local-beta-release.ps1"
-    "& `"$restoreScript`" -ArtifactDir `"$script:ArtifactDir`" -TunnelEnvFile `"$TunnelEnvFile`" -GeneratedEnvFile `"$GeneratedEnvFile`" -ConfirmBetaRestore" | Set-Content -LiteralPath (Join-Path $script:ArtifactDir "supervised-recovery.txt") -Encoding utf8
-
     Write-Step "Reconcile beta OpenBao state from release configuration"
     $liveMutationStarted = $true
     Invoke-ComposeLogged `
@@ -1504,9 +1488,8 @@ try {
         $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
         $liveMutationStarted = $true
         Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
-        $liveIssuanceUrl = if ($EnablePassportNative) { "postgresql://marty:${martyDbPassword}@postgres:5432/marty" } else { "postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty" }
+        $liveIssuanceUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"
         $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations")
-        if (-not $EnablePassportNative) { $liveIssuanceVerify += @("python", "manage_migrations.py", "current") }
         Invoke-ComposeLogged `
             -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations") `
             -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
@@ -1578,11 +1561,11 @@ catch {
             Write-Warning "Deployment failed before live mutation. The exact previously running beta container set was restored."
         }
         catch {
-            Write-Warning "Automatic beta recovery could not verify the exact prior container set. The mutation marker remains; inspect beta state and use supervised restore. $($_.Exception.Message)"
+            Write-Warning "Automatic beta recovery could not verify the exact prior container set. The mutation marker remains; inspect beta state before retrying. $($_.Exception.Message)"
         }
     }
     else {
-        Write-Warning "Deployment failed after live mutation began. Run the supervised beta-only command in $script:ArtifactDir\supervised-recovery.txt before resuming service."
+        Write-Warning "Deployment failed after live mutation began. Keep beta in maintenance and preserve the snapshot and jobs. This local runner cannot resume or restore the mutated state; do not rerun it. Diagnose beta state and prepare a reviewed Rust-only forward repair before resuming passport writes."
     }
     throw
 }

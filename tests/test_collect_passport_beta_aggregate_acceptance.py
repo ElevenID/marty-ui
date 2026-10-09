@@ -44,12 +44,13 @@ def fixture(tmp_path: Path, monkeypatch):
     signed = {
         "release": "marty-ui@1.1.999", "manifest_sha256": digest(tmp_path / "stack-manifest.json"),
         "services_image": SERVICES_IMAGE,
-        "issuance_image": "ghcr.io/elevenid/marty-credentials/issuance@sha256:" + "d" * 64,
+        "issuance_image": SERVICES_IMAGE,
         "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": UI_DIGEST,
                         "ghcr.io/elevenid/marty-ui-oss/services": SERVICES_DIGEST},
     }
     seen = []
-    def manifest_source(path, source, attest, attest_issuance):
+    def manifest_source(path, source, attest, attest_issuance, *, rust_only=False):
+        assert rust_only is True
         seen.append((path, source, attest("probe", {}, source)))
         return signed
     monkeypatch.setattr(aggregate, "manifest_source", manifest_source)

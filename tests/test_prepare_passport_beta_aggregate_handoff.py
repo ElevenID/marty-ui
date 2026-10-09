@@ -75,7 +75,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     })
     monkeypatch.setattr(handoff, "protected_source", lambda _runner: HEAD)
     monkeypatch.setattr(handoff, "PROTECTED_FILES", ())
-    monkeypatch.setattr(handoff, "manifest_source", lambda *_: {
+    monkeypatch.setattr(handoff, "manifest_source", lambda *_, **__: {
         "release": "marty-ui@1.2.3", "services_image": "services@sha256:" + "2" * 64,
         "issuance_image": "issuance@sha256:" + "3" * 64,
         "manifest_sha256": handoff.file_sha256(manifest),
@@ -122,6 +122,7 @@ def test_handoff_requires_stopped_signed_native_state(tmp_path, monkeypatch):
     assert plan["stopped_container_ids"] == STOPPED
     assert plan["native_receipt_sha256"] == handoff.file_sha256(paths[-1])
     assert plan["services_image"].startswith("services@sha256:")
+    assert plan["issuance_image"] == plan["services_image"]
     assert plan["ui_image"] == handoff.UI_REPOSITORY + "@sha256:" + "5" * 64
     assert plan["docs_image"] == "sha256:" + "6" * 64
 

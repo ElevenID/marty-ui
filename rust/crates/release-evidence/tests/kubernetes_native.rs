@@ -128,6 +128,9 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
                 );
             } else if value["metadata"]["name"] == "issuance" {
+                assert_eq!(owner(value)["image"], values["MARTY_SERVICES_IMAGE"]);
+                owner_mut(value)["image"] =
+                    owner(&before[index(&before, "Deployment", "issuance")])["image"].clone();
                 assert_eq!(owner(value)["livenessProbe"]["httpGet"]["path"], "/health");
                 assert_eq!(owner(value)["readinessProbe"]["httpGet"]["path"], "/ready");
                 owner_mut(value)["readinessProbe"]["httpGet"]["path"] = json!("/health");
@@ -589,7 +592,8 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
 fn api_defaults(model: &Value) -> Value {
     let mut actual = model.clone();
     let rows = actual["items"].as_array_mut().unwrap();
-    for selected in ["issuance-native", "signing-keys"] {
+    rows.push(selected_passport_config());
+    for selected in ["issuance-native", "issuance", "signing-keys"] {
         let native = index(rows, "Deployment", selected);
         rows[native]["metadata"]["resourceVersion"] = json!("1234");
         rows[native]["status"] = json!({"availableReplicas":1});
@@ -617,15 +621,17 @@ fn api_defaults(model: &Value) -> Value {
                 ("failureThreshold", 3),
                 ("timeoutSeconds", 1),
             ] {
-                owner[name][key] = json!(value);
+                if owner[name].get(key).is_none() {
+                    owner[name][key] = json!(value);
+                }
             }
             owner[name]["httpGet"]["scheme"] = json!("HTTP");
         }
         let service = index(rows, "Service", selected);
-        let allocated = if selected == "issuance-native" {
-            "10.96.0.123"
-        } else {
-            "10.96.0.124"
+        let allocated = match selected {
+            "issuance-native" => "10.96.0.123",
+            "issuance" => "10.96.0.125",
+            _ => "10.96.0.124",
         };
         rows[service]["spec"]["clusterIP"] = json!(allocated);
         rows[service]["spec"]["clusterIPs"] = json!([allocated]);
@@ -637,6 +643,117 @@ fn api_defaults(model: &Value) -> Value {
         }
     }
     actual
+}
+
+fn selected_passport_config() -> Value {
+    json!({
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": {"name": "marty-config", "namespace": "marty-prod"},
+        "data": {
+            "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+            "PASSPORT_NATIVE_FLOW_ENABLED": "true",
+            "PASSPORT_NATIVE_HTTP_ENABLED": "true",
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
+            "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
+            "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
+            "PASSPORT_KMS_CALLBACKS_ENABLED": "true"
+        }
+    })
+}
+
+#[test]
+fn full_deploy_requires_reviewed_route_and_kms_config_before_writes() {
+    let source = fs::read_to_string(root().join("scripts/deploy-kubernetes.sh")).unwrap();
+    let script = format!(
+        "set -euo pipefail\n{}\nerror() {{ printf '%s\\n' \"$*\" >&2; exit 1; }}\nenvsubst() {{ command cat; }}\nrequire_kubernetes_passport_selection\n",
+        extracted_function(&source, "require_kubernetes_passport_selection")
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = directory.path().join("01-configmap.yaml");
+    let mut config = fs::read_to_string(root().join("k8s/oracle/01-configmap.yaml")).unwrap();
+    let bash = if cfg!(windows) {
+        "C:/Program Files/Git/bin/bash.exe"
+    } else {
+        "bash"
+    };
+    let run = || {
+        let mut command = fixture_command(bash);
+        command.args(["--noprofile", "--norc", "-c", &script]);
+        command.env("K8S_DIR", shell_path(directory.path()));
+        command.env("NAMESPACE", "marty-prod");
+        command.env("K8S_ISSUANCE_NATIVE_ENABLED", "true");
+        command.env(
+            "K8S_NATIVE_ISSUANCE_BIN",
+            shell_path(Path::new(env!("CARGO_BIN_EXE_kubernetes-native-issuance"))),
+        );
+        execute(command, b"").0
+    };
+    fs::write(&manifest, &config).unwrap();
+    assert!(!run(), "unselected source must block deployment");
+    for key in [
+        "PASSPORT_NATIVE_GATEWAY_ENABLED",
+        "PASSPORT_NATIVE_FLOW_ENABLED",
+        "PASSPORT_NATIVE_HTTP_ENABLED",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    ] {
+        config = config.replace(
+            &format!("  {key}: \"false\""),
+            &format!("  {key}: \"true\""),
+        );
+    }
+    fs::write(&manifest, &config).unwrap();
+    assert!(run(), "fully selected source should pass preflight");
+    fs::write(
+        &manifest,
+        config.replace(
+            "  PASSPORT_KMS_CALLBACKS_ENABLED: \"true\"",
+            "  PASSPORT_KMS_CALLBACKS_ENABLED: \"false\"",
+        ),
+    )
+    .unwrap();
+    assert!(!run(), "partial KMS selection must block deployment");
+    fs::write(
+        &manifest,
+        config.replace(
+            "  PASSPORT_NATIVE_GATEWAY_ENABLED: \"true\"",
+            "  PASSPORT_NATIVE_GATEWAY_ENABLED: \"true\"\n  PASSPORT_NATIVE_GATEWAY_ENABLED: \"false\"",
+        ),
+    )
+    .unwrap();
+    assert!(
+        !run(),
+        "duplicate effective route key must block deployment"
+    );
+}
+
+#[test]
+fn live_passport_config_requires_atomic_route_and_kms_selection() {
+    let selected = json!({"kind":"List","items":[selected_passport_config()]});
+    native::selected_passport_config(&selected, "marty-prod").unwrap();
+    for key in [
+        "PASSPORT_NATIVE_GATEWAY_ENABLED",
+        "PASSPORT_NATIVE_FLOW_ENABLED",
+        "PASSPORT_NATIVE_HTTP_ENABLED",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    ] {
+        let mut disabled = selected.clone();
+        disabled["items"][0]["data"][key] = json!("false");
+        assert_eq!(
+            native::selected_passport_config(&disabled, "marty-prod"),
+            Err(REFUSAL),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        native::selected_passport_config(&json!({"kind":"List","items":[]}), "marty-prod"),
+        Err(REFUSAL)
+    );
 }
 
 #[test]
@@ -653,16 +770,46 @@ fn realistic_api_defaults_preserve_update_guard_and_hostile_changes_fail_closed(
     let rows = actual["items"].as_array().unwrap();
     let native = index(rows, "Deployment", "issuance-native");
     let legacy = index(rows, "Deployment", "issuance");
-    // Independent legacy image and unrelated topology are not owned by this
-    // native image update. Named-container lookup must not assume index zero.
+    // The alias can carry an older shared Rust digest during an image update.
     let mut independent = actual.clone();
-    owner_mut(&mut independent["items"][legacy])["image"] =
+    owner_mut(&mut independent["items"][legacy])["image"] = json!(format!(
+        "ghcr.io/elevenid/services@sha256:{}",
+        "b".repeat(64)
+    ));
+    native::check_update(&independent, &expected, "marty-prod").unwrap();
+    let mut invalid_image = independent.clone();
+    owner_mut(&mut invalid_image["items"][legacy])["image"] =
         json!("independent.invalid/external:reviewed");
+    assert_eq!(
+        native::check_update(&invalid_image, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
+    let mut invalid_command = independent.clone();
+    owner_mut(&mut invalid_command["items"][legacy])["command"] =
+        json!(["python", "-m", "uvicorn"]);
+    assert_eq!(
+        native::check_update(&invalid_command, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
+    let mut invalid_service = independent.clone();
+    let service = index(
+        invalid_service["items"].as_array().unwrap(),
+        "Service",
+        "issuance",
+    );
+    invalid_service["items"][service]["spec"]["selector"]["app"] = json!("wrong-owner");
+    assert_eq!(
+        native::check_update(&invalid_service, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
     independent["items"][legacy]["spec"]["template"]["spec"]["containers"]
         .as_array_mut()
         .unwrap()
         .insert(0, json!({"name":"unrelated-existing-sidecar"}));
-    native::check_update(&independent, &expected, "marty-prod").unwrap();
+    assert_eq!(
+        native::check_update(&independent, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
     for fault in [
         "shared-map",
         "management-key",
@@ -1135,7 +1282,7 @@ fn full_deploy_preflights_before_first_write_and_apply_uses_captured_model() {
 error() { printf '%s\n' "$*" >&2; exit 1; }
 step() { :; }
 info() { :; }
-resolve_kubernetes_issuance_image() { printf '%s\n' "$MARTY_ISSUANCE_IMAGE"; }
+require_kubernetes_services_release() { :; }
 cmd_setup_secrets() { printf 'unexpected-setup\n' >> "$FIXTURE_LEDGER"; return 94; }
 kubectl() {
   printf '%s\n' "$*" >> "$FIXTURE_LEDGER"
@@ -1163,6 +1310,8 @@ fi
         "invalid-selector",
     ] {
         let dir = tempfile::tempdir().unwrap();
+        let harness = dir.path().join("harness.sh");
+        fs::write(&harness, &script).unwrap();
         let ledger = dir.path().join("ledger");
         let captured = dir.path().join("captured");
         let applied = dir.path().join("applied");
@@ -1219,7 +1368,7 @@ fi
             "bash"
         };
         let mut cmd = fixture_command(bash);
-        cmd.args(["--noprofile", "--norc", "-c", &script])
+        cmd.args(["--noprofile", "--norc", &shell_path(&harness)])
             .envs(&values)
             .env("REPO_ROOT", shell_path(&root()))
             .env("K8S_DIR", shell_path(&manifests))
@@ -1230,7 +1379,6 @@ fi
             .env("NAMESPACE", "marty-prod")
             .env("OCIR_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_TAG", "2026.08.0")
-            .env("MARTY_ISSUANCE_IMAGE", "synthetic.invalid/legacy:reviewed")
             .env("FIXTURE_FAULT", fault)
             .env("FIXTURE_LEDGER", shell_path(&ledger))
             .env("FIXTURE_CAPTURED", shell_path(&captured))
@@ -1301,6 +1449,7 @@ error() { printf '%s\n' "$*" >&2; exit 1; }
 step() { :; }
 success() { :; }
 warn() { :; }
+require_kubernetes_services_release() { :; }
 catalog_services() { printf 'issuance\ngateway\n'; }
 controlled_canvas_guard() { command cat >/dev/null; }
 kubectl() {
@@ -1311,6 +1460,7 @@ kubectl() {
     'set image') : ;;
     'rollout status')
       if [[ "$3" == deployment/issuance-native && "$FIXTURE_FAULT" == rollout ]]; then return 19; fi
+      if [[ "$3" == deployment/issuance && "$FIXTURE_FAULT" == issuance-rollout ]]; then return 20; fi
       if [[ "$3" == deployment/signing-keys && "$FIXTURE_FAULT" == signing-rollout ]]; then return 18; fi ;;
     *) return 93 ;;
   esac
@@ -1325,12 +1475,14 @@ cmd_update_images
         "policy-mount",
         "policy-path",
         "rollout",
+        "issuance-rollout",
         "signing-rollout",
         "signing-key",
         "gateway-signing-key",
         "signing-source-missing",
         "signing-service-missing",
         "auth-target",
+        "route-disabled",
         "missing-binary",
         "invalid-image",
         "disabled",
@@ -1341,7 +1493,7 @@ cmd_update_images
         let dir = tempfile::tempdir().unwrap();
         let snapshot = dir.path().join("snapshot.json");
         let ledger = dir.path().join("ledger");
-        let mutated = if [
+        let mut mutated = if [
             "shared-map",
             "management-key",
             "policy-volume",
@@ -1359,6 +1511,11 @@ cmd_update_images
         } else {
             expected.clone()
         };
+        if fault == "route-disabled" {
+            let rows = mutated["items"].as_array_mut().unwrap();
+            let config = index(rows, "ConfigMap", "marty-config");
+            rows[config]["data"]["PASSPORT_NATIVE_GATEWAY_ENABLED"] = json!("false");
+        }
         fs::write(&snapshot, serde_json::to_vec(&mutated).unwrap()).unwrap();
         fs::write(&ledger, []).unwrap();
         let bash = if cfg!(windows) {
@@ -1380,7 +1537,6 @@ cmd_update_images
             .env("OCIR_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_TAG", "2026.08.0")
-            .env("MARTY_ISSUANCE_IMAGE", "synthetic.invalid/legacy:reviewed")
             .env("FIXTURE_LEDGER", shell_path(&ledger))
             .env("FIXTURE_SNAPSHOT", shell_path(&snapshot))
             .env("FIXTURE_FAULT", fault);
@@ -1408,7 +1564,7 @@ cmd_update_images
         let (passed, output, errors) = execute(cmd, b"");
         assert_eq!(
             passed,
-            fault == "none" || fault == "disabled" || fault == "absent",
+            fault == "none" || fault == "absent",
             "{fault}: {}",
             String::from_utf8_lossy(&errors)
         );
@@ -1419,9 +1575,9 @@ cmd_update_images
             .lines()
             .filter(|v| v.starts_with("set image "))
             .collect();
-        if fault == "none" || fault == "disabled" || fault == "absent" {
-            assert_eq!(writes.len(), if fault == "disabled" { 3 } else { 5 });
-            assert!(!writes
+        if fault == "none" || fault == "absent" {
+            assert_eq!(writes.len(), 6);
+            assert!(writes
                 .iter()
                 .any(|v| v.starts_with("set image deployment/issuance ")));
         } else if fault == "rollout" {
@@ -1429,6 +1585,12 @@ cmd_update_images
                 writes.len(),
                 2,
                 "No sibling writes after native rollout failure"
+            );
+        } else if fault == "issuance-rollout" {
+            assert_eq!(
+                writes.len(),
+                3,
+                "No sibling writes after issuance rollout failure"
             );
         } else if fault == "signing-rollout" {
             assert_eq!(
@@ -1442,6 +1604,7 @@ cmd_update_images
         if [
             "missing-binary",
             "invalid-image",
+            "disabled",
             "empty-selector",
             "invalid-selector",
         ]
@@ -1457,7 +1620,16 @@ cmd_update_images
                     values["MARTY_SERVICES_IMAGE"]
                 )
             );
-            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/signing-keys configmap/issuance-native-config -n marty-prod -o json --request-timeout=10s\n"));
+            if fault != "rollout" {
+                assert_eq!(
+                    writes[2],
+                    format!(
+                        "set image deployment/issuance issuance={} -n marty-prod",
+                        values["MARTY_SERVICES_IMAGE"]
+                    )
+                );
+            }
+            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/issuance service/signing-keys configmap/issuance-native-config configmap/marty-config -n marty-prod -o json --request-timeout=10s\n"));
             let signing = "rollout status deployment/signing-keys -n marty-prod --timeout=180s\n";
             assert!(
                 calls.find(signing).unwrap()
@@ -1483,7 +1655,6 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
             renderer.env(name, value);
         }
     }
-    renderer.env("MARTY_ISSUANCE_IMAGE","synthetic.invalid/legacy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     renderer
         .env("OCIR_REGISTRY", "synthetic.registry.invalid")
         .env("IMAGE_TAG", "2026.08.0");

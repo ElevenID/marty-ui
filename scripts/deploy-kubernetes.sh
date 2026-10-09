@@ -148,9 +148,39 @@ apply_manifest() {
   envsubst < "$file" | kubectl apply -f -
 }
 
-# No build, registry request or cluster mutation: capture the exact full model
-# before any deployment writes. Disabled/default keeps the existing path and
-# does not require the new executable or inspect unused native-only inputs.
+# No build or cluster mutation: authenticate the release and capture the exact
+# full model before any deployment write. Deploy and update-images reject a
+# disabled native selector.
+require_kubernetes_services_release() {
+  [[ -n "${MARTY_STACK_MANIFEST:-}" ]] || { error "Set MARTY_STACK_MANIFEST to the signed Rust-only release manifest."; return 1; }
+  local source_sha checked_root checked_manifests relative_manifests manifest_file relative_file
+  checked_root="$(git -C "$REPO_ROOT" rev-parse --show-toplevel)" || return 1
+  [[ "$(cd "$checked_root" && pwd -P)" == "$REPO_ROOT" ]] || { error "Kubernetes release checkout identity changed."; return 1; }
+  checked_manifests="$(cd "$K8S_DIR" && pwd -P)" || return 1
+  case "$checked_manifests" in
+    "$REPO_ROOT"/*) ;;
+    *) error "Kubernetes manifests must be inside the reviewed checkout."; return 1 ;;
+  esac
+  relative_manifests="${checked_manifests#"$REPO_ROOT"/}"
+  for manifest_file in \
+    00-namespace.yaml 01-configmap.yaml 03-postgres.yaml \
+    04-redis-rabbitmq.yaml 05-keycloak.yaml \
+    05b-revocation-profile-migrations.yaml 06-db-migrate.yaml \
+    06a-issuance-migrations.yaml 07-microservices.yaml \
+    07a-issuance-native.yaml 07b-signing-keys.yaml \
+    08-ui.yaml 09-cloudflared.yaml; do
+    [[ -f "$checked_manifests/$manifest_file" && ! -L "$checked_manifests/$manifest_file" ]] || { error "Kubernetes manifest is missing or not a regular reviewed file."; return 1; }
+    relative_file="$relative_manifests/$manifest_file"
+    git -C "$REPO_ROOT" ls-files --error-unmatch -- "$relative_file" >/dev/null 2>&1 || { error "Kubernetes manifest is not tracked by the reviewed checkout."; return 1; }
+  done
+  [[ -z "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=all)" ]] || { error "Kubernetes release checkout must be clean."; return 1; }
+  K8S_DIR="$checked_manifests"
+  source_sha="$(git -C "$REPO_ROOT" rev-parse --verify HEAD^{commit})" || return 1
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/check_kubernetes_services_release.py" \
+    --manifest "$MARTY_STACK_MANIFEST" --image "$MARTY_SERVICES_IMAGE" \
+    --source-sha "$source_sha"
+}
+
 prepare_kubernetes_native_issuance() {
   K8S_NATIVE_RENDERED_MODEL=""
   K8S_ISSUANCE_NATIVE_ENABLED="${K8S_ISSUANCE_NATIVE_ENABLED-true}"
@@ -163,16 +193,22 @@ prepare_kubernetes_native_issuance() {
   command -v "$K8S_NATIVE_ISSUANCE_BIN" >/dev/null 2>&1 || { error "Required native issuance deployment executable is unavailable."; return 1; }
   export K8S_ISSUANCE_NATIVE_ENABLED MARTY_SERVICES_IMAGE
   "$K8S_NATIVE_ISSUANCE_BIN" validate || return 1
+  require_kubernetes_services_release || return 1
   K8S_NATIVE_RENDERED_MODEL="$(envsubst < "${K8S_DIR}/07-microservices.yaml" | "$K8S_NATIVE_ISSUANCE_BIN" render --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR")" || return 1
   [[ -n "$K8S_NATIVE_RENDERED_MODEL" ]] || { error "Native issuance deployment model is empty."; return 1; }
 }
 
-catalog_services() {
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field k8s_deployment
+require_kubernetes_passport_selection() {
+  local manifest="${K8S_DIR}/01-configmap.yaml"
+  [[ -f "$manifest" ]] || { error "Kubernetes passport ConfigMap is missing."; return 1; }
+  if ! envsubst < "$manifest" | "$K8S_NATIVE_ISSUANCE_BIN" check-selection --namespace "$NAMESPACE"; then
+    error "Rust-only Kubernetes deploy requires selected passport routes and KMS custody in the reviewed ConfigMap."
+    return 1
+  fi
 }
 
-resolve_kubernetes_issuance_image() {
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/check_kubernetes_issuance_image.py"
+catalog_services() {
+  "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field k8s_deployment
 }
 
 catalog_required_secret_envs() {
@@ -425,10 +461,14 @@ cmd_status() {
 }
 
 cmd_update_images() {
+  [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]] || {
+    error "Rust-only Kubernetes image updates require native issuance."
+    return 1
+  }
   prepare_kubernetes_native_issuance || return 1
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     # Read-only API snapshot, not a lock against concurrent operator changes.
-    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/signing-keys configmap/issuance-native-config -n "$NAMESPACE" -o json --request-timeout=10s \
+    if ! kubectl get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/issuance service/signing-keys configmap/issuance-native-config configmap/marty-config -n "$NAMESPACE" -o json --request-timeout=10s \
       | "$K8S_NATIVE_ISSUANCE_BIN" check-update --repo-root "$REPO_ROOT" --manifest-dir "$K8S_DIR" --namespace "$NAMESPACE"; then
       error "Native issuance image update refused; apply the reviewed full-manifest selection first."
       return 1
@@ -447,10 +487,11 @@ cmd_update_images() {
     kubectl rollout status deployment/signing-keys -n "$NAMESPACE" --timeout=180s || return 1
     kubectl set image deployment/issuance-native "issuance-native=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
     kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
+    kubectl set image deployment/issuance "issuance=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
+    kubectl rollout status deployment/issuance -n "$NAMESPACE" --timeout=180s || return 1
   fi
   while IFS= read -r svc; do
-    # The external Python API is not built by this repository's image loop.
-    # Advance it only with its matching migration image in a reviewed deploy.
+    # Issuance is updated with the shared Rust services image above.
     [[ -z "$svc" || "$svc" == "issuance" ]] && continue
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
@@ -463,13 +504,12 @@ cmd_update_images() {
 }
 
 cmd_deploy() {
-  local issuance_image
-  issuance_image="$(resolve_kubernetes_issuance_image)" || {
-    error "Kubernetes issuance image validation failed before deployment."
+  [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]] || {
+    error "Rust-only Kubernetes deployment requires native issuance."
     return 1
   }
-  export MARTY_ISSUANCE_IMAGE="$issuance_image"
   prepare_kubernetes_native_issuance || return 1
+  require_kubernetes_passport_selection || return 1
   step "Full Kubernetes Deploy"
 
   apply_manifest "${K8S_DIR}/00-namespace.yaml"
@@ -551,6 +591,7 @@ cmd_deploy() {
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     kubectl rollout status deployment/signing-keys -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/issuance-native -n "$NAMESPACE" --timeout=180s || return 1
+    kubectl rollout status deployment/issuance -n "$NAMESPACE" --timeout=180s || return 1
     kubectl rollout status deployment/gateway -n "$NAMESPACE" --timeout=180s || return 1
   fi
   kubectl rollout status deployment/gateway  -n "$NAMESPACE" --timeout=180s || true

@@ -19,7 +19,6 @@ SOURCE = "a" * 40
 NOW = datetime(2026, 9, 27, 13, tzinfo=timezone.utc)
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "c" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "d" * 64
-ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "e" * 64
 INFRA = {
     "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
     "redis": "docker.io/library/redis@sha256:" + "2" * 64,
@@ -28,7 +27,7 @@ INFRA = {
 
 
 def manifest() -> dict:
-    return {"schema": "marty.stack/v1", "components": [
+    ui = (
         {"name": "marty-ui", "repository": "ElevenID/marty-ui",
          "version": "1.1.219", "commit": SOURCE,
          "artifacts": [
@@ -38,23 +37,30 @@ def manifest() -> dict:
               "digest": "sha256:" + "d" * 64},
              {"type": "oci", "uri": "ghcr.io/elevenid/marty-ui-oss/ui",
               "digest": "sha256:" + "f" * 64},
-        ]},
-        {"name": "marty-credentials-issuance", "repository": "ElevenID/marty-credentials",
-         "version": "0.1.78", "commit": "b" * 40,
-         "artifacts": [{"type": "oci", "uri": "ghcr.io/elevenid/marty-credentials-issuance",
-                        "digest": "sha256:" + "e" * 64}]},
-    ]}
+        ]}
+    )
+    supporting = (
+        "marty-api-core", "marty-blog", "marty-core-python",
+        "marty-verification-python", "marty-iso18013-python", "marty-common",
+        "marty-cli", "marty-integration-tests",
+    )
+    return {"schema": "marty.stack/v1", "release": "marty-ui@1.1.219",
+            "components": [ui, *(
+                {"name": name, "repository": f"ElevenID/{name}", "commit": "b" * 40,
+                 "artifacts": [{"type": "package", "uri": f"https://example.test/{name}",
+                                "digest": "sha256:" + "e" * 64}]}
+                for name in supporting
+            )]}
 
 
 def verified_inputs(tmp_path: Path) -> dict:
     path = tmp_path / "stack-manifest.json"
     path.write_text(json.dumps(manifest()), encoding="utf-8")
     result = release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                            verify_issuance=lambda *args: True,
                             infra=lambda: INFRA)
     assert result["services_reference"] == SERVICES
     assert result["migrations_reference"] == MIGRATIONS
-    assert result["issuance_reference"] == ISSUANCE
+    assert "issuance_reference" not in result
     assert result["infra_images"] == INFRA
     return result
 
@@ -96,42 +102,59 @@ def test_release_rejects_unbound_rust_image(tmp_path: Path) -> None:
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(PlanError, match="image"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       verify_issuance=lambda *args: True,
                        infra=lambda: INFRA)
     value = manifest()
     value["components"][0]["commit"] = "f" * 40
     path.write_text(json.dumps(value), encoding="utf-8")
-    with pytest.raises(PlanError, match="protected main"):
+    with pytest.raises(PlanError, match="commit"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       verify_issuance=lambda *args: True,
                        infra=lambda: INFRA)
     value = manifest()
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(PlanError, match="attestation"):
         release_inputs(path, SOURCE, verify_ui=lambda *args: False,
-                       verify_issuance=lambda *args: True,
                        infra=lambda: INFRA)
 
 
-def test_release_requires_exact_attested_credentials_schema_image(tmp_path: Path) -> None:
+def test_release_rejects_legacy_credentials_schema_image(tmp_path: Path) -> None:
     path = tmp_path / "stack-manifest.json"
     value = manifest()
     path.write_text(json.dumps(value), encoding="utf-8")
-    calls = []
-    result = release_inputs(
-        path, SOURCE, verify_ui=lambda *args: True,
-        verify_issuance=lambda *args: calls.append(args) or True,
-        infra=lambda: INFRA)
-    assert result["issuance_reference"] == ISSUANCE
-    assert calls == [(ISSUANCE, "b" * 40, "0.1.78")]
-    with pytest.raises(PlanError, match="attestation"):
-        release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       verify_issuance=lambda *args: False, infra=lambda: INFRA)
-    value["components"][1]["artifacts"][0]["uri"] = "ghcr.io/other/issuance"
+    release_inputs(path, SOURCE, verify_ui=lambda *args: True, infra=lambda: INFRA)
+    value["components"].append({
+        "name": "marty-credentials-issuance", "repository": "ElevenID/marty-credentials",
+        "version": "0.1.78", "commit": "b" * 40,
+        "artifacts": [{"type": "oci", "uri": "ghcr.io/elevenid/marty-credentials-issuance",
+                       "digest": "sha256:" + "e" * 64}],
+    })
     path.write_text(json.dumps(value), encoding="utf-8")
-    with pytest.raises(PlanError, match="image"):
-        release_inputs(path, SOURCE, verify_ui=lambda *args: True,
-                       verify_issuance=lambda *args: True, infra=lambda: INFRA)
+    with pytest.raises(PlanError, match="legacy credentials"):
+        release_inputs(path, SOURCE, verify_ui=lambda *args: True, infra=lambda: INFRA)
+
+
+def test_release_rejects_missing_component_and_duplicate_ui_image(tmp_path: Path) -> None:
+    path = tmp_path / "stack-manifest.json"
+    value = manifest()
+    value["components"] = [component for component in value["components"]
+                           if component["name"] != "marty-blog"]
+    path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(PlanError, match="missing components"):
+        release_inputs(path, SOURCE, verify_ui=lambda *args: True, infra=lambda: INFRA)
+
+    value = manifest()
+    value["components"][0]["artifacts"].append(
+        dict(value["components"][0]["artifacts"][0]))
+    path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(PlanError, match="exactly one services image"):
+        release_inputs(path, SOURCE, verify_ui=lambda *args: True, infra=lambda: INFRA)
+
+    value = manifest()
+    value["components"][0]["artifacts"].append(
+        {"type": "oci", "uri": "ghcr.io/elevenid/unreviewed/image",
+         "digest": "sha256:" + "9" * 64})
+    path.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(PlanError, match="image roles"):
+        release_inputs(path, SOURCE, verify_ui=lambda *args: True, infra=lambda: INFRA)
 
 
 def record_files(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
@@ -145,7 +168,7 @@ def record_files(tmp_path: Path) -> tuple[Path, Path, dict, dict]:
         "producer_run_id": "555555555",
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
-            "migrations_reference", "issuance_reference", "created_at",
+            "migrations_reference", "created_at",
             "expires_at", "owner_labels", "infra_images")},
         "containers": {}, "networks": {}, "volumes": [],
     }
@@ -169,7 +192,6 @@ def test_unsigned_record_never_reaches_docker(tmp_path: Path) -> None:
     ("project", "marty-selfhost-prod"),
     ("services_reference", "ghcr.io/other/services@sha256:" + "c" * 64),
     ("migrations_reference", "ghcr.io/other/migrations@sha256:" + "d" * 64),
-    ("issuance_reference", "ghcr.io/other/issuance@sha256:" + "e" * 64),
     ("infra_images", {**INFRA, "openbao": "quay.io/other/openbao@sha256:" + "3" * 64}),
     ("plan_sha256", "0" * 64),
 ])

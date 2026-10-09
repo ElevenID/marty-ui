@@ -1,7 +1,4 @@
-# Compatibility overlay for compositions that predate universal base ownership.
-# The base already selects Rust for migrated HTTP/gRPC and retains Python for
-# the exact eleven-route remainder. Runtime acceptance is still required before
-# deployment/Python retirement; host publications remain unchanged.
+# Shared native issuance runtime used by the default Compose stack.
 x-native-issuance-grpc-auth: &native-issuance-grpc-auth
   GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
 
@@ -19,7 +16,8 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       ISSUANCE_GRPC_ENABLED: "true"
       ISSUANCE_GRPC_PORT: "9005"
-      DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
+      MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ALLOWED_REDIRECT_URIS: ${ALLOWED_REDIRECT_URIS:-}
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}

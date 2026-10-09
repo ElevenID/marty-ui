@@ -271,7 +271,40 @@ def assert_models(
         "source": "notification_openbao_token",
         "target": "/run/secrets/notification_openbao_token",
     }
-    assert preserved == before, "Unowned self-host model change"
+    for name in ("issuance", "issuance-migrations"):
+        retired = preserved["services"][name]
+        frozen = before["services"][name]
+        assert retired.pop("build") == {
+            "context": ".", "dockerfile": "services/Dockerfile",
+            "args": {"SERVICE_NAME": "issuance-native"},
+        }
+        assert retired.pop("command") == (
+            ["/usr/local/bin/marty-issuance-service"] if name == "issuance"
+            else [". /app/load-secrets-env.sh\nexec /usr/local/bin/marty-issuance-service migrate\n"]
+        )
+        retired["image"] = frozen["image"]
+        retired["command"] = frozen["command"]
+        environment = retired["environment"]
+        assert environment.pop("SERVICE_NAME") == "issuance_native"
+        assert environment["DATABASE_URL_TEMPLATE"] == after["services"]["db-migrate"]["environment"]["DATABASE_URL_TEMPLATE"]
+        environment["DATABASE_URL_TEMPLATE"] = frozen["environment"]["DATABASE_URL_TEMPLATE"]
+        if name == "issuance":
+            assert environment.pop("MARTY_SCHEMA_STARTUP_MODE") == "validate"
+            assert environment.pop("CANVAS_MIRROR_WORKER_ENABLED") == "false"
+        else:
+            for dependency in ("organization", "credential-template"):
+                assert retired["depends_on"].pop(dependency) == {
+                    "condition": "service_healthy", "required": True,
+                }
+    if preserved != before:
+        changed = {
+            name: sorted(
+                key for key in preserved["services"][name].keys() | before["services"][name].keys()
+                if preserved["services"][name].get(key) != before["services"][name].get(key)
+            ) for name in preserved["services"].keys() & before["services"].keys()
+            if preserved["services"][name] != before["services"][name]
+        }
+        raise AssertionError(f"Unowned self-host model change: {changed}")
     legacy = before["services"]["issuance"]
     environment = {
         key: value
@@ -282,6 +315,8 @@ def assert_models(
     assert shared == environment
     environment.update(
         SERVICE_NAME="issuance_native",
+        DATABASE_URL_TEMPLATE=after["services"]["db-migrate"]["environment"]["DATABASE_URL_TEMPLATE"],
+        MARTY_SCHEMA_STARTUP_MODE="validate",
         ISSUANCE_GRPC_ENABLED="true",
         RP_GRPC_TARGET="revocation-profile:9013",
         **native_additive,
@@ -319,14 +354,21 @@ def assert_models(
         "restart": "unless-stopped",
         "networks": {"default": None},
     }
-    assert native == expected, "Native self-host model differs from closed additions"
+    if native != expected:
+        raise AssertionError(
+            "Native self-host model differs from closed additions: "
+            + str(sorted(key for key in native.keys() | expected.keys()
+                         if native.get(key) != expected.get(key)))
+        )
 
 
 def interpolated_models():
     original = (ROOT / FROZEN).read_text(encoding="utf-8")
     current = (ROOT / GATE["BASE"]).read_text(encoding="utf-8")
     required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", original))
-    assert required == set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    current_required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
+    assert required - current_required == {"MARTY_ISSUANCE_IMAGE"}
+    assert current_required - required == set()
     environment = yaml.safe_load(original)["services"]["issuance"]["environment"]
     variables = (
         set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
@@ -400,6 +442,8 @@ def interpolated_models():
                 else:
                     values[name] = value
                 for file in (FROZEN, GATE["BASE"]):
+                    if file == GATE["BASE"] and name not in current_required:
+                        continue
                     try:
                         render(file, values)
                     except subprocess.CalledProcessError as error:
@@ -408,7 +452,10 @@ def interpolated_models():
                         raise AssertionError(
                             f"Required self-host input accepted: {name}"
                         )
-        print(f"PASS: {len(required)} required inputs, missing/empty in both models")
+        print(
+            f"PASS: {len(current_required)} current required inputs reject missing/empty; "
+            "retired Python image input is absent"
+        )
 
 
 def run():
