@@ -34,6 +34,10 @@ spec:
               value: signing-keys
             - name: SIGNING_KEYS_SERVICE_PORT
               value: "8017"
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE
+              value: /run/secrets/integration-secret-tls/tls.crt
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE
+              value: /run/secrets/integration-secret-tls/tls.key
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -64,6 +68,12 @@ spec:
           ports:
             - name: http
               containerPort: 8017
+            - name: secret-tls
+              containerPort: 8018
+          volumeMounts:
+            - name: integration-secret-tls
+              mountPath: /run/secrets/integration-secret-tls
+              readOnly: true
           resources:
             requests:
               memory: 128Mi
@@ -83,6 +93,10 @@ spec:
               port: 8017
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: integration-secret-tls
+          secret:
+            secretName: signing-keys-integration-secret-server-tls
 ---
 apiVersion: v1
 kind: Service
@@ -97,3 +111,6 @@ spec:
     - name: http
       port: 8017
       targetPort: 8017
+    - name: secret-tls
+      port: 8018
+      targetPort: 8018

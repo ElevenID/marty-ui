@@ -70,6 +70,13 @@ function Set-DotEnvValue([string[]]$Lines, [string]$Name, [string]$Value) {
 
 $leafCertificates = @(
     [pscustomobject]@{
+        Certificate = "signing_keys_workload_server_cert"
+        Key = "signing_keys_workload_server_key"
+        CommonName = "signing-keys"
+        SubjectAlternativeName = "DNS:signing-keys"
+        ExtendedKeyUsage = "serverAuth"
+    },
+    [pscustomobject]@{
         Certificate = "pp_workload_server_cert"
         Key = "pp_workload_server_key"
         CommonName = "presentation-policy"
@@ -222,6 +229,8 @@ finally {
 
 $environmentNames = [ordered]@{
     MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE = "workload_identity_ca_cert"
+    SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE = "signing_keys_workload_server_cert"
+    SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE = "signing_keys_workload_server_key"
     PP_WORKLOAD_SERVER_CERT_FILE = "pp_workload_server_cert"
     PP_WORKLOAD_SERVER_KEY_FILE = "pp_workload_server_key"
     FLOW_WORKLOAD_CLIENT_CERT_FILE = "flow_workload_client_cert"

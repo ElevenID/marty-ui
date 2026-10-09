@@ -170,15 +170,15 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
                     let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
-                    assert_eq!(native_mounts.len(), 3);
-                    assert_eq!(native_mounts[1..], mounts.as_array().unwrap()[..]);
+                    assert_eq!(native_mounts.len(), 4);
+                    assert_eq!(native_mounts[2..], mounts.as_array().unwrap()[..]);
                     let native_volumes = native_owner
                         .pointer("/spec/template/spec/volumes")
                         .unwrap()
                         .as_array()
                         .unwrap();
-                    assert_eq!(native_volumes.len(), 3);
-                    assert_eq!(native_volumes[1..], volumes.as_array().unwrap()[..]);
+                    assert_eq!(native_volumes.len(), 4);
+                    assert_eq!(native_volumes[2..], volumes.as_array().unwrap()[..]);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -534,6 +534,14 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
             json!("/run/secrets/shared"),
         ),
         (
+            "/spec/template/spec/volumes/1/secret/secretName",
+            json!("untrusted-ca"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/1/readOnly",
+            json!(false),
+        ),
+        (
             "/spec/template/spec/initContainers",
             json!([{"name":"extra"}]),
         ),
@@ -596,6 +604,29 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
         native::compose(&changed, &template, &ready, &values),
         Err(REFUSAL)
     );
+    let signer = index(&template, "Deployment", "signing-keys");
+    for (path, value) in [
+        (
+            "/spec/template/spec/volumes/0/secret/secretName",
+            json!("untrusted-server-tls"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/readOnly",
+            json!(false),
+        ),
+        (
+            "/spec/template/spec/containers/0/ports/1/containerPort",
+            json!(8017),
+        ),
+    ] {
+        let mut changed = template.clone();
+        set_path(&mut changed[signer], path, value);
+        assert_eq!(
+            native::compose(&baseline, &changed, &ready, &values),
+            Err(REFUSAL),
+            "{path}"
+        );
+    }
 }
 
 fn api_defaults(model: &Value) -> Value {
@@ -905,7 +936,6 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "RP_GRPC_TARGET",
-        "SIGNING_KEYS_INTERNAL_URL",
     ] {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -920,13 +950,27 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         let entries = owner_mut(&mut baseline[i])["env"].as_array_mut().unwrap();
         entries.retain(|entry| entry["name"] != name);
         entries.push(custom.clone());
-        let model = native::compose(&baseline, &template, &ready, &values).unwrap();
+        let model = native::compose(&baseline, &template, &ready, &values)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         let rows = model["items"].as_array().unwrap();
         let selected = index(rows, "Deployment", "issuance-native");
         assert_eq!(env(&rows[i])[name], custom);
         assert_eq!(env(&rows[selected])[name], custom);
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
     }
+    let mut legacy_with_custom_signer = baseline.clone();
+    let legacy = index(&legacy_with_custom_signer, "Deployment", "issuance");
+    let signer = owner_mut(&mut legacy_with_custom_signer[legacy])["env"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["name"] == "SIGNING_KEYS_INTERNAL_URL")
+        .unwrap();
+    *signer = json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"https://custom-signer.example/internal"});
+    assert_eq!(
+        native::compose(&legacy_with_custom_signer, &template, &ready, &values),
+        Err(REFUSAL),
+    );
     for &name in native::SECRET_SETTINGS {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");

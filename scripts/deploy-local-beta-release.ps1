@@ -836,6 +836,8 @@ if ($EnablePassportNative) {
 }
 $workloadIdentityPathNames = @(
     "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_KEY_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
@@ -883,6 +885,7 @@ if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
 }
 $workloadCa = $workloadIdentityPaths["MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"]
 $workloadLeafNames = @(
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",

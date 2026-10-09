@@ -9,6 +9,7 @@ import subprocess
 
 TLS_FILES = frozenset({
     "workload_identity_ca_cert",
+    "signing_keys_workload_server_cert", "signing_keys_workload_server_key",
     "passport_edge_tls_cert", "passport_edge_tls_key",
     "flow_workload_client_cert", "flow_workload_client_key",
     "flow_workload_server_cert", "flow_workload_server_key",
@@ -39,6 +40,8 @@ def stage_tls(root: Path) -> None:
     temporary = {".passport-ca-key", ".passport-openssl.cnf"}
     ca = "workload_identity_ca_cert"
     identities = (
+        ("signing_keys_workload_server", "signing-keys", "serverAuth",
+         "DNS:signing-keys"),
         ("passport_edge_tls", "passport-https-edge", "serverAuth",
          "DNS:edge,DNS:passport-https-edge,DNS:localhost,IP:127.0.0.1"),
         ("flow_workload_client", "flow", "clientAuth",

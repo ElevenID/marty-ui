@@ -951,11 +951,19 @@ spec:
                   key: TOKEN_HMAC_KEY
             - name: SIGNING_KEYS_INTERNAL_URL
               value: "http://gateway:8000/internal/signing-keys"
+            - name: INTEGRATION_SECRET_KMS_URL
+              value: "https://signing-keys:8018/internal"
+            - name: INTEGRATION_SECRET_KMS_CA_FILE
+              value: /run/secrets/integration-secret-ca/ca.crt
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+          volumeMounts:
+            - name: integration-secret-ca
+              mountPath: /run/secrets/integration-secret-ca
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -963,6 +971,10 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
+      volumes:
+        - name: integration-secret-ca
+          secret:
+            secretName: signing-keys-integration-secret-ca
 ---
 # ================================================================
 # 6b. Verification (:8012)

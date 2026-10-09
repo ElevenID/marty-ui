@@ -226,6 +226,10 @@ spec:
               value: revocation-profile:9013
             - name: SIGNING_KEYS_INTERNAL_URL
               value: http://gateway:8000/internal/signing-keys
+            - name: INTEGRATION_SECRET_KMS_URL
+              value: https://signing-keys:8018/internal
+            - name: INTEGRATION_SECRET_KMS_CA_FILE
+              value: /run/secrets/integration-secret-ca/ca.crt
             - name: DIDCOMM_KMS_ADDR
               valueFrom:
                 configMapKeyRef:
@@ -284,6 +288,9 @@ spec:
             - name: didcomm-kms-token
               mountPath: /run/secrets/didcomm-kms
               readOnly: true
+            - name: integration-secret-ca
+              mountPath: /run/secrets/integration-secret-ca
+              readOnly: true
           ports:
             - name: http
               containerPort: 8005
@@ -315,6 +322,9 @@ spec:
             items:
               - key: DIDCOMM_ISSUANCE_OPENBAO_TOKEN
                 path: token
+        - name: integration-secret-ca
+          secret:
+            secretName: signing-keys-integration-secret-ca
 ---
 apiVersion: v1
 kind: Service

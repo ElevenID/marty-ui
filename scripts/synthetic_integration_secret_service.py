@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import secrets
+import ssl
 from urllib.parse import parse_qs, urlsplit
 
 
@@ -70,4 +71,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("0.0.0.0", 8017), Handler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", 8017), Handler)
+    cert_file = os.environ.get("SYNTHETIC_TLS_CERT_FILE")
+    key_file = os.environ.get("SYNTHETIC_TLS_KEY_FILE")
+    if bool(cert_file) != bool(key_file):
+        raise ValueError("synthetic TLS certificate and key must be paired")
+    if cert_file:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert_file, key_file)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+    server.serve_forever()

@@ -127,6 +127,47 @@ async fn reject_integration_secret_http(request: Request, next: Next) -> Respons
     next.run(request).await
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request, routing::post, Router};
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn plaintext_listener_refuses_both_integration_secret_operations() {
+        let app = Router::new()
+            .route(
+                "/internal/integration-secrets/encrypt",
+                post(|| async { StatusCode::OK }),
+            )
+            .route(
+                "/internal/integration-secrets/decrypt",
+                post(|| async { StatusCode::OK }),
+            )
+            .route("/other", post(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn(reject_integration_secret_http));
+
+        for (path, expected) in [
+            (
+                "/internal/integration-secrets/encrypt",
+                StatusCode::NOT_FOUND,
+            ),
+            (
+                "/internal/integration-secrets/decrypt",
+                StatusCode::NOT_FOUND,
+            ),
+            ("/other", StatusCode::OK),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(Request::post(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected, "{path}");
+        }
+    }
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()

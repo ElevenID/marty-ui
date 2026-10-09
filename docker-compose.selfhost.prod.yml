@@ -595,6 +595,8 @@ services:
       SERVICE_NAME: issuance_native
       DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
       DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       ISSUANCE_GRPC_ENABLED: "true"
       RP_GRPC_TARGET: revocation-profile:9013
       CANVAS_MIRROR_WORKER_ENABLED: ${CANVAS_MIRROR_WORKER_ENABLED:-false}
@@ -627,6 +629,7 @@ services:
       - canvas_credentials_shared_secret
       - grpc_service_token
       - didcomm_issuance_openbao_token
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -654,6 +657,8 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
@@ -680,6 +685,7 @@ services:
       - marty_db_password
       - issuance_api_key
       - token_hmac_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -894,6 +900,8 @@ services:
     environment:
       <<: *runtime-env
       SIGNING_KEYS_SERVICE_PORT: "8017"
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
@@ -905,6 +913,8 @@ services:
       - issuance_api_key
       - signing_keys_openbao_token
       - haip_kms_token
+      - signing_keys_workload_server_cert
+      - signing_keys_workload_server_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1235,6 +1245,10 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_applicant_event_token
   workload_identity_ca_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/workload_identity_ca_cert
+  signing_keys_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_workload_server_cert
+  signing_keys_workload_server_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_workload_server_key
   pp_workload_server_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_cert
   pp_workload_server_key:

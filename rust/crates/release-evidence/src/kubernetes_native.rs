@@ -487,6 +487,14 @@ fn native_template(resources: &[Value]) -> Result<()> {
             "SIGNING_KEYS_INTERNAL_URL",
             "http://gateway:8000/internal/signing-keys",
         ),
+        (
+            "INTEGRATION_SECRET_KMS_URL",
+            "https://signing-keys:8018/internal",
+        ),
+        (
+            "INTEGRATION_SECRET_KMS_CA_FILE",
+            "/run/secrets/integration-secret-ca/ca.crt",
+        ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
     }
@@ -520,9 +528,7 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
         "livenessProbe",
         "readinessProbe",
     ];
-    if didcomm_token {
-        owner_keys.push("volumeMounts");
-    }
+    owner_keys.push("volumeMounts");
     require_keys(owner, &owner_keys)?;
     require(
         owner["command"] == json!(["/app/services/entrypoint.sh"])
@@ -547,9 +553,7 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
         "imagePullSecrets",
         "containers",
     ];
-    if didcomm_token {
-        pod_keys.push("volumes");
-    }
+    pod_keys.push("volumes");
     require_keys(pod, &pod_keys)?;
     require(
         pod["automountServiceAccountToken"] == false
@@ -559,14 +563,21 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
     if didcomm_token {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true}]),
+                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}}]),
+                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}}]),
         )?;
     } else {
-        require(pod.get("volumes").is_none() && owner.get("volumeMounts").is_none())?;
+        require(
+            owner["volumeMounts"]
+                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true}]),
+        )?;
+        require(
+            pod["volumes"]
+                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}}]),
+        )?;
     }
     Ok(())
 }
@@ -589,6 +600,14 @@ fn signing_template(resources: &[Value]) -> Result<()> {
         ("SERVICE_NAME", "signing-keys"),
         ("SIGNING_KEYS_SERVICE_PORT", "8017"),
         ("SIGNING_KEYS_REDIS_URL", "redis://redis:6379/2"),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+            "/run/secrets/integration-secret-tls/tls.crt",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
+            "/run/secrets/integration-secret-tls/tls.key",
+        ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
     }
@@ -606,13 +625,16 @@ fn signing_template(resources: &[Value]) -> Result<()> {
     );
     let env = environment(owner)?;
     require(env.len() == expected.len() && expected.iter().all(|(k, v)| env.get(k) == Some(&v)))?;
-    require(owner["ports"] == json!([{"name":"http","containerPort":8017}]))?;
+    require(
+        owner["ports"]
+            == json!([{"name":"http","containerPort":8017},{"name":"secret-tls","containerPort":8018}]),
+    )?;
     for probe in ["livenessProbe", "readinessProbe"] {
         require(owner[probe]["httpGet"] == json!({"path":"/health","port":8017}))?;
     }
     require(
         service["spec"]
-            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017}]}),
+            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017},{"name":"secret-tls","port":8018,"targetPort":8018}]}),
     )?;
     Ok(())
 }

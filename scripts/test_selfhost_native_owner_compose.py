@@ -242,6 +242,29 @@ def assert_models(
     native = GATE["native_dispatcher_model"](
         preserved["services"].pop("issuance-native")
     )
+    tls_url = "https://signing-keys:8018/internal"
+    tls_ca_file = "/run/secrets/workload_identity_ca_cert"
+    tls_ca_mount = {
+        "source": "workload_identity_ca_cert",
+        "target": tls_ca_file,
+    }
+    for service in [native, preserved["services"].get("canvas-sync-worker")]:
+        if service is None:
+            continue
+        assert service["environment"].pop("INTEGRATION_SECRET_KMS_URL") == tls_url
+        assert service["environment"].pop("INTEGRATION_SECRET_KMS_CA_FILE") == tls_ca_file
+        assert service["secrets"].count(tls_ca_mount) == 1
+        service["secrets"].remove(tls_ca_mount)
+    signer_tls = preserved["services"]["signing-keys"]
+    for suffix in ("cert", "key"):
+        name = f"signing_keys_workload_server_{suffix}"
+        assert preserved["secrets"].pop(name)["file"].endswith("/" + name)
+        assert signer_tls["environment"].pop(
+            f"SIGNING_KEYS_INTEGRATION_SECRET_TLS_{suffix.upper()}_FILE"
+        ) == f"/run/secrets/{name}"
+        mount = {"source": name, "target": f"/run/secrets/{name}"}
+        assert signer_tls["secrets"].count(mount) == 1
+        signer_tls["secrets"].remove(mount)
     shared = preserved.pop("x-issuance-application-env")
     assert {key: shared[key] for key in SHARED_ADDITIONS} == shared_additions
     legacy_after = preserved["services"]["issuance"]["environment"]

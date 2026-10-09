@@ -10,13 +10,34 @@ postgres="issuance-postgres-${suffix}"
 service="issuance-service-${suffix}"
 secret_service="issuance-secret-service-${suffix}"
 secret_api_key="ci-only-signing-key-api-key-32-characters"
+tls_dir="$(mktemp -d "$repository_root/.issuance-smoke-tls-XXXXXXXX")"
 python_image="ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
 
 cleanup() {
   docker rm --force "$service" "$secret_service" "$postgres" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
+  rm -f -- "$tls_dir/ca.crt" "$tls_dir/ca.key" "$tls_dir/ca.srl" \
+    "$tls_dir/tls.crt" "$tls_dir/tls.key" "$tls_dir/tls.csr" "$tls_dir/tls.ext"
+  rmdir -- "$tls_dir" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+  -subj '/CN=Disposable Issuance Smoke CA' \
+  -addext 'basicConstraints=critical,CA:TRUE' \
+  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+  -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt" >/dev/null 2>&1
+openssl req -newkey rsa:2048 -sha256 -nodes \
+  -subj '/CN=synthetic-secret-service' \
+  -keyout "$tls_dir/tls.key" -out "$tls_dir/tls.csr" >/dev/null 2>&1
+printf '%s\n' 'basicConstraints=critical,CA:FALSE' \
+  'keyUsage=critical,digitalSignature,keyEncipherment' \
+  'extendedKeyUsage=serverAuth' \
+  'subjectAltName=DNS:synthetic-secret-service' >"$tls_dir/tls.ext"
+openssl x509 -req -in "$tls_dir/tls.csr" \
+  -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" -CAcreateserial \
+  -out "$tls_dir/tls.crt" -days 1 -sha256 -extfile "$tls_dir/tls.ext" \
+  >/dev/null 2>&1
 
 docker network create "$network" >/dev/null
 docker run --detach \
@@ -55,7 +76,11 @@ docker run --detach \
   --network "$network" \
   --network-alias synthetic-secret-service \
   --env SYNTHETIC_API_KEY="$secret_api_key" \
+  --env SYNTHETIC_TLS_CERT_FILE=/verification/tls/tls.crt \
+  --env SYNTHETIC_TLS_KEY_FILE=/verification/tls/tls.key \
   --mount "type=bind,source=$repository_root/scripts/synthetic_integration_secret_service.py,target=/verification/synthetic_integration_secret_service.py,readonly" \
+  --mount "type=bind,source=$tls_dir/tls.crt,target=/verification/tls/tls.crt,readonly" \
+  --mount "type=bind,source=$tls_dir/tls.key,target=/verification/tls/tls.key,readonly" \
   --entrypoint python \
   "$python_image" \
   //verification/synthetic_integration_secret_service.py \
@@ -80,6 +105,9 @@ docker run --detach \
   --env GRPC_SERVICE_TOKEN=ci-only-grpc-service-token-at-least-32-bytes \
   --env SIGNING_KEYS_INTERNAL_API_KEY="$secret_api_key" \
   --env SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys \
+  --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8017/internal/signing-keys \
+  --env INTEGRATION_SECRET_KMS_CA_FILE=/verification/tls/ca.crt \
+  --mount "type=bind,source=$tls_dir/ca.crt,target=/verification/tls/ca.crt,readonly" \
   --env DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty" \
   --publish 127.0.0.1::8005 \
   "$image" \

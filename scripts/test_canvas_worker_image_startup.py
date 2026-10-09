@@ -1,6 +1,7 @@
 """Packaged native startup against the frozen published schema and observations."""
 
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -84,6 +85,8 @@ def configuration(case, mode):
         "CANVAS_SYNC_WORKER_POLL_SECONDS": "60",
         "CANVAS_PILOT_ORGANIZATION_IDS": "bootstrap-org",
         "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:8017/internal/signing-keys",
+        "INTEGRATION_SECRET_KMS_URL": "https://127.0.0.1:8017/internal/signing-keys",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/synthetic-secrets/ca.crt",
         **case["environment"],
     }
     key_source = mode["key_source"]
@@ -176,12 +179,59 @@ def run(image):
         assert re.fullmatch(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}", pin)
         docker("pull", pin, timeout=120)
     with TemporaryDirectory(prefix="canvas-worker-image-startup-") as temporary:
-        directory = Path(temporary).resolve()
-        directory.chmod(0o755)
+        temporary_root = Path(temporary).resolve()
+        temporary_root.chmod(0o755)
+        directory = temporary_root / "worker-secrets"
+        directory.mkdir(mode=0o755)
         for name, value in SECRETS.items():
             path = directory / name
             path.write_text(value + "\r\n", encoding="utf-8", newline="")
             path.chmod(0o444)
+        tls_directory = temporary_root / "tls-server"
+        tls_directory.mkdir(mode=0o755)
+        openssl_config = tls_directory / "openssl.cnf"
+        openssl_config.write_text(
+            "[req]\ndistinguished_name=req_distinguished_name\n"
+            "[req_distinguished_name]\n", encoding="ascii",
+        )
+        for arguments in (
+            (
+                "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "1",
+                "-nodes", "-subj", "/CN=Disposable Canvas Smoke CA",
+                "-addext", "basicConstraints=critical,CA:TRUE",
+                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+                "-keyout", str(tls_directory / "ca.key"),
+                "-out", str(directory / "ca.crt"),
+            ),
+            (
+                "req", "-newkey", "rsa:2048", "-sha256", "-nodes",
+                "-subj", "/CN=127.0.0.1",
+                "-keyout", str(tls_directory / "tls.key"),
+                "-out", str(tls_directory / "tls.csr"),
+            ),
+            (
+                "x509", "-req", "-in", str(tls_directory / "tls.csr"),
+                "-CA", str(directory / "ca.crt"),
+                "-CAkey", str(tls_directory / "ca.key"), "-CAcreateserial",
+                "-out", str(tls_directory / "tls.crt"), "-days", "1", "-sha256",
+                "-extfile", str(tls_directory / "tls.ext"),
+            ),
+        ):
+            if arguments[0] == "x509":
+                (tls_directory / "tls.ext").write_text(
+                    "basicConstraints=critical,CA:FALSE\n"
+                    "keyUsage=critical,digitalSignature,keyEncipherment\n"
+                    "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
+                    encoding="ascii",
+                )
+            subprocess.run(
+                ("openssl", *arguments), check=True,
+                env={**os.environ, "OPENSSL_CONF": str(openssl_config)},
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        (directory / "ca.crt").chmod(0o444)
+        (tls_directory / "tls.key").chmod(0o444)
+        (tls_directory / "tls.crt").chmod(0o444)
         with owned_container(
             "--pull=never",
             "--network",
@@ -246,6 +296,12 @@ def run(image):
                 *HARDENED,
                 "--env",
                 f"SYNTHETIC_API_KEY={SECRETS['SIGNING_KEYS_INTERNAL_API_KEY']}",
+                "--env",
+                "SYNTHETIC_TLS_CERT_FILE=/verification/tls/tls.crt",
+                "--env",
+                "SYNTHETIC_TLS_KEY_FILE=/verification/tls/tls.key",
+                *mount(tls_directory / "tls.crt", "/verification/tls/tls.crt"),
+                *mount(tls_directory / "tls.key", "/verification/tls/tls.key"),
                 *mount(
                     ROOT / "scripts/synthetic_integration_secret_service.py",
                     "/verification/synthetic_integration_secret_service.py",

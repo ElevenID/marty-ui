@@ -284,6 +284,11 @@ cmd_setup_secrets() {
   notification_webhook_secret="$(resolve_secret_input NOTIFICATION_WEBHOOK_SECRET)"
   notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
   workload_identity_ca_cert="$(resolve_secret_input MARTY_WORKLOAD_IDENTITY_CA_CERT)"
+  require_resolved_secret MARTY_WORKLOAD_IDENTITY_CA_CERT "$workload_identity_ca_cert"
+  signing_keys_workload_server_cert="$(resolve_secret_input SIGNING_KEYS_WORKLOAD_SERVER_CERT)"
+  signing_keys_workload_server_key="$(resolve_secret_input SIGNING_KEYS_WORKLOAD_SERVER_KEY)"
+  require_resolved_secret SIGNING_KEYS_WORKLOAD_SERVER_CERT "$signing_keys_workload_server_cert"
+  require_resolved_secret SIGNING_KEYS_WORKLOAD_SERVER_KEY "$signing_keys_workload_server_key"
   pp_workload_server_cert="$(resolve_secret_input PP_WORKLOAD_SERVER_CERT)"
   pp_workload_server_key="$(resolve_secret_input PP_WORKLOAD_SERVER_KEY)"
   flow_workload_client_cert="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_CERT)"
@@ -352,6 +357,16 @@ cmd_setup_secrets() {
     --from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"
+
+  kubectl create secret generic signing-keys-integration-secret-server-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=tls.crt="$signing_keys_workload_server_cert" \
+    --from-literal=tls.key="$signing_keys_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic signing-keys-integration-secret-ca \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
   kubectl create secret generic presentation-policy-workload-tls \
     --namespace="$NAMESPACE" \

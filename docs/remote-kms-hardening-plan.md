@@ -6941,7 +6941,7 @@ logs if the container exits or never receives one; this makes a remaining
 hosted-only failure diagnosable. It has not yet passed on the new PR head.
 
 2026-10-08 integration-secret transport implementation in progress (local,
-uncommitted, unpushed): CodeQL's two high alerts are a real plaintext/API-key
+unpushed): CodeQL's two high alerts are a real plaintext/API-key
 HTTP path, not a false positive. A separate Rust TLS listener has been added
 to Signing Keys on configurable port 8018 with paired PEM certificate/key
 configuration; its HTTP listener denies integration-secret routes. Issuance's
@@ -6959,3 +6959,28 @@ documented and tested path; the HTTP-route denial needs a live assertion.
 Do not push this partial transport change or claim CodeQL fixed until those
 surfaces and a hosted rerun pass. Use distinct certificates and keys for
 transport TLS versus non-exportable KMS application keys.
+
+2026-10-08 TLS deployment follow-up (local, unpushed): the transport code is
+committed at `ee05e0f37`. Self-host Compose now provisions separate Signing
+Keys server certificate/key secrets and mounts the existing workload CA on
+Issuance and Canvas worker clients. Kubernetes templates and the deploy script
+now create a separate server TLS Secret plus a CA-only client Secret; the
+closed Rust renderer checks their exact URLs, paths, ports, mounts, and service
+mapping. The self-host Compose model suite passes all five cases. Twelve of
+thirteen Kubernetes renderer tests pass locally; the remaining CLI-fixture
+test invokes `envsubst`, which is unavailable in this Windows environment and
+must run on Linux/hosted CI. A live middleware test confirms that the HTTP
+listener refuses both integration-secret routes. The packaged Issuance smoke
+harness now generates a disposable CA and separate server certificate,
+supplies only the CA to the client, and runs the synthetic service over TLS.
+The current `marty-issuance:kms-tls-local` image passed this smoke. Rustls
+correctly rejected an initial test certificate marked `CA:TRUE` as an end
+entity; the corrected leaf has `CA:FALSE` and `serverAuth`. The Canvas worker
+image-startup suite passed all 16 direct and file-backed cases against the
+same image and TLS synthetic service. The beta workload-identity issuer and
+disposable passport certificate issuer now produce a Signing Keys server leaf
+with DNS SAN `signing-keys`; the disposable chain passed `openssl verify
+-verify_hostname signing-keys`. These deployment and harness edits remain
+local and unpushed. Development Compose certificate provisioning, other process
+fixtures, live OpenBao recovery, certificate rotation, and hosted CodeQL
+remain open.
