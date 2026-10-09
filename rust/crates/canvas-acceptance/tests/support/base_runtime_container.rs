@@ -29,6 +29,7 @@ const KUBERNETES_CHILD: &str = "kubernetes_profile_gateway_composition_child";
 const COMPOSE_SHA256: &str = "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be";
 const COMPAT_TEST_EXECUTABLE: &str = "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";
 const ASSETS: &[&str] = &[
+    "docker/openbao-didcomm-dev.hcl",
     "docker-compose.base.yml",
     "docker-compose.profile.issuance-native.yml",
     "docker-compose.profile.issuance-native-authcrypt.yml",
@@ -1065,8 +1066,8 @@ mod tests {
         ] {
             assert!(completed(&status, SENTINEL).is_err());
         }
-        assert_eq!(ASSETS.len(), 19);
-        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 19);
+        assert_eq!(ASSETS.len(), 20);
+        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 20);
         assert_eq!(kubernetes_source_assets().unwrap().len(), 7);
     }
 }

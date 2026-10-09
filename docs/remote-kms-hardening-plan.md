@@ -1225,11 +1225,11 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; UI and Credentials candidates pin Core PR #355 head `d41d87c`; Core's exact hosted checks pass and it is ready for the required review. UI's six no-default-feature native library suites pass (969 active tests, 17 ignored), and Credentials' locked graph and hosted checks pass. An authenticator consumer probe found old direct and transitive Core pins through Verifier `marty-sync`; Verifier still selects removed local-key features. Downstream wallet/Verifier adoption, full consumer packaging and published release artifacts remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; UI and Credentials candidates pin Core PR #355 head `d41d87c`; Core's exact hosted checks pass and it is ready for the required review. UI's six no-default-feature native library suites pass (969 active tests, 17 ignored), and Credentials' locked graph and hosted checks pass. An authenticator consumer probe found old direct and transitive Core pins through Verifier `marty-sync`; Verifier's test-only feature selectors no longer resolve against hardened Core. Downstream wallet/Verifier adoption, full consumer packaging and published release artifacts remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 at `fef8da1` pins Core `d41d87c`, excludes LDAP from WASM and rejects isomdl local signing. Its 19 hosted checks pass, alongside local web WASM/package-load and Windows ABI3 wheel/surface checks. The authenticator browser flow has a verified old-Core/Verifier dependency gap; published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core PR #355 at `d41d87c` is ready for review with green hosted checks and one required approval; Credentials draft PR #313 at `fef8da1` is green but needs browser/release qualification. UI draft PR #1192 at `543b9a96c` has green service images, OpenBao plugin recovery and release contracts; one stale Rust contracts expectation is fixed locally, and Canvas is still live. The grouped correction head remains local. Exact release artifacts, supported cutover and recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core PR #355 at `d41d87c` is ready for review with green hosted checks and one required approval; Credentials draft PR #313 at `fef8da1` is green but needs browser/release qualification. UI draft PR #1192 at `543b9a96c` passed service images, OpenBao plugin recovery and release contracts but failed one stale Rust contracts assertion and three Canvas cases. The local grouped batch corrects that assertion and the diagnosed Canvas fixture gaps; exact new-head CI is pending. Release artifacts, supported cutover and recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and the named service JSON stores. A disposable PostgreSQL 16 run of the candidate Rust Issuance migration created 31 tables without `issuer_signing_keys`; earlier focused storage checks pass. A read-only local-stack audit found an empty historical `issuer_signing_keys.encrypted_jwk_json` table still present in self-host PostgreSQL; beta has no private-key-named table or column. Full assembled-schema, runtime-write, self-host rebuild/cutover and release-artifact proof remain. |
 
 ### First execution steps
@@ -7392,11 +7392,12 @@ claiming authenticator adoption. The isolated authenticator worktree contains
 diagnostic manifest/lock edits only and has not been published.
 
 An isolated Verifier root probe using Core `d41d87c` reaches a concrete
-manifest incompatibility before compilation: production `src-tauri` enables
-the removed `marty-verification/local-key-operations` and
+manifest incompatibility before compilation: `src-tauri` dev-dependencies
+request the removed `marty-verification/local-key-operations` and
 `marty-crypto/sod-builder` features, and `marty-sync`'s optional demo-fixture
-path requests them too. Cargo rejects `sod-builder` on the hardened Core
-0.2 crate. Verifier's current `origin/main` still pins an older Core
+path requests them too. Cargo validates these feature names even for the
+selected `marty-sync` build and rejects `sod-builder` on hardened Core 0.2.
+Verifier's current `origin/main` still pins an older Core
 `08a0d43`; simply advancing the authenticator's `marty-sync` revision to
 Verifier main would leave a mixed old/new Core graph. Treat Verifier and
 authenticator as explicit downstream consumer work, preserving verifier and
@@ -7407,8 +7408,48 @@ Source review narrows the Verifier impact: the `sod-builder` call is in
 `src-tauri/tests/emrtd_conformance.rs` and the local Core key generator is in
 `src-tauri/tests/open_badge_conformance.rs`; the optional `marty-sync`
 `demo-fixtures` module also creates local Ed25519 keys and SODs. Yet
-`src-tauri/Cargo.toml` enables `sod-builder` and `local-key-operations` on
-its production dependencies, so those test-only abilities enter its normal
-feature graph. An aligned Verifier change would move fixture capability out
-of that production graph and replace the tests with public vectors or
-remote-custody fixtures while retaining their conformance assertions.
+`src-tauri/Cargo.toml` lists those features under `[dev-dependencies]`, not
+normal production dependencies. This is a test/optional-fixture migration and
+dependency-resolution gap; it is not evidence that the Verifier production
+binary selects local-key features. An aligned Verifier change would replace
+those fixtures with public vectors or remote-custody fixtures while retaining
+their conformance assertions.
+
+2026-10-08/09 UI PR #1192 run `37871998969` completed with the known Rust
+contracts test failure plus three Canvas database-contract failures; service
+images, OpenBao plugin recovery, release contracts, strict lint, CodeQL and
+the other applicable checks passed. Canvas ran 142 passing and three failing
+tests in its main isolated group, plus a separate 110-pass worker group. The
+retained child stderr proves both base-profile failures were caused by the
+renderer checking `docker/openbao-didcomm-dev.hcl` inside an exact-owned
+container whose source allowlist omitted that tracked file; it was not a
+missing PR file or a KMS process failure. The local fix adds exactly that
+regular file to the closed mount allowlist and updates its cardinality guard.
+The focused Rust allowlist/completion test passes locally.
+
+The third Canvas failure was the packaged self-host loader. Its child failed
+before completing the packager operation, so cleanup correctly retained the
+synthetic scratch. Reproducing the same bundle model on Windows with the
+standalone Compose executable exposed the stale exact-secret set in
+`resolved_selfhost_runtime`: `issuance-native` now mounts the
+`workload_identity_ca_cert` for HTTPS integration-secret KMS, but the model
+still expected the earlier six secrets. The local correction includes that
+CA secret and maps `INTEGRATION_SECRET_KMS_CA_FILE` to its mount. All six
+`marty-selfhost-bundle --test executable_bundle` cases pass locally after the
+correction, including actual package/extract/render and negative guards.
+Windows' default Docker CLI could not discover its Compose plugin under the
+packager's intentionally cleared environment, so the local reproduction used
+the installed standalone `docker-compose.exe`. These are diagnosed candidate
+fixes; Linux hosted Canvas and the full exact-head PR gate must pass after
+the single grouped push.
+Targeted Rustfmt for the two touched acceptance crates and `git diff --check`
+pass. Workspace-wide Cargo fmt on the Windows long path could not launch
+rustfmt (`os error 206`), so the targeted check is the local formatting
+evidence; hosted Rust lint remains the exact-head gate.
+
+The isolated Verifier probe now passes `cargo +1.97.1 check --offline -p
+marty-sync` against Core `d41d87c` and the reviewed SSI/isomdl fork pins after
+removing the obsolete feature requests from its dev-dependency and optional
+demo-fixture declarations. This proves the normal policy-sync crate compiles,
+not that Verifier tests, its application binary, or the authenticator wallet
+are qualified. Its old local-signing fixture tests still need migration.

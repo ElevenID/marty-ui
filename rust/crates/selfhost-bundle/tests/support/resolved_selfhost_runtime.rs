@@ -344,6 +344,7 @@ fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "token_hmac_key",
             "canvas_credentials_shared_secret",
             "grpc_service_token",
+            "workload_identity_ca_cert",
         ]
         .into_iter()
         .collect(),
@@ -378,6 +379,7 @@ fn secret_field(key: &str) -> Result<&'static str> {
         "GRPC_SERVICE_TOKEN_FILE" => Ok("grpc_service_token"),
         "ISSUANCE_API_KEY_FILE" | "SIGNING_KEYS_INTERNAL_API_KEY_FILE" => Ok("issuance_api_key"),
         "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
+        "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" => Ok("canvas_credentials_shared_secret"),
         "BAO_TOKEN_FILE" => Ok("openbao_service_token"),
