@@ -98,6 +98,7 @@ def render(spec, command):
             ISSUANCE_API_KEY=KEY,
             SIGNING_KEYS_INTERNAL_API_KEY=KEY,
             GRPC_SERVICE_TOKEN=TOKEN,
+            DEVICE_REGISTRATION_GATEWAY_KEY="synthetic-distinct-flow-device-gateway-key-32-chars",
             PUBLIC_API_URL="https://issuer.example",
             FLOW_CALLBACK_DESTINATIONS="org-1|https://callback.example/result?nonce=__MARTY_TOKEN__",
             SELFHOST_STATE_DIR=(directory / "unused-state").as_posix(),

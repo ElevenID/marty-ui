@@ -8723,3 +8723,52 @@ restore probe passed against real OpenBao, PostgreSQL and Redis after this
 refactor, including holder-proof verification/deletion, DIDComm rotation, the
 Go extension, HAIP and integration-secret reads before and after restore.
 This remains a local follow-up held for the next grouped UI push.
+
+Device proof design gate for durable holder signing: the current Gateway
+session identity carries a user and tenant, but the searched Rust Gateway/Auth
+runtime has no device-bound session claim. The existing Device Registration
+challenge verifies a PS256 public key supplied by the device; using that as
+the new signing authorization would preserve an app-held private key and
+conflict with strict KMS-only custody. The Authenticator client currently has
+OID4VCI access-token handling but no Gateway session-backed holder-signing
+client. A revocable, server-issued device credential paired with the user
+session could bind a registration without an app-held private key, with the
+explicit limitation that theft of both bearer credentials grants signing until
+revocation. A stronger device-possession factor may be preferable, but must be
+evaluated against the KMS-only requirement before implementation. No public
+holder-signing route is enabled until this choice and its enrollment/revocation
+semantics are settled and tested.
+
+Latest UI CI `37913136390` exposed two packaging-guard omissions on the
+published `167c5e7e4` head: the frozen self-host model comparator did not yet
+classify the paired Device Registration secret as an owned security addition,
+and the Rust packaging workflow's synthetic beta Compose environment omitted
+the newly required key. The local correction checks that the self-host secret
+is mounted exactly once to Gateway and Device Registration and nowhere else,
+and adds a distinct synthetic value to the packaging job. The full
+`test_selfhost_native_owner_compose.py` script now passes its default, empty,
+custom and missing-input renders plus frozen-model comparison. This is a
+correction for the current CI failure, not an exact-head hosted pass; wait for
+the remaining jobs to finish and batch any further findings before repushing.
+
+The same published-head CI subsequently exposed three more fixtures tied to
+the dedicated Device Registration credential. The Canvas Kubernetes runtime
+composition proof used a synthetic `marty-secrets` map without that key; the
+Gateway executable smoke setup omitted it and failed before reaching its
+intended Redis checks; and repository release checks included a beta physical
+Compose render, a Flow self-host render and Kubernetes secret setup fixtures
+without distinct values. Local follow-up now supplies a unique synthetic key
+in each fixture while preserving the new fail-closed production checks. The
+targeted Python suite covering the beta selector, Flow render, Kubernetes
+secret setup and self-host model passed 157/157; the Gateway executable smoke
+tests passed 3/3. The Linux-only Canvas composition proof still requires
+exact-head hosted confirmation. These corrections remain local pending the
+rest of published-head CI and full local release-suite results.
+
+Published-head UI CI `37913136390` has now terminated with five failed
+worker lanes plus the aggregate gate; the OpenBao DIDComm plugin image lane
+finished successfully, including its coordinated PostgreSQL/Raft recovery
+step. The five failed lanes map to the dedicated-credential fixtures described
+above. No failed evidence was rerun or discarded. The next hosted run must use
+the correction head and independently prove all gates; the former green
+prior-head run and the passing OpenBao lane do not qualify that new head.

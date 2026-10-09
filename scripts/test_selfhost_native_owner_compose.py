@@ -426,6 +426,21 @@ def assert_models(
                 assert retired["depends_on"].pop(dependency) == {
                     "condition": "service_healthy", "required": True,
                 }
+    # Both sides of the newly authenticated device API share one dedicated
+    # secret; no other self-host service may receive it.
+    gateway_secret = preserved["secrets"].pop("device_registration_gateway_key")
+    assert gateway_secret["file"].endswith("/device_registration_gateway_key")
+    for name in ("gateway", "device-registration"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("DEVICE_REGISTRATION_GATEWAY_KEY_FILE") == (
+            "/run/secrets/device_registration_gateway_key"
+        )
+        mount = {
+            "source": "device_registration_gateway_key",
+            "target": "/run/secrets/device_registration_gateway_key",
+        }
+        assert service["secrets"].count(mount) == 1
+        service["secrets"].remove(mount)
     assert preserved == before, "Unowned self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(before, sort_keys=True, indent=2).splitlines(keepends=True),

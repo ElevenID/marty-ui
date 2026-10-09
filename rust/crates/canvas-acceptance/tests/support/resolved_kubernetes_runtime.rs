@@ -554,6 +554,10 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
         ),
         ("ISSUANCE_API_KEY".into(), API_KEY.into()),
         ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
+        (
+            "DEVICE_REGISTRATION_GATEWAY_KEY".into(),
+            "synthetic-distinct-kubernetes-device-gateway-key-32-chars".into(),
+        ),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
         ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (

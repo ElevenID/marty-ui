@@ -384,6 +384,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "MARTY_ISSUANCE_IMAGE": IMAGE,
         "MARTY_DOCS_IMAGE": "sha256:" + "a" * 64,
         "GRPC_SERVICE_TOKEN": GRPC,
+        "DEVICE_REGISTRATION_GATEWAY_KEY": "synthetic-distinct-beta-device-gateway-key-32-chars",
         "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
     })
     digest_names = (

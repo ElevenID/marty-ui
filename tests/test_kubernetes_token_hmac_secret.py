@@ -101,6 +101,9 @@ def harness(tmp_path):
             env.setdefault(
                 entry["env"], "synthetic-required-value-at-least-thirty-two-bytes"
             )
+    env["DEVICE_REGISTRATION_GATEWAY_KEY"] = (
+        "synthetic-distinct-device-gateway-key-at-least-thirty-two-bytes"
+    )
     env.pop("TOKEN_HMAC_KEY")
     prelude = r"""
 set -euo pipefail

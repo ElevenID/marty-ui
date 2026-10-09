@@ -1911,6 +1911,7 @@ jobs:
           MARTY_MIGRATIONS_IMAGE: example.invalid/migrations@sha256:7777777777777777777777777777777777777777777777777777777777777777
           MARTY_UI_IMAGE: example.invalid/ui@sha256:8888888888888888888888888888888888888888888888888888888888888888
           GRPC_SERVICE_TOKEN: ci-only-token-with-at-least-32-characters
+          DEVICE_REGISTRATION_GATEWAY_KEY: ci-only-dedicated-device-gateway-key-32-chars
           ISSUANCE_API_KEY: ci-only-issuance-api-key-with-32-characters
           SIGNING_KEYS_INTERNAL_API_KEY: ci-only-signing-key-api-key-32-characters
           VERIFICATION_GOVERNANCE_JSON: '{"ci_compose_render_only":true}'
