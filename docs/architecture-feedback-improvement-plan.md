@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 16:18 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-09 17:33 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -55,6 +55,13 @@ UI #1210 repaired Gateway's base-Compose Verification address and guarded all
 15 configured upstream addresses. Its full PR and protected merge-group checks
 passed; main's one-reviewer rule was restored. This is deployment correctness,
 not a CI speedup.
+UI #1211 retained two timing-sensitive published Canvas worker references but
+serialized them after observed shutdown-bound failures under parallel load.
+UI #1212 repaired the oracle Kubernetes Gateway Signing Keys binding and
+guarded its parsed ConfigMap/container environment. Both passed full PR and
+protected queue checks and merged; main's one-reviewer rule was restored and
+verified. These are reliability and deployment-correctness changes, not
+measured CI speedups.
 
 ## Objective and scope
 
@@ -2662,19 +2669,66 @@ seconds in published database contracts. This repaired deployment wiring and
 closed one A0/A3 input gap; it did not change check selection or establish a
 CI speedup.
 
-## A0/A3 Gateway Kubernetes upstream parity (2026-10-09, candidate)
+## A0/A3 Gateway Kubernetes upstream parity (2026-10-09, merged)
 
 The oracle Kubernetes Gateway imports `marty-config` through `envFrom`, but
 that ConfigMap omitted `SIGNING_KEYS_SERVICE_URL`. Gateway's published signing
 route would inherit its `http://localhost:8017` development default, which
 cannot reach the separate Signing Keys Service on port 8017 when its optional
-`07b-signing-keys.yaml` overlay is applied. Add the missing binding and guard
-the exact 15 Gateway upstream targets against
-both the ConfigMap and any explicit Gateway environment overrides. Keep the
-expected addresses independent of production configuration, require the
-optional Signing Keys Service endpoint, and retain all existing checks. This
-is a deployment-correctness slice, not a CI speedup or permission to narrow the
-shadow planner's service-change fallback. Protected CI remains required.
+`07b-signing-keys.yaml` overlay is applied. [#1212](https://github.com/ElevenID/marty-ui/pull/1212)
+added the missing binding and a parsed-YAML guard for the exact 15 Gateway
+upstream targets, the actual Gateway container's ConfigMap import and explicit
+environment overrides, and the optional Signing Keys Service endpoint. The
+expected addresses remain independent of production configuration. The frozen
+historical ConfigMap hash reconstruction removes exactly the new binding.
+Focused Python checks passed (110 tests, one skip, 363 subtests); the reviewer
+found no remaining P1-P3 issue. Full exact-head [PR run](https://github.com/ElevenID/marty-ui/actions/runs/37959076710)
+and combined-head [protected run](https://github.com/ElevenID/marty-ui/actions/runs/37963117844)
+passed. The PR merged as `f50cc7c56` at 17:32:34 UTC, and main's one-reviewer
+rule was restored and verified. The PR and protected Canvas jobs took 31m06s
+and 30m49s; these are not comparable evidence of an attributable saving.
+This deployment-correctness slice did not narrow the shadow planner's
+service-change fallback or remove any check.
+
+## A6 published Canvas worker reference reliability (2026-10-09, merged)
+
+Two pinned worker references missed their existing 10-second SIGINT shutdown
+bound under parallel Canvas load on different exact-main runs. [#1211](https://github.com/ElevenID/marty-ui/pull/1211)
+kept both required references and their original bounds, but ran them serially
+before excluding them from the parallel worker target. The frozen oracles and
+native preflights remain; the exact case roster and timing-phase guards were
+updated. Its full [protected run](https://github.com/ElevenID/marty-ui/actions/runs/37962807792)
+passed and it merged as `1afa80a5e` at 17:28:48 UTC. Its protected Canvas job
+took 30m20s. This addresses observed flakiness; it does not establish a CI
+speedup or authorize weaker timing semantics.
+
+## A6 Kubernetes/consumer policy test-source ownership (2026-10-09, candidate)
+
+Six exact root Python test sources covering issuance consumer bindings,
+Kubernetes service coverage and signed release selection, token-secret shell
+doubles, supported passport Kubernetes, and consumer routing are collected by
+the existing Release Contract Tests root pytest step (122 collected and 122
+passed locally). Repository references show no second named workflow/script
+invocation; the service-image Dockerfile guard rejects root test copies, while
+UI and browser images build from their separate `ui` and `tests` contexts.
+These test files are not runtime inputs. Route PRs changing only these exact
+sources to their existing release-test owner; keep production scripts,
+manifests, unknown siblings, and mixed changes on the conservative classifier
+path. Synthetic classifier tests require the exact result tuple, a broad
+unknown-sibling fallback, mixed source selection, and full merge-group
+selection. This does not remove a test or narrow any deployed-source check.
+Hosted exact-source and protected outcomes are required before claiming faster
+feedback.
+
+Latest protected timing comparison: #1210's Canvas run `37955004959` spent
+482 seconds compiling reusable tests, 318 seconds building the public
+self-host image, and 459 seconds in database contracts. #1212's combined-head
+run `37963117844` spent 618, 375, and 647 seconds in those phases. The
+`json_depth`, `json_consumer`, and `worker_startup` migration/seed events all
+slowed together; #1211 also changed the combined head. These are different
+load/code conditions, not an attributable regression or a reason to delete
+one named case. A further fixture-reuse change needs case ownership and
+isolation proof under comparable runs.
 
 ## Design references
 
