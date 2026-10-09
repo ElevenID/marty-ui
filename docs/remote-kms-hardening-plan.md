@@ -7956,3 +7956,42 @@ Ruff and diff checks pass locally. Rust Lint and Packaging passed on this
 head; Rust contracts, Canvas, OpenBao and images remain live. Group this
 source-assertion correction with the K10 schema guard and any further live
 lane findings before the next push.
+
+With CI's `PYTHONPATH=packages` plus the repository root locally, all 6,208
+Python release tests collected. A full Windows run reached the Canvas Bash
+shell-harness cases at roughly 12% and advanced too slowly to serve as a
+practical full-suite gate; it was stopped deliberately. This is not a full
+local pass. The exact corrected workflow assertion passes in isolation, while
+the hosted Linux run established 6,200 passing tests and the one known source
+assertion failure. Re-run the complete hosted release lane after the grouped
+correction rather than extrapolating from the interrupted Windows run.
+
+The new Issuance PostgreSQL migration contract also passes targeted locked,
+offline Rust 1.95 Clippy with warnings denied. The first disposable database
+run's narrow expiry assertion is retained with a diagnostic message; the
+subsequent clean disposable PostgreSQL 16 run passed the entire selected
+migration test. Both runs exercised the new private-key schema checks before
+the expiry assertion.
+
+At UI head `d2b56df78`, run `37888791629` has now passed `Run safe Rust
+contract groups concurrently`, the hosted step that executes the selected
+signing document Redis contract with the new guarded database-14 fixture.
+Rust Lint and Packaging and Rust Service Images also passed. The Rust
+contracts job continues through later checks; do not call the entire lane
+green until it terminates.
+
+The same `d2b56df78` run subsequently completed Rust Service Tests
+(`contracts`), Rust Service Tests (`canvas`), Rust Lint and Packaging, and Rust
+Service Images successfully. The Canvas result includes packaged public
+selfhost and isolated database suites; the contracts result includes the
+guarded Redis document test, gateway and live Signing Keys contracts. Release
+Contract Tests remains the sole failed lane observed so far because of the
+known exact workflow-text assertion fixed locally. The OpenBao plugin image
+restore lane remains live and must finish before the grouped follow-up push.
+
+The OpenBao DIDComm plugin image job also completed successfully at
+`d2b56df78`, including the coordinated PostgreSQL/Raft restore probe. All
+substantive lanes are now terminal; Release Contract Tests is the only failed
+one, and the aggregate CI Gate is queued. Push the single grouped follow-up
+containing the corrected workflow assertion and real Issuance private-key
+schema guard, then require a fresh exact-head CI rollup.
