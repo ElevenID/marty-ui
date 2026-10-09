@@ -1,20 +1,18 @@
 //! Ticket-bound enrollment with server-owned identity and remote-only holder keys.
 
-use chrono::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
-    control_plane::MembershipAuthorizer,
+    control_plane::MembershipAuthorizer, holder_credential::CREDENTIAL_LIFETIME,
     holder_credential_repository::PostgresHolderCredentialRepository,
     holder_key_provisioner::HolderKeyProvisioner,
     pairing_confirmation::PostgresPairingConfirmations, pairing_ticket::PairingTicketRepository,
     CreateRegistration, DeviceError, DevicePreferences, DeviceService, Platform,
 };
 
-const CREDENTIAL_LIFETIME: Duration = Duration::days(1);
 const INVALID_TICKET: &str = "pairing ticket is invalid or expired";
 
 #[derive(Debug, Deserialize)]

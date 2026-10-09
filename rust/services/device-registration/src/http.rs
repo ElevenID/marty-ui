@@ -15,6 +15,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     control_plane::MembershipAuthorizer,
+    holder_credential_rotation::HolderCredentialRotator,
     holder_signer::HolderSigner,
     pairing_confirmation::PostgresPairingConfirmations,
     pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
@@ -30,6 +31,7 @@ pub struct HttpState {
     pub pairing_confirmations: Option<Arc<PostgresPairingConfirmations>>,
     pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
     pub holder_signer: Option<Arc<HolderSigner>>,
+    pub holder_credential_rotator: Option<Arc<HolderCredentialRotator>>,
     pub release_version: String,
     pub build_revision: String,
     pub gateway_key: String,
@@ -57,6 +59,10 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/v1/devices/holder-signatures",
             axum::routing::post(sign_holder_payload),
+        )
+        .route(
+            "/v1/devices/holder-credential-rotations",
+            axum::routing::post(rotate_holder_credential),
         )
         .route(
             "/v1/devices/{registration_id}",
@@ -246,6 +252,33 @@ async fn redeem_pairing_ticket(
 struct HolderSignRequest {
     purpose: String,
     payload_b64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HolderCredentialRotationRequest {
+    replacement_credential: String,
+}
+
+async fn rotate_holder_credential(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<HolderCredentialRotationRequest>,
+) -> Result<Response, ApiError> {
+    let rotator = state
+        .holder_credential_rotator
+        .as_ref()
+        .ok_or_else(|| DeviceError::PairingStore("remote holder rotation is unavailable".into()))?;
+    let current = bearer(&headers)?;
+    let rotated = rotator
+        .rotate(current, &body.replacement_credential)
+        .await?;
+    let mut response = Json(rotated).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 async fn sign_holder_payload(

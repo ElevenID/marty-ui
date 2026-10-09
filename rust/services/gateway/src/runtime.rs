@@ -6600,6 +6600,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn holder_rotation_forwards_only_bearer_and_replacement_to_device_registration() {
+        let (router, recorder) = actor_test_router();
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/holder-credential-rotations")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer current-opaque-capability")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(
+                        r#"{"replacement_credential":"new-opaque-capability"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "device-registration");
+        assert_eq!(calls[0].1.path, "/v1/devices/holder-credential-rotations");
+        assert_eq!(
+            calls[0].1.header("authorization"),
+            Some("Bearer current-opaque-capability")
+        );
+        assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(
+            calls[0].1.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn native_passport_gateway_forwards_all_eight_public_routes_with_tenant_key() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let router = gateway_router(runtime_state_with_upstream_and_passport(

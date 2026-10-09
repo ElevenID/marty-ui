@@ -1,6 +1,7 @@
 use marty_device_registration::{
     control_plane::{MembershipAuthorizer, OrganizationMembershipClient},
     holder_credential_repository::PostgresHolderCredentialRepository,
+    holder_credential_rotation::HolderCredentialRotator,
     holder_key_cleanup::HolderKeyCleanup,
     holder_key_client::HolderKeyClient,
     holder_key_provisioner::HolderKeyProvisioner,
@@ -109,6 +110,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
     let pairing_confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));
+    let holder_credential_rotator = Arc::new(HolderCredentialRotator::new(
+        pool.clone(),
+        memberships.clone(),
+    ));
     tokio::spawn(
         (*pairing_confirmations)
             .clone()
@@ -155,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             pairing_confirmations: Some(pairing_confirmations),
             pairing_enrollment,
             holder_signer,
+            holder_credential_rotator: Some(holder_credential_rotator),
             release_version,
             build_revision,
             gateway_key,

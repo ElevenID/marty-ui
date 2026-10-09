@@ -177,7 +177,7 @@ impl PostgresHolderCredentialRepository {
     }
 }
 
-async fn replace_locked(
+pub(crate) async fn replace_locked(
     transaction: &mut Transaction<'_, Postgres>,
     record: &HolderCredentialRecord,
     now: DateTime<Utc>,

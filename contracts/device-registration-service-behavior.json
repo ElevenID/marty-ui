@@ -8,6 +8,7 @@
     {"method": "POST", "path": "/v1/devices/pairing-ack", "success": 200},
     {"method": "GET", "path": "/v1/devices/pairing-confirmations/{pairing_id}", "success": 200},
     {"method": "POST", "path": "/v1/devices/holder-signatures", "success": 200},
+    {"method": "POST", "path": "/v1/devices/holder-credential-rotations", "success": 200},
     {"method": "GET", "path": "/v1/devices", "success": 200},
     {"method": "GET", "path": "/v1/devices/{registration_id}", "success": 200},
     {"method": "PATCH", "path": "/v1/devices/{registration_id}", "success": 200},

@@ -16,6 +16,14 @@ const TOKEN_BYTES: usize = 32;
 const TOKEN_CHARS: usize = 43; // unpadded URL-safe base64 of 32 bytes
 const MAX_LIFETIME_SECONDS: i64 = 30 * 24 * 60 * 60;
 const INVALID: &str = "holder device credential is invalid";
+pub const CREDENTIAL_LIFETIME: Duration = Duration::days(1);
+
+pub(crate) fn canonical_bearer(value: &str) -> bool {
+    value.len() == TOKEN_CHARS
+        && URL_SAFE_NO_PAD.decode(value).ok().is_some_and(|bytes| {
+            bytes.len() == TOKEN_BYTES && URL_SAFE_NO_PAD.encode(bytes) == value
+        })
+}
 
 #[derive(Clone)]
 pub struct HolderCredentialRecord {
@@ -65,7 +73,18 @@ pub fn issue(
     now: DateTime<Utc>,
     lifetime: Duration,
 ) -> Result<IssuedHolderCredential, DeviceError> {
-    if !eligible(registration) {
+    let mut random = [0_u8; TOKEN_BYTES];
+    rand::rng().fill_bytes(&mut random);
+    issue_with_bearer(registration, now, lifetime, URL_SAFE_NO_PAD.encode(random))
+}
+
+pub(crate) fn issue_with_bearer(
+    registration: &DeviceRegistration,
+    now: DateTime<Utc>,
+    lifetime: Duration,
+    bearer: String,
+) -> Result<IssuedHolderCredential, DeviceError> {
+    if !eligible(registration) || !canonical_bearer(&bearer) {
         return Err(DeviceError::Forbidden(INVALID.into()));
     }
     let seconds = lifetime.num_seconds();
@@ -77,9 +96,6 @@ pub fn issue(
     let expires_at = now.checked_add_signed(lifetime).ok_or_else(|| {
         DeviceError::BadRequest("holder device credential expiry is invalid".into())
     })?;
-    let mut random = [0_u8; TOKEN_BYTES];
-    rand::rng().fill_bytes(&mut random);
-    let bearer = URL_SAFE_NO_PAD.encode(random);
     let token_sha256: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
     Ok(IssuedHolderCredential {
         bearer,
@@ -110,10 +126,7 @@ pub fn authorize(
     let digest: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
     let token_matches = digest.ct_eq(&record.token_sha256).unwrap_u8() == 1;
     if !token_matches
-        || bearer.len() != TOKEN_CHARS
-        || !bearer
-            .bytes()
-            .all(|value| value.is_ascii_alphanumeric() || value == b'-' || value == b'_')
+        || !canonical_bearer(bearer)
         || !valid_record_for(record, registration, now)
         || record.user_id != user_id
         || record.organization_id != organization_id
@@ -187,6 +200,23 @@ mod tests {
             now
         )
         .is_err());
+    }
+
+    #[test]
+    fn replacement_bearer_must_be_canonical_32_byte_base64url() {
+        let registration = registration();
+        let now = Utc::now();
+        let canonical = URL_SAFE_NO_PAD.encode([17_u8; TOKEN_BYTES]);
+        assert!(canonical_bearer(&canonical));
+        assert!(issue_with_bearer(&registration, now, Duration::days(1), canonical).is_ok());
+        for malformed in [
+            "short".to_owned(),
+            "B".repeat(TOKEN_CHARS),
+            "!".repeat(TOKEN_CHARS),
+        ] {
+            assert!(!canonical_bearer(&malformed));
+            assert!(issue_with_bearer(&registration, now, Duration::days(1), malformed).is_err());
+        }
     }
 
     #[test]

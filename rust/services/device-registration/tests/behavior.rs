@@ -50,7 +50,7 @@ fn contract_retires_device_private_key_challenge() {
         "../../../../contracts/device-registration-service-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract["routes"].as_array().unwrap().len(), 10);
+    assert_eq!(contract["routes"].as_array().unwrap().len(), 11);
     assert!(contract["challenge"].is_null());
     assert!(contract["invariants"]
         .as_array()
@@ -150,6 +150,7 @@ async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
+        holder_credential_rotator: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -224,6 +225,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
+        holder_credential_rotator: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -258,6 +260,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
+        holder_credential_rotator: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -278,6 +281,7 @@ async fn mobile_redemption_cannot_use_a_missing_remote_kms_authority() {
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
+        holder_credential_rotator: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -319,6 +323,7 @@ async fn mobile_signing_requires_gateway_and_remote_kms_authority() {
         pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
+        holder_credential_rotator: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),

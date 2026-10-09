@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 449;
+pub const EXPECTED_ROUTE_COUNT: usize = 450;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -697,6 +697,7 @@ fn public_route(path: &str) -> bool {
         || path == "/v1/devices/pair"
         || path == "/v1/devices/pairing-ack"
         || path == "/v1/devices/holder-signatures"
+        || path == "/v1/devices/holder-credential-rotations"
         || path == "/v1/organizations/invitations/validate"
         || path == "/v1/organizations/join/code/validate"
         || path == "/v1/passport/webhooks/personalization"
@@ -1010,17 +1011,17 @@ mod tests {
     #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
-        assert_eq!(contract.route_table().expect("public").routes().len(), 449);
+        assert_eq!(contract.route_table().expect("public").routes().len(), 450);
         assert_eq!(
             contract
                 .runtime_route_table()
                 .expect("runtime")
                 .routes()
                 .len(),
-            452
+            453
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), 465);
+        assert_eq!(proxy.routes().len(), 466);
         assert_eq!(
             route_for(
                 &proxy,

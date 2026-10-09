@@ -2,6 +2,7 @@ pub mod control_plane;
 pub mod domain;
 pub mod holder_credential;
 pub mod holder_credential_repository;
+pub mod holder_credential_rotation;
 pub mod holder_key;
 pub mod holder_key_cleanup;
 pub mod holder_key_client;

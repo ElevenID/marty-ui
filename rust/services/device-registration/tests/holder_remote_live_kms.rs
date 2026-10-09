@@ -6,6 +6,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use marty_device_registration::{
     control_plane::MembershipAuthorizer,
     holder_credential_repository::PostgresHolderCredentialRepository,
+    holder_credential_rotation::HolderCredentialRotator,
     holder_key_cleanup::HolderKeyCleanup,
     holder_key_client::HolderKeyClient,
     holder_key_provisioner::HolderKeyProvisioner,
@@ -137,6 +138,10 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         pairing_confirmations: Some(Arc::new(confirmations.clone())),
         pairing_enrollment: Some(enrollment),
         holder_signer: Some(signer.clone()),
+        holder_credential_rotator: Some(Arc::new(HolderCredentialRotator::new(
+            pool.clone(),
+            memberships.clone(),
+        ))),
         release_version: "test".into(),
         build_revision: "disposable".into(),
         gateway_key: gateway_key.into(),
@@ -321,17 +326,58 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("revoked membership signing response");
     assert_eq!(revoked_membership.status(), reqwest::StatusCode::FORBIDDEN);
+    let denied_rotation = http
+        .post(format!(
+            "{device_origin}/v1/devices/holder-credential-rotations"
+        ))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"replacement_credential":URL_SAFE_NO_PAD.encode([41_u8;32])}))
+        .send()
+        .await
+        .expect("revoked membership rotation response");
+    assert_eq!(denied_rotation.status(), reqwest::StatusCode::FORBIDDEN);
     memberships.0.store(true, Ordering::SeqCst);
 
-    let replacement = credentials
-        .issue_for_registration(
-            &registration.id,
-            &registration.user_id,
-            key.organization_id.as_str(),
-            chrono::Duration::hours(1),
-        )
+    let replacement = URL_SAFE_NO_PAD.encode([42_u8; 32]);
+    let rotation_body = json!({"replacement_credential":replacement});
+    let rotated = http
+        .post(format!(
+            "{device_origin}/v1/devices/holder-credential-rotations"
+        ))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&rotation_body)
+        .send()
         .await
-        .expect("atomically rotate bearer using database clock");
+        .expect("holder credential rotation response");
+    assert!(rotated.status().is_success());
+    assert_eq!(rotated.headers()["cache-control"], "no-store");
+    let rotated: serde_json::Value = rotated.json().await.unwrap();
+    assert_eq!(rotated["registration_id"], registration.id);
+    let retry = http
+        .post(format!(
+            "{device_origin}/v1/devices/holder-credential-rotations"
+        ))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&rotation_body)
+        .send()
+        .await
+        .expect("lost-response rotation retry");
+    assert!(retry.status().is_success());
+    assert_eq!(retry.json::<serde_json::Value>().await.unwrap(), rotated);
+    let altered = http
+        .post(format!(
+            "{device_origin}/v1/devices/holder-credential-rotations"
+        ))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"replacement_credential":URL_SAFE_NO_PAD.encode([43_u8;32])}))
+        .send()
+        .await
+        .expect("different replay response");
+    assert_eq!(altered.status(), reqwest::StatusCode::FORBIDDEN);
     assert!(signer
         .sign(
             &enrolled.device_credential,
@@ -344,7 +390,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .is_err());
     signer
         .sign(
-            &replacement.bearer,
+            &replacement,
             &registration.user_id,
             key.organization_id.as_str(),
             "holder_binding",
@@ -360,7 +406,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .expect("registered device");
     assert!(signer
         .sign(
-            &replacement.bearer,
+            &replacement,
             &registration.user_id,
             key.organization_id.as_str(),
             "holder_binding",

@@ -9831,3 +9831,37 @@ issuer-key resolver, the bearer-scoped Gateway ES256 signer, and
 `submit_presentation_for_request` with the original request's nonce, audience,
 state, and response mode. Preserve the separate mDoc session path and prove
 both on mobile; add bearer renewal with lost-response recovery before release.
+
+2026-10-09 holder bearer renewal candidate (local grouped batch): Device
+Registration now offers bearer-only `POST
+/v1/devices/holder-credential-rotations` through Gateway. A confirmed,
+active registration and current organization membership are required. The
+mobile app generates a fresh 32-byte capability using `Random.secure`, saves
+it as `pending_credential` in platform secure storage before sending it, and
+promotes it only after receiving the server's scoped expiry response. The
+mobile client rejects noncanonical 32-byte base64url capabilities and
+serializes pairing against in-flight renewal while coalescing concurrent
+renewals, so a second request cannot overwrite the bearer installed by the
+first. The
+server stores SHA-256 digests only, locks the registration while revoking the
+old bearer and installing the replacement, and recognizes an identical
+old/new retry after a lost response; a changed replay is rejected. The
+Authenticator records pairing as locally confirmed only after its exact-ticket
+acknowledgment succeeds; renewal rejects an unconfirmed stored enrollment.
+The presentation entrypoint checks and renews a confirmed paired bearer when
+its expiry is within 12 hours. A device that stays offline past the one-day
+bearer expiry still needs a user-approved re-pairing path or a proven
+background renewal schedule; renewal at presentation time alone does not
+guarantee uninterrupted wallet use. This does not yet make presentation
+functional: the trusted-issuer and Rust remote-presenter work above remains.
+
+The expanded disposable OpenBao/PostgreSQL/Redis probe passed with public
+rotation, exact lost-response retry, changed-replay rejection, signing under
+the replacement, and revocation/deletion. Device Registration behavior tests
+8/8, Gateway contract tests 15/15, its public rotation forwarding test, and
+all-target Device Registration/Gateway Clippy passed. Mobile unit test source
+covers staged-storage retry, simultaneous calls, and rejecting renewal before
+acknowledgment; the canonical bearer
+Rust unit test passed. Dart/Flutter tooling is absent on this host;
+run analyzer, mobile tests, and physical-device network acceptance on the
+grouped PR before claiming release readiness.
