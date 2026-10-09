@@ -2,9 +2,13 @@
 //! OpenBao retains the private signing key; only public metadata enters Rust.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use marty_holder_key_reference::new_reference;
 use marty_signing_keys::kms::{
     create_managed_openbao, read_managed_openbao, rotate_openbao, sign, ProviderRequest,
     SignRequest,
+};
+use marty_signing_keys::managed_holder_key::{
+    CreateHolderKeyRequest, HolderKeyScope, OpenBaoManagedHolderKeys, SignHolderKeyRequest,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -105,4 +109,49 @@ async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
     .await
     .expect("version-two public key read");
     assert_eq!(current["public_jwk"], second["public_jwk"]);
+
+    let holder = OpenBaoManagedHolderKeys::new(endpoint.clone(), scoped_token.clone())
+        .expect("scoped holder provider");
+    let holder_reference = new_reference("org-holder", "registration-holder", "holder_binding")
+        .expect("scoped holder reference");
+    let scope = || HolderKeyScope {
+        organization_id: "org-holder".into(),
+        registration_id: "registration-holder".into(),
+        purpose: "holder_binding".into(),
+        provider_reference: holder_reference.clone(),
+    };
+    let holder_metadata = holder
+        .create(CreateHolderKeyRequest {
+            scope: scope(),
+            algorithm: "EdDSA".into(),
+        })
+        .await
+        .expect("non-exportable holder key creation");
+    assert_eq!(holder_metadata["status"], "active");
+    assert_eq!(holder_metadata["exportable"], false);
+    let signature = holder
+        .sign(SignHolderKeyRequest {
+            scope: scope(),
+            algorithm: "EdDSA".into(),
+            key_version: holder_metadata["latest_version"].as_u64().unwrap(),
+            public_jwk: holder_metadata["public_jwk"].clone(),
+            payload_b64: URL_SAFE_NO_PAD.encode(b"exact-holder-proof"),
+        })
+        .await
+        .expect("version-pinned managed holder signature");
+    assert_eq!(signature.signature_encoding, "raw");
+    assert!(!signature.signature_b64.is_empty());
+    holder
+        .revoke(scope())
+        .await
+        .expect("remote holder revocation");
+    assert!(read_managed_openbao(ProviderRequest {
+        service_config: json!({
+            "id":"managed-openbao-transit", "service_type":"openbao-transit",
+            "endpoint":endpoint, "mount":"transit", "key_reference":holder_reference,
+            "algorithm":"EdDSA", "auth_reference":scoped_token
+        }),
+    })
+    .await
+    .is_err());
 }

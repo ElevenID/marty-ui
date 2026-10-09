@@ -3,10 +3,12 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{holder_credential::eligible, DeviceError, DeviceRegistration};
+use marty_holder_key_reference::belongs_to;
+
+pub use marty_holder_key_reference::new_reference;
 
 const INVALID: &str = "managed holder key metadata is invalid";
 
@@ -24,33 +26,6 @@ pub struct HolderKeyRecord {
     pub public_y: Option<String>,
     pub created_at: DateTime<Utc>,
     pub revoked_at: Option<DateTime<Utc>>,
-}
-
-pub fn new_reference(organization_id: &str, purpose: &str) -> Result<String, DeviceError> {
-    let prefix = tenant_prefix(organization_id, purpose)
-        .ok_or_else(|| DeviceError::BadRequest(INVALID.into()))?;
-    Ok(format!("{}{}", prefix, Uuid::new_v4().simple()))
-}
-
-fn tenant_prefix(organization_id: &str, purpose: &str) -> Option<String> {
-    let namespace = match purpose {
-        "holder_binding" => "cred-holder",
-        "presentation_signing" => "cred-presenter",
-        _ => return None,
-    };
-    let digest = Sha256::digest(organization_id.as_bytes());
-    Some(format!("{namespace}-{}-", hex::encode(&digest[..16])))
-}
-
-fn valid_reference_for(organization_id: &str, purpose: &str, reference: &str) -> bool {
-    tenant_prefix(organization_id, purpose).is_some_and(|prefix| {
-        reference.strip_prefix(&prefix).is_some_and(|suffix| {
-            suffix.len() == 32
-                && suffix
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        })
-    })
 }
 
 fn public_coordinate(value: &Value, name: &str) -> Result<String, DeviceError> {
@@ -83,7 +58,7 @@ impl HolderKeyRecord {
                 .organization_id
                 .as_deref()
                 .is_some_and(|organization| {
-                    valid_reference_for(organization, purpose, provider_reference)
+                    belongs_to(provider_reference, organization, &registration.id, purpose)
                 })
             || metadata.get("status").and_then(Value::as_str) != Some("active")
             || metadata.get("exportable").and_then(Value::as_bool) != Some(false)
@@ -161,10 +136,11 @@ impl HolderKeyRecord {
             && self.registration_id == registration.id
             && self.user_id == registration.user_id
             && registration.organization_id.as_deref() == Some(self.organization_id.as_str())
-            && valid_reference_for(
-                &self.organization_id,
-                &self.purpose,
+            && belongs_to(
                 &self.provider_reference,
+                &self.organization_id,
+                &self.registration_id,
+                &self.purpose,
             )
             && self.remote_version > 0
             && matches!(
@@ -220,7 +196,7 @@ mod tests {
     #[test]
     fn accepts_only_non_exportable_tenant_scoped_public_provider_metadata() {
         let registration = registration();
-        let reference = new_reference("org-a", "holder_binding").unwrap();
+        let reference = new_reference("org-a", &registration.id, "holder_binding").unwrap();
         assert!(reference.starts_with("cred-holder-"));
         let mut metadata = json!({
             "status":"active", "type":"ed25519", "latest_version":1, "selected_version":"1",
@@ -243,7 +219,7 @@ mod tests {
         assert!(record.valid_for(&registration));
         assert_eq!(record.public_jwk()["kid"], reference);
         assert!(record.public_jwk().get("d").is_none());
-        let presenter = new_reference("org-a", "presentation_signing").unwrap();
+        let presenter = new_reference("org-a", &registration.id, "presentation_signing").unwrap();
         assert!(presenter.starts_with("cred-presenter-"));
         assert!(HolderKeyRecord::from_provider(
             &registration,
@@ -258,7 +234,7 @@ mod tests {
             &registration,
             "holder_binding",
             "EdDSA",
-            &new_reference("org-b", "holder_binding").unwrap(),
+            &new_reference("org-b", &registration.id, "holder_binding").unwrap(),
             &metadata,
             Utc::now(),
         )

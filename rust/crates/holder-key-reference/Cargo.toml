@@ -1,0 +1,17 @@
+[package]
+name = "marty-holder-key-reference"
+version = "0.1.0"
+description = "Shared scoped OpenBao holder-key reference format"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+hex.workspace = true
+sha2.workspace = true
+uuid.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

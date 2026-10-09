@@ -95,9 +95,9 @@ CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_keys (
     organization_id varchar(36) NOT NULL,
     purpose varchar(32) NOT NULL CONSTRAINT ck_device_holder_key_purpose CHECK (purpose IN ('holder_binding','presentation_signing')),
     algorithm varchar(16) NOT NULL CONSTRAINT ck_device_holder_key_algorithm CHECK (algorithm IN ('EdDSA','ES256')),
-    provider_reference varchar(96) NOT NULL UNIQUE CONSTRAINT ck_device_holder_key_reference CHECK (
-        (purpose='holder_binding' AND provider_reference ~ '^cred-holder-[0-9a-f]{32}-[0-9a-f]{32}$') OR
-        (purpose='presentation_signing' AND provider_reference ~ '^cred-presenter-[0-9a-f]{32}-[0-9a-f]{32}$')
+    provider_reference varchar(128) NOT NULL UNIQUE CONSTRAINT ck_device_holder_key_reference CHECK (
+        (purpose='holder_binding' AND provider_reference ~ '^cred-holder-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$') OR
+        (purpose='presentation_signing' AND provider_reference ~ '^cred-presenter-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$')
     ),
     remote_version bigint NOT NULL CONSTRAINT ck_device_holder_key_version CHECK (remote_version > 0),
     public_x varchar(43) NOT NULL CONSTRAINT ck_device_holder_key_public_x CHECK (public_x ~ '^[A-Za-z0-9_-]{43}$'),

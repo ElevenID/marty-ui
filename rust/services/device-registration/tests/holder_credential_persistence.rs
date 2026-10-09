@@ -208,6 +208,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
 
     let first_reference = new_reference(
         registration.organization_id.as_deref().unwrap(),
+        &registration.id,
         "holder_binding",
     )
     .unwrap();
@@ -241,6 +242,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
 
     let second_reference = new_reference(
         registration.organization_id.as_deref().unwrap(),
+        &registration.id,
         "holder_binding",
     )
     .unwrap();
@@ -274,6 +276,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         "EdDSA",
         &new_reference(
             registration.organization_id.as_deref().unwrap(),
+            &registration.id,
             "holder_binding",
         )
         .unwrap(),
@@ -286,6 +289,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
     duplicate_id.id = first_key.id.clone();
     duplicate_id.provider_reference = new_reference(
         registration.organization_id.as_deref().unwrap(),
+        &registration.id,
         "holder_binding",
     )
     .unwrap();

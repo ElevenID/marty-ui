@@ -3932,7 +3932,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
- "hex",
+ "marty-holder-key-reference",
  "marty-key-material-policy",
  "marty-verification",
  "prost",
@@ -4160,6 +4160,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "marty-holder-key-reference"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "sha2 0.10.9",
  "uuid",
 ]
 
@@ -4601,6 +4610,7 @@ dependencies = [
  "hex",
  "http 1.5.0",
  "marty-crypto",
+ "marty-holder-key-reference",
  "marty-key-material-policy",
  "marty-oid4vci",
  "marty-oid4vp-contract",

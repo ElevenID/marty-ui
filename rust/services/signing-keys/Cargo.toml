@@ -37,6 +37,7 @@ der.workspace = true
 hex.workspace = true
 marty-crypto = { workspace = true, features = ["x509"] }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-holder-key-reference = { path = "../../crates/holder-key-reference" }
 marty-oid4vci = { workspace = true, features = ["issuer"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-passport-auth = { path = "../../crates/passport-auth" }

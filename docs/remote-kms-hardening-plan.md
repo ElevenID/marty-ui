@@ -9180,3 +9180,21 @@ and workflow-quality checks also passed. This qualifies that published head
 only. The local credential/key ledger and version-pinned adapter commits are
 not included, and green CI does not substitute for the remaining holder
 wallet/signing, passport cutover or release-artifact acceptance gates.
+
+2026-10-09 local managed holder service boundary: a shared Rust reference
+crate now derives purpose-, organization- and registration-bound OpenBao names
+for holder and presenter keys; the fresh Device Registration schema enforces
+the same 128-character reference shape. Signing Keys has a separate internal
+create/sign/revoke router guarded by a dedicated Device Registration service
+credential, rather than the broad internal signing credential. The provider
+accepts only EdDSA or ES256, checks reference scope before contacting OpenBao,
+requires a positive pinned version and exact matching public JWK for signing,
+rejects private material and noncanonical or oversized signing input, and
+uses the existing managed OpenBao adapter for key lifecycle. The route is
+currently disabled until its distinct credential is provisioned. Its local
+unit tests passed, and the guarded disposable OpenBao probe passed actual
+non-exportable holder key creation, version-pinned signing, and remote
+revocation under scoped policy. The Device Registration client, durable
+provisioning compensation and deactivation cleanup, enrollment authorization,
+Gateway session binding, public signing route and wallet acceptance remain
+open. Do not present this as end-to-end holder custody yet.

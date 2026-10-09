@@ -10,6 +10,8 @@ pub mod flow_envelope;
 pub mod http;
 pub mod integration_secret_envelope;
 pub mod kms;
+pub mod managed_holder_http;
+pub mod managed_holder_key;
 pub mod passport_artifact_envelope;
 pub mod passport_callback_hmac;
 mod private_material;

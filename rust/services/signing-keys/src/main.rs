@@ -7,7 +7,8 @@ use axum::{
 use axum_server::{tls_rustls::RustlsConfig, Handle};
 use marty_signing_keys::{
     config::Config, csca_lifecycle::CscaLifecycleStore, documents::DocumentStore,
-    flow_envelope::OpenBaoEnvelopeProvider, http, profiles::ProfileStore, registry::RegistryStore,
+    flow_envelope::OpenBaoEnvelopeProvider, http, managed_holder_http,
+    managed_holder_key::OpenBaoManagedHolderKeys, profiles::ProfileStore, registry::RegistryStore,
     vc_api_holder_proof::OpenBaoHolderProofProvider,
 };
 use std::time::Duration;
@@ -30,6 +31,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         error
     })?;
     let managed_openbao_endpoint = config.bao_addr.clone();
+    let holder_api = match (
+        config.holder_device_key.as_ref(),
+        config.bao_addr.as_ref(),
+        config.bao_token.as_ref(),
+    ) {
+        (Some(key), Some(endpoint), Some(token)) => Some((
+            key.clone(),
+            OpenBaoManagedHolderKeys::new(endpoint.clone(), token.clone())?,
+        )),
+        _ => None,
+    };
     let registry_store = RegistryStore::connect(&config.registry_redis_url)
         .await?
         .with_managed_openbao(managed_openbao_endpoint);
@@ -90,6 +102,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         flow_envelopes,
         config.public_domain,
     );
+    let app = match holder_api {
+        Some((device_key, provider)) => {
+            app.merge(managed_holder_http::router(device_key, provider))
+        }
+        None => app,
+    };
     // The existing HTTP listener serves non-secret signing routes. Plaintext
     // integration-secret requests are accepted only by the separate TLS port.
     let http_app = app

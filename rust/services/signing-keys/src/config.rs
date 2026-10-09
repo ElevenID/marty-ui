@@ -18,6 +18,7 @@ pub struct Config {
     pub release_version: String,
     pub build_revision: String,
     pub internal_api_key: String,
+    pub holder_device_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub beta_csca_issuance_enabled: bool,
@@ -80,6 +81,17 @@ impl Config {
             );
         }
         let dsc_issue_gateway_key = secret_value(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        let holder_device_key = secret_value(values, "DEVICE_REGISTRATION_SIGNING_KEYS_KEY")?;
+        if holder_device_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || dsc_issue_gateway_key.as_ref() == Some(key)
+        }) {
+            return Err(
+                "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
         if dsc_issue_gateway_key
             .as_ref()
             .is_some_and(|key| key.len() < 32 || key == &internal_api_key)
@@ -117,6 +129,7 @@ impl Config {
             key.len() < 32
                 || key == &internal_api_key
                 || dsc_issue_gateway_key.as_ref() == Some(key)
+                || holder_device_key.as_ref() == Some(key)
         }) {
             return Err(
                 "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
@@ -126,6 +139,9 @@ impl Config {
         let bao_addr = value(values, "BAO_ADDR");
         let bao_token =
             secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
+        if holder_device_key.as_deref() == bao_token.as_deref() && holder_device_key.is_some() {
+            return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from BAO_TOKEN".into());
+        }
         let haip_kms_token_file = value(values, "HAIP_KMS_TOKEN_FILE").map(PathBuf::from);
         if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
@@ -156,6 +172,9 @@ impl Config {
                     .into(),
             );
         }
+        if holder_device_key.is_some() && bao_addr.is_none() {
+            return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY requires OpenBao".into());
+        }
         if haip_kms_token_file.is_some() && bao_addr.is_none() {
             return Err("HAIP_KMS_TOKEN_FILE requires BAO_ADDR".into());
         }
@@ -165,6 +184,7 @@ impl Config {
             release_version,
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
+            holder_device_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
             beta_csca_issuance_enabled,
@@ -320,6 +340,34 @@ mod tests {
         assert!(Config::from_values(&values).is_err());
         values.remove("OTHER_SERVICE_URL");
         assert!(Config::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn device_registration_holder_key_requires_distinct_openbao_backed_authority() {
+        let mut values = HashMap::from([
+            ("BAO_ADDR".into(), "http://bao:8200".into()),
+            (
+                "BAO_TOKEN".into(),
+                "scoped-openbao-token-32-characters".into(),
+            ),
+            (
+                "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+                "dedicated-device-registration-key-32-chars".into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "scoped-openbao-token-32-characters".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "dedicated-device-registration-key-32-chars".into(),
+        );
+        values.remove("BAO_ADDR");
+        values.remove("BAO_TOKEN");
+        assert!(Config::from_values(&values).is_err());
     }
 
     #[test]
