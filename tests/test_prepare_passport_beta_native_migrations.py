@@ -34,7 +34,7 @@ def test_image_must_match_every_normalized_protected_migration(tmp_path):
     )
     assert tuple(relative for relative, _ in source) == MIGRATIONS
     assert image_path(MIGRATIONS[0]) == (
-        "/app/passport-native-migrations/issuance/0000_merge_issuance_heads_bridge.sql"
+        "/app/passport-native-migrations/issuance/0001_oid4vci_public_protocol.sql"
     )
     with pytest.raises(NativeMigrationError, match="differs from protected source"):
         checked_migrations(tmp_path, IMAGE, lambda _image, _relative: b"SELECT 0;\n")
@@ -106,7 +106,7 @@ def test_receipt_binds_protected_source_and_sql_attests_database(tmp_path):
     assert b"source_commit, migration_set_sha256" in payload
     assert b"CREATE TABLE issuance_service.rust_schema_migrations" in payload
     assert b"GRANT SELECT ON issuance_service.rust_schema_migrations TO marty" in payload
-    assert b"('0000_merge_issuance_heads_bridge')" in payload
+    assert b"('0001_oid4vci_public_protocol')" in payload
     assert b"expected_system_identifier = '123456'" in payload
     assert b"expected_fence_epoch = '345'" in payload
     assert b"pg_stat_activity" in payload

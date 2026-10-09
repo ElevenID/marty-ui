@@ -1,6 +1,4 @@
-//! Final-form equivalent of the historical Marty application-template seed.
-//! Existing databases were already transformed by Alembic; this runs only
-//! while installing the fresh Rust baseline.
+//! Seed Marty application templates while installing the fresh Rust baseline.
 
 use serde_json::{json, Map, Value};
 use sqlx::{PgConnection, Row};

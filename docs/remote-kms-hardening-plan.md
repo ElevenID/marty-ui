@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-08 (America/Denver).
+Status: active. Updated: 2026-10-09 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -1229,8 +1229,8 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 removes unverified JWT parser exports; its prior head `5eaedab` passed 11 CI jobs. Current head `7b065b0` pins final Core `6855721`, passes the local KMS graph guard and awaits new exact-head CI. Publishable Credentials wheel, browser verification, replacement vectors and release artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 published head `8215f28af` combines KMS custody, Rust-only Issuance ownership and release gates; its prior head `aadcc39cf` passed CI `37904347088` with 29 successful checks and one intentional skip. The new exact-head CI `37908090888` is running and does not inherit that result. Separate Rust-only Issuance PR #1203 head `8341eca92` passed CI `37904023691` with the same check totals. Credentials PR #313 `7b065b0`, Core PR #355 `4cc1c9f`, Verifier PR #154 `19431ec`, and Authenticator PR #57 `1a3bb73` have green exact-head checks. Authenticator stays draft because remote holder signing and wallet behavior are not implemented. No remaining cross-repository PR is release qualified or merged; KMS-only cutover/recovery remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and named service JSON stores. The combined Rust Issuance binary created 31 tables and 10 Rust ledger entries in fresh PostgreSQL 16, without `issuer_signing_keys` or private-key columns. Migration and read-only verification now reject recreated private-key tables and columns; the disposable self-host migration-image qualifier and aggregate beta collector reject them across service schemas. The pushed passport disposable stack uses the Rust migrator and TLS remote-secret KMS instead of the old Credentials Alembic image. The existing self-host PostgreSQL still contains an empty historical `issuer_signing_keys.encrypted_jwk_json` table; beta has no private-key-named table or column. Exact released-image, full assembled-schema, runtime-write, self-host rebuild/cutover and artifact proof remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 head `a957f5da6` combines KMS custody, Rust-only Issuance ownership and release gates with the Flow acceptance split from main. Its exact-head CI `37919254810` is live and has no failed job at the last inspection; prior-head failures and passes are recorded below and do not qualify this head. Separate Rust-only Issuance PR #1203 head `8341eca92` passed CI `37904023691`. Credentials PR #313 `7b065b0`, Core PR #355 `4cc1c9f`, Verifier PR #154 `19431ec`, and Authenticator PR #57 `1a3bb73` have green exact-head checks. Core still requires review; Authenticator stays draft because remote holder signing and wallet behavior are not implemented. No remaining cross-repository PR is release qualified or merged; KMS-only cutover/recovery remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and named service JSON stores. The published Rust Issuance candidate created 31 tables and 10 Rust ledger entries in fresh PostgreSQL 16, without `issuer_signing_keys` or private-key columns. A local, unpushed fresh-only candidate removes the redundant Alembic bridge and creates nine ledger entries; migration, read-only verification and a new CI catalog inspector reject historical Alembic and private-key storage in a disposable PostgreSQL 16 check. The pushed passport disposable stack uses the Rust migrator and TLS remote-secret KMS instead of the old Credentials Alembic image. The older fenced beta installer still assumes an historical database and must be replaced or retired. Exact released-image, full assembled-schema, runtime-write, self-host rebuild/cutover and artifact proof remain. |
 
 ### First execution steps
 
@@ -8813,3 +8813,38 @@ recovery, Rust service images, release contracts, Rust lint/packaging, security
 scanning and other completed CI lanes passed on `8f7d6bec4`. Preserve this
 failed run as immutable evidence; merge reconciliation and the closed-model
 fix are grouped into the next UI PR head.
+
+2026-10-09 fresh-only Issuance migration review (local, unpushed): Rust
+Issuance still accepted historical `merge_issuance_heads`/`issuance_event_owner`
+Alembic databases and shipped a 72-line bridge, despite the fresh KMS-only
+cutover requirement and absence of public deployments. The local candidate
+removes that bridge and its release ledger/file inventories; `migrate` and
+read-only `verify-owned-schema` now reject any historical Issuance Alembic
+table. The native 0001-0008 schema migrations remain because the current
+product uses their tables and constraints. Focused native-migration and
+aggregate-acceptance/fence-authority Python tests pass 65/65; the Rust
+Issuance library test target compiled and warnings-denied Clippy passed.
+This batch is **not publishable yet**: the older fenced beta
+native installer assumes an existing Issuance schema, applies only post-baseline
+SQL, and would no longer produce a database accepted by the fresh-only Rust
+verifier. Replace or retire that installer and its protected release path as
+one coherent clean-database cutover before pushing the bridge removal. Do not
+count local tests of the SQL inventory as proof of assembled-stack behavior.
+
+The existing Rust contract CI lane already creates a dedicated empty
+PostgreSQL database and executes the built Issuance `migrate` binary. The
+local follow-up extends that lane to run the read-only Rust
+`verify-owned-schema` command and a shared catalog inspection over every
+service schema. The inspector reuses the self-host private-key table/column
+query and rejects an Issuance Alembic ledger. Against a new disposable
+PostgreSQL 16 container, the rebuilt binary migrated and verified successfully,
+the inspector passed, and the ledger had exactly nine entries (baseline plus
+0001-0008). Injecting `issuer_signing_keys.encrypted_jwk_json` made the
+inspector fail; after removing it, injecting an Alembic table made both the
+inspector and Rust read-only verifier fail. The disposable container was
+stopped. A second disposable PostgreSQL 16 database with only a historical
+Issuance Alembic table proved the rebuilt `migrate` command rejects the old
+lineage without creating a Rust ledger; its container was also stopped. This
+is direct clean-install evidence for the candidate source and
+new gate, not yet a hosted exact-head or released-image result. The old
+fenced beta installer remains the explicit replacement/retirement dependency.

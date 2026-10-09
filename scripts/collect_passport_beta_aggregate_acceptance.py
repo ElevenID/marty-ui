@@ -44,7 +44,7 @@ IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUNTIME_KEYS = {"container_id", "image_id", "configured_image", "started_at",
                 "config_hash", "networks"}
 ISSUANCE_MIGRATION_VERSIONS = sorted((
-    "issuance_service_baseline_v1", "0000_merge_issuance_heads_bridge",
+    "issuance_service_baseline_v1",
     "0001_oid4vci_public_protocol",
     "0002_physical_document_jobs", "0003_passport_bureau_provider_binding",
     "0004_passport_submission_intent", "0005_passport_submission_provenance",

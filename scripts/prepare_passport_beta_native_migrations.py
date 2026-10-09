@@ -31,7 +31,6 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_REPOSITORY = "ghcr.io/elevenid/marty-ui-oss/migrations"
 MIGRATIONS = (
-    "rust/services/issuance/migrations/0000_merge_issuance_heads_bridge.sql",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
     "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",

@@ -1509,6 +1509,11 @@ jobs:
           test -x rust/target/debug/marty-issuance-service
           DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             rust/target/debug/marty-issuance-service migrate
+          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+            rust/target/debug/marty-issuance-service verify-owned-schema
+          python3 scripts/verify_fresh_kms_issuance_schema.py \
+            --container "${{ job.services.postgres.id }}" \
+            --database marty_issuance_executable_smoke_test
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
