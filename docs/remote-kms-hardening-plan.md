@@ -10379,3 +10379,31 @@ across all affected owners before claiming the hosted artifact gates.
 After the scoped-token correction, the complete Signing Keys library suite
 passed locally (140 passed, eight intentional live-test ignores); the live
 holder lifecycle was run separately against disposable services.
+
+2026-10-09 Credentials graph convergence candidate: draft PR #313 remained
+green at `6269324` but still pinned Core `7c50d31`; its body mentioned an
+older revision. The local Credentials branch now pins its five direct Core
+crates, six lockfile packages, Python-wheel CI source, and graph guard to
+reviewed Core `735a11f`. Locked metadata passed the KMS-only graph guard,
+and the local `marty-rs` library check, warnings-denied Clippy, and 25/25
+library tests passed. This is not yet a pushed exact-head CI or wheel/browser
+artifact qualification; keep #313 draft until the native graph and release
+gates converge.
+
+2026-10-09 Credentials publication: `f3ea65e` was pushed to draft PR #313,
+and its description now names the actual `735a11f` Core pin. The new hosted
+CI is running; do not treat the earlier green `6269324` head as qualifying
+the repinned release graph.
+
+2026-10-09 Authenticator exact-head quality review: PR #57 at `e773596`
+passes Dart formatting, full Flutter analysis, and its 168 Flutter tests
+(four skipped), but the existing 90% line-coverage gate reports 57.24%
+(976/1,705 non-generated lines). The exact hosted LCOV artifact attributes
+most misses to imported legacy Spruce platform wrappers: 316/343 lines
+missed in the extended wrapper and 202/203 in the base wrapper; the new
+remote-holder pairing service itself has 293/305 lines hit. Wallet credential
+storage, web wrapper and liveness view account for further misses. Do not
+weaken or exclude the gate solely to make CI green. Audit and retire old
+local-key wrappers or add behavioral coverage for still-supported methods,
+then rerun the exact-head gate. Physical-device and native wallet proof are
+still required beyond Flutter test coverage.
