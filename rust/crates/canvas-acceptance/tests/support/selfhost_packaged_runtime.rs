@@ -716,7 +716,7 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
     eprintln!("{STAGE_PREFIX}database:provision");
     let pool = provision(database).await?;
     let gateway = super::selfhost_runtime_sidecar::network_gateway(database)?;
-    let kms = super::remote_integration_secret::container_server(
+    let kms = super::issuance_process::remote_integration_secret::container_server(
         gateway,
         super::selfhost_runtime_sidecar::MANAGEMENT_KEY,
     )

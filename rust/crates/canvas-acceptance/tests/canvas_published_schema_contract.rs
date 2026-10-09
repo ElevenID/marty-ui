@@ -2,12 +2,9 @@ use sqlx::postgres::PgPoolOptions;
 use std::collections::BTreeSet;
 use tracing::instrument::WithSubscriber;
 
-#[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
-mod remote_integration_secret;
-
 #[tokio::test]
 async fn packaged_remote_secret_fixture_requires_verified_https() {
-    let fixture = remote_integration_secret::container_server(
+    let fixture = issuance_process::remote_integration_secret::container_server(
         std::net::Ipv4Addr::LOCALHOST,
         selfhost_runtime_sidecar::MANAGEMENT_KEY,
     )
