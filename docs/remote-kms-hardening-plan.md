@@ -7542,3 +7542,9 @@ selfhost Rustfmt plus diff checks pass. This is a source-diagnosed candidate
 fix to a Docker create failure, not yet a passing Linux public-image test.
 The complete prior run has stopped, so push the accumulated UI corrections
 together and require exact-head requalification.
+The grouped correction batch was pushed to UI PR #1192 at exact head
+`f798dcde61729d5e8e221882484533e410d4d4d0`, including the current
+`main` merge and the Release Contract, Gateway managed-key metadata, and
+packaged Canvas CA fixture corrections. New hosted CI run `37879061558`
+started for that head. The previous failed run `37875662633` and its logs
+remain immutable evidence; no new-head gate is claimed yet.
