@@ -8292,3 +8292,10 @@ Flutter/Dart SDK on this Windows host. The next hosted run must prove these
 generated files match current bridge source. Local locked bridge tests are
 running after the unified Core/Verifier repin; the first parallel C++ build
 failed before test execution, so a single-job retry is being captured.
+
+The single-job Windows bridge retry also stopped before Rust test execution:
+vendored OpenSSL `openssl-sys` failed under MSVC with `C1083: Cannot open
+compiler generated file: '': Invalid argument` in the long worktree target
+path. This is a local build-environment/path failure, not passing bridge
+validation. The exact-head hosted Linux bridge lane must provide the decisive
+compiled behavior evidence after the final repin and generated-hash fix.

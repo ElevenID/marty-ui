@@ -38,13 +38,13 @@ jsonwebtoken = { version = "10.3", features = ["rust_crypto"] }
 log = "0.4"
 num-bigint = "0.4"
 num-traits = "0.2"
-marty-crypto = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only", "ecdsa-verification", "jwk", "x509-parsing"] }
-marty-didcomm = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only"] }
-marty-iso18013 = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false }
-marty-oid4vci = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only"] }
-marty-verification = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82", default-features = false, features = ["kms-only"] }
-marty-canonical-digest = { version = "0.2", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
-marty-status = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "d41d87cc2ef8eeaddbb9d659c2ac5642f7a0ce82" }
+marty-crypto = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only", "ecdsa-verification", "jwk", "x509-parsing"] }
+marty-didcomm = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only"] }
+marty-iso18013 = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false }
+marty-oid4vci = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only"] }
+marty-verification = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e", default-features = false, features = ["kms-only"] }
+marty-canonical-digest = { version = "0.2", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e" }
+marty-status = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6855721d7e863682f18fad613ec46f9f4975e33e" }
 mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
 mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
 mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
