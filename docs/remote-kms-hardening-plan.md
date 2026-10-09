@@ -10593,3 +10593,26 @@ Organization Quality run `37999430821`, Open-source policy run
 `37999429420`, and CodeQL Actions run `37999429505` have since completed
 successfully at the same published head; CodeQL Rust and the main CI run
 remain in progress.
+
+2026-10-09 four-hour checkpoint and CI review: the published UI exact-head
+run `37999429439` reached the Rust contract and release-contract jobs. Those
+jobs failed on two stale inventories: the release-contract Python test
+expected the pre-mirror GitHub Redis service ID, and the trust-profile crate
+maintained a second HTTP-operation list that omitted the new wallet issuer-key
+route already present in the canonical service surface and shared contract.
+The local UI branch now uses the selected Redis fixture ID in the assertion
+and removes the duplicate Rust list so the domain test reads the canonical
+surface. The focused Python assertion passed locally, as did all six Rust
+tests in the affected trust-profile domain and surface suites. The full
+227-test Python file was stopped after its early checks ran slowly; the exact
+changed assertion had already passed. These corrections, along with the JSON
+storage guard, remain local for one grouped
+UI PR #1192 push. The earlier hosted failures remain immutable evidence.
+
+2026-10-09 mobile issuer-trust self-review: local Authenticator commit
+`92b6dd0` recursively rejects private or secret fields hidden inside the
+public JWK snapshot, including nested objects and lists. Full Flutter
+analysis is clean; 183 tests pass with four skips. Current non-generated
+coverage is 75.90% (1,493/1,967), below the protected 90% gate. This and
+the preceding mobile wallet commits remain local for one grouped PR #57
+update; live device, KMS custody, and end-to-end acceptance are still open.
