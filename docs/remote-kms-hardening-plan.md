@@ -9548,6 +9548,12 @@ expected behavior and live remote-custody Rust acceptance, or document and
 isolate the frozen historical comparison so it cannot serve as custody proof
 or ship in a product image. Preserve Canvas regression coverage when retiring
 the oracle path. The exact-head Canvas pass does not close this finding.
+Source packaging review narrows the exposure: the final `services/Dockerfile`
+runtime stage copies Rust binaries, the service entrypoint and the secret
+loader, but no `run_canvas_worker_*_oracle.py` script. That excludes the
+historical oracle from this source-defined product image; an exact released
+image filesystem check and replacement of the acceptance graph's local-master
+oracle dependency remain open.
 
 2026-10-09 K10 exact-image coverage expansion (local candidate): the
 digest-pinned self-host migration qualifier previously ran only Organization,
