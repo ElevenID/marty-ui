@@ -177,7 +177,22 @@ def run(image):
     assert set(expected) == {case["name"] for case in cases}
     for pin in (pins["observed_image"], pins["observed_postgres_image"]):
         assert re.fullmatch(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}", pin)
-        docker("pull", pin, timeout=120)
+    docker("pull", pins["observed_image"], timeout=120)
+    selected_postgres = subprocess.run(
+        [
+            "bash",
+            str(ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh"),
+            pins["observed_postgres_image"],
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+        timeout=120,
+    ).stdout.strip()
+    assert selected_postgres in {
+        pins["observed_postgres_image"],
+        f"mirror.gcr.io/library/{pins['observed_postgres_image']}",
+    }
     with TemporaryDirectory(prefix="canvas-worker-image-startup-") as temporary:
         temporary_root = Path(temporary).resolve()
         temporary_root.chmod(0o755)
@@ -247,7 +262,7 @@ def run(image):
                     "POSTGRES_DB": DATABASE_NAME,
                 }
             ),
-            pins["observed_postgres_image"],
+            selected_postgres,
         ) as postgres:
             docker("start", postgres)
 

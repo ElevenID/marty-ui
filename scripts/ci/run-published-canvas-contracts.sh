@@ -55,6 +55,11 @@ mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' ../cont
 for image in "${images[@]}"; do
   [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]]
 done
+pull_published_postgres() {
+  MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash \
+    "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" "$1")" || return
+  export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE
+}
 find_executable() {
   local target="$1"
   local package
@@ -135,7 +140,7 @@ if [[ "$mode" == worker-* ]]; then
     local image
     for image in "${images[@]}"; do
       if [[ "$image" == "${images[0]}" ]]; then
-        timed image_pull postgres docker pull "$image"
+        timed image_pull postgres pull_published_postgres "$image"
       else
         timed image_pull published_probe docker pull "$image"
       fi
@@ -309,7 +314,7 @@ pull_images() {
   for image in "${images[@]}"; do
     # Stable ordinal only: never put an image reference in timing evidence.
     if [[ "$image" == "${images[0]}" ]]; then
-      timed image_pull postgres docker pull "$image"
+      timed image_pull postgres pull_published_postgres "$image"
     else
       timed image_pull published_probe docker pull "$image"
     fi

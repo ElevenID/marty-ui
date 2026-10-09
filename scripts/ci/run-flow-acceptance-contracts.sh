@@ -34,9 +34,16 @@ mapfile -t images < <(jq -er '.observed_postgres_image, .observed_image' \
 [[ ${#images[@]} == 2 ]] || exit 1
 for image in "${images[@]}"; do
   [[ "$image" =~ ^[a-z0-9./_-]+@sha256:[a-f0-9]{64}$ ]] || exit 1
-  docker pull "$image"
 done
-docker pull redis:7-alpine
+MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash \
+  "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" "${images[0]}")"
+export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE
+docker pull "${images[1]}"
+# The shared Redis fixture intentionally resolves a local tag to an immutable
+# image ID; seed that exact tag from the reviewed digest rather than Docker Hub.
+redis_image="$(bash "$(dirname "${BASH_SOURCE[0]}")/pull-pinned-dockerhub-image.sh" \
+  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)"
+docker tag "$redis_image" redis:7-alpine
 
 log=$(mktemp "${RUNNER_TEMP}/flow-acceptance.XXXXXX")
 trap 'rm -f -- "$log"' EXIT

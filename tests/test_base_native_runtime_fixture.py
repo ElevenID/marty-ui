@@ -385,7 +385,7 @@ def compatibility_ci(workflow):
         'awk \'$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }\' ../services/Dockerfile',
         "[[ ${#builder_images[@]} == 1 ]]",
         "^rust:1\\.95-bookworm@sha256:[a-f0-9]{64}$",
-        'docker pull "$bookworm_builder"',
+        '../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder"',
         "docker run --rm --network none --read-only",
         '--user "$(id -u):$(id -g)"',
         '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
