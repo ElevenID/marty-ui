@@ -2750,17 +2750,65 @@ Its full [protected merge-group run](https://github.com/ElevenID/marty-ui/action
 passed every required check, and #1214 merged as `b44c482dc`. This proves
 scoped feedback for this exact test-only path, not a general pipeline saving.
 
-The next reviewed local candidate runs all six named Kubernetes/consumer
-test sources plus workflow-policy tests for a nonempty PR changing only those
-regular files. It skips the unchanged frozen Credentials mirror replay and
-OCI archive proof in that PR path; unknown, mixed, deleted, symlinked, and
-protected merge-group inputs retain the complete release job. The exact
-proposed command passed 268 local cases in 93 seconds on the #1214 main base,
-including all five new passport-consumer cases. The standalone workflow-policy
-suite passed all 141 cases. A pre-rebase 263-case run exposed and then cleared
-a stale policy reference count; it is not the final validation result.
-The full protected gate and an actual later source-only PR are still needed
-before attributing a hosted feedback saving to this second narrowing.
+The reviewed [#1216](https://github.com/ElevenID/marty-ui/pull/1216)
+selector runs all six named Kubernetes/consumer test sources plus
+workflow-policy tests for a nonempty PR changing only those regular files.
+It skips the unchanged frozen Credentials mirror replay and OCI archive proof
+in that PR path; unknown, mixed, deleted, symlinked, and protected merge-group
+inputs retain the complete release job. The exact proposed command passed
+268 local cases in 93 seconds on the #1214 main base, including all five new
+passport-consumer cases. The standalone workflow-policy suite passed all 141
+cases. A pre-rebase 263-case run exposed and then cleared a stale policy
+reference count; it is not the final validation result. Its full
+[PR run](https://github.com/ElevenID/marty-ui/actions/runs/37980016444) and
+[protected combined-head run](https://github.com/ElevenID/marty-ui/actions/runs/37983789543)
+passed, and #1216 merged as `a6e28dbc9` with the one-reviewer rule restored.
+
+The first source-only [pilot #1217](https://github.com/ElevenID/marty-ui/pull/1217)
+strengthens the existing production Kubernetes resource guard: catalog-owned
+Deployments and Services must be in `marty-prod`, duplicate production
+identities fail, and an unrelated namespace decoy remains valid. Independent
+review found no P1-P3 issue. Its exact-head
+[PR run](https://github.com/ElevenID/marty-ui/actions/runs/37986999423)
+selected Release Contract Tests plus Public Protocol Contract, skipped the
+unrelated Rust/image/browser/UI matrices, executed all 273 selected cases
+(273 passed in 1m48s), and reached the CI Gate 4m08s after run creation. The
+release job took 2m14s. This observed gate is 5m09s shorter than #1214's
+9m17s source-only gate, but the heads, runners, and changes differ; it is a
+scoped feedback observation, not a controlled attribution or whole-pipeline
+average. #1217's full protected merge-group validation and main merge are
+still pending at this checkpoint.
+
+The first #1217 protected
+[run 37987570280](https://github.com/ElevenID/marty-ui/actions/runs/37987570280)
+failed when Docker Hub returned HTTP 429 to BuildKit's HEAD request for the
+unchanged digest-pinned Debian Bookworm base during the public self-host image
+build. All other job results were successful; the required CI Gate failed and
+GitHub removed the entry from the merge queue. The reviewed source-only head
+was requeued unchanged for a second complete protected run. That
+[run 37990150422](https://github.com/ElevenID/marty-ui/actions/runs/37990150422)
+also failed: logs show Docker Hub's unauthenticated pull limit on the
+unchanged PostgreSQL service, cargo-deny action, and several image builds;
+Nginx integration also failed during its Docker build, though its helper did
+not expose the underlying registry error. The required gate failed and GitHub
+removed the entry. This is an external registry failure, not a test regression or
+permission to bypass the image proof; #1217 remains open and unmerged.
+
+The initial [mirror PR #1218](https://github.com/ElevenID/marty-ui/pull/1218)
+preserves canonical digest-pinned service references and configures a Docker
+daemon/BuildKit pull-through cache for later jobs. Independent review caught
+and corrected a first-draft direct-mirror service reference that would have
+lost fallback on cache misses. All 223 targeted local policy tests passed.
+Its first full hosted PR run `37991390398` demonstrates that this is **not yet
+a complete remedy**: the pre-step PostgreSQL service still hit Hub 429, the
+Passport Fence PostgreSQL tests hit 429 after the daemon mirror step, and the
+Docker-based cargo-deny action hit 429 for its pinned Rust base. The separate
+organization Workflow Quality job also failed pulling its pinned Python
+runtime image. Nginx integration passed, but that alone cannot attribute a
+cache improvement. #1218 was marked draft; do not merge or claim a speedup
+until the required hosted and protected gates pass. Next work must cover
+pre-step services and repository/organization runtime-image pulls with
+digest-preserving, fallback-safe distribution; maintain the full checks.
 
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
