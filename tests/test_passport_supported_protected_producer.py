@@ -16,7 +16,8 @@ from services.passport_disposable_identity import issuer_did
 from scripts.check_passport_supported_producer_handoff import HandoffError, verify_handoff
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_protected_producer import (
-    WORKFLOW_NAME, _application, _observe_bound_runtime, _remove_batch_state,
+    WORKFLOW_NAME, _application, _assert_disposable_schema,
+    _observe_bound_runtime, _remove_batch_state,
     produce_disposable_receipt,
 )
 from scripts.collect_passport_supported_acceptance import COMPOSE_FLAGS, COMPOSE_SERVICES
@@ -37,6 +38,27 @@ def test_producer_uses_frozen_synthetic_mrz_accepted_by_bureau() -> None:
     assert application["mrz"] == frozen_mrz
     assert all(application["mrz"][field].strip()
                for field in ("line_1", "line_2"))
+
+
+def test_disposable_schema_gate_fails_closed_without_exposing_rows() -> None:
+    seen = []
+    record = {"containers": {"postgres": "c" * 64}}
+
+    def reject(args, environment, timeout):
+        seen.append((args, environment, timeout))
+        return False
+
+    with pytest.raises(ProducerError, match="private-key storage or is unavailable"):
+        _assert_disposable_schema(record, {"DOCKER_HOST": "local"}, reject)
+    args, environment, timeout = seen.pop()
+    assert args[:3] == ["docker", "exec", "c" * 64]
+    assert "ON_ERROR_STOP=1" in args
+    assert "issuer_signing_keys" in args[-1]
+    assert "RAISE EXCEPTION" in args[-1]
+    assert environment == {"DOCKER_HOST": "local"} and timeout == 60
+    with pytest.raises(ProducerError, match="PostgreSQL container is unavailable"):
+        _assert_disposable_schema({"containers": {"postgres": "other"}}, {}, reject)
+    assert not seen
 
 
 def flow_receipt(final_native_id: str = "issuance-native") -> dict:
@@ -177,7 +199,8 @@ def test_producer_orders_real_gates_and_tears_down(
     prior_native_id = "f" * 64
     record = {"project": selected["project"],
               "containers": {"issuance-native": prior_native_id,
-                             "signing-keys": "signing-keys"}}
+                             "signing-keys": "signing-keys",
+                             "postgres": "c" * 64}}
 
     def run(args, env, timeout):
         calls.append(("run", args))
@@ -308,8 +331,13 @@ def test_producer_orders_real_gates_and_tears_down(
     assert commands[1][:2] == ["docker", "run"]
     if surface == "selfhost":
         assert "selfhost-ceremony.yml" in " ".join(commands[2])
-        assert "--force-recreate" in commands[-1]
-        assert commands[-1][-2:] == ["gateway", "signing-keys"]
+        assert any("--force-recreate" in command and
+                   command[-2:] == ["gateway", "signing-keys"]
+                   for command in commands)
+    schema_checks = [command for command in commands
+                     if command[:2] == ["docker", "exec"] and "psql" in command]
+    assert len(schema_checks) == 2
+    assert all(command[2] == "c" * 64 for command in schema_checks)
     assert report["status"] == "blocked"
     assert report["rust_routes_verified"] is True
     assert report["signed_gateway_callback_verified"] is True
@@ -402,7 +430,8 @@ def test_invalid_route_proof_fails_and_cleans(tmp_path: Path,
             setup=setup_certificate(selected),
             record_live=lambda *args: {"project": selected["project"],
                                        "containers": {"signing-keys": "signing-keys",
-                                                      "issuance-native": "native"}},
+                                                      "issuance-native": "native",
+                                                      "postgres": "c" * 64}},
             recheck_signer=lambda *args: current_signer(),
             preflight_native=lambda *args, **kwargs: {
                 "native_container_id": "native", "native_batch_preflight_verified": True},
@@ -460,7 +489,8 @@ def test_failed_recreate_uses_plan_bound_partial_teardown(tmp_path: Path) -> Non
             setup=setup_certificate(selected),
             record_live=lambda *args: {"project": selected["project"],
                                        "containers": {"issuance-native": prior_native_id,
-                                                      "signing-keys": "signing-keys"}},
+                                                      "signing-keys": "signing-keys",
+                                                      "postgres": "c" * 64}},
             recheck_signer=lambda *args: current_signer(),
             preflight_native=lambda *args, **kwargs: {
                 "native_container_id": prior_native_id,
