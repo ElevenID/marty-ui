@@ -8248,3 +8248,11 @@ records the 2026-10-09 upstream 13.x compileSdk 37 requirement against the
 app's current compileSdk 36, with review due 2026-10-23; it no longer asserts
 that Android SDK 37 is unavailable without current evidence. This remains a
 tracked dependency exception, not a KMS feature qualification.
+
+At Authenticator PR #57 head `274ffaf`, Flutter Build run `37895163276`
+completed successfully for both unsigned Android APK and iOS configuration.
+This gives a hosted Android compile and iOS project/configuration check for
+the fail-closed native edits; it does not compile the iOS Swift runtime or
+prove functional KMS wallet behavior. Rust Bridge Codegen run `37895163219`
+is still generating bridge surfaces. The local quality correction is committed
+as `91bac10` and remains unpushed pending that result.
