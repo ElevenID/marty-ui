@@ -114,7 +114,7 @@ def test_verified_proof_is_bound_to_executable_source_run_and_tier(proof, monkey
     monkeypatch.setitem(proof.module["run"].__globals__, "run_case", fake_run)
     proof.module["run"](proof.executable)
     assert proof.module["verify"](proof.executable)
-    assert len(calls) == 3
+    assert len(calls) == 4
     assert all("--exact" in call and "--test-threads=1" in call for call in calls[1:])
     record = json.loads(proof.evidence.read_text(encoding="ascii"))
     assert (

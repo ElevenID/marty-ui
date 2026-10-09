@@ -333,7 +333,7 @@ def _validate_component_owners(manifest: dict, inputs: dict[str, str]) -> None:
         else:
             assert inputs["runner"].count(f"--skip {test}") == 1
             assert inputs["runner"].index(f"--skip {test}") < inputs["runner"].index(
-                "expected_skipped_config_tests=2"
+                "expected_skipped_config_tests=3"
             )
     _validate_rendered_config_owner(
         inputs["source"], RENDERED_CONFIG.read_text(encoding="utf-8"), inputs["runner"]
@@ -536,7 +536,7 @@ def _validate_rendered_config_owner(source: str, config: str, runner: str) -> No
     assert f"--skip {name}" not in runner
     assert runner.count(f"--skip rendered_base_process::{name}") == 1
     assert runner.index(f"--skip rendered_base_process::{name}") < runner.index(
-        "expected_skipped_config_tests=2"
+        "expected_skipped_config_tests=3"
     )
     assert (
         runner.count(
@@ -616,6 +616,7 @@ def test_rendered_config_execution_guard_rejects_noop_failure_and_duplicate_mark
     marker = "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1"
     log = tmp_path / "composition.log"
     other_markers = [
+        "RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1",
         "RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1",
         "DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1",
     ]

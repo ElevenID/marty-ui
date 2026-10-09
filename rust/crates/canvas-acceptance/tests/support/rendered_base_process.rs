@@ -37,9 +37,13 @@ fn bounded_render(
     }
 }
 
-pub(super) fn assert_renderer_deadlines() {
-    let python = std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
-        .expect("configured renderer qualification requires explicit Python");
+pub(super) fn require_explicit_python() -> std::ffi::OsString {
+    std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
+        .expect("configured renderer qualification requires explicit Python")
+}
+
+fn assert_renderer_deadlines() {
+    let python = require_explicit_python();
     for (program, expected, deadline) in [
         (
             "import os,time; os.close(1); time.sleep(30)",
@@ -69,6 +73,16 @@ pub(super) fn assert_renderer_deadlines() {
         .unwrap(),
         b"{}"
     );
+}
+
+#[test]
+fn renderer_bounds_proof_is_image_free() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renderer bounds proof requires the configured Linux gate");
+        return;
+    }
+    assert_renderer_deadlines();
+    println!("\nRENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1");
 }
 
 #[derive(Deserialize)]

@@ -201,10 +201,11 @@ fi
 # keeps the ordinary full composition run and its completion-marker checks.
 if python3 "$(dirname "${BASH_SOURCE[0]}")/run-canvas-config-proofs.py" verify "$composition_executable"; then
   config_skips=(
+    --skip rendered_base_process::renderer_bounds_proof_is_image_free
     --skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy
     --skip resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy
   )
-  expected_skipped_config_tests=2
+  expected_skipped_config_tests=3
 fi
 worker_binary=$(find_issuance_package_binary marty-canvas-sync-worker)
 issuance_binary=$(find_issuance_package_binary marty-issuance-service)
@@ -233,6 +234,7 @@ if [[ -z "$preflight_target" ]]; then
   }
 fi
 printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy: test'
+printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::renderer_bounds_proof_is_image_free: test'
 if [[ -z "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
 fi
@@ -628,6 +630,10 @@ timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$compos
   exit 1
 }
 if (( expected_skipped_config_tests == 0 )); then
+  [[ $(grep -Fo 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
+    echo 'Renderer bounds proof did not execute and complete exactly once' >&2
+    exit 1
+  }
   [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
     echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
     exit 1
@@ -638,6 +644,7 @@ if (( expected_skipped_config_tests == 0 )); then
   }
 else
   # A test running despite an authorized skip is not the selected full suite.
+  [[ $(grep -Fo 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
   [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
   [[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
 fi
