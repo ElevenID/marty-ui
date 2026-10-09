@@ -7830,3 +7830,24 @@ invariants, and its test, Ruff, Bash syntax and diff checks pass locally.
 This correction still needs an exact-head CI run. The Release Contract Tests
 source-assertion fix is in the same local batch; the current OpenBao restore,
 Canvas image and Rust image lanes should finish before the batch is pushed.
+
+Further Authenticator production-surface inventory found a web custody violation in
+`lib/services/spruce_platform_service_web.dart`: `generateKeyPair` calls the
+local WASM P-256 generator and returns its JWK under both `publicKey` and
+`privateKey`. Verify whether that JWK contains private parameters before
+claiming actual key disclosure. The conditional web WASM wrapper also exposes Ed25519 generation,
+raw-JWK credential issuance and raw-JWK presentation signing. Native Android
+`PresentationSignerAdapter.kt` signs through device `KeyManager`; iOS
+`SignerAdapter.swift` similarly operates on device keys. These paths are not
+remote KMS-only. Replace or retire their exported signing/generation surfaces
+as part of the Authenticator consumer cutover, and prove web/native wallet
+capabilities against authenticated remote holder custody before qualifying
+that consumer. Do not treat the Rust bridge pin or mock ZK pass as this proof.
+
+UI run `37885206206` subsequently completed `Test OpenBao DIDComm plugin
+image` successfully, including the coordinated PostgreSQL/Raft restore lane,
+and `Rust Service Images` successfully at pushed head `cf2f701fe`. Canvas
+public selfhost image qualification remains live. The Release Contract Tests
+and Rust contracts failures on this head are addressed by local commits
+`f90161397` and `0c7370c7a` respectively; neither is a hosted pass until the
+next exact-head run completes.
