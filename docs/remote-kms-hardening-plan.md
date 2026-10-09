@@ -10763,3 +10763,22 @@ protected 90% gate. This commit remains local in the broad mobile batch.
 UI #1192's Rust Service Images, release contracts, and Rust analysis have
 passed at `148d85b8f`; Canvas, Rust contracts, and OpenBao plugin image
 jobs remain pending, with no completed exact-head failure observed.
+
+2026-10-09 mobile bulk receipt test and security audit: local Authenticator
+commit `85d00d0` tests select-all, deselect-all, and unhide of two same-title
+verified receipts without deleting either durable record. Focused and full
+Flutter suites pass (190 tests, four skips); non-generated coverage rose to
+85.90% (1,748/2,035), still below 90%. The audit also found a separate
+unqualified document-verification path: `LivenessCheckView` obtains
+`MARTY_LIVENESS_SIGNING_SECRET` from a Flutter build-time environment value and
+passes it to native Rust `create_liveness_challenge`, whose implementation signs
+locally with the supplied secret. On web, `_startWebMock` advances gestures
+after a timer; `ReviewAndSubmitView` hard-codes successful authentication and
+simulates a submission when no callback is supplied. This cannot count as
+remote custody, real liveness, or submission acceptance. Before publishing
+the mobile release, replace this with a server-issued, KMS-backed challenge
+and real submission/verification path, or explicitly fail closed until that
+path is available; do not add tests that bless the simulated success as
+production behavior. The mobile PR batch remains local and unqualified.
+At this checkpoint UI #1192's Rust contract job has also passed; Canvas and
+OpenBao plugin image jobs are still pending at its published head.
