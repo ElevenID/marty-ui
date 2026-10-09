@@ -10437,3 +10437,23 @@ the protected 90% gate. This commit and the earlier `8fee8c3` remain local in
 the grouped Authenticator PR #57 batch; do not push only to collect another
 failing hosted coverage run. The active wallet credential store and other
 supported UI paths still need behavioral coverage and native-device review.
+
+2026-10-09 unsupported mobile channel retirement: local Authenticator commit
+`9408df6` removes the extended Dart service's remaining platform dispatches
+for mDoc presentation/session setup, SD-JWT presentation verification, and
+wallet backup, restore, sync, import and export. Android's registered handler
+does not implement these advanced methods; iOS rejects or leaves them
+unimplemented. The OID4VP router now rejects the unsupported mDoc branch
+before channel dispatch, and the verified Rust-backed SD-JWT path retains its
+single-use session set and completion flow. Negative boundary tests pass
+8/8, full Flutter analysis reports no issues, and the full suite passes
+172 with four skips. Local non-generated coverage rises to 65.95%
+(1,129/1,712), still short of the protected 90% gate; this is not mobile
+artifact or physical-device qualification. The three Authenticator local
+commits since published PR #57 head remain grouped and unpushed. Core PR
+#355 and Verifier PR #154 retain green exact-head CI; Credentials draft PR
+#313 at `f3ea65e` now has all exact-head hosted checks green, including the
+local Python binding and WASM jobs. UI PR #1192 at `7f8ae9b9d` still has
+container-backed/registry failures and its aggregate CI Gate is red; do not
+count that head as qualified. Continue with behavioral tests and native
+release/device verification before publishing or merging the mobile batch.
