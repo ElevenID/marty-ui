@@ -538,6 +538,11 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
             "postgresql://oracle:synthetic-local-only@postgres:5432/canvas_published_schema_test"
                 .into(),
         ),
+        (
+            "DATABASE_SYNC_URL".into(),
+            "postgresql://oracle:synthetic-local-only@postgres:5432/canvas_published_schema_test"
+                .into(),
+        ),
         ("ISSUANCE_API_KEY".into(), API_KEY.into()),
         ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),

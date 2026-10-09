@@ -116,7 +116,7 @@ def assert_kubernetes_bindings(documents, config):
     ]
     assert service["spec"]["selector"] == {"app": "issuance"}
     assert issuance["ports"] == [{"containerPort": 8005}, {"containerPort": 9005}]
-    assert issuance["image"] == "${MARTY_SERVICES_IMAGE}"
+    assert issuance["image"] == "${MARTY_ISSUANCE_IMAGE}"
     assert issuance["command"] == ["/usr/local/bin/marty-issuance-service"]
     assert "args" not in issuance
     assert not any(

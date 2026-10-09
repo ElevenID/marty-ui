@@ -63,7 +63,7 @@ def model(tmp_path, enabled=True):
             "PERSONALIZATION_BUREAU_URL": VALIDATOR["PRIVATE_BUREAU_URL"],
             "PERSONALIZATION_BUREAU_API_KEY": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
-            "DATABASE_URL": "postgresql+asyncpg://marty:synthetic@postgres:5432/marty",
+            "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
         }
     )
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
@@ -311,6 +311,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "dsc_key_in_service_command",
         "bureau_database_target",
         "native_database_target",
+        "native_database_driver",
         "signing_route",
         "callback_route",
         "callback_direct_native",
@@ -475,7 +476,9 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
             "postgresql://marty:synthetic@production.example:5432/marty"
         )
     elif mutation == "native_database_target":
-        native["DATABASE_URL"] = "postgresql+asyncpg://marty:other@postgres:5432/marty"
+        native["DATABASE_URL"] = "postgresql://marty:other@postgres:5432/marty"
+    elif mutation == "native_database_driver":
+        native["DATABASE_URL"] = "postgresql+asyncpg://marty:synthetic@postgres:5432/marty"
     elif mutation == "signing_route":
         bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
             "https://public.example.test"

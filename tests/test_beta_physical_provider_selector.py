@@ -86,7 +86,7 @@ def model(tmp_path: Path) -> dict:
                 "/run/secrets/passport_physical_provider_api_key",
             "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "",
             "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE": "",
-            "DATABASE_URL": "postgresql+asyncpg://marty:beta-physical-secret-4444444444444444444444444444444444444444@postgres:5432/marty",
+            "DATABASE_URL": "postgresql://marty:beta-physical-secret-4444444444444444444444444444444444444444@postgres:5432/marty",
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
         }, "secrets": ["passport_physical_provider_api_key"]},
