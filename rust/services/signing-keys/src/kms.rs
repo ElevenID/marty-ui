@@ -374,6 +374,7 @@ pub async fn verify(request: ProviderRequest) -> Result<CapabilityResult, KmsErr
 }
 
 async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
+    let key_version = requested_openbao_key_version(config)?;
     if string(config, "id") == Some("managed-openbao-transit") {
         let metadata = read_managed_openbao(ProviderRequest {
             service_config: config.clone(),
@@ -421,6 +422,9 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
         (STANDARD.encode(digest), true, Some(vault_name))
     };
     let mut body = json!({"input": input, "prehashed": prehashed});
+    if let Some(key_version) = key_version {
+        body["key_version"] = json!(key_version);
+    }
     if let Some(hash_algorithm) = hash_algorithm {
         body["hash_algorithm"] = Value::String(hash_algorithm.to_string());
     }
@@ -447,13 +451,23 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
             .json(&body),
     )
     .await?;
-    let encoded = response
+    let signature = response
         .pointer("/data/signature")
         .and_then(Value::as_str)
-        .and_then(|value| value.rsplit(':').next())
         .ok_or_else(|| {
             KmsError::InvalidResponse("OpenBao sign response did not include signature".to_string())
         })?;
+    if let Some(expected_version) = key_version {
+        let expected_prefix = format!("vault:v{expected_version}:");
+        if !signature.starts_with(&expected_prefix) {
+            return Err(KmsError::InvalidResponse(
+                "OpenBao signed with a different key version".into(),
+            ));
+        }
+    }
+    let encoded = signature.rsplit(':').next().ok_or_else(|| {
+        KmsError::InvalidResponse("OpenBao sign response did not include signature".to_string())
+    })?;
     decode_standard(encoded, "OpenBao signature")
 }
 
@@ -501,7 +515,7 @@ fn openbao_jwk_from_data(config: &Value, data: &Value) -> Result<Value, KmsError
         "key_reference",
         "OpenBao adapter requires 'endpoint' and 'key_reference' in service_config",
     )?;
-    let latest = openbao_latest_version_from_data(data);
+    let latest = openbao_selected_version(config, data)?;
     let metadata = data
         .get("keys")
         .and_then(Value::as_object)
@@ -557,6 +571,26 @@ fn openbao_jwk_from_data(config: &Value, data: &Value) -> Result<Value, KmsError
     jwk_value(jwk, key_reference)
 }
 
+fn requested_openbao_key_version(config: &Value) -> Result<Option<u64>, KmsError> {
+    let Some(value) = config.get("key_version").filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let version = match value {
+        Value::String(value) => value.parse::<u64>().ok(),
+        Value::Number(value) => value.as_u64(),
+        _ => None,
+    }
+    .filter(|version| *version > 0)
+    .ok_or_else(|| KmsError::InvalidConfig("OpenBao key_version must be positive".into()))?;
+    Ok(Some(version))
+}
+
+fn openbao_selected_version(config: &Value, data: &Value) -> Result<String, KmsError> {
+    Ok(requested_openbao_key_version(config)?
+        .map(|version| version.to_string())
+        .unwrap_or_else(|| openbao_latest_version_from_data(data)))
+}
+
 fn openbao_latest_version_from_data(data: &Value) -> String {
     data.get("latest_version")
         .map(|value| match value {
@@ -607,15 +641,16 @@ pub async fn read_managed_openbao(request: ProviderRequest) -> Result<Value, Kms
     let data = openbao_key_data(config).await?;
     let public_jwk = openbao_jwk_from_data(config, &data)?;
     let latest_version = data.get("latest_version").cloned().unwrap_or(Value::Null);
-    let latest = openbao_latest_version_from_data(&data);
-    let latest_key = data
+    let selected_version = openbao_selected_version(config, &data)?;
+    let selected_key = data
         .get("keys")
         .and_then(Value::as_object)
-        .and_then(|keys| keys.get(&latest));
+        .and_then(|keys| keys.get(&selected_version));
     Ok(json!({
         "public_jwk": public_jwk,
         "latest_version": latest_version,
-        "created_at": latest_key.and_then(|key| key.get("creation_time")).cloned().unwrap_or(Value::Null),
+        "selected_version": selected_version,
+        "created_at": selected_key.and_then(|key| key.get("creation_time")).cloned().unwrap_or(Value::Null),
         "type": data.get("type").cloned().unwrap_or(Value::Null),
         "exportable": data.get("exportable").cloned().unwrap_or(Value::Null),
         "allow_plaintext_backup": data.get("allow_plaintext_backup").cloned().unwrap_or(Value::Null),
@@ -1430,6 +1465,93 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn pinned_openbao_version_selects_matching_public_key_and_signing_version() {
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        };
+
+        let first = STANDARD.encode([1_u8; 32]);
+        let second = STANDARD.encode([2_u8; 32]);
+        let data = json!({
+            "latest_version": 2, "type": "ed25519",
+            "supports_signing": true, "soft_deleted": false,
+            "exportable": false, "allow_plaintext_backup": false,
+            "deletion_allowed": false, "imported_key": false,
+            "keys": {"1": {"public_key": first}, "2": {"public_key": second}}
+        });
+        let signed_body = Arc::new(Mutex::new(None::<Value>));
+        let returned_version = Arc::new(AtomicUsize::new(1));
+        let app = axum::Router::new()
+            .route(
+                "/v1/transit/keys/holder-key",
+                axum::routing::get(move || {
+                    let data = data.clone();
+                    async move { axum::Json(json!({"data": data})) }
+                }),
+            )
+            .route(
+                "/v1/transit/sign/holder-key",
+                axum::routing::post({
+                    let signed_body = Arc::clone(&signed_body);
+                    let returned_version = Arc::clone(&returned_version);
+                    move |axum::Json(body): axum::Json<Value>| {
+                        let signed_body = Arc::clone(&signed_body);
+                        let returned_version = Arc::clone(&returned_version);
+                        async move {
+                            *signed_body.lock().unwrap() = Some(body);
+                            let version = returned_version.load(Ordering::SeqCst);
+                            axum::Json(
+                                json!({"data":{"signature":format!("vault:v{version}:AQID")}}),
+                            )
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = json!({
+            "id":"managed-openbao-transit", "service_type":"openbao-transit",
+            "endpoint":endpoint, "mount":"transit", "key_reference":"holder-key",
+            "algorithm":"EdDSA", "auth_reference":"fixture-token", "key_version":1
+        });
+        let metadata = read_managed_openbao(ProviderRequest {
+            service_config: config.clone(),
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            metadata["public_jwk"]["x"],
+            URL_SAFE_NO_PAD.encode([1_u8; 32])
+        );
+        assert_eq!(metadata["selected_version"], "1");
+        let response = sign(SignRequest {
+            service_config: config.clone(),
+            payload_b64: URL_SAFE_NO_PAD.encode(b"holder-payload"),
+        })
+        .await
+        .unwrap();
+        assert_eq!(response.signature_b64, "AQID");
+        assert_eq!(
+            signed_body.lock().unwrap().as_ref().unwrap()["key_version"],
+            1
+        );
+        returned_version.store(2, Ordering::SeqCst);
+        assert!(matches!(
+            sign(SignRequest {
+                service_config: config,
+                payload_b64: URL_SAFE_NO_PAD.encode(b"holder-payload"),
+            })
+            .await,
+            Err(KmsError::InvalidResponse(_))
+        ));
+        server.abort();
+        assert!(requested_openbao_key_version(&json!({"key_version":0})).is_err());
+        assert!(requested_openbao_key_version(&json!({"key_version":"bad"})).is_err());
+    }
 
     #[test]
     fn managed_signing_key_requires_provider_generated_non_exportable_custody() {

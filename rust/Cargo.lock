@@ -3932,6 +3932,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "hex",
  "marty-key-material-policy",
  "marty-verification",
  "prost",

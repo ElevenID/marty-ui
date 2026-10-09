@@ -203,6 +203,28 @@ def qualify(*, rust_adapter: bool = False) -> None:
                 f"deny exportable {reference}",
             )
 
+        for reference in ("cred-holder-probe", "cred-presenter-probe"):
+            path = f"transit/keys/{reference}"
+            status, _ = call("POST", f"{path}/config", managed, {"deletion_allowed": True})
+            ensure(
+                status in (200, 204),
+                f"allow scoped holder revocation {reference}: HTTP {status}",
+            )
+            ensure(
+                call("DELETE", path, managed)[0] in (200, 204),
+                f"delete retired holder key {reference}",
+            )
+            ensure(call("GET", path, managed)[0] == 404, f"retired {reference} absent")
+        ensure(
+            call("POST", "transit/keys/cred-issuer-probe/config", managed,
+                 {"deletion_allowed": True})[0] == 403,
+            "deny issuer deletion enablement",
+        )
+        ensure(
+            call("DELETE", "transit/keys/cred-issuer-probe", managed)[0] == 403,
+            "deny issuer deletion",
+        )
+
         ensure(
             call(
                 "POST", "transit/keys/cred-issuer-plain", plain, {"type": "ecdsa-p256"}

@@ -33,6 +33,7 @@ async fn verify(
         "device_registration_keys",
         "device_key_transitions",
         "device_holder_credentials",
+        "device_holder_keys",
         "alembic_version",
     ] {
         if !tables.contains(required) {

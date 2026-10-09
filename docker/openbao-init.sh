@@ -309,12 +309,18 @@ path "transit/keys/cred-dsc-*" {
   allowed_parameters = { "type" = ["ecdsa-p256", "ecdsa-p384", "ecdsa-p521", "rsa-2048", "ed25519"] }
 }
 path "transit/keys/cred-holder-*" {
-  capabilities = ["create", "update", "read"]
-  allowed_parameters = { "type" = ["ecdsa-p256", "ed25519"] }
+  capabilities = ["create", "update", "read", "delete"]
+  allowed_parameters = { "type" = ["ecdsa-p256", "ed25519"], "deletion_allowed" = [true, "true"] }
+}
+path "transit/keys/cred-holder-*/config" {
+  capabilities = ["create", "update"]
 }
 path "transit/keys/cred-presenter-*" {
-  capabilities = ["create", "update", "read"]
-  allowed_parameters = { "type" = ["ecdsa-p256", "ed25519"] }
+  capabilities = ["create", "update", "read", "delete"]
+  allowed_parameters = { "type" = ["ecdsa-p256", "ed25519"], "deletion_allowed" = [true, "true"] }
+}
+path "transit/keys/cred-presenter-*/config" {
+  capabilities = ["create", "update"]
 }
 path "transit/keys/lti-tool-*" {
   capabilities = ["create", "update", "read"]

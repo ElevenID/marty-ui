@@ -1,9 +1,12 @@
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, Utc};
 use marty_device_registration::{
     holder_credential::{authorize, issue},
     holder_credential_repository::{
         authorize_bearer, HolderCredentialRepository, PostgresHolderCredentialRepository,
     },
+    holder_key::{new_reference, HolderKeyRecord},
+    holder_key_repository::PostgresHolderKeyRepository,
     migration,
     postgres::PostgresDeviceRepository,
     CreateRegistration, DeviceRegistration, DeviceRepository, Platform,
@@ -26,6 +29,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         .expect("fresh schema migration");
     let devices = PostgresDeviceRepository::new(pool.clone());
     let holders = PostgresHolderCredentialRepository::new(pool.clone());
+    let holder_keys = PostgresHolderKeyRepository::new(pool.clone());
     let now = Utc::now();
     let registration = devices
         .save(DeviceRegistration::new(
@@ -202,6 +206,103 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         .await
         .expect("store third digest");
 
+    let first_reference = new_reference(
+        registration.organization_id.as_deref().unwrap(),
+        "holder_binding",
+    )
+    .unwrap();
+    let public_x = URL_SAFE_NO_PAD.encode([7_u8; 32]);
+    let first_metadata = serde_json::json!({
+        "status":"active", "type":"ed25519", "latest_version":1, "selected_version":"1",
+        "exportable":false, "allow_plaintext_backup":false, "deletion_allowed":false,
+        "public_jwk":{"kty":"OKP", "crv":"Ed25519", "x":public_x, "kid":first_reference}
+    });
+    let first_key = HolderKeyRecord::from_provider(
+        &registration,
+        "holder_binding",
+        "EdDSA",
+        &first_reference,
+        &first_metadata,
+        now,
+    )
+    .expect("provider metadata projection");
+    holder_keys
+        .bind(first_key.clone(), now)
+        .await
+        .expect("bind first reference");
+    let active_key = holder_keys
+        .current(&registration.id, "holder_binding")
+        .await
+        .expect("key lookup")
+        .expect("current holder reference");
+    assert_eq!(active_key.provider_reference, first_reference);
+    assert_eq!(active_key.public_jwk(), first_key.public_jwk());
+    assert!(active_key.valid_for(&registration));
+
+    let second_reference = new_reference(
+        registration.organization_id.as_deref().unwrap(),
+        "holder_binding",
+    )
+    .unwrap();
+    let mut second_metadata = first_metadata.clone();
+    second_metadata["public_jwk"]["kid"] = serde_json::json!(second_reference);
+    let second_key = HolderKeyRecord::from_provider(
+        &registration,
+        "holder_binding",
+        "EdDSA",
+        &second_reference,
+        &second_metadata,
+        now + Duration::seconds(1),
+    )
+    .expect("second provider metadata");
+    holder_keys
+        .bind(second_key.clone(), now + Duration::seconds(1))
+        .await
+        .expect("rotate reference");
+    assert_eq!(
+        holder_keys
+            .current(&registration.id, "holder_binding")
+            .await
+            .expect("rotated lookup")
+            .expect("rotated reference")
+            .provider_reference,
+        second_reference
+    );
+    let wrong_reference = HolderKeyRecord::from_provider(
+        &registration,
+        "holder_binding",
+        "EdDSA",
+        &new_reference(
+            registration.organization_id.as_deref().unwrap(),
+            "holder_binding",
+        )
+        .unwrap(),
+        &second_metadata,
+        now + Duration::seconds(2),
+    );
+    assert!(wrong_reference.is_err());
+    // A failed database insert must also roll back the retirement of current.
+    let mut duplicate_id = second_key.clone();
+    duplicate_id.id = first_key.id.clone();
+    duplicate_id.provider_reference = new_reference(
+        registration.organization_id.as_deref().unwrap(),
+        "holder_binding",
+    )
+    .unwrap();
+    assert!(holder_keys
+        .bind(duplicate_id, now + Duration::seconds(2))
+        .await
+        .is_err());
+    assert_eq!(
+        holder_keys
+            .current(&registration.id, "holder_binding")
+            .await
+            .expect("post-rollback lookup")
+            .expect("post-rollback reference")
+            .provider_reference,
+        second_reference
+    );
+
     devices
         .deactivate(&registration.id)
         .await
@@ -213,6 +314,11 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         .expect("revoked lookup")
         .expect("second audit row");
     assert!(revoked.revoked_at.is_some());
+    assert!(holder_keys
+        .current(&registration.id, "holder_binding")
+        .await
+        .expect("deactivated key lookup")
+        .is_none());
     assert!(holders
         .replace(
             issue(

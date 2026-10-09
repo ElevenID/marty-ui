@@ -34,7 +34,7 @@ pub struct IssuedHolderCredential {
     pub record: HolderCredentialRecord,
 }
 
-fn eligible(registration: &DeviceRegistration) -> bool {
+pub(crate) fn eligible(registration: &DeviceRegistration) -> bool {
     registration.is_active
         && !registration.user_id.trim().is_empty()
         && !registration.device_id.trim().is_empty()

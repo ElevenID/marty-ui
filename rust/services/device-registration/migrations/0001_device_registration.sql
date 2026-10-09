@@ -88,6 +88,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_one_current
 CREATE INDEX IF NOT EXISTS ix_device_holder_scope
     ON device_registration_service.device_holder_credentials(user_id, organization_id, registration_id);
 
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_keys (
+    id varchar(36) PRIMARY KEY,
+    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    purpose varchar(32) NOT NULL CONSTRAINT ck_device_holder_key_purpose CHECK (purpose IN ('holder_binding','presentation_signing')),
+    algorithm varchar(16) NOT NULL CONSTRAINT ck_device_holder_key_algorithm CHECK (algorithm IN ('EdDSA','ES256')),
+    provider_reference varchar(96) NOT NULL UNIQUE CONSTRAINT ck_device_holder_key_reference CHECK (
+        (purpose='holder_binding' AND provider_reference ~ '^cred-holder-[0-9a-f]{32}-[0-9a-f]{32}$') OR
+        (purpose='presentation_signing' AND provider_reference ~ '^cred-presenter-[0-9a-f]{32}-[0-9a-f]{32}$')
+    ),
+    remote_version bigint NOT NULL CONSTRAINT ck_device_holder_key_version CHECK (remote_version > 0),
+    public_x varchar(43) NOT NULL CONSTRAINT ck_device_holder_key_public_x CHECK (public_x ~ '^[A-Za-z0-9_-]{43}$'),
+    public_y varchar(43),
+    created_at timestamptz NOT NULL,
+    revoked_at timestamptz,
+    CONSTRAINT ck_device_holder_key_public_y CHECK ((algorithm='EdDSA' AND public_y IS NULL) OR (algorithm='ES256' AND public_y ~ '^[A-Za-z0-9_-]{43}$')),
+    CONSTRAINT ck_device_holder_key_revocation CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_key_one_current
+    ON device_registration_service.device_holder_keys(registration_id, purpose)
+    WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_device_holder_key_scope
+    ON device_registration_service.device_holder_keys(user_id, organization_id, registration_id);
+
 INSERT INTO device_registration_service.device_registration_keys
     (id, registration_id, key_version, public_key_der, public_key_kid, state, valid_from, valid_until, revoked_at, created_at)
 SELECT r.id, r.id, 1, r.public_key_der, r.public_key_kid,

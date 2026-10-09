@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 head `7b065b0` pins hardened Core `6855721` and has green exact-head checks, including the locally built Python extension, both exact pinned Core Python wheels, WASM, Rust and retirement guard. The repository root is deliberately an empty Python test-harness wheel, not a distributable Credentials runtime; Core owns canonical native wheels. Browser behavior, replacement vectors and release artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 published head `daa74b80e` combines KMS custody, Rust-only Issuance ownership, fresh schemas and release gates. CI `37924336922` completed: Release Contract Tests failed on 15 stale assertions, and CI Gate failed as a consequence; Canvas, OpenBao, Rust contracts, Rust images and all other required jobs passed. The assertion fix is local pending a grouped push. Separate Rust-only Issuance PR #1203 head `8341eca92` passed CI `37904023691`. Credentials PR #313 `7b065b0`, Core PR #355 `4cc1c9f`, Verifier PR #154 `19431ec`, and Authenticator PR #57 `1a3bb73` had green exact-head checks before the next local batches. Core still requires review; Authenticator stays draft because remote holder signing and wallet behavior are not implemented. No remaining cross-repository PR is release qualified or merged; KMS-only cutover/recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 published head `a47fb7942` combines KMS custody, Rust-only Issuance ownership, fresh schemas and release gates, and its exact-head CI `37929521793` plus PR CodeQL/dependency/workflow checks passed. The prior `daa74b80e` run `37924336922` remains immutable failed evidence for 15 stale release assertions corrected in the succeeding head. Separate Rust-only Issuance PR #1203 head `8341eca92` passed CI `37904023691`. Credentials PR #313 `7b065b0`, Core PR #355 `4cc1c9f`, Verifier PR #154 `19431ec`, and Authenticator PR #57 `1a3bb73` had green exact-head checks before the next local batches. New holder credential/key-ledger and pinned-version work remains local; Core still requires review; Authenticator stays draft because remote holder signing and wallet behavior are not implemented. No remaining cross-repository PR is release qualified or merged; KMS-only cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and named service JSON stores. The published Rust Issuance candidate removes the Alembic bridge and uses nine Rust ledger entries. Local fresh PostgreSQL 16 checks ran real Organization, Credential Template and Issuance migrations and read-only verification twice: 47 service tables, nine Issuance ledger entries, no private-key catalog entries; injected Alembic and private-key state were rejected. The signed-image qualifier is a required third release gate but no new signed image pair has passed it. The historical beta SQL mutation entrypoints are retired; old receipt consumers and dispatch workflows still need removal or replacement. Exact released-image, full assembled-schema, runtime-write, self-host rebuild/cutover and artifact proof remain. |
 
 ### First execution steps
@@ -9100,3 +9100,83 @@ transaction rollback on duplicate ID, explicit revocation and deactivation
 revocation. This is local, unpushed evidence. It does not establish an
 authenticated enrollment route, a durable KMS holder key, holder signing or
 wallet acceptance; those remain release blockers.
+
+2026-10-09 holder enrollment security review: the current native Device
+Registration `register` path accepts a keyless registration under an
+authenticated Gateway session with no device challenge; the challenge is
+required only when a PS256 public key is supplied. Therefore the proposed
+session plus server-issued bearer is revocable and KMS-compatible, but its
+initial enrollment does not independently prove control of a particular
+device. A stolen Gateway session could register and receive a fresh bearer.
+Do not expose holder signing on that basis alone. The cutover needs an
+explicit enrollment and rotation authorization decision (for example,
+step-up user authentication or an independent device pairing ceremony),
+while keeping the actual holder signing key generated and retained in KMS.
+Signing Keys currently offers only public-JWK `holder-keys` registration,
+and the VC-API holder-proof path creates and deletes a one-request OpenBao
+key. Neither is a durable holder signer. The next implementation must pair
+a registration-scoped, reference/public-only key ledger with authenticated
+Device Registration-to-Signing Keys create/sign/revoke operations and must
+reject arbitrary provider references at that boundary. The published UI run
+`37929521793` is still live: 19 of 21 jobs completed without a failure;
+OpenBao integration-secret recovery and Canvas public image build are active.
+
+2026-10-09 local durable holder-key reference work: native Device Registration
+now has a fresh-schema `device_holder_keys` ledger containing only a
+registration/user/organization/purpose, OpenBao reference and version, and
+public Ed25519 or P-256 coordinates. It contains no JWK blob or private key
+column. The Rust projection accepts only active non-exportable provider
+metadata, validates the public coordinates and binds the reference to the
+organization hash. PostgreSQL binding locks the registration, rotates the
+current purpose entry atomically and revokes entries on deactivation. The
+Device Registration library and integration suite passed 16/16, including
+fresh PostgreSQL migration, reference rotation and rollback. Synthetic
+provider metadata in these tests proves storage behavior only, not live KMS
+custody. OpenBao's [Transit sign API](https://openbao.org/docs/next/api/secret/transit/)
+documents `key_version`; the local Signing Keys adapter now selects the
+matching public-key version, sends a positive explicit version for signing
+and rejects a response tagged with another version. Its focused regression
+test passes. The ledger and adapter are local, unpushed, and not connected to
+an enrollment/signing route. Provisioning compensation, remote revoke,
+dedicated service authentication, a live versioned OpenBao signature, and
+wallet behavior remain required. UI CI `37929521793` remains live with
+20/21 jobs complete and no failure; Canvas is still active.
+
+Holder namespace/policy review: the first local ledger draft used
+`holder-*`, which the shipped signing-keys-managed OpenBao policy cannot
+create. The corrected reference generator binds the organization digest and
+purpose to the existing `cred-holder-*` and `cred-presenter-*` namespaces;
+fresh PostgreSQL constraints enforce the same purpose-to-prefix mapping.
+Only those two namespaces now permit deletion after an explicit
+`deletion_allowed=true` config update, while the issuer namespace still
+denies both. The live disposable policy probe with `--rust-adapter` passed
+after this correction, including positive holder/presenter deletion,
+negative issuer deletion and the Rust version-pinned signing proof. Remote
+deletion is still not called by Device Registration deactivation; a durable
+cleanup/compensation path remains required before acceptance.
+
+2026-10-09 live OpenBao version follow-up: the guarded
+`python scripts/probe_signing_keys_openbao_policy.py --rust-adapter` run passed
+against disposable pinned OpenBao and scoped service credentials. Its Rust
+managed-key test created a non-exportable P-256 key, rotated it, recovered
+the version-one public JWK after rotation, and obtained a version-one Transit
+signature through the newly pinned adapter. The probe also completed its
+existing six-prefix ACL, provider HMAC, tenant and managed-profile route
+checks. This is real remote signing/version evidence, but the durable holder
+ledger has not been connected to the provider, an authenticated signing
+route, or a wallet. Review found that a pinned public JWK paired with the
+provider's latest version could be stored as a false binding; the Rust
+holder-key projection now requires `selected_version` to equal
+`latest_version` when first binding a new key. Rotation later uses a new
+ledger record instead of silently relabeling an old public key.
+
+2026-10-09 exact-head UI qualification update: draft PR #1192 head
+`a47fb79425d63f842df286b81300dc1e4233fe4d` completed run
+[`37929521793`](https://github.com/ElevenID/marty-ui/actions/runs/37929521793)
+successfully. Its CI Gate, Release Contract Tests, OpenBao DIDComm plugin
+image, Rust service contracts/images/Canvas, feature-regression probe,
+supply-chain and other required jobs passed; PR CodeQL, dependency review
+and workflow-quality checks also passed. This qualifies that published head
+only. The local credential/key ledger and version-pinned adapter commits are
+not included, and green CI does not substitute for the remaining holder
+wallet/signing, passport cutover or release-artifact acceptance gates.

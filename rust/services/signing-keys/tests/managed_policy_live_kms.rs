@@ -1,8 +1,10 @@
 //! Opt-in Rust adapter proof against disposable OpenBao and its scoped token.
 //! OpenBao retains the private signing key; only public metadata enters Rust.
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use marty_signing_keys::kms::{
-    create_managed_openbao, read_managed_openbao, rotate_openbao, ProviderRequest,
+    create_managed_openbao, read_managed_openbao, rotate_openbao, sign, ProviderRequest,
+    SignRequest,
 };
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -75,4 +77,32 @@ async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
     assert_eq!(second["latest_version"], 2);
     assert_ne!(first["public_jwk"], second["public_jwk"]);
     assert!(second["public_jwk"].get("d").is_none());
+
+    let mut pinned_config = json!({
+        "id": "managed-openbao-transit", "service_type": "openbao-transit",
+        "auth_mode": "service_token", "endpoint": endpoint, "mount": "transit",
+        "key_reference": reference, "algorithm": "ES256", "key_version": 1
+    });
+    let pinned = read_managed_openbao(ProviderRequest {
+        service_config: pinned_config.clone(),
+    })
+    .await
+    .expect("version-one public key read after rotation");
+    assert_eq!(pinned["public_jwk"], first["public_jwk"]);
+    assert_eq!(pinned["selected_version"], "1");
+    let signed = sign(SignRequest {
+        service_config: pinned_config.clone(),
+        payload_b64: URL_SAFE_NO_PAD.encode(b"versioned-holder-proof"),
+    })
+    .await
+    .expect("version-one non-exportable signature after rotation");
+    assert_eq!(signed.signature_encoding, "der");
+    assert!(!signed.signature_b64.is_empty());
+    pinned_config["key_version"] = json!(2);
+    let current = read_managed_openbao(ProviderRequest {
+        service_config: pinned_config,
+    })
+    .await
+    .expect("version-two public key read");
+    assert_eq!(current["public_jwk"], second["public_jwk"]);
 }
