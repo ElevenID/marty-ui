@@ -374,6 +374,7 @@ async fn didcomm_renewal_private_ip_refusal_preserves_published_rows() {
 }
 
 #[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
+#[allow(dead_code, reason = "shared fixture also serves Flow acceptance cases")]
 mod didcomm_native_grpc_fixture;
 
 #[tokio::test]

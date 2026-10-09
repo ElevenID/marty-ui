@@ -1,13 +1,37 @@
 #[path = "../../../services/issuance/tests/support/base_runtime_redis.rs"]
+#[allow(
+    dead_code,
+    reason = "shared fixture also serves Canvas acceptance cases"
+)]
 mod base_runtime_redis;
 #[path = "../../../services/issuance/tests/support/didcomm_gateway_replay.rs"]
+#[allow(
+    dead_code,
+    reason = "shared fixture also serves Canvas acceptance cases"
+)]
 mod didcomm_gateway_replay;
 #[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
+#[allow(
+    dead_code,
+    reason = "shared fixture also serves Canvas acceptance cases"
+)]
 mod didcomm_native_grpc_fixture;
 #[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
+#[allow(
+    dead_code,
+    reason = "shared fixture also serves other acceptance cases"
+)]
 mod issuance_named_peers;
 #[path = "../../../services/issuance/tests/support/issuance_process.rs"]
+#[allow(
+    dead_code,
+    reason = "shared fixture also serves other acceptance cases"
+)]
 mod issuance_process;
+#[allow(
+    dead_code,
+    reason = "shared fixture also serves other acceptance cases"
+)]
 mod bounded_fixture_command {
     include!("../../../services/issuance/tests/support/bounded_fixture_command.rs");
 }
