@@ -32,6 +32,16 @@ fourth-file worker-only pilot and #1202's dedicated self-host acceptance owner
 are now merged after protected validation. Historical checkpoints below are
 not current merge-status claims.
 
+October 9 delivery checkpoint: UI #1205 moved the nine Flow admission and
+consumer cases to a dedicated acceptance owner without dropping the 139-case
+Linux Canvas/Flow roster. UI #1206 merged the exact eight-file, fail-closed
+Flow PR selector; #1207 proved its selected Flow lane with nine real cases and
+then passed full protected merge-group qualification. The #1207 PR reached its
+gate in 11m01s, of which the Flow job took 10m35s (9m24s compile, 23s database
+step). This is observed faster feedback for that exact test-source class, not
+an attributable full-pipeline saving. Main's one-reviewer rule was restored
+after each temporary self-merge exception.
+
 ## Objective and scope
 
 Reduce the amount of unrelated code and infrastructure needed to validate a change. Establish independently testable Rust boundaries, select checks from their actual dependencies, and report failures earlier while preserving behavior, features, security guarantees, and release qualification.
@@ -2494,7 +2504,7 @@ comparison should an exact-file PR selector be considered; protected merge
 groups must retain full Canvas/contracts qualification. No speedup is claimed
 from this unimplemented option.
 
-## A1 Flow admission/consumer acceptance owner (2026-10-09, candidate)
+## A1 Flow admission/consumer acceptance owner (2026-10-09, merged)
 
 A dedicated `marty-flow-acceptance` target now owns the six outer Flow/DIDComm
 admission cases and three nested public-startup cases formerly discovered by
@@ -2526,10 +2536,11 @@ took 30m07s, including 10m09s compilation, 8m06s public-image build, and
 8m10s, 7m33s, and 7m14s for those respective stages; different heads and
 cache conditions make this a diagnostic comparison, not an attributable
 speedup. The same PR's Release Contract job exposed stale policy guards,
-which were corrected separately. Protected Linux validation and comparable
-repeat timings remain pending; no end-to-end CI speedup is claimed.
+which were corrected separately. The corrected final-head PR and protected
+merge-group checks passed, and [#1205](https://github.com/ElevenID/marty-ui/pull/1205)
+merged as `859030f8e`. No end-to-end CI speedup is claimed from this split.
 
-## A6 exact Flow-test-source PR selector (2026-10-09, candidate)
+## A6 exact Flow-test-source PR selector (2026-10-09, merged)
 
 The next bounded selector accepts only a nonempty subset of the eight tracked
 `marty-flow-acceptance` test-owned files. It requires the existing regular-Git-
@@ -2540,9 +2551,35 @@ pinned Bookworm builder, verifies those artifacts, and requires the same nine
 case IDs and owned database/Redis fixtures as the full Canvas lane. Rust lint,
 supply-chain, release-policy, public-protocol, and aggregate checks remain;
 merge groups still run the full matrix. Independent review found no P1-P3
-issue and 195 focused local tests passed. This is a candidate, not a speedup:
-hosted Linux execution and timing, followed by a test-source-only pilot, are
-required before claiming faster feedback.
+issue and 195 focused local tests passed. The corrected full PR run
+[37917235263](https://github.com/ElevenID/marty-ui/actions/runs/37917235263)
+and protected run
+[37920041018](https://github.com/ElevenID/marty-ui/actions/runs/37920041018)
+passed; [#1206](https://github.com/ElevenID/marty-ui/pull/1206) merged as
+`f2d011211`. The one-file [#1207](https://github.com/ElevenID/marty-ui/pull/1207)
+pilot selected only the Flow Rust lane on PR, passed all nine Flow cases and
+the retained release/lint/supply-chain/public-protocol/aggregate checks in
+[run 37923064960](https://github.com/ElevenID/marty-ui/actions/runs/37923064960),
+then passed the full protected
+[run 37924634057](https://github.com/ElevenID/marty-ui/actions/runs/37924634057)
+and merged as `a2970c70f`. The PR reached its gate in 11m01s; the Flow job
+took 10m35s, including 9m24s compiling the test and real binaries and 23s in
+the database step. This proves scoped feedback for the exact test-only class,
+not a general CI speedup or a controlled comparison against a same-head full
+matrix.
+
+## A0/A3 Auth-to-Applicant profile consumer (2026-10-09, candidate)
+
+The existing shadow planner records an Applicant-to-Auth non-Cargo edge but
+previously cited only Auth's service URL and startup reference. The new
+source-backed witness covers Auth's default `http://applicant:8006`, OIDC JIT
+and Canvas provisioner registration/calls, the PATCH request with tenant
+identity and response-account check, Applicant's route/handler/server, and
+the base Compose default/provider-port binding. Scoped marker mutations test
+each owner; the planner still selects the full workspace for service changes.
+There is no new gate skip, runtime behavior change, or claimed speedup.
+Independent review found no P1-P3 issue; 41 planner tests passed with one
+skip and 333 subtests. Hosted PR/protected evidence is pending.
 
 ## Design references
 

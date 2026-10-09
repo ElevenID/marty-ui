@@ -40,23 +40,23 @@ fn bounded_render(
 pub(super) fn assert_renderer_deadlines() {
     let python = std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
         .expect("configured renderer qualification requires explicit Python");
-    for (program, expected) in [
+    for (program, expected, deadline) in [
         (
             "import os,time; os.close(1); time.sleep(30)",
             "Compose rendering exceeded deadline",
+            Duration::from_millis(400),
         ),
         (
             "import sys,time; sys.stdout.write('x'*262145); sys.stdout.flush(); time.sleep(30)",
             "rendered model exceeds limit",
+            // Busy shared runners can take longer than 400 ms to start Python.
+            // Keep this bounded, but let the output-limit assertion win.
+            Duration::from_secs(5),
         ),
     ] {
         let started = Instant::now();
-        let error = bounded_render(
-            Command::new(&python).args(["-c", program]),
-            b"{}",
-            Duration::from_millis(400),
-        )
-        .unwrap_err();
+        let error = bounded_render(Command::new(&python).args(["-c", program]), b"{}", deadline)
+            .unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(started.elapsed() < Duration::from_secs(10));
     }
