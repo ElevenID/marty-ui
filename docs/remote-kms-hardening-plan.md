@@ -8951,6 +8951,7 @@ This is still an intermediate source change: historical Python SQL builders,
 receipt consumers and manual beta acceptance workflows remain in the tree and
 need cleanup/replacement before the grouped PR is publishable. No protected
 beta host or signed new-head image was exercised by these tests.
+
 The follow-up removed `build_sql`, `checked_migrations`, image SQL reads and
 `stage_sql` from the historical beta native-migration module, together with
 its disposable SQL-bundle tests. Its remaining `prepare()` is a terminal
@@ -8960,3 +8961,36 @@ fence-authority and retired-operator tests pass 87/87; release-transaction,
 qualifier and CI-gate tests pass 32/32. This removes the old bundle assembly
 capability, but does not yet retire every historical receipt consumer or beta
 workflow. Supported fresh Rust schema paths remain the release target.
+
+Grouped UI draft PR #1192 was updated from `a957f5da6` to exact head
+`daa74b80ee9423030f97e11b2a204655c8b863f1` with the eight local
+fresh-schema, signed-image gate, Canvas owner, and beta retirement commits.
+Before publication, 309 relevant Python tests, Ruff, the compiled Canvas and
+Flow test inventories, and local fresh PostgreSQL migration/verification
+checks passed; Flow lists exactly nine cases. The new exact-head CI run is
+`37924336922` and was queued at the last observation. The PR remains draft;
+this is a qualification request, not release approval or signed-image proof.
+
+Remaining beta-workflow audit after disabling the old operator: the
+`passport-beta-*`, `passport-python-deletion-cutover`, and
+`passport-rust-predeletion-acceptance` dispatches all target the dedicated
+`passport-beta-wsl2` runner. They cover prerequisite, preliminary, deployed
+candidate, final acceptance, demo publication, soak, and old-writer drain
+lineage. Their aggregate readers still query
+`passport_cutover.native_migration_receipt`; merely deleting the SQL emitter
+does not invalidate a pre-existing receipt. The newer `passport-supported-*`
+workflows rehearse disposable infrastructure, managed certificates and Rust
+provisioning, while the current supported consumer workflow uploads a blocked
+receipt. They do not yet replace every old beta publication/soak claim. Keep
+those old claims out of KMS-only release qualification and remove or replace
+the dispatches together with their receipt validators after mapping the
+required supported passport acceptance behavior; no old receipt is evidence
+of a clean fresh-schema cutover.
+
+Release artifact source check: `services/Dockerfile.migrations` copies only
+`rust/services/issuance/migrations` and `rust/services/flow/migrations` into
+the migrations image's passport-native directory; it does not copy the retired
+Python SQL preparer or protected beta PowerShell entrypoints. The deleted
+Issuance Alembic bridge is therefore absent from this candidate image input.
+This source inspection is narrower than an exact digest filesystem inspection
+and does not replace the new signed-image qualification gate.
