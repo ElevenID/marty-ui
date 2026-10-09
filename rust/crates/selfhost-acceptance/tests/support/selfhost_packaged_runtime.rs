@@ -105,6 +105,12 @@ fn run_isolated_case(case: ChildCase) -> Result<(), String> {
     ] {
         command.env(key, std::env::var_os(key).ok_or(ERROR)?);
     }
+    // The parent selected the exact oracle digest from the available registry
+    // cache. The child revalidates this optional reference against the same
+    // pinned oracle before creating its disposable PostgreSQL container.
+    if let Some(image) = std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
+        command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);
+    }
     // Disable automatic parent cleanup before the child can create anything.
     // Only verified resource absence restores automatic scratch removal.
     owned.disable_cleanup(true);
@@ -308,7 +314,7 @@ fn record_stage(case: SecretCase, stage: &'static str) {
     eprintln!("{STAGE_PREFIX}{}:{stage}", case_key(case));
 }
 
-fn record_database_stage(stage: &'static str) {
+pub(super) fn record_database_stage(stage: &'static str) {
     debug_assert!(valid_stage(&format!("database:{stage}")));
     eprintln!("{STAGE_PREFIX}database:{stage}");
 }

@@ -63,6 +63,7 @@ async fn selfhost_public_image_loader_child() {
         selfhost_runtime_sidecar::PendingKind::Database,
     )
     .unwrap();
+    selfhost_packaged_runtime::record_database_stage("start");
     let owned = std::mem::ManuallyDrop::new(
         canvas_published_database::PublishedDatabase::start_with_scope(
             selfhost_runtime_sidecar::parent_scope().unwrap(),
