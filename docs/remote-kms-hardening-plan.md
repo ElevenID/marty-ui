@@ -10261,3 +10261,13 @@ host's default Rust 1.93 is below this workspace's Rust 1.95 minimum;
 the explicit Rust 1.97.1 locked check of Gateway, Auth and Device
 Registration passed. This toolchain mismatch is not a source regression;
 the check does not replace full hosted CI or the real KMS release probes.
+
+2026-10-09 UI local grouped-graph validation: with Rust 1.97.1 and the
+new `735a11f` Core pin, strict all-target Clippy passed for Gateway,
+Auth and Device Registration. Their locked library suites passed:
+Gateway 159 passed/one existing ignored, Auth 3 passed, and Device
+Registration 9 passed. Core PR #355 still has Fast Rust Preflight pending
+at this checkpoint; its other reported checks have no failure. Do not
+publish or qualify the broader local UI batch based on these three
+library suites alone; native image, database, wallet and exact-head hosted
+checks remain required.
