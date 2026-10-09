@@ -10180,3 +10180,21 @@ callers and preserve any required non-signing wallet/session behavior before
 removing this API. The QR SD-JWT route uses the verified Rust bridge and
 does not traverse those native signing channels. This is a source audit,
 not mobile artifact or physical-device acceptance.
+
+2026-10-09 Core wallet HTTP bound review: local Core commit `735a11f`
+replaces unbounded wallet response parsing with one streaming, size-limited
+reader for credential offers, issuer and authorization-server metadata,
+nonce, token, credential, presentation, and request-object responses. It
+also rejects non-HTTPS, credential-bearing, or fragment-bearing by-reference
+offer URLs before network access and stops copying arbitrary issuer error
+bodies into token and credential errors. The presentation path now rejects
+an oversized body even when the HTTP status is successful. A focused test
+proves advertised oversize rejection; another proves chunked oversize
+rejection; a third proves insecure offer references fail before fetch.
+Wallet-feature library tests passed 154/154 (42 existing ignored), strict
+Clippy and formatting passed. This commit is local and is deliberately held
+for a grouped Core PR #355 update with downstream Core-revision repins;
+published Core `cd21cad` remains the checked head. The 8 MiB credential
+response bound preserves larger mDoc payloads while Authenticator applies
+its tighter 1 MiB SD-JWT receipt limit after Core parsing. Physical-device
+and real-issuer qualification remain required.
