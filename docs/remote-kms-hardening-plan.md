@@ -10527,3 +10527,20 @@ with a fake bridge, not cryptographic custody acceptance. Flutter analysis is
 clean and the full suite passes 179 tests with four skips. Non-generated line
 coverage is 79.30% (1,406/1,773), still below the protected 90% gate; the
 commit remains local in the grouped Authenticator PR #57 batch.
+
+2026-10-09 wallet receipt durability and UI deletion correction: local
+Authenticator commit `537c547` removes the separate secure-storage receipt
+index and writes one independently enumerable entry per verified wallet
+receipt. Concurrent saves can no longer overwrite a shared ID index; reads
+reject an entry whose embedded ID differs from its storage key, and clear
+leaves unrelated secure-storage data intact. The expired-pass UI awaits
+deletion, keeps its selection and reports a failure if the receipt delete
+fails; a widget test confirms deleting one of two same-title expired passes
+preserves the other. A storage read error now preserves already displayed
+cards instead of replacing the wallet view with an empty list. Full Flutter
+analysis passed and 183 tests passed with four skips. Instrumenting the new
+widget test added previously unmeasured view code to LCOV, so the current
+non-generated coverage ratio is 75.91% (1,494/1,968), still below the 90%
+protected gate; this is not a source-coverage regression conclusion. The
+source commit remains local for the broad PR #57 batch. Real platform secure
+storage and device behavior remain to be qualified.
