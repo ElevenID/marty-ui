@@ -42,10 +42,10 @@ const ID: &str = "ordinary-admission-recovery-synthetic";
 const CODE: &str = "synthetic-ordinary-recovery-pre-authorized-code";
 const API_KEY: &str = "synthetic-admission-management-key";
 
-#[path = "didcomm_flow_grpc_admission.rs"]
-mod flow_grpc;
 #[path = "flow_native_consumer.rs"]
 mod flow_consumer;
+#[path = "didcomm_flow_grpc_admission.rs"]
+mod flow_grpc;
 
 pub(super) async fn run_flow_consumer(database_url: &str) {
     flow_consumer::run(database_url).await;
