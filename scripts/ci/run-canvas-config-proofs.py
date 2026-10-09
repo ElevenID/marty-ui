@@ -1,7 +1,7 @@
-"""Run the two image-free Canvas config proofs early, or verify their same-run proof.
+"""Run the image-free Canvas config proofs early, or verify their same-run proof.
 
 Only a matching composition-test executable may authorize the later exact skips.
-Local/standalone full runs without this evidence continue to execute both tests.
+Local/standalone full runs without this evidence continue to execute all cases.
 """
 
 import hashlib
@@ -20,6 +20,10 @@ TARGET = "canvas_published_schema_contract"
 PACKAGE = "#marty-canvas-acceptance@"
 EVIDENCE = "canvas-config-proofs.json"
 CASES = (
+    (
+        "rendered_base_process::renderer_bounds_proof_is_image_free",
+        "RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1",
+    ),
     (
         "rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy",
         "RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1",

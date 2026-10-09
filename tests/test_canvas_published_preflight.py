@@ -111,8 +111,13 @@ ROSTER_EXPIRY_TESTS = (
     "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
     "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
 )
-LATEST_REGISTRATION_COUNT = 170
+RENDERER_BOUNDS = "rendered_base_process::renderer_bounds_proof_is_image_free"
+LATEST_REGISTRATION_COUNT = 171
 LATEST_REGISTRATION_SHA256 = (
+    "56e6384a8bb480f2d9ca66cd59f5060a41e98581127cbf269671700ccfbe0d90"
+)
+PRE_RENDERER_REGISTRATION_COUNT = 170
+PRE_RENDERER_REGISTRATION_SHA256 = (
     "db3ce3bed72fb3fcafe86edf5ad913fbafc9810ffa5d6ce55f8ea68c6db7ebbd"
 )
 
@@ -141,6 +146,12 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     assert len(names) == len(set(names))
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
         LATEST_REGISTRATION_SHA256
+    )
+    assert names.count(RENDERER_BOUNDS) == 1
+    names = [name for name in names if name != RENDERER_BOUNDS]
+    assert len(names) == PRE_RENDERER_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        PRE_RENDERER_REGISTRATION_SHA256
     )
     assert all(names.count(name) == 1 for name in ROSTER_EXPIRY_TESTS)
     before_roster = [name for name in names if name not in ROSTER_EXPIRY_TESTS]
@@ -234,6 +245,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
     assert script.count("if (( expected_skipped_config_tests == 0 )); then") == 1
+    assert (
+        script.count(
+            "grep -Fo 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
     assert (
         script.count(
             "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
@@ -521,6 +538,14 @@ else
           duplicate) printf 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\nPUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\n' ;;
         esac
       fi
+      if [[ "$*" != *"--skip rendered_base_process::renderer_bounds_proof_is_image_free"* ]]; then
+        case "$TEST_RENDERER_BOUNDS_MARKER" in
+          ok) printf 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1\n' ;;
+          prefixed) printf 'test %s ... RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1\nok\n' 'renderer-bounds' ;;
+          missing) ;;
+          duplicate) printf 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1\n' ;;
+        esac
+      fi
       if [[ "$*" != *"--skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
       case "$TEST_RENDERED_CONFIG_MARKER" in
         ok) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
@@ -607,6 +632,7 @@ fi
         qualification=False,
         fast_owner_row="ok",
         config_marker="ok",
+        renderer_marker="ok",
         timeout_marker="ok",
         private_ip_pg_marker="ok",
         k8s_config_marker="ok",
@@ -632,6 +658,7 @@ fi
                     "heartbeat_readiness_",
                     "json_consumer_diagnostic_",
                     "timeout_consumer_",
+                    RENDERER_BOUNDS,
                     RENDERED_CONFIG,
                     PRIVATE_IP_PG,
                     K8S_RENDERED_CONFIG,
@@ -698,6 +725,7 @@ fi
                 "TEST_FAILURE": failure,
                 "TEST_FAST_OWNER_ROW": fast_owner_row,
                 "TEST_RENDERED_CONFIG_MARKER": config_marker,
+                "TEST_RENDERER_BOUNDS_MARKER": renderer_marker,
                 "TEST_TIMEOUT_MARKER": timeout_marker,
                 "TEST_PRIVATE_IP_PG_MARKER": private_ip_pg_marker,
                 "TEST_K8S_CONFIG_MARKER": k8s_config_marker,
@@ -855,6 +883,26 @@ def test_rendered_config_marker_accepts_interleaved_harness_output(shell_case):
     )
 
 
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_renderer_bounds_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], renderer_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert "Renderer bounds proof did not execute and complete exactly once" in result.stderr
+
+
+def test_renderer_bounds_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], renderer_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
 def _config_evidence(tmp_path, *, qualification=False):
     record = {
         "schema": 1,
@@ -868,7 +916,7 @@ def _config_evidence(tmp_path, *, qualification=False):
             "GITHUB_SHA": "a" * 40,
         },
         "qualification": "1" if qualification else "0",
-        "cases": [RENDERED_CONFIG, K8S_RENDERED_CONFIG],
+        "cases": [RENDERER_BOUNDS, RENDERED_CONFIG, K8S_RENDERED_CONFIG],
     }
     (tmp_path / "canvas-config-proofs.json").write_text(
         json.dumps(record) + "\n", encoding="ascii"
@@ -878,7 +926,7 @@ def _config_evidence(tmp_path, *, qualification=False):
 
 @pytest.mark.parametrize("qualification", [False, True])
 @pytest.mark.parametrize("mode", ["full", "full-after-preflights"])
-def test_same_run_composition_proof_skips_only_two_completed_cases(
+def test_same_run_composition_proof_skips_only_three_completed_cases(
     shell_case, tmp_path, qualification, mode
 ):
     _config_evidence(tmp_path, qualification=qualification)
@@ -897,11 +945,12 @@ def test_same_run_composition_proof_skips_only_two_completed_cases(
         if call[:2] == ["child", "contract"] and "--test-threads=4" in call
     ]
     assert len(composition) == 1
+    assert composition[0].count(RENDERER_BOUNDS) == 1
     assert composition[0].count(RENDERED_CONFIG) == 1
     assert composition[0].count(K8S_RENDERED_CONFIG) == 1
     assert composition[0].count("--skip") == (
-        4 if mode == "full-after-preflights" and not qualification else 3
-    )  # serial, two config cases, and routine-only historical HTTPX proof
+        5 if mode == "full-after-preflights" and not qualification else 4
+    )  # serial, three image-free cases, and routine-only historical HTTPX proof
     assert PRIVATE_IP_PG not in composition[0]
 
 
@@ -935,6 +984,7 @@ def test_untrusted_composition_proof_falls_back_to_full_execution(
         if call[:2] == ["child", "contract"] and "--test-threads=4" in call
     ]
     assert len(composition) == 1
+    assert RENDERER_BOUNDS not in composition[0]
     assert RENDERED_CONFIG not in composition[0]
     assert K8S_RENDERED_CONFIG not in composition[0]
 
@@ -1536,11 +1586,17 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
     shell_case, mode, target
 ):
     result, calls = shell_case(
-        [mode], registrations=[f"{RENDERED_CONFIG}: test", f"{target}: test"]
+        [mode],
+        registrations=[
+            f"{RENDERED_CONFIG}: test",
+            f"{RENDERER_BOUNDS}: test",
+            f"{target}: test",
+        ],
     )
     assert result.returncode == 0, result.stderr
     assert [call for call in calls if call[:2] == ["grep", "-Fx"]] == [
         ["grep", "-Fx", f"{RENDERED_CONFIG}: test"],
+        ["grep", "-Fx", f"{RENDERER_BOUNDS}: test"],
         ["grep", "-Fx", f"{target}: test"],
     ]
     assert [call for call in calls if call[0] == "child"] == [

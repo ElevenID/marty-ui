@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 06:52 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-09 13:37 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -41,6 +41,11 @@ gate in 11m01s, of which the Flow job took 10m35s (9m24s compile, 23s database
 step). This is observed faster feedback for that exact test-source class, not
 an attributable full-pipeline saving. Main's one-reviewer rule was restored
 after each temporary self-merge exception.
+UI #1208 has since merged its Auth-to-Applicant shadow-edge witness and a
+bounded synthetic renderer-test deadline correction; the full protected
+Canvas, contracts, image, release, and security checks passed. It changes no
+runtime behavior or service-package selection. The broader dependency input
+graph remains incomplete.
 
 ## Objective and scope
 
@@ -2568,7 +2573,7 @@ the database step. This proves scoped feedback for the exact test-only class,
 not a general CI speedup or a controlled comparison against a same-head full
 matrix.
 
-## A0/A3 Auth-to-Applicant profile consumer (2026-10-09, candidate)
+## A0/A3 Auth-to-Applicant profile consumer (2026-10-09, merged)
 
 The existing shadow planner records an Applicant-to-Auth non-Cargo edge but
 previously cited only Auth's service URL and startup reference. The new
@@ -2579,7 +2584,42 @@ the base Compose default/provider-port binding. Scoped marker mutations test
 each owner; the planner still selects the full workspace for service changes.
 There is no new gate skip, runtime behavior change, or claimed speedup.
 Independent review found no P1-P3 issue; 41 planner tests passed with one
-skip and 333 subtests. Hosted PR/protected evidence is pending.
+skip and 333 subtests. The first protected run
+[37928228236](https://github.com/ElevenID/marty-ui/actions/runs/37928228236)
+failed one unchanged synthetic Compose renderer assertion: under concurrent
+load, its 400 ms oversized-output probe timed out before Python wrote the
+sentinel. The reviewed correction retained the 400 ms hang probe, 262,144-byte
+output limit, real renderer bound, exact error assertion, and owned cleanup;
+only the synthetic oversized-output probe now has a bounded five-second
+startup allowance. [The corrected PR run](https://github.com/ElevenID/marty-ui/actions/runs/37931967220)
+and [full protected run](https://github.com/ElevenID/marty-ui/actions/runs/37935430868)
+both passed the named renderer case and all required checks. [#1208](https://github.com/ElevenID/marty-ui/pull/1208)
+merged as `7324bf0ed`; the one-reviewer rule was restored. The original
+planner/document-only PR reached its gate in 2m07s, but the corrective
+test-source change required the full PR Rust matrix; no new general CI
+speedup is attributed to #1208.
+
+The protected #1208 Canvas job took 22m11s. Its compile, public-image, and
+parallel database steps took 7m24s, 5m03s, and 6m09s respectively; inside the
+last step the worker target was longest at 5m25s. These are one run's
+diagnostics, not before/after speedup evidence or permission to shorten real
+lease/deadline tests. The host `sccache` snapshot had zero hits because the
+hermetic Bookworm compiler does not use that host wrapper; it is not a cache
+hit-rate measurement for the container compile.
+
+## A4/A6 image-free renderer bounds proof (2026-10-09, candidate)
+
+The synthetic renderer deadline/output-limit proof currently runs inside two
+late Canvas composition cases, after image and database preparation. Move that
+same proof into one named test in the existing Canvas composition executable
+and include it in the early image-free config-proof roster. Keep the real
+rendered-configuration and native-process assertions in both original cases,
+including their explicit Python requirement. Exact same-run executable digest,
+run identity, tier, named-case success, and completion marker must authorize
+the later skip; missing or stale evidence must run the entire composition
+suite and require the new marker there. This is a fail-fast and duplicate-test
+cleanup candidate, not a measured wall-clock saving. Protected Linux CI must
+still prove the registered test and fallback paths before merge.
 
 ## Design references
 

@@ -248,7 +248,7 @@ async fn base_profile_gateway_composition_child() {
         std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref(),
         Ok("1")
     );
-    rendered_base_process::assert_renderer_deadlines();
+    let _ = rendered_base_process::require_explicit_python();
     renewal_fresh_main::run_gateway(
         "postgresql://oracle:synthetic-local-only@127.0.0.1:5432/canvas_published_schema_test",
         "redis://127.0.0.1:6379",
@@ -263,7 +263,7 @@ async fn base_profile_native_renewal_uses_actual_rendered_configuration() {
         eprintln!("Rendered base native process requires the exact-owned published schema gate");
         return;
     }
-    rendered_base_process::assert_renderer_deadlines();
+    let _ = rendered_base_process::require_explicit_python();
     let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
