@@ -1791,6 +1791,36 @@ jobs:
             -- --list | grep -Fx "$chain_test: test"
           cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
             "$chain_test" -- --ignored --exact
+      - name: Prove remote holder lifecycle with scoped OpenBao and fresh PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec "${{ job.services.postgres.id }}" createdb -U postgres marty_holder_kms_test
+          nonce="$(openssl rand -hex 16)"
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
+            http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request PUT \
+            --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"] }"}' \
+            http://127.0.0.1:8200/v1/sys/policies/acl/kms-holder-test >/dev/null
+          scoped_token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data '{"policies":["kms-holder-test"],"ttl":"20m"}' \
+            http://127.0.0.1:8200/v1/auth/token/create \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
+          [[ -n "$scoped_token" && "$scoped_token" != test-only ]]
+          MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200 \
+            MARTY_TEST_OPENBAO_TOKEN="$scoped_token" \
+            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only \
+            MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce" \
+            DEVICE_REGISTRATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_holder_kms_test \
+            BAO_TOKEN="$scoped_token" \
+            cargo test --locked -p marty-device-registration --test holder_remote_live_kms \
+              registration_provision_sign_and_deactivate_delete_remote_key -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite

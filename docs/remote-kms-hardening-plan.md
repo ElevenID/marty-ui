@@ -10330,3 +10330,34 @@ registry-index check: Docker could not inspect the pinned Postgres digest,
 matching the other Docker Hub pull-limit errors. Keep that availability gate
 intact and rerun it when the registry is available. These corrections are
 local and need exact-head hosted requalification after the current CI run.
+
+2026-10-09 UI correction publication: grouped commit `c732eae85` was pushed
+to PR #1192 after all prior source-bearing checks completed; its new hosted
+run is in progress. The standalone Rust feature regression probe now passes
+at this head. Image, service-test, supply-chain, Nginx and reusable workflow
+quality jobs still fail before KMS execution while Docker Hub returns the
+unauthenticated pull limit; these cannot be counted as acceptance evidence.
+
+2026-10-09 live holder lifecycle audit: a dedicated ignored integration test
+for registration, scoped remote OpenBao key provisioning, public-key and
+signature proof, credential rotation, deactivation and KMS key deletion was
+present but not invoked by the contracts CI lane. On isolated disposable
+OpenBao and fresh PostgreSQL containers it passed end to end with a scoped
+Transit token. A first run without global `BAO_TOKEN` exposed that the
+managed-key missing check used a global token for its collection lookup even
+when the operation carried an explicit scoped token. The local fix reuses
+the operation's token for that lookup, retaining the public environment-token
+inventory API; a focused regression test and strict Signing Keys Clippy pass.
+The live test passed again against a third fresh database after this change.
+A local CI addition runs the test in the existing contracts lane with a
+dedicated fresh database, root-guard sentinel and scoped token; YAML and
+shell syntax pass locally. This new gate is not yet hosted or released.
+
+2026-10-09 Authenticator quality correction: formatting commit `423674a`
+was pushed to PR #57 and the new head passed its format step, Android/iOS
+configuration and build checks. Full hosted Flutter analysis then reported
+four missing braces in the new remote wallet code. Local commit `e773596`
+adds them; after localization generation, full `flutter analyze --no-pub`
+reported no issues, and repository-wide Dart formatting reported no changes.
+That correction remains local until the current generated-binding check
+finishes, so the published head is not yet quality-green.

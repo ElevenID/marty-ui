@@ -210,6 +210,13 @@ pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String
     let token = secret_value("BAO_TOKEN")
         .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
         .ok_or_else(|| KmsError::InvalidConfig("Managed OpenBao access is unavailable.".into()))?;
+    list_managed_openbao_key_names_with_token(endpoint, &token).await
+}
+
+async fn list_managed_openbao_key_names_with_token(
+    endpoint: &str,
+    token: &str,
+) -> Result<Vec<String>, KmsError> {
     let response = match send_json(
         Client::new()
             .get(format!(
@@ -1381,7 +1388,13 @@ pub(crate) async fn missing_managed_openbao_key(
             "Managed OpenBao key lookup requires the transit mount".into(),
         ));
     }
-    Ok(!list_managed_openbao_key_names(endpoint)
+    let token = transit_token(config);
+    if token.is_empty() {
+        return Err(KmsError::InvalidConfig(
+            "Managed OpenBao access is unavailable.".into(),
+        ));
+    }
+    Ok(!list_managed_openbao_key_names_with_token(endpoint, &token)
         .await?
         .iter()
         .any(|name| name == reference))
@@ -1860,6 +1873,46 @@ mod tests {
         )
         .await
         .unwrap());
+    }
+
+    #[tokio::test]
+    async fn managed_key_missing_lookup_uses_the_same_scoped_token() {
+        let app = axum::Router::new().route(
+            "/v1/transit/keys",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                if headers
+                    .get("x-vault-token")
+                    .and_then(|value| value.to_str().ok())
+                    == Some("scoped-token")
+                {
+                    (StatusCode::OK, axum::Json(json!({"data":{"keys":[]}})))
+                } else {
+                    (
+                        StatusCode::FORBIDDEN,
+                        axum::Json(json!({"errors":["permission denied"]})),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("local KMS fixture");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = json!({
+            "endpoint": endpoint,
+            "mount": "transit",
+            "key_reference": "missing-key",
+            "auth_reference": "scoped-token"
+        });
+        let missing = KmsError::ProviderStatus {
+            status: StatusCode::NOT_FOUND,
+            detail: r#"{"errors":[]}"#.into(),
+        };
+        assert!(missing_managed_openbao_key(&config, &missing)
+            .await
+            .expect("scoped collection lookup"));
+        server.abort();
     }
 
     #[test]
