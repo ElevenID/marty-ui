@@ -16,6 +16,39 @@ RUST = ROOT / "rust"
 # Keep the service fallback below until every service and its transitive inputs
 # have an obligation owner. The paths document the source of each observation.
 OBSERVED_NON_CARGO_CONSUMERS = {
+    "marty-gateway": [
+        {
+            # Trust Profile resolves issuer did:web documents through the
+            # stack-owned Gateway unless the internal base URL is overridden.
+            "package": "marty-trust-profile",
+            "evidence": "rust/services/trust-profile/src/config.rs",
+            "binding": 'value(&values, "DID_RESOLUTION_BASE_URL").unwrap_or("http://gateway:8000")',
+            "runtime_evidence": "rust/services/trust-profile/src/main.rs",
+            "runtime_marker": "NativeIssuerKeyResolver::new(",
+            "registration_marker": ".with_issuer_key_resolver(issuer_key_resolver)",
+            "request_evidence": "rust/services/trust-profile/src/issuer_keys.rs",
+            "client_marker": ".with_did_web_internal_base_urls(internal_base_urls)",
+            "request_marker": ".resolve_with_metadata(did)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "trust-profile",
+            "deployment_marker": "DID_RESOLUTION_BASE_URL: http://gateway:8000",
+        },
+        {
+            # The standard Compose profile configures Issuance's optional
+            # DIDComm recipient did:web resolver against Gateway.
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/config.rs",
+            "binding": '"DIDCOMM_DID_WEB_INTERNAL_BASE_URL"',
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "runtime_marker": "config.didcomm_did_web_internal_base_url.as_deref()",
+            "client_evidence": "rust/services/issuance/src/initiation_didcomm.rs",
+            "client_marker": "resolver.with_did_web_internal_base_urls([base_url])",
+            "request_marker": ".resolve_with_metadata(holder_did)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "issuance",
+            "deployment_marker": "DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}",
+        },
+    ],
     # Auth connects to these services at runtime. Their package changes can
     # affect Auth even though Cargo has no reverse dependency on them.
     "marty-flow": [

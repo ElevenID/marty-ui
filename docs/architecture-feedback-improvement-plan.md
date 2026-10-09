@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-08 19:43 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-09 06:52 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -27,8 +27,10 @@ Full protected checks remain. The separate roster component draft is deferred
 for lifecycle/qualification reasons. Core #352
 merged its authenticated presentation-proof API and #353 its narrow digest
 crate, but UI migration and nightly release qualification remain incomplete.
-Earlier failed main evidence remains ineligible for release/reuse. Historical
-checkpoints below are not current merge-status claims.
+Earlier failed main evidence remains ineligible for release/reuse. UI #1201's
+fourth-file worker-only pilot and #1202's dedicated self-host acceptance owner
+are now merged after protected validation. Historical checkpoints below are
+not current merge-status claims.
 
 ## Objective and scope
 
@@ -2172,12 +2174,15 @@ versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
 
-Next bounded A1 self-host owner candidate (2026-10-09 reviewed local draft,
-not yet hosted): the public-image loader's two root cases and eight
-embedded support cases have one deployment/packaging obligation. The draft
-moves their unchanged assertions and exact ten libtest IDs into
-`marty-selfhost-acceptance`, while composition retains its 136 other discovered
-cases. It moves the two self-host support files together, reuses the original
+## A1 dedicated self-host acceptance owner (2026-10-09, merged)
+
+The public-image loader's two root cases and eight embedded support cases
+have one deployment/packaging obligation. [UI #1202](https://github.com/ElevenID/marty-ui/pull/1202)
+moved their unchanged assertions and exact ten libtest IDs into
+`marty-selfhost-acceptance`, while composition retains its 139 other discovered
+cases on the final protected #1202 head (135 routine parallel passes, four
+intentionally filtered in that invocation). It moves the two self-host
+support files together, reuses the original
 single-source bundle, renewal, database, and bounded-command fixtures, and
 shares only the generic cleanup-result combiner with composition. The
 composition manifest can then drop three direct development edges:
@@ -2190,10 +2195,33 @@ and contracts-lane exclusion retain the mandatory owner. Local locked Rust
 1.95 compilation and discovered-ID checks passed for both self-host and
 composition; strict package Clippy passed. The full synthetic runner policy
 suite passed 221 cases with one skip after a caught preflight-closure defect
-was corrected; focused selector and ownership policy tests passed.
-Independent review found no P1-P3 regression. Full hosted Linux
-image/PostgreSQL/cleanup execution and protected CI remain required; this
-split changes no skip or release qualification.
+was corrected; focused selector and ownership policy tests passed. Two
+independent reviews found no P1-P3 regression. The first hosted PR run exposed
+26 stale release-policy expectations and one current-input pin; these were
+corrected without weakening the three-target failure guard. The correction's
+281 related tests passed locally, and the exact-head
+[PR run 37890433024](https://github.com/ElevenID/marty-ui/actions/runs/37890433024)
+passed all required checks in 32m12s. The final
+[protected run 37893223551](https://github.com/ElevenID/marty-ui/actions/runs/37893223551)
+passed the full combined-head plan in 28m21s, including 10/10 self-host and
+111 worker cases; the self-host target took 197.9s while the worker target
+took 386.7s concurrently. #1202 merged as `a9845070e`; one required review
+was restored immediately. The split changes no skip or release qualification,
+and these runs do not establish an overall CI wall-time saving.
+
+## A0/A3 Gateway DID-web runtime consumers (2026-10-09 local candidate)
+
+Gateway's root and organization-slug DID-web routes are consumed by two Rust
+services without Cargo dependencies on Gateway. Trust Profile defaults its
+issuer-key resolver to `http://gateway:8000` and the base Compose profile
+binds that URL. Issuance's DIDComm recipient resolver uses the same Gateway
+URL when its optional internal DID-web setting is configured; base Compose
+provides that default. The candidate records both source-, route-contract-,
+and scoped-Compose-backed shadow edges. Mutation-checked tests require the
+consumer binding and call, Gateway route dispatch, published paths, and
+deployment wiring. Gateway source changes still select the full Rust
+workspace, including both consumers; this does not establish complete
+non-Cargo input closure, alter any check, or claim a speedup.
 
 ## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
 
@@ -2435,11 +2463,34 @@ focused policy tests passed; independent review found no P1-P3 issue.
 [UI #1199](https://github.com/ElevenID/marty-ui/pull/1199) passed full
 [PR run 37882465625](https://github.com/ElevenID/marty-ui/actions/runs/37882465625)
 and protected [merge-group run 37884784355](https://github.com/ElevenID/marty-ui/actions/runs/37884784355),
-then merged as `df93dc3f2`. The fourth file's worker-only eligibility is not
-yet a measured feedback speedup; the separate one-file
-[pilot #1201](https://github.com/ElevenID/marty-ui/pull/1201) must prove it on
-hosted CI. Protected merge groups retain full Canvas/contracts validation,
-and one required approval was restored after #1199 merged.
+then merged as `df93dc3f2`. The separate one-file
+[pilot #1201](https://github.com/ElevenID/marty-ui/pull/1201) changed only
+that fourth source and selected the worker-only PR lane. Its
+[PR run 37887354111](https://github.com/ElevenID/marty-ui/actions/runs/37887354111)
+passed 111 worker cases and reached the gate in 13m40s; its
+[protected run 37888622587](https://github.com/ElevenID/marty-ui/actions/runs/37888622587)
+kept full Canvas/contracts validation and reached the gate in 34m30s. These
+are different execution plans, not an attributable end-to-end percentage.
+#1201 merged as `05f6dd972`; one required approval was restored after merge.
+
+## A6 self-host-only PR selector feasibility (2026-10-09, deferred)
+
+The new self-host acceptance target has three tracked test-owned files: its
+root `selfhost_public_image_contract.rs` and the `selfhost_packaged_runtime.rs`
+and `selfhost_runtime_sidecar.rs` support modules. The root release-policy
+suite also reads them, and the six Rust-copying Docker contexts currently
+exclude these test sources. Shared fixtures, package manifests, scripts, and
+runtime/image sources are not test-only inputs. A direct exact-file selector
+is not safe yet: the CI artifact verifier has only full and worker-only modes,
+the runner requires composition and worker artifacts before it runs the ten
+self-host cases, and public-image/packager preparation exists only in the full
+Canvas job. The aggregate gate has no self-host-only result tuple. A future
+additive diagnostic lane would need to build the same image and packager,
+verify the exact compiled target, execute all ten cases with owned database
+cleanup, and retain timing/evidence. Only after hosted coverage and wall-time
+comparison should an exact-file PR selector be considered; protected merge
+groups must retain full Canvas/contracts qualification. No speedup is claimed
+from this unimplemented option.
 
 ## Design references
 
