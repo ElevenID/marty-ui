@@ -9070,3 +9070,20 @@ wheels instead. The remaining artifact question is whether those canonical
 native wheels and the browser consumer behave correctly when published and
 installed in the supported product, not whether a root Credentials runtime
 wheel can be produced.
+
+Holder authorization working assumption, pending user preference: use a
+revocable server-issued 256-bit opaque device credential together with the
+authenticated Gateway user session. Store only its SHA-256 digest and scope it
+to an active registration, exact user and organization, with bounded expiry.
+Theft of both bearer credentials permits signing until revocation; no
+device-held asymmetric private key is introduced. The first local Rust
+foundation is `marty-device-registration::holder_credential`: it returns the
+bearer only at issuance, denies any registration carrying the old PS256 public-key
+projection, and rejects wrong token, user, organization, registration,
+expiry, revocation and inactivity. Its library suite passes 4/4 and
+warnings-denied Clippy passes. This module is **not wired to an HTTP route or
+persistent repository**, and does not create, authorize or sign with a durable
+KMS holder key. Complete transactional credential rotation/revocation,
+reference-only key persistence, authenticated Device Registration-to-Signing
+Keys operations, Gateway session binding and mobile/web wallet behavior
+before calling this accepted custody.
