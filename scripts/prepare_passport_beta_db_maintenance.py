@@ -22,7 +22,7 @@ try:
     from .probe_passport_beta_cutover_snapshot import (
         ZERO_COUNT_WATERMARK_SQL, validate_direct_probe,
     )
-    from .verify_passport_beta_protected_cutover import verify as verify_cutover_report
+    from .verify_passport_beta_rust_readiness import verify as verify_cutover_report
     from .probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
         production_attachment_sha256, production_snapshot, run,
@@ -39,7 +39,7 @@ except ImportError:
     from probe_passport_beta_cutover_snapshot import (
         ZERO_COUNT_WATERMARK_SQL, validate_direct_probe,
     )
-    from verify_passport_beta_protected_cutover import verify as verify_cutover_report
+    from verify_passport_beta_rust_readiness import verify as verify_cutover_report
     from probe_passport_beta_host import (
         BETA_PROJECT, HostProbeError, beta_psql, ids, inspect,
         production_attachment_sha256, production_snapshot, run,
@@ -156,7 +156,7 @@ def prepare(
     head = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
-    source = manifest_source(manifest_path, head)
+    source = manifest_source(manifest_path, head, rust_only=True)
     receipt_target = checked_receipt(receipt_path, head)
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -206,8 +206,9 @@ def prepare(
     report = verify_cutover_report(
         report_path, source_commit=head,
         deletion_head=candidate_deletion_head(report_path),
-        snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
-        receipt=receipt,
+        snapshot=snapshot, snapshot_path=snapshot_path,
+        snapshot_file_sha256=snapshot_file_sha256,
+        receipt=receipt, receipt_path=receipt_path,
     )
     database_uid = f"postgresql:{receipt_target['system_id']}:{receipt_target['database_oid']}"
     validate_direct_probe(snapshot["fence_first_probe"],
@@ -318,7 +319,7 @@ def verify_plan(
     head = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
-    source = manifest_source(manifest_path, head)
+    source = manifest_source(manifest_path, head, rust_only=True)
     receipt = checked_receipt(receipt_path, head)
     receipt_raw = json.loads(receipt_path.read_text(encoding="utf-8"))
     require(plan.get("source_commit") == head
@@ -344,8 +345,9 @@ def verify_plan(
     report = verify_cutover_report(
         report_path, source_commit=head,
         deletion_head=candidate_deletion_head(report_path),
-        snapshot=snapshot, snapshot_file_sha256=snapshot_file_sha256,
-        receipt=receipt_raw,
+        snapshot=snapshot, snapshot_path=snapshot_path,
+        snapshot_file_sha256=snapshot_file_sha256,
+        receipt=receipt_raw, receipt_path=receipt_path,
     )
     docker = plan.get("docker")
     require(isinstance(docker, dict), "Maintenance Docker identity is invalid")

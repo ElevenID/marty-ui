@@ -20,23 +20,24 @@ import subprocess
 from typing import Callable
 
 if __package__:
-    from .check_passport_beta_fence_authority import verify_issuance_attestation
     from .check_passport_supported_compose_ownership import verify as verify_ownership
     from .collect_passport_beta_acceptance import verify_attestations
     from .passport_supported_infra_images import qualified_images
+    from .prepare_official_beta_release import OfficialReleaseError, _validated_components
 else:
-    from check_passport_beta_fence_authority import verify_issuance_attestation
     from check_passport_supported_compose_ownership import verify as verify_ownership
     from collect_passport_beta_acceptance import verify_attestations
     from passport_supported_infra_images import qualified_images
+    from prepare_official_beta_release import OfficialReleaseError, _validated_components
 
 
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
-DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
-UI_SERVICES = "ghcr.io/elevenid/marty-ui-oss/services"
-UI_MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations"
-ISSUANCE_IMAGE = "ghcr.io/elevenid/marty-credentials-issuance"
+UI_IMAGES = {
+    "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
+    "services": "ghcr.io/elevenid/marty-ui-oss/services",
+    "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+}
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
 # The hosted attestor signs a blocked producer receipt after its plan handoff.
 RECORD_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-record.yml"
@@ -64,33 +65,8 @@ def _attest(target: str, repository: str, signer: str, commit: str,
     return True
 
 
-def _component(manifest: dict, name: str, repository: str,
-               image: str) -> tuple[str, str, str]:
-    components = manifest.get("components")
-    require(isinstance(components, list), "Official stack components are missing")
-    matches = [item for item in components if isinstance(item, dict)
-               and item.get("name") == name]
-    require(len(matches) == 1, "Official stack component is missing or ambiguous")
-    item = matches[0]
-    commit = item.get("commit")
-    version = item.get("version")
-    require(item.get("repository") == repository
-            and isinstance(commit, str) and COMMIT.fullmatch(commit) is not None
-            and isinstance(version, str) and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version),
-            "Official stack component source is invalid")
-    artifacts = item.get("artifacts")
-    require(isinstance(artifacts, list), "Official stack artifacts are missing")
-    images = [value for value in artifacts if isinstance(value, dict)
-              and value.get("type") == "oci" and value.get("uri") == image]
-    require(len(images) == 1 and isinstance(images[0].get("digest"), str)
-            and DIGEST.fullmatch(images[0]["digest"]) is not None,
-            "Official stack image is missing or ambiguous")
-    return commit, version, images[0]["digest"]
-
-
 def release_inputs(manifest_path: Path, source_commit: str, *,
                    verify_ui: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
-                   verify_issuance: Callable[[str, str, str], bool] = verify_issuance_attestation,
                    infra: Callable[[], dict[str, str]] = qualified_images) -> dict:
     require(COMMIT.fullmatch(source_commit) is not None,
             "Protected UI source commit is invalid")
@@ -98,40 +74,29 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise PlanError("Official stack manifest is missing or invalid") from exc
-    require(isinstance(manifest, dict) and manifest.get("schema") == "marty.stack/v1",
-            "Official stack manifest schema is invalid")
-    ui_commit, _, services_digest = _component(
-        manifest, "marty-ui", "ElevenID/marty-ui", UI_SERVICES)
-    require(ui_commit == source_commit,
-            "Official stack UI source differs from protected main")
-    _, _, migrations_digest = _component(
-        manifest, "marty-ui", "ElevenID/marty-ui", UI_MIGRATIONS)
-    ui_images = {artifact.get("uri"): artifact.get("digest")
-                 for component in manifest["components"] if isinstance(component, dict)
-                 and component.get("name") == "marty-ui"
-                 for artifact in component.get("artifacts", [])
-                 if isinstance(artifact, dict) and artifact.get("type") == "oci"}
-    require(set(ui_images) == {UI_SERVICES, UI_MIGRATIONS,
-                              "ghcr.io/elevenid/marty-ui-oss/ui"}
-            and all(isinstance(value, str) and DIGEST.fullmatch(value)
-                    for value in ui_images.values()),
-            "Official stack UI image roles are incomplete")
+    require(isinstance(manifest, dict), "Official stack manifest is invalid")
+    try:
+        _, _, images = _validated_components(manifest, source_commit, rust_only=True)
+    except OfficialReleaseError as exc:
+        raise PlanError(f"Rust-only official stack manifest is invalid: {exc}") from exc
+    require(all(images[role]["uri"] == uri for role, uri in UI_IMAGES.items()),
+            "Official stack UI image repository differs from protected release")
+    ui_component = next(component for component in manifest["components"]
+                        if component["name"] == "marty-ui")
+    ui_artifact_uris = [artifact["uri"] for artifact in ui_component["artifacts"]
+                        if artifact.get("type") == "oci"]
+    require(sorted(ui_artifact_uris) == sorted(UI_IMAGES.values()),
+            "Official stack UI image roles are incomplete or ambiguous")
+    ui_images = {images[role]["uri"]: images[role]["digest"]
+                 for role in ("ui", "services", "migrations")}
     require(verify_ui(manifest_path, ui_images, source_commit) is True,
             "Official stack UI attestations are unverified")
-    issuance_commit, issuance_version, issuance_digest = _component(
-        manifest, "marty-credentials-issuance", "ElevenID/marty-credentials",
-        ISSUANCE_IMAGE)
-    issuance_reference = f"{ISSUANCE_IMAGE}@{issuance_digest}"
-    require(verify_issuance(issuance_reference, issuance_commit,
-                            issuance_version) is True,
-            "Official Credentials issuance image attestation is unverified")
     infra_images = infra()
     return {
         "source_commit": source_commit,
         "stack_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-        "services_reference": f"{UI_SERVICES}@{services_digest}",
-        "migrations_reference": f"{UI_MIGRATIONS}@{migrations_digest}",
-        "issuance_reference": issuance_reference,
+        "services_reference": images["services"]["reference"],
+        "migrations_reference": images["migrations"]["reference"],
         "infra_images": infra_images,
     }
 
@@ -220,7 +185,6 @@ def _require_record_binding(plan_path: Path, plan: dict, record: dict) -> None:
             and record.get("source_commit") == plan.get("source_commit")
             and record.get("services_reference") == plan.get("services_reference")
             and record.get("migrations_reference") == plan.get("migrations_reference")
-            and record.get("issuance_reference") == plan.get("issuance_reference")
             and record.get("infra_images") == plan.get("infra_images")
             and record.get("created_at") == plan.get("created_at")
             and record.get("expires_at") == plan.get("expires_at")

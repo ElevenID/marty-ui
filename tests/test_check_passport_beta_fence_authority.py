@@ -236,7 +236,10 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     baseline_source["components"][-1]["commit"] = "9" * 40
     baseline.write_text(json.dumps(baseline_source), encoding="utf-8")
     planned = json.loads(manifest.read_text(encoding="utf-8"))
-    planned["components"][-2]["artifacts"][0]["digest"] = "sha256:" + "5" * 64
+    planned["components"] = [
+        component for component in planned["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
     planned["components"][-1]["artifacts"][1]["digest"] = "sha256:" + "4" * 64
     manifest.write_text(json.dumps(planned), encoding="utf-8")
     (planned_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")

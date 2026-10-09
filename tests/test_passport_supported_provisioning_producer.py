@@ -38,7 +38,6 @@ NOW = datetime(2026, 9, 27, 12, tzinfo=timezone.utc)
 PROJECT = "marty-passport-acceptance-base-123456abcdef"
 SOURCE = "a" * 40
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
-ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "d" * 64
 LABELS = {
     "com.marty.passport.acceptance.owner": "supported-consumer",
     "com.marty.passport.acceptance.run-id": "123456",
@@ -87,7 +86,6 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "stack_manifest_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
         "services_reference": SERVICES,
         "migrations_reference": "migrations@sha256:" + "c" * 64,
-        "issuance_reference": ISSUANCE,
         "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
                          "openbao": "openbao@sha256:" + "f" * 64,
                          "edge": "nginx@sha256:" + "1" * 64},
@@ -108,7 +106,7 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
 def verify(path: Path, manifest: Path, plan: dict, **kwargs) -> dict:
     inputs = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "issuance_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     return verify_plan_release(
         path, manifest, "123456", ENV,
@@ -123,7 +121,7 @@ def test_infra_rehearsal_requires_its_exact_protected_workflow(tmp_path: Path) -
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "issuance_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     gates = {"attest": lambda *args: True,
              "release": lambda *args: official,
@@ -143,7 +141,7 @@ def partial_teardown_context(tmp_path: Path) -> tuple[tuple, dict, dict]:
     path, manifest, plan = source_plan(tmp_path)
     official = {key: plan[key] for key in (
         "source_commit", "stack_manifest_sha256", "services_reference",
-        "migrations_reference", "issuance_reference", "infra_images",
+        "migrations_reference", "infra_images",
     )}
     gates = {"now": NOW, "attest": lambda *args: True,
              "release": lambda *args: official,
@@ -161,7 +159,6 @@ def input_plan() -> dict:
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
         "services_reference": SERVICES,
         "migrations_reference": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "c" * 64,
-        "issuance_reference": ISSUANCE,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": LABELS,
     }

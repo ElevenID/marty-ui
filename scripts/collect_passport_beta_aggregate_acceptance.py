@@ -42,7 +42,8 @@ IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUNTIME_KEYS = {"container_id", "image_id", "configured_image", "started_at",
                 "config_hash", "networks"}
 ISSUANCE_MIGRATION_VERSIONS = sorted((
-    "issuance_service_baseline_v1", "0001_oid4vci_public_protocol",
+    "issuance_service_baseline_v1", "0000_merge_issuance_heads_bridge",
+    "0001_oid4vci_public_protocol",
     "0002_physical_document_jobs", "0003_passport_bureau_provider_binding",
     "0004_passport_submission_intent", "0005_passport_submission_provenance",
     "0006_passport_beta_batch_identity", "0007_passport_beta_batch_provenance",
@@ -313,7 +314,8 @@ def collect_aggregate(
                     for version in key_versions.values()),
             "Aggregate beta managed issuer proof differs from deployment")
     try:
-        signed = manifest_source(manifest_path, source, attest, attest_issuance)
+        signed = manifest_source(manifest_path, source, attest, attest_issuance,
+                                 rust_only=True)
     except (OSError, ValueError) as exc:
         raise EvidenceError("Aggregate signed release did not verify") from exc
     require(signed["manifest_sha256"] == plan["stack_manifest_sha256"]

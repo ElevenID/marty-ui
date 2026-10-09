@@ -41,4 +41,20 @@ foreach ($relative in $operators) {
         if ([IO.File]::Exists($orphan)) { [IO.File]::Delete($orphan) }
     }
 }
+$bindings = @($ast.FindAll({ param($node)
+    $node -is [Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -ceq '$maintenanceBase'
+}, $true))
+if ($bindings.Count -ne 1) {
+    throw 'Native gate has no single maintenance verifier command'
+}
+$baseArguments = $bindings[0].Right.Extent.Text
+foreach ($required in @(
+    "'--cutover-snapshot'", '[string]$maintenancePlan.cutover_snapshot_path',
+    "'--cutover-report'", '[string]$maintenancePlan.cutover_report_path'
+)) {
+    if (-not $baseArguments.Contains($required)) {
+        throw 'Native gate omits a sealed maintenance readiness input'
+    }
+}
 Write-Output 'atomic beta receipt rehearsal passed'

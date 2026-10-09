@@ -161,12 +161,19 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
     )
     previous = model()
     previous["services"]["issuance"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
+    previous["services"]["issuance-native"]["environment"]["DATABASE_URL"] = (
+        "postgresql+asyncpg://marty:synthetic@postgres:5432/marty"
+    )
     for setting in gate["SHARED_SETTING_REPAIRS"]:
         previous["services"]["issuance"]["environment"].setdefault(
-            setting, f"synthetic-{setting.lower()}"
+            setting,
+            "false" if setting == "CANVAS_MIRROR_WORKER_ENABLED" else f"synthetic-{setting.lower()}",
         )
         previous["services"]["issuance-native"]["environment"].pop(setting, None)
     actual = deepcopy(previous)
+    actual["services"]["issuance-native"]["environment"]["DATABASE_URL"] = (
+        "postgresql://marty:synthetic@postgres:5432/marty"
+    )
     for setting in gate["SHARED_SETTING_REPAIRS"]:
         actual["services"]["issuance-native"]["environment"][setting] = previous[
             "services"

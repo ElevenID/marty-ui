@@ -1,5 +1,10 @@
 # Next aggregate beta: acceptance checklist
 
+The current post-deletion execution sequence is
+[Post-deletion Rust passport beta cutover](passport-postdeletion-beta-cutover.md).
+The predeletion release/run instructions below are historical and are not
+prerequisites for the Rust-only source after merged Python deletion.
+
 The final aggregate beta operator requires two external issuer input files.
 `IssuerChainFile` contains exactly `organization_id`, `csca_issuer_did`,
 `csca_certificate_id`, and `dsc_issuer_did`. Its organization and DSC DID must

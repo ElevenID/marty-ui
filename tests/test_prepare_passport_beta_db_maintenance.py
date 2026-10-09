@@ -95,7 +95,7 @@ def test_plan_binds_current_fence_source_and_production(monkeypatch, tmp_path):
     checked = []
     monkeypatch.setattr(maintenance, "protected_file",
                         lambda relative, _runner: checked.append(relative))
-    monkeypatch.setattr(maintenance, "manifest_source", lambda _manifest, _head: {
+    monkeypatch.setattr(maintenance, "manifest_source", lambda _manifest, _head, **_: {
         "release": "marty-ui@1.2.3", "manifest_sha256": "a" * 64,
     })
     monkeypatch.setattr(maintenance, "checked_receipt", lambda _path, _head: {
@@ -211,7 +211,7 @@ def test_resume_verifies_full_ids_and_requires_every_service_stopped(monkeypatch
     head = "b" * 40
     monkeypatch.setattr(maintenance, "protected_source", lambda _runner: head)
     monkeypatch.setattr(maintenance, "protected_file", lambda _relative, _runner: None)
-    monkeypatch.setattr(maintenance, "manifest_source", lambda _path, _head: {
+    monkeypatch.setattr(maintenance, "manifest_source", lambda _path, _head, **_: {
         "release": "marty-ui@1.2.3", "manifest_sha256": "a" * 64,
     })
     monkeypatch.setattr(maintenance, "checked_receipt", lambda _path, _head: {

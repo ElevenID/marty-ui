@@ -268,18 +268,22 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # marty-credentials owns the issuance schema. Apply migrations from the
-  # exact immutable issuance image before its API or worker starts.
+  # Apply the native issuance schema with the same Rust build as the API.
   issuance-migrations:
-    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: issuance-native
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         . /app/load-secrets-env.sh
-        exec python manage_migrations.py upgrade
+        exec /usr/local/bin/marty-issuance-service migrate
     environment:
       <<: *runtime-env
-      DATABASE_URL_TEMPLATE: *database-url-template
+      SERVICE_NAME: issuance_native
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
     secrets:
       - marty_db_password
@@ -288,6 +292,10 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+      organization:
+        condition: service_healthy
+      credential-template:
+        condition: service_healthy
     healthcheck:
       disable: true
     restart: "no"
@@ -546,11 +554,19 @@ services:
     restart: unless-stopped
 
   issuance:
-    image: ${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: issuance-native
     entrypoint: ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
-    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8005"]
+    command: ["/usr/local/bin/marty-issuance-service"]
     environment:
       <<: *issuance-application-env
+      SERVICE_NAME: issuance_native
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_SCHEMA_STARTUP_MODE: validate
+      CANVAS_MIRROR_WORKER_ENABLED: "false"
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
       CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
@@ -579,7 +595,7 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  # Native owner for selected routes; legacy siblings remain on issuance.
+  # Native owner for passport routes; the issuance alias runs the same binary.
   issuance-native:
     extends:
       file: docker-compose.service.issuance-native-runtime.yml
@@ -589,6 +605,8 @@ services:
     environment:
       <<: *issuance-application-env
       SERVICE_NAME: issuance_native
+      DATABASE_URL_TEMPLATE: *database-url-sync-template
+      MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUANCE_GRPC_ENABLED: "true"
       RP_GRPC_TARGET: revocation-profile:9013
       CANVAS_MIRROR_WORKER_ENABLED: ${CANVAS_MIRROR_WORKER_ENABLED:-false}

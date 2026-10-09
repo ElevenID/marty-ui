@@ -157,7 +157,9 @@ try {
         ConvertFrom-Json -ErrorAction Stop
     $maintenanceBase = @(
         (Join-Path $PSScriptRoot 'prepare_passport_beta_db_maintenance.py'),
-        '--stack-manifest', $StackManifest, '--fence-receipt', $FenceReceipt)
+        '--stack-manifest', $StackManifest, '--fence-receipt', $FenceReceipt,
+        '--cutover-snapshot', [string]$maintenancePlan.cutover_snapshot_path,
+        '--cutover-report', [string]$maintenancePlan.cutover_report_path)
     $state = Assert-StoppedGeneration -BaseArguments $maintenanceBase -Intent $intent
     $intentSha = (Get-FileHash -LiteralPath $intent -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($maintenance.schema -cne 'marty.passport-beta-db-maintenance-start/v1' -or

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from scripts.check_didcomm_native_credentials_release import NativeDidcommReleaseError
+from scripts.check_didcomm_native_credentials_release import IMAGE
 from scripts.check_issuance_retention_credentials_release import (
     REQUIRED_COMMIT,
     REQUIRED_REVISION,
@@ -21,7 +22,18 @@ CONTRACT = json.loads(
         encoding="utf-8"
     )
 )
-LOCK = json.loads((ROOT / "release/stack-lock.json").read_text(encoding="utf-8"))
+RELEASE = CONTRACT["release_gate"]["qualified_release"]
+LOCK = {"components": [{
+    "name": "marty-credentials-issuance",
+    "repository": "ElevenID/marty-credentials",
+    "version": RELEASE["version"],
+    "commit": RELEASE["commit"],
+    "artifacts": [{
+        "type": "oci", "uri": IMAGE, "digest": RELEASE["digest"],
+        "sbom": RELEASE["evidence"]["sbom"],
+        "provenance": RELEASE["evidence"]["provenance"],
+    }],
+}]}
 
 
 def test_retention_requires_the_reviewed_event_owner_migration_release() -> None:
@@ -65,9 +77,9 @@ def test_retention_rejects_an_unreviewed_coherent_source_pin() -> None:
         validate_retention_release(contract, lock)
 
 
-def test_retention_release_gate_runs_in_ci_and_cd() -> None:
+def test_retired_retention_release_gate_is_not_run_in_ci_or_cd() -> None:
     invocation = "python scripts/check_issuance_retention_credentials_release.py"
     for workflow in ("ci.yml", "cd.yml"):
-        assert invocation in (ROOT / ".github/workflows" / workflow).read_text(
+        assert invocation not in (ROOT / ".github/workflows" / workflow).read_text(
             encoding="utf-8"
         )

@@ -648,7 +648,7 @@ spec:
     app: trust-profile
 ---
 # ================================================================
-# 6. Issuance (:8005) — built from marty-credentials repo
+# 6. Issuance (:8005) — shared native Rust services image
 # ================================================================
 apiVersion: apps/v1
 kind: Deployment
@@ -675,6 +675,7 @@ spec:
         - name: issuance
           image: ${MARTY_ISSUANCE_IMAGE}
           imagePullPolicy: Always
+          command: ['/usr/local/bin/marty-issuance-service']
           envFrom:
             - configMapRef:
                 name: marty-config
@@ -682,6 +683,12 @@ spec:
             - containerPort: 8005
             - containerPort: 9005
           env:
+            - name: SERVICE_NAME
+              value: issuance_native
+            - name: MARTY_SCHEMA_STARTUP_MODE
+              value: validate
+            - name: CANVAS_MIRROR_WORKER_ENABLED
+              value: "false"
             - name: GRPC_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -702,7 +709,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: DATABASE_URL
+                  key: DATABASE_SYNC_URL
             - name: RABBITMQ_URL
               valueFrom:
                 secretKeyRef:
@@ -894,6 +901,7 @@ metadata:
   name: issuance
   namespace: marty-prod
 spec:
+  type: ClusterIP
   ports:
     - port: 8005
       targetPort: 8005

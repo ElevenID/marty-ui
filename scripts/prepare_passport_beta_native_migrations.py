@@ -31,6 +31,7 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_REPOSITORY = "ghcr.io/elevenid/marty-ui-oss/migrations"
 MIGRATIONS = (
+    "rust/services/issuance/migrations/0000_merge_issuance_heads_bridge.sql",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
     "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",
@@ -103,6 +104,8 @@ def checked_migrations(
         found = {path.relative_to(root).as_posix()
                  for path in (root / directory).glob("*.sql")}
         expected = {path for path in MIGRATIONS if path.startswith(directory + "/")}
+        if directory.endswith("/issuance/migrations"):
+            expected.add("rust/services/issuance/migrations/0000_issuance_service_baseline.sql")
         require(found == expected,
                 f"Native migration inventory changed: {directory}")
     result = []
@@ -200,7 +203,24 @@ def build_sql(
         payload.extend(f"\n-- protected native migration: {relative}\n".encode("ascii"))
         payload.extend(data)
         payload.extend(b"\n")
+    issuance_versions = [
+        Path(relative).stem for relative, _ in migrations
+        if relative.startswith("rust/services/issuance/migrations/")
+    ]
+    ledger_rows = ["    ('issuance_service_baseline_v1')"]
+    ledger_rows.extend(f"    ('{version}')" for version in issuance_versions)
     payload.extend((
+        "\n-- Privileged, atomic handoff to the read-only Rust schema verifier.\n"
+        "CREATE TABLE issuance_service.rust_schema_migrations (\n"
+        "    version text PRIMARY KEY,\n"
+        "    applied_at timestamptz NOT NULL DEFAULT now()\n"
+        ");\n"
+        "ALTER TABLE issuance_service.rust_schema_migrations\n"
+        "    OWNER TO marty_passport_fence_owner;\n"
+        "REVOKE ALL ON issuance_service.rust_schema_migrations FROM PUBLIC, marty;\n"
+        "GRANT SELECT ON issuance_service.rust_schema_migrations TO marty;\n"
+        "INSERT INTO issuance_service.rust_schema_migrations (version) VALUES\n"
+        + ",\n".join(ledger_rows) + ";\n"
         "\n-- Commit evidence in the same transaction as every native migration.\n"
         "CREATE TABLE passport_cutover.native_migration_receipt (\n"
         "    singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),\n"
@@ -225,7 +245,7 @@ def prepare(manifest: Path, fence_receipt: Path) -> tuple[dict[str, object], byt
     head = protected_source()
     for relative in PROTECTED:
         protected_file(relative, run)
-    signed = manifest_source(manifest, head)
+    signed = manifest_source(manifest, head, rust_only=True)
     receipt = checked_receipt(fence_receipt, head)
     digest = signed["oci_digests"][IMAGE_REPOSITORY]
     image = f"{IMAGE_REPOSITORY}@{digest}"

@@ -88,10 +88,14 @@ PROTECTED_FILES = (
     "rust/services/issuance/src/migration_seed.rs",
     "rust/services/issuance/migrations/0000_issuance_service_baseline.sql",
     "rust/services/issuance/migrations/0000_issuance_service_catalog.json",
+    "rust/services/issuance/migrations/0000_merge_issuance_heads_bridge.sql",
     "scripts/probe_passport_beta_cutover_snapshot.py",
     "scripts/verify_passport_beta_protected_cutover.py",
     "scripts/collect_passport_python_deletion_cutover.py",
     ".github/workflows/passport-python-deletion-cutover.yml",
+    "scripts/collect_passport_beta_rust_readiness.py",
+    "scripts/verify_passport_beta_rust_readiness.py",
+    ".github/workflows/passport-beta-rust-readiness.yml",
     "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.dev.yml",
@@ -215,6 +219,7 @@ def manifest_source(
     path: Path, expected_commit: str,
     attest: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
     attest_issuance: Callable[[str, str, str], bool] = verify_issuance_attestation,
+    *, rust_only: bool = False,
 ) -> dict[str, Any]:
     require(path.name == "stack-manifest.json"
             and (path.parent / "SHA256SUMS").is_file(),
@@ -230,7 +235,8 @@ def manifest_source(
     require(isinstance(release, str) and re.fullmatch(r"marty-ui@[0-9]+\.[0-9]+\.[0-9]+", release) is not None,
             "Official stack release coordinate is invalid")
     try:
-        version, _, images = _validated_components(manifest, expected_commit)
+        version, _, images = _validated_components(
+            manifest, expected_commit, rust_only=rust_only)
     except OfficialReleaseError as exc:
         raise HostProbeError("Official stack components are invalid") from exc
     require(release == f"marty-ui@{version}", "Official release version differs")
@@ -238,15 +244,18 @@ def manifest_source(
                for role in ("ui", "services", "migrations")}
     require(set(digests) == OCI_ROLES and len(digests) == 3,
             "Official UI OCI roles are incomplete")
-    credentials = next(item for item in manifest["components"]
-                       if item["name"] == "marty-credentials-issuance")
-    require(credentials["repository"] == "ElevenID/marty-credentials",
-            "Credentials issuer repository is invalid")
+    credentials = None if rust_only else next(
+        item for item in manifest["components"]
+        if item["name"] == "marty-credentials-issuance")
+    if credentials is not None:
+        require(credentials["repository"] == "ElevenID/marty-credentials",
+                "Credentials issuer repository is invalid")
     require(attest(path, digests, expected_commit) is True,
             "Official stack manifest or OCI attestation is invalid")
-    require(attest_issuance(images["issuance"]["reference"], credentials["commit"],
-                            credentials["version"]) is True,
-            "Credentials issuance image attestation is invalid")
+    if credentials is not None:
+        require(attest_issuance(images["issuance"]["reference"], credentials["commit"],
+                                credentials["version"]) is True,
+                "Credentials issuance image attestation is invalid")
     build_only = {}
     for variable, component_name in (
         ("MARTY_COMMON", "marty-common"),
@@ -271,11 +280,11 @@ def manifest_source(
     return {
         "release": release, "source_commit": expected_commit,
         "manifest_sha256": file_sha256(path), "oci_digests": digests,
-        "issuance_image": images["issuance"]["reference"],
+        "issuance_image": images["services" if rust_only else "issuance"]["reference"],
         "ui_image": images["ui"]["reference"],
         "services_image": images["services"]["reference"],
         "build_only_artifacts": build_only,
-        "issuance_source_commit": credentials["commit"],
+        "issuance_source_commit": expected_commit if rust_only else credentials["commit"],
         "signed_manifest_verified": True,
     }
 
@@ -496,7 +505,8 @@ def check_authority(
             and SHA256.fullmatch(str(approval.get("beta_baseline_manifest_sha256")))
                 is not None,
             "Protected beta target approval fields are invalid")
-    source = manifest_source(manifest_path, head, attest, attest_issuance)
+    source = manifest_source(manifest_path, head, attest, attest_issuance,
+                             rust_only=True)
     require_release_schema_validation_capability(source["source_commit"], runner)
     require_premigrated_compose_validation(PREMIGRATED.read_text(encoding="utf-8"))
     require(file_sha256(beta_baseline_manifest_path)
@@ -521,7 +531,7 @@ def check_authority(
     }, "Published annotated release tag differs from protected source")
     deletion_head, deletion_merge_commit = merged_deletion_pr(runner)
     require_predeletion_signed_image(
-        deletion_merge_commit, source["issuance_source_commit"], runner)
+        deletion_merge_commit, baseline["issuance_source_commit"], runner)
     require_deletion_lineage(approval["credentials_deletion_head"],
                              deletion_head, runner)
     target = observer()

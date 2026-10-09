@@ -1069,7 +1069,7 @@ def test_oid4vci_coverage_mutations_break_the_enforced_provenance_or_route_floor
         assert not valid(changed)
 
 
-def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
+def test_candidate_uses_rust_runtime_across_compose_surfaces() -> None:
     ownership = json.loads(text("docs/rust-migration-ownership.json"))
     capability = next(
         value
@@ -1109,10 +1109,10 @@ def test_candidate_is_path_split_without_replacing_the_python_runtime() -> None:
     assert "ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005" in production
     assert "ISSUANCE_SERVICE_URL: http://issuance:8005" in production
     assert "file: docker-compose.service.issuance-native-runtime.yml" in production
-    assert "MARTY_ISSUANCE_IMAGE" in production
+    assert "MARTY_ISSUANCE_IMAGE" not in production
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" not in production
-    assert "MARTY_ISSUANCE_IMAGE" in compose
-    assert 'command: ["python", "manage_migrations.py", "upgrade"]' in compose
+    assert "MARTY_ISSUANCE_IMAGE" not in compose
+    assert 'command: ["migrate"]' in compose
 
 
 def test_public_issued_credential_adapters_cut_over_without_claiming_siblings() -> None:

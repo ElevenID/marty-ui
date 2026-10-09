@@ -60,7 +60,7 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         assert f'select(.name == "{component}")' in workflow
 
     assert "gh attestation verify" in workflow
-    assert 'docker pull "$uri@$digest"' in workflow
+    assert 'gh attestation verify "oci://ghcr.io/elevenid/marty-ui-oss/services@$SERVICES_DIGEST"' in workflow
     assert "repository: ElevenID/marty-integration-tests" not in workflow
     assert '--history integration-history' in workflow
     assert '--expected-commit "$INTEGRATION_COMMIT"' in workflow
@@ -82,8 +82,8 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         in workflow
     )
     assert "npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz" in workflow
-    assert 'any(.assets[]; .name == "stack-manifest.json")' in workflow
-    assert "No previous public stack release" in workflow
+    assert "Render the exact Rust-only public stack images" in workflow
+    assert "--previous-manifest" not in workflow
     assert "marty-subscriptions" not in workflow
     assert "runs-on: self-hosted" not in workflow
     assert "runs-on: ubuntu-latest" in workflow
@@ -539,37 +539,28 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.81"
-    assert integration["commit"] == "01f2d4f6425c0dd6d11ca1a92f5e46f4cea70a04"
+    assert integration["version"] == "1.2.82"
+    assert integration["commit"] == "dbf553d141dc4dc1695a52c39edef0a8083c22d5"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:76ea94e645fbbc7c821e85f64b2e28fa3199186e1f1c5f14829034fd75e2e178"
+        "sha256:1074cd501057c90c65477bab3220bedae54df026067d0fc70fe6f23c6dd114cd"
     )
 
-    issuance = next(
-        component
-        for component in lock["components"]
-        if component["name"] == "marty-credentials-issuance"
-    )
-    qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
-        "release_gate"
-    ]["qualified_release"]
-    assert issuance["version"] == qualified["version"]
-    assert issuance["commit"] == qualified["commit"]
-    assert issuance["artifacts"][0]["digest"] == qualified["digest"]
+    assert all(component["name"] != "marty-credentials-issuance"
+               for component in lock["components"])
+    assert all(artifact["type"] != "oci"
+               for component in lock["components"]
+               for artifact in component["artifacts"])
 
 
 def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.234"
+    assert lock["release"] == "marty-ui@1.1.235"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.234")
-    qualified = json.loads(_text("contracts/didcomm-native-consumer-ownership.json"))[
-        "release_gate"
-    ]["qualified_release"]
-    assert components["marty-credentials-issuance"]["version"] == qualified["version"]
-    assert components["marty-integration-tests"]["version"] == "1.2.81"
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.235")
+    assert "marty-credentials-issuance" not in components
+    assert components["marty-integration-tests"]["version"] == "1.2.82"
 
     documents = (
         _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),

@@ -21,7 +21,25 @@ CONTRACT = json.loads(
         encoding="utf-8"
     )
 )
-LOCK = json.loads((ROOT / "release/stack-lock.json").read_text(encoding="utf-8"))
+
+
+def _historical_lock() -> dict:
+    """Keep the signed predeletion release gate as a frozen reference."""
+    release = CONTRACT["release_gate"]["qualified_release"]
+    evidence = release["evidence"]
+    return {"components": [{
+        "name": "marty-credentials-issuance",
+        "repository": "ElevenID/marty-credentials",
+        "version": release["version"],
+        "commit": release["commit"],
+        "artifacts": [{
+            "type": "oci", "uri": IMAGE, "digest": release["digest"],
+            "sbom": evidence["sbom"], "provenance": evidence["provenance"],
+        }],
+    }]}
+
+
+LOCK = _historical_lock()
 
 
 def _component(lock: dict) -> dict:
@@ -57,7 +75,7 @@ def _pending_models() -> tuple[dict, dict]:
     return contract, lock
 
 
-def test_current_activation_is_pinned_to_the_published_immutable_release() -> None:
+def test_historical_activation_was_pinned_to_the_published_immutable_release() -> None:
     gate = CONTRACT["release_gate"]
     assert gate["state"] == "qualified"
     assert gate["required_source_checkpoint"] == "efd5da1e2d41419ce93721f98d314c7b911e6b5e"
@@ -167,7 +185,7 @@ def test_stale_or_wrong_release_evidence_fails_closed(mutation: str) -> None:
         validate_release_gate(contract, lock)
 
 
-def test_ci_and_cd_execute_the_unbypassable_release_gate() -> None:
+def test_ci_and_cd_do_not_require_the_retired_release_gate() -> None:
     invocation = "python scripts/check_didcomm_native_credentials_release.py"
-    assert invocation in (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert invocation in (ROOT / ".github/workflows/cd.yml").read_text(encoding="utf-8")
+    assert invocation not in (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert invocation not in (ROOT / ".github/workflows/cd.yml").read_text(encoding="utf-8")

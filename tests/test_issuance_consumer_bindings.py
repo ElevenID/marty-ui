@@ -117,7 +117,8 @@ def assert_kubernetes_bindings(documents, config):
     assert service["spec"]["selector"] == {"app": "issuance"}
     assert issuance["ports"] == [{"containerPort": 8005}, {"containerPort": 9005}]
     assert issuance["image"] == "${MARTY_ISSUANCE_IMAGE}"
-    assert "command" not in issuance and "args" not in issuance
+    assert issuance["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert "args" not in issuance
     assert not any(
         item and item["metadata"]["name"] == "issuance-native" for item in documents
     )
@@ -202,21 +203,15 @@ def assert_selfhost_bindings(compose):
         "service": "issuance-native",
     }
     issuance = services["issuance"]
-    assert (
-        issuance["image"]
-        == "${MARTY_ISSUANCE_IMAGE:?set MARTY_ISSUANCE_IMAGE to an immutable issuance image digest}"
-    )
+    assert issuance["build"]["dockerfile"] == "services/Dockerfile"
+    assert issuance["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert issuance["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
-    assert issuance["command"] == [
-        "python",
-        "-m",
-        "uvicorn",
-        "main:app",
-        "--host",
-        "0.0.0.0",
-        "--port",
-        "8005",
-    ]
+    assert issuance["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert issuance["environment"]["SERVICE_NAME"] == "issuance_native"
+    assert issuance["environment"]["MARTY_SCHEMA_STARTUP_MODE"] == "validate"
+    assert issuance["environment"]["DATABASE_URL_TEMPLATE"] == (
+        "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
+    )
     flags = {
         name: {
             key: value
@@ -459,7 +454,7 @@ def test_selfhost_guard_rejects_policy_drift_and_unrelated_target_changes(mutati
     elif mutation == "other-target":
         services["flow"]["environment"]["CT_GRPC_TARGET"] = "other:9003"
     else:
-        services["issuance"]["command"] = ["/usr/local/bin/marty-issuance-service"]
+        services["issuance"]["command"] = ["python", "-m", "uvicorn", "main:app"]
     with pytest.raises(AssertionError):
         assert_selfhost_bindings(compose)
 

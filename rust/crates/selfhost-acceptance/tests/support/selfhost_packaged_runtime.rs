@@ -481,6 +481,12 @@ async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String>
             .await
             .map_err(|_| ERROR)?;
     require(identity == ("marty".into(), "marty".into()))?;
+    // The frozen published-schema template predates the Rust OID4VCI
+    // migration. Prepare this disposable clone once, then exercise the
+    // packaged service with its production `validate` startup setting.
+    marty_issuance_service::migration::migrate(&check)
+        .await
+        .map_err(|_| "Packaged selfhost qualification failed: database:migrate-oid4vci")?;
     record_database_stage("seed");
     seed(&check).await?;
     check.close().await;

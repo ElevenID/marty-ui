@@ -312,6 +312,27 @@ fn index(resources: &[Value], kind: &str, name: &str) -> Result<usize> {
     Ok(matches[0])
 }
 
+/// Require the live route owner and its KMS custody policy before an image-only
+/// update can retain or replace the Rust issuance alias.
+pub fn selected_passport_config(snapshot: &Value, namespace: &str) -> Result<()> {
+    require(snapshot["kind"] == "List" && !namespace.is_empty())?;
+    let resources = snapshot["items"].as_array().ok_or(REFUSAL)?;
+    let config = &resources[index(resources, "ConfigMap", "marty-config")?];
+    require(config["metadata"]["namespace"] == namespace)?;
+    for key in [
+        "PASSPORT_NATIVE_GATEWAY_ENABLED",
+        "PASSPORT_NATIVE_FLOW_ENABLED",
+        "PASSPORT_NATIVE_HTTP_ENABLED",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    ] {
+        require(config["data"][key] == "true")?;
+    }
+    Ok(())
+}
+
 fn container<'a>(value: &'a Value, name: &str) -> Result<&'a Value> {
     let containers = value
         .pointer("/spec/template/spec/containers")
@@ -789,6 +810,8 @@ pub fn compose(
         values,
     )?;
     let legacy_owner = container_mut(&mut result[legacy_index], "issuance")?;
+    require(legacy_owner["command"] == json!(["/usr/local/bin/marty-issuance-service"]))?;
+    legacy_owner["image"] = json!(image);
     append_env(legacy_owner, "DIDCOMM_DELIVERY_OWNER", "native")?;
     append_env(legacy_owner, "ISSUANCE_NATIVE_SERVICE_URL", NATIVE_URL)?;
     require(legacy_owner["livenessProbe"]["httpGet"]["path"] == "/health")?;
@@ -865,6 +888,7 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
         ("Deployment", "issuance"),
         ("Deployment", "signing-keys"),
         ("Service", "issuance-native"),
+        ("Service", "issuance"),
         ("Service", "signing-keys"),
         ("ConfigMap", "issuance-native-config"),
     ] {
@@ -909,10 +933,23 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                 }
             }
             "Deployment" if name == "issuance" => {
+                require(
+                    observed["spec"]["selector"] == target["spec"]["selector"]
+                        && observed.pointer("/spec/template/metadata/labels")
+                            == target.pointer("/spec/template/metadata/labels"),
+                )?;
+                require(normalized_pod(observed)? == normalized_pod(target)?)?;
                 let observed_owner = container(observed, name)?;
                 let target_owner = container(target, name)?;
                 let observed_env = environment(observed_owner)?;
                 let target_env = environment(target_owner)?;
+                require(
+                    observed_owner["command"] == json!(["/usr/local/bin/marty-issuance-service"])
+                        && observed_owner["command"] == target_owner["command"]
+                        && observed_owner["args"] == target_owner["args"],
+                )?;
+                services_image(observed_owner["image"].as_str().ok_or(REFUSAL)?)?;
+                services_image(target_owner["image"].as_str().ok_or(REFUSAL)?)?;
                 require(observed_owner["envFrom"] == target_owner["envFrom"])?;
                 require(
                     observed_owner["livenessProbe"]["httpGet"]["path"]
@@ -929,12 +966,21 @@ pub fn check_update(actual: &Value, expected: &Value, namespace: &str) -> Result
                     .chain(INHERITED_SETTINGS)
                     .chain(OPTIONAL_SETTINGS)
                     .chain(SHARED_BINDINGS)
-                    .chain(["DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"].iter())
+                    .chain(
+                        [
+                            "DIDCOMM_DELIVERY_OWNER",
+                            "ISSUANCE_NATIVE_SERVICE_URL",
+                            "SERVICE_NAME",
+                            "MARTY_SCHEMA_STARTUP_MODE",
+                            "CANVAS_MIRROR_WORKER_ENABLED",
+                        ]
+                        .iter(),
+                    )
                 {
                     require(observed_env.get(setting) == target_env.get(setting))?;
                 }
-                // The old image, unrelated fields and unrelated mounts remain
-                // its independent owner. Only paired DIDComm mounts are fenced.
+                // The digest can advance, but the Rust command and shared
+                // service-image family cannot change during an image update.
                 for (_, volume, _, path, setting) in MOUNTS {
                     require(observed_env.get(setting) == target_env.get(setting))?;
                     for (observed_values, target_values, key, wanted) in [
@@ -1017,7 +1063,8 @@ fn normalized_pod(deployment: &Value) -> Result<Value> {
     let owner = &mut owners[0];
     require(
         (deployment["metadata"]["name"] == "issuance-native"
-            || deployment["metadata"]["name"] == "signing-keys")
+            || deployment["metadata"]["name"] == "signing-keys"
+            || deployment["metadata"]["name"] == "issuance")
             && owner["name"] == deployment["metadata"]["name"],
     )?;
     services_image(owner["image"].as_str().ok_or(REFUSAL)?)?;
@@ -1034,7 +1081,14 @@ fn normalized_pod(deployment: &Value) -> Result<Value> {
     for name in ["livenessProbe", "readinessProbe"] {
         for (key, value) in [
             ("successThreshold", 1),
-            ("failureThreshold", 3),
+            (
+                "failureThreshold",
+                if deployment["metadata"]["name"] == "issuance" && name == "livenessProbe" {
+                    5
+                } else {
+                    3
+                },
+            ),
             ("timeoutSeconds", 1),
         ] {
             remove_default(&mut owner[name], key, json!(value))?;

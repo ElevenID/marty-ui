@@ -22,6 +22,7 @@ const SOURCES: &[&str] = &[
 const READY: &str = "auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native";
 const DATABASE_TEMPLATE: &str =
     "postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty";
+const RUST_DATABASE_TEMPLATE: &str = "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty";
 
 #[track_caller]
 fn require(value: bool) -> Result<()> {
@@ -512,11 +513,17 @@ impl ClosedSelfhostModel {
         require(services["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] == READY)?;
         require(services["gateway"]["environment"]["REDIS_DB_GATEWAY"] == "2")?;
         require(services["flow"]["environment"]["REDIS_DB_FLOW"] == "3")?;
-        for owner in ["issuance-native", "flow"] {
-            require(services[owner]["environment"]["DATABASE_URL_TEMPLATE"] == DATABASE_TEMPLATE)?;
+        for (owner, expected, anchor) in [
+            (
+                "issuance-native",
+                RUST_DATABASE_TEMPLATE,
+                "x-database-url-sync-template",
+            ),
+            ("flow", DATABASE_TEMPLATE, "x-database-url-template"),
+        ] {
+            require(services[owner]["environment"]["DATABASE_URL_TEMPLATE"] == expected)?;
             require(
-                services[owner]["environment"]["DATABASE_URL_TEMPLATE"]
-                    == self.full_model["x-database-url-template"],
+                services[owner]["environment"]["DATABASE_URL_TEMPLATE"] == self.full_model[anchor],
             )?;
         }
         for (owner, key, _, original) in MAPPINGS {
@@ -878,7 +885,7 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
     assert!(prepared.directory().is_dir());
     assert_eq!(
         prepared.raw_model()["services"]["issuance-native"]["environment"]["DATABASE_URL_TEMPLATE"],
-        DATABASE_TEMPLATE
+        RUST_DATABASE_TEMPLATE
     );
     let endpoints = OwnedEndpoints(
         ROLES
@@ -937,11 +944,14 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
             }
         }
     }
-    for owner in ["issuance-native", "flow"] {
+    for (owner, scheme) in [
+        ("issuance-native", "postgresql"),
+        ("flow", "postgresql+asyncpg"),
+    ] {
         assert_eq!(
             mapped.environments[owner]["DATABASE_URL_TEMPLATE"],
             format!(
-                "postgresql+asyncpg://marty:$${{MARTY_DB_PASSWORD}}@127.0.0.1:{}/marty",
+                "{scheme}://marty:$${{MARTY_DB_PASSWORD}}@127.0.0.1:{}/marty",
                 endpoints.port(Role::Database)
             )
         );

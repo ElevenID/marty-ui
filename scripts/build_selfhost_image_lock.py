@@ -46,7 +46,7 @@ DEDICATED_SERVICES = {
     "cloudflared-beta": "cloudflared-wrapper",
 }
 ISSUANCE_SERVICES = frozenset({"issuance", "issuance-migrations"})
-MANDATORY_SHARED_SERVICES = frozenset({"gateway"})
+MANDATORY_SHARED_SERVICES = frozenset({"gateway", *ISSUANCE_SERVICES})
 
 
 class ImageLockError(ValueError):
@@ -222,8 +222,6 @@ def build_lock(
             _require(role == roles[name], f"{name} has the wrong source image role")
             _require(match.group("version") == claim["version"],
                      f"{name} source image version differs from transaction")
-        elif name in ISSUANCE_SERVICES:
-            _require(role is None, f"{name} cannot use a Marty UI image")
         else:
             _require(role is None, f"{name} is not a Marty bundle image role")
 
@@ -268,7 +266,7 @@ def main() -> None:
     parser.add_argument("--selfhost-images", required=True, type=Path,
                         help="JSON object with ui-selfhost and cloudflared-wrapper exact OCI refs")
     parser.add_argument("--external-services", required=True, type=Path,
-                        help="JSON service-to-exact-ref map for issuance and infrastructure")
+                        help="JSON service-to-exact-ref map for independent infrastructure")
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     lock = build_lock(

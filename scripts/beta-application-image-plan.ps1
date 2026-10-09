@@ -5,27 +5,11 @@ function New-BetaApplicationImagePlan {
         [Parameter(Mandatory = $true)][string[]]$Services,
         [Parameter(Mandatory = $true)][string]$ReleaseVersion,
         [Parameter(Mandatory = $true)][bool]$OfficialStackRelease,
-        [Parameter(Mandatory = $true)][string]$IssuanceReference,
-        [Parameter(Mandatory = $true)][string]$IssuanceDigest,
-        [bool]$UseRustIssuance = $true,
         [string]$ServicesReference = "",
         [string]$ServicesDigest = ""
     )
 
     foreach ($service in $Services) {
-        if ($service -eq "issuance" -and -not $UseRustIssuance) {
-            [pscustomobject][ordered]@{
-                service = $service
-                image_expression = '${MARTY_ISSUANCE_IMAGE}'
-                effective_reference = $IssuanceReference
-                artifact_role = "issuance"
-                selector_present = $false
-                selector = $null
-                build_eligible = $false
-                known_digest = $IssuanceDigest
-            }
-            continue
-        }
         $selectorPresent = $OfficialStackRelease
         $imageExpression = if ($OfficialStackRelease) { '${MARTY_SERVICES_IMAGE}' }
             else { "elevenid-local/${service}:${ReleaseVersion}" }
@@ -57,7 +41,7 @@ function ConvertTo-BetaApplicationImageLines {
     foreach ($entry in $Plan) {
         "  $($entry.service):"
         "    image: $($entry.image_expression)"
-        if ($entry.selector_present -or ($entry.service -eq "issuance" -and $entry.artifact_role -ne "issuance")) {
+        if ($entry.selector_present -or $entry.service -eq "issuance") {
             "    environment:"
             if ($entry.service -eq "issuance") { "      SERVICE_NAME: issuance_native" }
             else { "      SERVICE_NAME: $($entry.selector)" }
@@ -66,7 +50,7 @@ function ConvertTo-BetaApplicationImageLines {
                 "      CANVAS_MIRROR_WORKER_ENABLED: 'false'"
             }
         }
-        if ($entry.service -eq "issuance" -and $entry.artifact_role -ne "issuance") {
+        if ($entry.service -eq "issuance") {
             if ($entry.build_eligible) {
                 "    build:"
                 "      context: ."
@@ -80,7 +64,7 @@ function ConvertTo-BetaApplicationImageLines {
             "    command: []"
         }
     }
-    $issuance = @($Plan | Where-Object { $_.service -eq "issuance" -and $_.artifact_role -ne "issuance" })
+    $issuance = @($Plan | Where-Object { $_.service -eq "issuance" })
     if ($issuance.Count -gt 1) { throw "Issuance image plan is ambiguous" }
     if ($issuance.Count -eq 1) {
         "  issuance-migrations:"

@@ -22,7 +22,6 @@ from scripts.check_passport_supported_rust_model import (
 PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
-ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
 INFRA = {
     "edge": "docker.io/library/nginx@sha256:" + "4" * 64,
     "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
@@ -100,14 +99,6 @@ def mounts_for(service: str) -> list[dict]:
             "Destination": "/etc/nginx/conf.d/default.conf",
             "RW": False,
         })
-    if service == "issuance-migrations":
-        mounts.append({
-            "Type": "bind",
-            "Source": str(Path(__file__).resolve().parents[1]
-                          / "scripts/passport_supported_issuance_migrate.sh"),
-            "Destination": "/usr/local/bin/passport-supported-issuance-migrate",
-            "RW": False,
-        })
     for key in ((service,) if service != "openbao" else
                 ("openbao", "openbao-file", "openbao-logs")):
         if key in DATA:
@@ -132,7 +123,6 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
         "project": PROJECT, "run_id": "123456", "source_commit": "b" * 40,
         "services_reference": IMAGE,
         "migrations_reference": MIGRATIONS,
-        "issuance_reference": ISSUANCE,
         "infra_images": INFRA,
         "created_at": (NOW - timedelta(minutes=5)).isoformat(),
         "expires_at": (NOW + timedelta(minutes=55)).isoformat(),
@@ -258,6 +248,11 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                         "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
                         "PUBLIC_DOMAIN": "localhost:29876"}
                        if service == "db-migrate" else
+                       {"SERVICE_NAME": "issuance_native",
+                        "DATABASE_URL_TEMPLATE": (
+                            "postgresql://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
+                        "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password"}
+                       if service == "issuance-migrations" else
                        revocation_env if service == "revocation-profile" else
                        migration_env if service == "revocation-profile-migrate" else
                        gateway_env if service == "gateway" else
@@ -290,10 +285,12 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        "Health": {"Status": "healthy"}}),
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
                        "Env": [f"{key}={value}" for key, value in runtime_env.items()],
-                       **({"Cmd": ["/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"]}
+                       **({"Entrypoint": ["/bin/sh", "-c"],
+                            "Cmd": [". /app/load-secrets-env.sh\n"
+                                    "exec /usr/local/bin/marty-issuance-service migrate\n"]}
                           if service == "issuance-migrations" else {}),
                        "Image": (MIGRATIONS if service == "db-migrate" else
-                                 ISSUANCE if service == "issuance-migrations" else
+                                 IMAGE if service == "issuance-migrations" else
                                  IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
                                  INFRA[service])},
             "NetworkSettings": {"Networks": attached_networks,
@@ -327,18 +324,18 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
     return record, calls
 
 
-def test_credentials_schema_container_is_exact_signed_one_shot() -> None:
+def test_rust_schema_container_is_exact_signed_one_shot() -> None:
     record, calls = fixture()
     assert verify(record, "base", NOW, lambda args: calls[tuple(args)])["live_ownership_verified"]
     key = ("container", "inspect", record["containers"]["issuance-migrations"])
     item = json.loads(calls[key])
     item[0]["Config"]["Cmd"][-1] = "true"
     calls[key] = json.dumps(item)
-    with pytest.raises(OwnershipError, match="Credentials schema command"):
+    with pytest.raises(OwnershipError, match="Rust schema command"):
         verify(record, "base", NOW, lambda args: calls[tuple(args)])
     record, calls = fixture()
     item = json.loads(calls[key])
-    item[0]["Config"]["Image"] = IMAGE
+    item[0]["Config"]["Image"] = "ghcr.io/other/services@sha256:" + "f" * 64
     calls[key] = json.dumps(item)
     with pytest.raises(OwnershipError, match="signed release"):
         verify(record, "base", NOW, lambda args: calls[tuple(args)])
@@ -348,6 +345,24 @@ def test_credentials_schema_container_is_exact_signed_one_shot() -> None:
     calls[key] = json.dumps(item)
     with pytest.raises(OwnershipError, match="unowned mount"):
         verify(record, "base", NOW, lambda args: calls[tuple(args)])
+
+
+@pytest.mark.parametrize("key,value", [
+    ("SERVICE_NAME", "issuance"),
+    ("DATABASE_URL_TEMPLATE", "postgresql://marty:secret@production:5432/marty"),
+    ("MARTY_DB_PASSWORD_FILE", "/run/secrets/other"),
+    ("DATABASE_URL", "postgresql://marty:secret@production:5432/marty"),
+])
+def test_live_rust_schema_database_binding_is_disposable(key: str, value: str) -> None:
+    record, calls = fixture()
+    inspect_key = ("container", "inspect", record["containers"]["issuance-migrations"])
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                                if not entry.startswith(key + "=")]
+    item[0]["Config"]["Env"].append(f"{key}={value}")
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match="Rust schema command"):
+        run(record, calls)
 
 
 @pytest.mark.parametrize("service,key,value", [

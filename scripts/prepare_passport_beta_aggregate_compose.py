@@ -42,7 +42,6 @@ except ImportError:
 
 
 SERVICES_IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:"
-ISSUANCE_IMAGE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:"
 UI_IMAGE = "ghcr.io/elevenid/marty-ui-oss/ui@sha256:"
 SIGNED_APPLICATIONS = frozenset({
     "auth", "organization", "credential-template", "trust-profile", "applicant",
@@ -211,8 +210,7 @@ def image_override(handoff: dict[str, Any]) -> str:
         if name == "issuance-native":
             rows.extend(("      ENVIRONMENT: beta",
                          "      GRPC_INSECURE_ALLOWED: 'true'"))
-    # The final protected overlay replaces the default Python alias and its
-    # Alembic job together. Both use the same signed Rust services artifact.
+    # Keep the alias and migrator on the same signed Rust services artifact.
     rows.extend(("  issuance:", "    image: ${MARTY_SERVICES_IMAGE}",
                  "    build: !reset null",
                  "    entrypoint: [/usr/local/bin/marty-issuance-service]",
@@ -225,14 +223,15 @@ def image_override(handoff: dict[str, Any]) -> str:
                  "  issuance-migrations:",
                  "    image: ${MARTY_SERVICES_IMAGE}", "    build: !reset null",
                  "    entrypoint: [/usr/local/bin/marty-issuance-service]",
-                 "    command: [migrate]", "    environment:",
+                 "    command: [verify-owned-schema]", "    environment:",
                  "      SERVICE_NAME: issuance_native",
                  "      DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty",
                  "    depends_on:",
                  "      organization: {condition: service_healthy}",
                  "      credential-template: {condition: service_healthy}"))
-    require(handoff.get("services_image") and handoff.get("issuance_image"),
-            "Signed aggregate image references are absent")
+    require(handoff.get("services_image")
+            and handoff.get("issuance_image") == handoff["services_image"],
+            "Signed aggregate Rust image reference is absent or inconsistent")
     return "\n".join(rows) + "\n"
 
 
@@ -257,7 +256,6 @@ def render_candidate(handoff: dict[str, Any]) -> tuple[dict[str, Any], dict[str,
                           **build_only,
                           "MARTY_DOCS_IMAGE": docs_image,
                           "MARTY_SERVICES_IMAGE": handoff["services_image"],
-                          "MARTY_ISSUANCE_IMAGE": handoff["issuance_image"],
                           "MARTY_UI_RELEASE_IMAGE": handoff["ui_image"],
                           "MARTY_NETWORK_NAME": "elevenid-beta-network"}
     env_args = [part for relative in ENV_FILES
@@ -324,7 +322,7 @@ def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
             and CONTAINER.fullmatch(docs_container_id) is not None
             and DIGEST.fullmatch(docs_image_id) is not None,
             "Beta maintenance preflight identities are invalid")
-    signed = manifest_source(stack_manifest, source_commit)
+    signed = manifest_source(stack_manifest, source_commit, rust_only=True)
     docs = inspect(docs_container_id, run)
     config = docs.get("Config")
     labels = config.get("Labels") if isinstance(config, dict) else None
@@ -339,7 +337,7 @@ def preflight_maintenance_compose(stack_manifest: Path, source_commit: str,
             "Preserved beta docs image changed before maintenance")
     handoff = {
         "services_image": signed["services_image"],
-        "issuance_image": signed["issuance_image"],
+        "issuance_image": signed["services_image"],
         "ui_image": f"{UI_IMAGE}{signed['oci_digests']['ghcr.io/elevenid/marty-ui-oss/ui'].split(':', 1)[1]}",
         "build_only_artifacts": signed["build_only_artifacts"],
         "docs_image": docs_image,
@@ -365,9 +363,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and DIGEST.fullmatch(str(handoff.get("services_image", "")).split("@")[-1])
                 is not None
             and str(handoff.get("services_image", "")).startswith(SERVICES_IMAGE)
-            and str(handoff.get("issuance_image", "")).startswith(ISSUANCE_IMAGE)
-            and DIGEST.fullmatch(str(handoff.get("issuance_image", "")).split("@")[-1])
-                is not None
+            and handoff.get("issuance_image") == handoff["services_image"]
             and str(handoff.get("ui_image", "")).startswith(UI_IMAGE)
             and DIGEST.fullmatch(str(handoff.get("ui_image", "")).split("@")[-1])
                 is not None,
@@ -469,7 +465,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and migrations.get("image") == handoff["services_image"]
             and migrations.get("entrypoint")
                 == ["/usr/local/bin/marty-issuance-service"]
-            and migrations.get("command") == ["migrate"]
+            and migrations.get("command") == ["verify-owned-schema"]
             and environment(migrations).get("SERVICE_NAME") == "issuance_native"
             and str(environment(migrations).get("DATABASE_URL", "")).startswith(
                 "postgresql://")
@@ -635,10 +631,10 @@ def verify_resume_plan(
                 and recorded[field] == file_sha256(ROOT / "scripts/sql" / filename),
                 f"Aggregate resume Rust owner SQL changed: {filename}")
     source = recorded["source_commit"]
-    signed = manifest_source(stack_manifest, source)
+    signed = manifest_source(stack_manifest, source, rust_only=True)
     require(signed["manifest_sha256"] == recorded.get("stack_manifest_sha256")
             and signed["services_image"] == recorded.get("services_image")
-            and signed["issuance_image"] == recorded.get("issuance_image")
+            and signed["services_image"] == recorded.get("issuance_image")
             and (UI_IMAGE + signed["oci_digests"]["ghcr.io/elevenid/marty-ui-oss/ui"].split(":", 1)[1])
                 == recorded.get("ui_image")
             and file_sha256(fence_receipt) == recorded.get("fence_receipt_sha256")
