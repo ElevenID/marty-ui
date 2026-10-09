@@ -837,6 +837,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["flow"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
