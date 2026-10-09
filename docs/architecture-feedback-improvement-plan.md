@@ -2251,11 +2251,12 @@ rule and establishes no speedup. Historical depth selection remains required
 until a stronger exact-probe closure invariant and change-triggered full
 qualification are implemented and reviewed; protected merge groups retain it.
 
-## A6 opt-in worker-only published runner (2026-10-08 local draft)
+## A6 opt-in worker-only published runner (2026-10-08, merged UI #1191)
 
 The worker acceptance target is now a separate Cargo package, but routine CI
 still resolves composition and self-host artifacts and builds the public image
-before its full Canvas group. This reviewed draft adds opt-in
+before its full Canvas group.
+[UI #1191](https://github.com/ElevenID/marty-ui/pull/1191) added opt-in
 `worker-preflights` and `worker-canvas` runner modes plus worker-only artifact
 verification; no workflow selects them, and the default full runner, required
 checks, and release gates are unchanged. The opt-in path keeps the same 147
@@ -2264,18 +2265,17 @@ executable-digest proof before any preflight skip, routine/full historical-case
 policy, real worker binary, isolated PostgreSQL, timing, and owned cleanup.
 Synthetic regression tests passed (211 passed, one skipped, one existing
 Windows signal test deselected after it passed alone); focused mode tests and
-static checks also passed. No CI speedup or live published-process result is
-claimed: local artifacts include only a Windows test executable, not the Linux
-test and real worker binaries required by the Docker-backed runner.
+static checks also passed. At this stage, the local artifacts included only a
+Windows test executable, not the Linux test and real worker binaries required
+by the Docker-backed runner; the hosted follow-up below supplies that proof.
 
-Next prove the opt-in path in a hosted Linux job with matching Cargo JSON
-artifacts, pinned images, all selected case IDs, preflight digest/cleanup and
-timing evidence. Only then consider a separate fail-closed worker-test-only PR
-selector, with protected full qualification preserved and changes to shared
-fixture/support inputs excluded until their dependency closure is proven.
+The next requirement was hosted Linux proof with matching Cargo JSON artifacts,
+pinned images, all selected case IDs, preflight digest/cleanup and timing
+evidence. Only after that proof could a separate fail-closed worker-test-only PR
+selector be considered, with protected full qualification preserved.
 
 A6 diagnostic follow-up ([UI #1194](https://github.com/ElevenID/marty-ui/pull/1194),
-2026-10-08, hosted result pending): a maintainer adds the
+merged 2026-10-09): a maintainer adds the
 `ci-worker-diagnostic` label **before a subsequent PR-head push**; that
 `synchronize` event adds a third, worker-only Rust matrix lane. Labeling an
 already-open PR alone does not start this workflow, and unrelated label
@@ -2293,12 +2293,12 @@ measurement, not a measured speedup or authority to skip any ordinary job.
 The classifier's existing `--emit-verified-leaves` proof does not execute this
 new worker guard or emit worker paths; extending that proof belongs to the
 separate selective-validation pilot, after live diagnostic evidence.
-The first labeled hosted PR must prove live case counts, run-bound preflight
+The first labeled hosted PR had to prove live case counts, run-bound preflight
 digest, pinned image/process/database and cleanup evidence. A later distinct
-test-source-only pilot is required before considering selective PR CI; the
+test-source-only pilot is still required before claiming selective PR CI; the
 workspace-wide Clippy and release-policy jobs remain possible bottlenecks.
 The exact initial PR head was independently reviewed after rebase onto the
-merged worker-only runner; it is not live worker-only evidence.
+merged worker-only runner; it was not live worker-only evidence.
 The first labeled [PR run 37861477220](https://github.com/ElevenID/marty-ui/actions/runs/37861477220)
 selected all three Rust lanes. Its worker-only job passed in 13m36s (5m56s
 compile, 6m51s database/process step): both pinned-process preflights passed,
@@ -2310,7 +2310,21 @@ using a stale exact-string owner guard; release pytest also found structural
 assertions written for only one compile/preflight lane. The reviewed follow-up
 requires the active PR-only matrix and normal fallback and updates the stale
 tests without relaxing full Canvas obligations. A corrected hosted run and
-full-Canvas comparison remain pending.
+full-Canvas comparison were pending at that point.
+
+The corrected [PR run 37863529515](https://github.com/ElevenID/marty-ui/actions/runs/37863529515)
+passed every check and the aggregate gate. Its diagnostic worker lane took
+13m20s (5m46s compile, 6m44s database/process step); both pinned preflights
+passed, 110 worker cases passed with two capture-only ignores, and all 261
+timing rows were `ok`. In the **same run**, the unchanged full Canvas lane
+took 25m41s, including 145 composition passes and the same 110 worker passes
+with two ignores; contracts took 16m33s. This establishes a 12m21s shorter
+worker lane under those conditions, not a whole-PR speedup: both lanes still
+ran. The protected [merge-group run 37865923534](https://github.com/ElevenID/marty-ui/actions/runs/37865923534)
+passed the original full Canvas/contracts plan with no diagnostic worker lane,
+and #1194 merged as `16d0072c7`. The temporary self-merge approval exception
+was restored to one required approval immediately after merge. The separate
+exact-test-source selector and its one-file hosted pilot remain unmerged.
 
 ## A6 exact worker-test-source PR selector (2026-10-08 local draft)
 
