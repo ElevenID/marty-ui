@@ -9887,3 +9887,32 @@ OID4VP and separate mDoc flows remain acceptance gates. Local `cargo fmt
 --check` passed; the targeted Authenticator Rust test could not compile on
 this Windows host because the Longfellow ZK C++ dependency cannot find
 `openssl/sha.h`. Run the test and generated-bridge verification in hosted CI.
+
+2026-10-09 mobile credential and issuer-trust source audit: Authenticator's
+scanner calls `handleOID4VCOfferSDK`, which still invokes Android/iOS native
+handlers that return `REMOTE_KMS_REQUIRED`; the existing
+`WalletCredentialStore.store` has no production caller. The current mobile
+wallet therefore has neither a functioning KMS-backed OID4VCI receipt path
+nor a stored SD-JWT to present. Its Rust `trust.rs` is an IACA certificate
+registry for mDoc, not an SD-JWT issuer key allowlist. Signing Keys exposes
+organization-scoped managed issuer identity list/resolve APIs with public JWK
+projection, but those identify the organization's own active issuer keys;
+they are not by themselves a trust policy for external issuers. Do not treat
+an unverified credential `iss`, verifier request, or arbitrary DID resolution
+as authority to add a trusted key.
+
+Wallet completion must include a user-approved OID4VCI receipt flow that
+uses the paired remote holder key for proof JWT signing, stores the issued
+credential only after issuer/holder binding and endpoint validation, and
+records its trust provenance. Define an operator-governed issuer trust source
+covering supported external issuers and managed local identities; deliver a
+bounded, authenticated, organization-scoped public verification-key snapshot
+to the paired device and refresh it on rotation/revocation. Feed only that
+snapshot to Core's `SdJwtIssuerKeyResolver`, with exact issuer, `kid`, and
+algorithm matching and a rejection path for stale or ambiguous keys. Then
+wire the Rust OID4VP presenter to secure stored credentials and remote ES256
+signing. Acceptance needs an issued credential received on Android and iOS,
+verified issuer and `cnf.jwk`, a signed KB-JWT with original nonce/audience,
+state-preserving submission, rotation/revocation denial, and physical-device
+negative cases. The earlier mobile pairing and renewal probes do not prove
+these gates.
