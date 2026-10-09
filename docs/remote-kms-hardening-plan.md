@@ -8814,7 +8814,8 @@ scanning and other completed CI lanes passed on `8f7d6bec4`. Preserve this
 failed run as immutable evidence; merge reconciliation and the closed-model
 fix are grouped into the next UI PR head.
 
-2026-10-09 fresh-only Issuance migration review (local, unpushed): Rust
+2026-10-09 fresh-only Issuance migration review (local commit `f444c8d16`,
+unpushed): Rust
 Issuance still accepted historical `merge_issuance_heads`/`issuance_event_owner`
 Alembic databases and shipped a 72-line bridge, despite the fresh KMS-only
 cutover requirement and absence of public deployments. The local candidate
