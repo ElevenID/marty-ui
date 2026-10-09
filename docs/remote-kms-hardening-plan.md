@@ -8897,7 +8897,13 @@ owner/Issuance source-contract tests passed after the workflow switched to
 real upstream Rust binaries. The disposable image qualifier's eight tests,
 including actual Compose rendering and failed-native-step cleanup, pass.
 Warnings-denied Clippy passed for all three changed Rust binaries. The
-published UI `a957f5da6` CI run `37919254810` has passed its OpenBao plugin,
-Rust image, Rust contract, release contract and other completed lanes; Canvas
-is still running, so that head is not yet exact-head qualified. The later
-fresh-only source commits are not in that run and remain unpushed.
+published UI `a957f5da6` CI run `37919254810` passed its OpenBao plugin,
+Rust image, Rust contract, release contract and other jobs, but failed the
+Canvas job before its database contracts: Flow's executable listed ten tests
+while the runner's exact owner inventory expected nine. The tenth was the
+ignored OpenBao scoped signer probe inherited through a shared Issuance
+fixture by both Flow and Canvas. The local follow-up moves only its test
+registration into Canvas while retaining the OpenBao signing and denied-read
+proof, so Flow again owns exactly nine and Canvas retains the scoped probe.
+The later fresh-only source and selector corrections are not in that run and
+remain unpushed; no exact-head UI qualification can be claimed from it.

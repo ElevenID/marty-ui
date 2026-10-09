@@ -155,32 +155,17 @@ impl RemoteIssuerSigner {
         assert_eq!(bytes.len(), 64);
         bytes
     }
-}
-
-#[cfg(test)]
-mod kms_tests {
-    use super::*;
-
-    #[tokio::test]
-    #[ignore = "requires the disposable Canvas OpenBao Transit backend"]
-    async fn scoped_transit_signer_verifies_without_key_read_authority() {
-        let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
-        let root_token = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
-        let signer = RemoteIssuerSigner::create(&base_url, &root_token).await;
-        let payload = b"canvas managed issuer signing proof";
-        let signature = ed25519_dalek::Signature::from_slice(&signer.sign(payload).await).unwrap();
-        signer
-            .verifying_key()
-            .verify_strict(payload, &signature)
-            .unwrap();
-        let metadata = signer
-            .client
-            .get(format!("{base_url}/v1/transit/keys/{}", signer.key_name))
-            .header("X-Vault-Token", &signer.token)
+    pub(super) async fn metadata_read_status(&self) -> StatusCode {
+        self.client
+            .get(format!(
+                "{}/v1/transit/keys/{}",
+                self.base_url, self.key_name
+            ))
+            .header("X-Vault-Token", &self.token)
             .send()
             .await
-            .unwrap();
-        assert_eq!(metadata.status(), StatusCode::FORBIDDEN);
+            .unwrap()
+            .status()
     }
 }
 

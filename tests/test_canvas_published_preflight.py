@@ -509,7 +509,7 @@ record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
 if [[ "$#" == 2 && "$1" == --list && "$2" == --ignored ]]; then
-  printf '%s\n' 'issuance_named_peers::kms_tests::scoped_transit_signer_verifies_without_key_read_authority: test'
+  printf '%s\n' 'scoped_transit_signer_verifies_without_key_read_authority: test'
 elif [[ "$#" == 1 && "$1" == --list ]]; then
   [[ "$TEST_FAILURE" != list ]] || exit 19
   while IFS= read -r registration; do printf '%s\n' "$registration"; done < "registrations-$name"
@@ -1188,7 +1188,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     ] + [
         f"{serial}: test",
         f"{json_serial}: test",
-        "issuance_named_peers::kms_tests::scoped_transit_signer_verifies_without_key_read_authority: test",
+        "scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
     assert children[:10] == [
@@ -1212,7 +1212,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "child",
             "contract",
             "1",
-            "issuance_named_peers::kms_tests::scoped_transit_signer_verifies_without_key_read_authority",
+            "scoped_transit_signer_verifies_without_key_read_authority",
             "--ignored",
             "--exact",
             "--nocapture",

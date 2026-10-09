@@ -516,7 +516,7 @@ kms_root_token=$(jq -er '.root_token' "$kms_config")
 [[ "$kms_container" =~ ^canvas-kms-[a-f0-9]{12}$ ]]
 [[ "$kms_url" =~ ^http://127\.0\.0\.1:[0-9]+$ ]]
 [[ "$kms_root_token" =~ ^[a-f0-9]{32}$ ]]
-scoped_signer_test='issuance_named_peers::kms_tests::scoped_transit_signer_verifies_without_key_read_authority'
+scoped_signer_test='scoped_transit_signer_verifies_without_key_read_authority'
 "$composition_executable" --list --ignored | grep -Fx "$scoped_signer_test: test"
 timed canvas_serial kms_scoped_signer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" "$scoped_signer_test" --ignored --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
