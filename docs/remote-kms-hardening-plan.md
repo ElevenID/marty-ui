@@ -10110,10 +10110,31 @@ remote-only credential receipt and the remaining native path audit are ready.
 The next mobile implementation should receive pre-authorized OID4VCI offers
 through Rust's offer/issuer-metadata/token APIs, fetch the issuer's fresh
 Nonce Endpoint value (not currently exposed by the Authenticator bridge),
-prepare Core's `openid4vci-proof+jwt` with the paired public Ed25519
-holder-binding key, obtain the exact-input EdDSA signature from the paired
-remote signer, verify the signature before requesting the credential, then
-verify the returned SD-JWT against the fresh Trust Profile issuer snapshot
+prepare Core's `openid4vci-proof+jwt` with the paired public P-256
+`presentation_signing` key, obtain the exact-input ES256 signature from the
+paired remote signer, verify the signature before requesting the credential,
+then verify the returned SD-JWT against the fresh Trust Profile issuer snapshot
 and holder binding before storing it in `WalletCredentialStore`. Preserve
 configuration choice and transaction/deferred semantics or explicitly fail
 closed until implemented; do not revive the native local-key offer handler.
+The previously recorded Ed25519 `holder_binding` proof choice was wrong for
+SD-JWT receipt: Core's verified presenter requires `cnf.jwk` to bind to the
+paired P-256 presentation key. The distinct Ed25519 key remains scoped to
+its own holder-binding use; do not rely on its proof to issue a credential
+that the P-256 presenter cannot later use.
+
+2026-10-09 Core and Verifier review checkpoint: Core `cd21cad` is published
+on PR #355. It shares strict trusted-issuer and P-256 holder-binding
+verification between SD-JWT receipt and presentation, exposes verified
+receipt metadata for remote-only wallet storage, and uses one bounded,
+no-redirect HTTP client for wallet token, credential, and VP requests.
+Core wallet-feature library tests passed 151/151 (42 existing ignored),
+strict Clippy passed, and the public-only receipt fixture rejects untrusted
+issuers and mismatched holder keys. Hosted CI on this exact Core head is
+running; PR #355 still requires review before merge. Verifier `cd059ce`
+repins its Core graph to this head on PR #154; `marty-sync` tests passed
+35/35 (one ignored), and its new hosted CI has not yet completed. The
+Verifier repin changed only Cargo.toml and seven Core package sources in
+Cargo.lock; unrelated generated schema files remain untouched. The
+Authenticator PR #57 still has nine local unpublished commits so remote-only
+receipt and native-path retirement can land as a broad feature batch.
