@@ -10361,3 +10361,21 @@ adds them; after localization generation, full `flutter analyze --no-pub`
 reported no issues, and repository-wide Dart formatting reported no changes.
 That correction remains local until the current generated-binding check
 finishes, so the published head is not yet quality-green.
+
+2026-10-09 exact-head UI recheck and registry feasibility: PR #1192 at
+`c732eae85` passed the Rust feature regression probe and Rust lint/packaging
+after the standalone Core lock correction. Release contracts now report
+6,145 passed and one failure: the live pinned Postgres registry-index fetch;
+all three stale source assertions are fixed. The container-backed jobs and
+reusable quality workflow still fail at Docker Hub pulls. Docker's published
+limit is 100 unauthenticated pulls per IPv4/IPv6 subnet in a six-hour window
+(https://docs.docker.com/docker-hub/usage/pulls/). Read-only `buildx`
+inspection confirmed that Public ECR's official-image mirror serves the same
+reviewed digest for the pinned Postgres, Redis, Rust, Debian, Go and Nginx
+images, but a registry switch would also touch shared quality workflow and
+release image policy; no image provenance or CI requirement was weakened.
+Wait for registry availability or implement a fully reviewed mirror change
+across all affected owners before claiming the hosted artifact gates.
+After the scoped-token correction, the complete Signing Keys library suite
+passed locally (140 passed, eight intentional live-test ignores); the live
+holder lifecycle was run separately against disposable services.
