@@ -8536,3 +8536,12 @@ stack manifest/lock, plus exact attestation binding for the native services
 image. This review does **not** satisfy the requested rollback gate: a clean
 KMS-only artifact, PostgreSQL snapshot and OpenBao Raft restore must still be
 exercised together and rechecked for custody and behavior.
+
+Test-custody follow-up: the Canvas LTI public-JWKS exporter test still generated
+two RSA private keys solely to derive public PEM. It now reads two existing
+public-only RSA certificate fixtures, projects their public keys and asserts
+the two exported moduli differ across Transit versions. All seven focused
+tests and Ruff pass. The broader private-key-name scan found only synthetic
+rejection markers and TLS/certificate-device proof test key generation in the
+sampled UI paths; this narrow correction is not an exhaustive test-custody
+closure claim. It remains local until the current hosted UI run finishes.

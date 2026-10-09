@@ -1,17 +1,24 @@
 import json
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
+from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from scripts.export_canvas_lti_public_jwks import export_public_jwks, main
 
 
-def public_pem() -> str:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    return key.public_key().public_bytes(
+PUBLIC_CERTIFICATES = (Path(__file__).resolve().parents[1]
+                       / "ui/src/components/trust/adapters/parsing/__fixtures__")
+
+
+def public_pem(name: str) -> str:
+    key = x509.load_pem_x509_certificate(
+        (PUBLIC_CERTIFICATES / name).read_bytes()
+    ).public_key()
+    return key.public_bytes(
         serialization.Encoding.PEM,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("ascii")
@@ -26,11 +33,11 @@ def transit_response(*, key_type: str = "rsa-2048") -> dict:
             "keys": {
                 "1": {
                     "creation_time": "2026-07-01T00:00:00Z",
-                    "public_key": public_pem(),
+                    "public_key": public_pem("one.pem"),
                 },
                 "2": {
                     "creation_time": "2026-07-14T08:00:00-06:00",
-                    "public_key": public_pem(),
+                    "public_key": public_pem("two.pem"),
                 },
             },
         }
@@ -52,6 +59,7 @@ def test_exports_only_public_rs256_fields_and_versioned_active_kid() -> None:
     assert jwks["keys"][0]["kty"] == "RSA"
     assert jwks["keys"][0]["use"] == "sig"
     assert jwks["keys"][1]["retired_at"] == "2026-07-14T14:00:00Z"
+    assert jwks["keys"][0]["n"] != jwks["keys"][1]["n"]
     assert datetime.fromisoformat(
         jwks["keys"][1]["retired_at"].replace("Z", "+00:00")
     ).tzinfo == timezone.utc
