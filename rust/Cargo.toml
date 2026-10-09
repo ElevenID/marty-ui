@@ -57,6 +57,7 @@ mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framewor
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
 # Keep the compatibility generation explicit for packages whose test APIs use rand 0.8.
 rand08 = { package = "rand", version = "0.8" }
 redis = { version = "1.5", default-features = false, features = ["connection-manager", "script", "tokio-comp"] }

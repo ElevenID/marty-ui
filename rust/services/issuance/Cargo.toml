@@ -113,7 +113,7 @@ jsonwebtoken.workspace = true
 mmf-platform.workspace = true
 rand08.workspace = true
 rsa.workspace = true
-rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+rcgen.workspace = true
 tower.workspace = true
 
 [build-dependencies]

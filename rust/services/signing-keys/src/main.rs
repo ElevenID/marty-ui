@@ -127,6 +127,28 @@ async fn reject_integration_secret_http(request: Request, next: Next) -> Respons
     next.run(request).await
 }
 
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+    info!("shutdown requested");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,26 +188,4 @@ mod tests {
             assert_eq!(response.status(), expected, "{path}");
         }
     }
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
-    };
-    #[cfg(unix)]
-    let terminate = async {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler")
-            .recv()
-            .await;
-    };
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
-    }
-    info!("shutdown requested");
 }

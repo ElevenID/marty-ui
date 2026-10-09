@@ -7023,3 +7023,16 @@ Credentials candidate also removes WASM `generate_p256_key` and
 `create_verifiable_credential` wrapper has no active Dart call site. Review
 and preserve the wallet's holder-key capability without restoring server-side
 issuer private-key APIs before opening the grouped Credentials PR.
+
+2026-10-08 UI hosted Rust follow-up: the same PR run failed strict Signing Keys
+Clippy because its new HTTP-route denial test module preceded
+`shutdown_signal`. Moving the test module to the end of the file passed local
+`cargo +1.97.1 clippy --locked -p marty-signing-keys --bin
+marty-signing-keys --tests -- -D warnings`. The hosted Canvas and contracts
+jobs both failed compiling the shared TLS integration-secret test fixture
+because the two Canvas acceptance crates lacked `rustls`, `axum-server`, and
+`rcgen` dev dependencies. Those dependencies are now declared, with `rcgen`
+centralized in the workspace manifest; `cargo +1.97.1 test --offline -p
+marty-canvas-acceptance -p marty-canvas-worker-acceptance --no-run` passes
+locally. These fixes are local until remaining hosted jobs complete, then
+will be pushed together with the gRPC advisory correction.
