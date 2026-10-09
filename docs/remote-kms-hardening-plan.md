@@ -7094,3 +7094,16 @@ their removal breaks an actively shipped wallet feature, but does not prove
 the browser build works; test the exact authenticator artifact and its active
 presentation path before closing wallet preservation. The removed methods
 remain retired in the Credentials candidate.
+
+Hosted old-head checkpoint: the UI OpenBao DIDComm plugin image job completed
+successfully, including coordinated live integration-secret recovery after
+PostgreSQL and OpenBao Raft restoration. This is acceptance evidence for the
+TLS transport at PR head `d9240b8fd`, although the dependency advisory and
+other known check failures at that head still require the local correction
+batch and a new hosted run. The service-image job remains in progress.
+The old-head Rust service-image job subsequently completed successfully,
+including the packaged Issuance smoke and Canvas worker startup gates. Its
+full PR check set ended with 22 successful, seven failed, and one skipped
+check; the failures are dependency review, Canvas/contracts compilation,
+strict Rust lint, release contracts, and CodeQL, all addressed in the local
+grouped correction batch. Push that batch once, then evaluate the new head.
