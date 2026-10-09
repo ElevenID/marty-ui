@@ -1649,6 +1649,31 @@ protected combined-head CI passed, including the Canvas database lane.
 This change does not shorten real leases or establish an attributable CI
 speedup; collect comparable case timing before claiming one.
 
+## A4 validation-decision fast owner (2026-10-09 local candidate)
+
+The protected #1155 timing artifact measured the 13-case published
+`repository_validation` matrix at 13.499s. This reviewed candidate extracts
+its existing field, scope, and reference decisions from the PostgreSQL adapter
+without changing SQL reads, error precedence, target-disable calls, or job
+failure handling. A typed, literal fast table owns all 13 frozen repository
+case IDs, error codes and summaries, terminal/no-retry policy, and disable
+decisions; it checks the frozen oracle without deriving expected values from
+the production classifier. Five PostgreSQL cases remain for the distinct real
+scope JOIN, archived/stale durable disable, and application/candidate
+post-read existence races. Their lease, dead-letter, target/OAuth/facts,
+preservation, and cleanup assertions remain. The separate native and pinned
+historical 20-case qualifications remain selected in full.
+
+The tier-obligation inventory and run-bound contracts/Canvas guards now name
+the fast and database owners explicitly; otherwise ten routine-excluded cases
+would have retained a stale database-owner claim. On one local Windows/Docker
+host the five-case pinned-schema boundary passed in 9.650s, while the earlier
+13-case hosted sample was 13.499s. These are not comparable conditions, so no
+CI speedup is claimed. Rust 1.95 package check and the fast unit test passed;
+293 focused policy/preflight tests passed with one existing skip. Independent
+review found no P1-P3 issue. Hosted Linux qualification and protected CI are
+still required before this candidate can merge.
+
 ## Product packaging and integration workstream (added 2026-10-07)
 
 The local product plan (`artifacts/consumer-audit-2026-10-07/marty-product-packaging-and-integration-plan.md` in the coordinating workspace) defines PKG01-09, INT01-06, TST01-05, CICD01-04, BUS01-02, MKT01-02, and QA01-02. Those IDs are retained here so progress and acceptance evidence can be reconciled without duplicating the plan's full text. This tracker remains the active engineering queue; the product plan retains the detailed product and commercial acceptance criteria.
@@ -2325,10 +2350,10 @@ worker lane under those conditions, not a whole-PR speedup: both lanes still
 ran. The protected [merge-group run 37865923534](https://github.com/ElevenID/marty-ui/actions/runs/37865923534)
 passed the original full Canvas/contracts plan with no diagnostic worker lane,
 and #1194 merged as `16d0072c7`. The temporary self-merge approval exception
-was restored to one required approval immediately after merge. The separate
-exact-test-source selector and its one-file hosted pilot remain unmerged.
+was restored to one required approval immediately after merge. At that point,
+the separate exact-test-source selector and its one-file pilot were unmerged.
 
-## A6 exact worker-test-source PR selector (2026-10-08 local draft)
+## A6 exact worker-test-source PR selector (2026-10-09, merged)
 
 The next bounded draft considers only the three tracked Rust files owned by
 `canvas_published_worker_contract`: its target and two explicit support
@@ -2343,9 +2368,27 @@ pinned-process preflights, worker suite, Rust lint and supply-chain checks,
 root release-policy pytest, public-protocol checks, and the aggregate gate;
 only unrelated runtime/image qualification is bypassed for these test-only
 sources. The gate accepts the exact worker tuple only on pull requests and
-rejects a skipped selected job. This is local code, not hosted evidence or a
-measured speedup. Do not activate it until the #1194 diagnostic is green and
-the selector receives independent review and a test-source-only hosted pilot.
+rejects a skipped selected job. [UI #1195](https://github.com/ElevenID/marty-ui/pull/1195)
+merged the independently reviewed selector as `f4926bb4d` after full PR and
+protected merge-group validation; the selector PR itself retained the full
+Canvas/contracts matrix because it changed workflow and planner code.
+
+The distinct one-file [pilot #1196](https://github.com/ElevenID/marty-ui/pull/1196)
+changed only `canvas_startup_attestation.rs` to test rejection of a nested
+checkout root before evidence or artifact creation. Its
+[PR run 37874366360](https://github.com/ElevenID/marty-ui/actions/runs/37874366360)
+selected only the worker Rust lane, kept release/lint/security/public-protocol
+and aggregate checks, and finished green in 13m41s from run creation to gate.
+The worker job took 13m21s: 5m49s compile, 6m47s real database/process step,
+111 passes, two intentional capture-only ignores, both pinned preflights, and
+261 timing rows all `ok`. The preceding #1195 full-PR run took 36m, an
+observed 22m19s difference that includes different diffs and runner queueing,
+not an attributable end-to-end percentage. The same-run #1194 lane comparison
+above is the cleaner 12m21s worker-versus-full-Canvas evidence. #1196 passed
+the original full Canvas/contracts protected merge-group plan and merged as
+`fb93db737`; one required approval was restored immediately after merge.
+This establishes faster feedback for the exact three-file class, not for
+mixed/shared/runtime edits or final merge qualification.
 
 ## Design references
 
