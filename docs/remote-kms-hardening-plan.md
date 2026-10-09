@@ -9418,3 +9418,29 @@ push. Core PR #355 hosted checks are green at `7c50d31`; Verifier PR #154
 hosted checks are green at `206f80e`. Authenticator's first Windows build
 against the unified graph reproduced the previously known MSVC OpenSSL
 `C1083` long-path failure; a short isolated target-path check is in progress.
+
+2026-10-09 exact-head consumer CI and UI main reconciliation: Credentials PR
+#313 corrective head `6269324` now has 19 successful checks, including its
+graph preflight and CI gate. Verifier PR #154 at `206f80e` and Core PR #355
+at `7c50d31` are green. Authenticator PR #57 at `9a91130` has 12 successful
+checks, including Android, unsigned iOS configuration, Flutter tests and
+generated Rust bindings; its Cargo metadata resolves one Core source. Local
+Windows checks did not prove a bridge build: the original long target hit
+MSVC OpenSSL `C1083`, and a short isolated target exposed missing
+`openssl/sha.h`/`zstd.h` plus C++ `sbb`/`adc` intrinsics in the local ZK
+toolchain. Those local failures remain evidence; the hosted Linux bridge lane
+is the passed compile evidence, while wallet remote-signing acceptance is
+still open.
+
+UI PR #1192's grouped `2eb1223fd` push was blocked from checks by a newer
+main conflict. The local merge preserves KMS-only DIDComm/OpenBao settings
+and the fresh Rust Issuance ledger, while taking main's Canvas deadline and
+deployment improvements. Main's `0000_merge_issuance_heads_bridge.sql` was
+excluded because it would restore an Alembic upgrade path that the fresh-only
+runtime rejects. The merged Rust workspace check, Issuance all-target Clippy,
+394 affected Python tests, 47 physical-provider tests, two Canvas published
+runner cases, three complete Compose model scripts, 55 migration/fence tests
+and Bash syntax checks passed locally. The merged head has not yet been
+published or qualified by hosted CI. Historical published-schema Canvas
+fixtures still assert the old Alembic revision; retire or replace that test
+producer with fresh Rust schema evidence before final release qualification.

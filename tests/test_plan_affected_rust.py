@@ -1965,6 +1965,143 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             ),
                         )
 
+    def test_applicant_auth_profile_edge_is_source_backed_and_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/applicant/src/http.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-applicant" and edge["package"] == "marty-auth"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertNotIn(
+            "marty-applicant",
+            {dep["name"] for dep in packages["marty-auth"]["dependencies"]},
+        )
+
+        # Scope markers to their owner, so a similar string in an unrelated
+        # test or route cannot conceal removal of the actual request chain.
+        scopes = {
+            "config": (
+                "applicant_service_url: origin(",
+                "issuance_native_service_url: origin(",
+            ),
+            "startup": (
+                "let applicant_profile = Arc::new(",
+                "let organizations = Arc::new(",
+            ),
+            "jit_startup": (
+                "let provisioner = Arc::new(",
+                "let event_publisher = Arc::new(",
+            ),
+            "canvas_startup": (
+                "let canvas = Arc::new(",
+                "let credential_state = Arc::new(",
+            ),
+            "canvas_call": (
+                "pub async fn finalize(",
+                "let session = Session::create(",
+            ),
+            "login": (
+                "pub async fn handle_callback(",
+                "async fn publish_login_events(",
+            ),
+            "jit": (
+                "pub async fn provision_at(",
+                "impl UserProvisioner for JitUserProvisioner",
+            ),
+            "request": (
+                "async fn upsert_profile(",
+                "impl CanvasApplicantProfileProvisioner",
+            ),
+            "response": (
+                "impl ApplicantProvisioningStore for MmfApplicantProvisioningStore",
+                "pub struct MmfAuthEventPublisher",
+            ),
+            "route": ("pub fn router(state: HttpState)", "#[derive(Debug)]"),
+            "handler": ("async fn upsert_profile(", "async fn enroll_biometric("),
+            "server": ("axum::serve(", ".await"),
+        }
+        markers = (
+            ("binding", "evidence", "config"),
+            ("runtime_marker", "runtime_evidence", "startup"),
+            ("runtime_url_marker", "runtime_evidence", "startup"),
+            ("store_marker", "runtime_evidence", "startup"),
+            ("jit_marker", "runtime_evidence", "jit_startup"),
+            ("canvas_marker", "runtime_evidence", "canvas_startup"),
+            ("canvas_call_marker", "canvas_callsite_evidence", "canvas_call"),
+            ("callsite_marker", "callsite_evidence", "login"),
+            ("jit_call_marker", "jit_evidence", "jit"),
+            ("request_method_marker", "request_evidence", "request"),
+            ("request_marker", "request_evidence", "request"),
+            ("request_identity_marker", "request_evidence", "request"),
+            ("response_identity_marker", "request_evidence", "response"),
+            ("provider_route_marker", "provider_evidence", "route"),
+            ("provider_identity_marker", "provider_evidence", "handler"),
+            ("provider_write_marker", "provider_evidence", "handler"),
+            (
+                "provider_registration_marker",
+                "provider_registration_evidence",
+                "server",
+            ),
+        )
+        sources = {
+            edge[source]: (ROOT / edge[source]).read_text(encoding="utf-8")
+            for _, source, _ in markers
+        }
+
+        def scoped_parts(content: str, scope: str) -> tuple[str, str, str]:
+            start, end = scopes[scope]
+            self.assertIn(start, content)
+            before, tail = content.split(start, 1)
+            self.assertIn(end, tail)
+            section, after = tail.split(end, 1)
+            return before + start, section, end + after
+
+        def assert_markers(snapshot: dict[str, str]) -> None:
+            for marker, source, scope in markers:
+                self.assertIn(
+                    edge[marker], scoped_parts(snapshot[edge[source]], scope)[1]
+                )
+
+        assert_markers(sources)
+        for marker, source, scope in markers:
+            with self.subTest(marker=marker):
+                path = edge[source]
+                changed = dict(sources)
+                before, section, after = scoped_parts(changed[path], scope)
+                changed[path] = (
+                    before + section.replace(edge[marker], "removed-edge", 1) + after
+                )
+                with self.assertRaises(AssertionError):
+                    assert_markers(changed)
+
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        auth = compose.split(f"\n  {edge['deployment_service']}:\n", 1)[1].split(
+            "\n  organization:\n", 1
+        )[0]
+        applicant = compose.split(f"\n  {edge['deployment_provider_service']}:\n", 1)[
+            1
+        ].split("\n  notification:\n", 1)[0]
+        self.assertNotIn(edge["deployment_absent_marker"], auth)
+        self.assertIn(edge["deployment_provider_marker"], applicant)
+        with self.assertRaises(AssertionError):
+            self.assertNotIn(
+                edge["deployment_absent_marker"],
+                auth + edge["deployment_absent_marker"],
+            )
+        with self.assertRaises(AssertionError):
+            self.assertIn(
+                edge["deployment_provider_marker"],
+                applicant.replace(edge["deployment_provider_marker"], "removed-edge"),
+            )
+
     def test_shared_and_unowned_inputs_request_full_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

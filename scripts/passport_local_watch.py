@@ -130,10 +130,11 @@ def main() -> int:
                                                   now=datetime.now(timezone.utc))
         validate_certificate_setup(certificate, plan, args.port)
     if not args.watch_only:
-        print("Starting complete released stack...", flush=True)
-        if not run([*compose, "up", "-d", "--wait", "--wait-timeout", "360"],
-                   env, log, 600):
-            print(f"Released stack startup failed. Project retained for diagnosis: {project}",
+        print("Starting complete local stack...", flush=True)
+        if not run([*compose, "-f", str(watch), "up", "-d", "--build",
+                    "--wait", "--wait-timeout", "1200"],
+                   env, log, 1500):
+            print(f"Local stack startup failed. Project retained for diagnosis: {project}",
                   flush=True)
             return 1
     print("Replacing issuance-native with source watcher...", flush=True)

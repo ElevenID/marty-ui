@@ -228,10 +228,9 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         "FIXTURE_JSON": raw,
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
-        # Native issuance is mandatory; the isolated guard below supplies a
-        # read-only stub for its separately tested selection check.
+        # This test isolates the Canvas cutover guard; the native issuance
+        # selection and its image-update guard have separate contract tests.
         "K8S_ISSUANCE_NATIVE_ENABLED": "true",
-        "MARTY_SERVICES_IMAGE": "synthetic.invalid/services@sha256:" + "a" * 64,
     }
     assert "MARTY_ISSUANCE_IMAGE" not in env
     catalog = json.loads((ROOT / "deploy-config/catalog/services.json").read_text())
@@ -255,7 +254,8 @@ native_check() {
 kubectl() {
   case "$1:$2" in
     get:deployment/issuance-native)
-      printf '%s' '{"items":[]}' ;;
+      printf '{}'
+      return 0 ;;
     get:deployment)
       [[ $# == 8 && "$3" == canvas-sync-worker && "$4" == -n && "$5" == "$NAMESPACE" && "$6" == -o && "$7" == json && "$8" == --request-timeout=10s ]] || return 92
       printf '%s\n' "$PRIVATE_DIAGNOSTIC" >&2
@@ -275,7 +275,12 @@ readonly -f kubectl
 """
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
-        input=prelude + extracted_update() + "\nprepare_kubernetes_native_issuance() { K8S_NATIVE_ISSUANCE_BIN=native_check; }\ncmd_update_images\n",
+        input=(prelude + extracted_update() + "\n"
+               "prepare_kubernetes_native_issuance() {\n"
+               "  MARTY_SERVICES_IMAGE=synthetic.invalid/services@sha256:"
+               + "a" * 64 + "\n"
+               "  K8S_NATIVE_ISSUANCE_BIN=true\n"
+               "}\ncmd_update_images\n"),
         text=True,
         capture_output=True,
         env=env,

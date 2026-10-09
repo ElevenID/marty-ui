@@ -99,6 +99,7 @@ find_issuance_package_binary() {
   }
   printf '%s\n' "${matches[0]}"
 }
+deadline_serial_test=worker_deadline_matches_frozen_published_process
 # Opt-in diagnostic owner. No current CI selector invokes these modes; the
 # default and existing full/preflight paths below retain their original order.
 # This branch never loads composition, Gateway, Flow or the public selfhost
@@ -167,16 +168,18 @@ if [[ "$mode" == worker-* ]]; then
   fi
   worker_serial_test=worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings
   printf '%s\n' "$worker_tests" | grep -Fx "$worker_serial_test: test"
-  worker_parallel_list=$("$worker_executable" --list --skip "$worker_serial_test" "${worker_preflight_skips[@]}")
-  printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$worker_mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$worker_serial_test"
+  printf '%s\n' "$worker_tests" | grep -Fx "$deadline_serial_test: test"
+  worker_parallel_list=$("$worker_executable" --list --skip "$worker_serial_test" --skip "$deadline_serial_test" "${worker_preflight_skips[@]}")
+  printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$worker_mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$worker_serial_test" "$deadline_serial_test"
   worker_all=$(printf '%s\n' "$worker_tests" | grep -c ': test$')
   worker_parallel=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
-  [[ $((worker_all - worker_parallel)) == $((1 + expected_worker_skips)) ]]
+  [[ $((worker_all - worker_parallel)) == $((2 + expected_worker_skips)) ]]
   pull_worker_images
   timed canvas_serial sql_logging "$worker_executable" "$worker_serial_test" --exact --nocapture --test-threads=1
+  timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
   worker_log=$(mktemp "${RUNNER_TEMP:?}/canvas-worker-only.XXXXXX")
   trap 'rm -f -- "$worker_log"' EXIT
-  timed canvas_target worker env MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$worker_retry_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$worker_validation_tier" "$worker_executable" --skip "$worker_serial_test" "${worker_preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log"
+  timed canvas_target worker env MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$worker_retry_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$worker_validation_tier" "$worker_executable" --skip "$worker_serial_test" --skip "$deadline_serial_test" "${worker_preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log"
   python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"
   exit 0
 fi
@@ -198,10 +201,11 @@ fi
 # keeps the ordinary full composition run and its completion-marker checks.
 if python3 "$(dirname "${BASH_SOURCE[0]}")/run-canvas-config-proofs.py" verify "$composition_executable"; then
   config_skips=(
+    --skip rendered_base_process::renderer_bounds_proof_is_image_free
     --skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy
     --skip resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy
   )
-  expected_skipped_config_tests=2
+  expected_skipped_config_tests=3
 fi
 worker_binary=$(find_issuance_package_binary marty-canvas-sync-worker)
 issuance_binary=$(find_issuance_package_binary marty-issuance-service)
@@ -232,6 +236,7 @@ if [[ -z "$preflight_target" ]]; then
   }
 fi
 printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy: test'
+printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::renderer_bounds_proof_is_image_free: test'
 if [[ -z "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
 fi
@@ -481,18 +486,22 @@ printf '%s\n' "$all_test_names" | grep -Fx 'worker_timeout_native_child: test'
 # its own so unrelated test threads cannot affect the positive control.
 serial_test=worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings
 printf '%s\n' "$worker_tests" | grep -Fx "$serial_test: test"
+printf '%s\n' "$worker_tests" | grep -Fx "$deadline_serial_test: test"
 serial_composition_test=json_consumer_diagnostic_matches_published_boundaries
 printf '%s\n' "$composition_tests" | grep -Fx "$serial_composition_test: test"
 all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
 composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" | grep -c ': test$')
 flow_parallel_tests=$(printf '%s\n' "$flow_tests" | grep -c ': test$')
-worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
+worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
 selfhost_parallel_tests=$(printf '%s\n' "$selfhost_tests" | grep -c ': test$')
-printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
+printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test" "$deadline_serial_test"
 parallel_tests=$((composition_parallel_tests + flow_parallel_tests + worker_parallel_tests + selfhost_parallel_tests))
-[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
+[[ $((all_tests - parallel_tests)) == $((3 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
 timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
+# The deadline replay measures a 10-second renewal against a frozen 14-second
+# bound. Run it without concurrent Canvas database owners or test threads.
+timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
 # The packaged renewal cases need an actual non-exportable X25519 sender. Keep
 # root authority in this acceptance process; the native binary gets only the
 # exact-version read/pack token file provisioned by the Rust fixture.
@@ -574,7 +583,7 @@ flow_pid=$!
 relay_target_timing "$flow_pid" "$flow_log" "$flow_end" &
 flow_relay_pid=$!
 worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
+MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
 relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &
 worker_relay_pid=$!
@@ -651,6 +660,10 @@ timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$compos
   exit 1
 }
 if (( expected_skipped_config_tests == 0 )); then
+  [[ $(grep -Fo 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
+    echo 'Renderer bounds proof did not execute and complete exactly once' >&2
+    exit 1
+  }
   [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 1 ]] || {
     echo 'Rendered-base renewal 2x2 configuration proof did not execute and complete exactly once' >&2
     exit 1
@@ -661,6 +674,7 @@ if (( expected_skipped_config_tests == 0 )); then
   }
 else
   # A test running despite an authorized skip is not the selected full suite.
+  [[ $(grep -Fo 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
   [[ $(grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
   [[ $(grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' "$composition_log" | wc -l) == 0 ]]
 fi

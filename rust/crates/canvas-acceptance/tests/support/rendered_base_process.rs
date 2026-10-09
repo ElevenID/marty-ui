@@ -37,26 +37,30 @@ fn bounded_render(
     }
 }
 
-pub(super) fn assert_renderer_deadlines() {
-    let python = std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
-        .expect("configured renderer qualification requires explicit Python");
-    for (program, expected) in [
+pub(super) fn require_explicit_python() -> std::ffi::OsString {
+    std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
+        .expect("configured renderer qualification requires explicit Python")
+}
+
+fn assert_renderer_deadlines() {
+    let python = require_explicit_python();
+    for (program, expected, deadline) in [
         (
             "import os,time; os.close(1); time.sleep(30)",
             "Compose rendering exceeded deadline",
+            Duration::from_millis(400),
         ),
         (
             "import sys,time; sys.stdout.write('x'*262145); sys.stdout.flush(); time.sleep(30)",
             "rendered model exceeds limit",
+            // Busy shared runners can take longer than 400 ms to start Python.
+            // Keep this bounded, but let the output-limit assertion win.
+            Duration::from_secs(5),
         ),
     ] {
         let started = Instant::now();
-        let error = bounded_render(
-            Command::new(&python).args(["-c", program]),
-            b"{}",
-            Duration::from_millis(400),
-        )
-        .unwrap_err();
+        let error = bounded_render(Command::new(&python).args(["-c", program]), b"{}", deadline)
+            .unwrap_err();
         assert_eq!(error.to_string(), expected);
         assert!(started.elapsed() < Duration::from_secs(10));
     }
@@ -69,6 +73,16 @@ pub(super) fn assert_renderer_deadlines() {
         .unwrap(),
         b"{}"
     );
+}
+
+#[test]
+fn renderer_bounds_proof_is_image_free() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Renderer bounds proof requires the configured Linux gate");
+        return;
+    }
+    assert_renderer_deadlines();
+    println!("\nRENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1");
 }
 
 #[derive(Deserialize)]

@@ -112,10 +112,15 @@ def production_public_route(
 
 def run(command: list[str]) -> str:
     try:
-        result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
-    except (OSError, subprocess.SubprocessError) as exc:
+        result = subprocess.run(
+            command, check=True, capture_output=True, text=True,
+            encoding="utf-8", errors="strict", timeout=30,
+        )
+    except (OSError, UnicodeError, subprocess.SubprocessError) as exc:
         # Docker inspect output and psql stderr may contain unrelated secrets.
         raise HostProbeError("Beta host inspection failed") from exc
+    if not isinstance(result.stdout, str):
+        raise HostProbeError("Beta host inspection returned no output")
     return result.stdout.strip()
 
 

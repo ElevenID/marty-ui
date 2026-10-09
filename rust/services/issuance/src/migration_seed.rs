@@ -26,7 +26,7 @@ pub(super) async fn seed_marty_application_templates(
 
     let organization_name: Option<String> = sqlx::query_scalar(
         "SELECT COALESCE(NULLIF(name, ''), slug, '')
-         FROM organization_service.organizations WHERE id = $1",
+         FROM organization_service.organizations WHERE id = $1::uuid",
     )
     .bind(marty_org_id)
     .fetch_optional(&mut *connection)

@@ -153,19 +153,28 @@ def test_guard_is_additive_after_discovery_before_skip_selection() -> None:
 )
 def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None:
     serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
-    original = discovered() | {serial, "unrelated_native_worker_test"}
-    omitted = {serial}
+    deadline = "worker_deadline_matches_frozen_published_process"
+    original = discovered() | {serial, deadline, "unrelated_native_worker_test"}
+    omitted = {serial, deadline}
     if mode == "full-after-preflights":
         omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
         if qualification == "0":
             omitted |= {entry["test"] for entry in INVENTORY["historical"]}
     validate_selection(
-        INVENTORY, original, original - omitted, mode, qualification, serial
+        INVENTORY, original, original - omitted, mode, qualification, serial, deadline
     )
     if mode == "full-after-preflights" and qualification == "0":
-        assert len(omitted - {serial}) == 37
+        assert len(omitted - {serial, deadline}) == 37
     if mode == "full-after-preflights" and qualification == "1":
-        assert len(omitted - {serial}) == 4
+        assert len(omitted - {serial, deadline}) == 4
+
+
+def test_deadline_serial_owner_cannot_be_omitted_from_selection_guard() -> None:
+    serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
+    deadline = "worker_deadline_matches_frozen_published_process"
+    original = discovered() | {serial, deadline}
+    with pytest.raises(ValueError, match="selection drift"):
+        validate_selection(INVENTORY, original, original - {serial, deadline}, "full", "0", serial)
 
 
 def test_same_count_wrong_selected_case_fails_closed() -> None:

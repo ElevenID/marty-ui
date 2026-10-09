@@ -148,8 +148,9 @@ apply_manifest() {
   envsubst < "$file" | kubectl apply -f -
 }
 
-# Authenticate the release and capture the exact full model before any
-# deployment write. KMS-only deployment requires the native owner.
+# No build or cluster mutation: authenticate the release and capture the exact
+# full model before any deployment write. KMS-only deploy and update-images
+# require the native owner and reject a disabled selector.
 require_kubernetes_services_release() {
   [[ -n "${MARTY_STACK_MANIFEST:-}" ]] || { error "Set MARTY_STACK_MANIFEST to the signed Rust-only release manifest."; return 1; }
   local source_sha checked_root checked_manifests relative_manifests manifest_file relative_file
