@@ -10745,3 +10745,21 @@ image, Rust service image, and Rust CodeQL jobs remain pending. No completed
 job has failed at this head; do not treat the whole run as green until it is
 terminal. Core #355, Verifier #154, and Credentials #313 retain their
 previously green exact-head checks and remain unmerged.
+
+2026-10-09 mobile wallet-detail self-review: local Authenticator commit
+`2a596b2` replaces two duplicated detail layouts with one typed
+`VerifiedReceiptDetails` widget. The previous active details screens displayed
+a hard-coded holder name, mislabeled the credential title as issuer, and
+invented a card ID from the title hash; these could misrepresent distinct
+same-title verified receipts. Both single-card and grouped screens now show
+the receipt's actual ID, issuer, credential type, and format, without
+inventing holder claims. The unused `privateData` CardData member and dead
+map serialize/deserialize methods were removed, so the detail route cannot
+reconstruct arbitrary map-provided fields. Focused widget tests passed for
+single and same-title grouped receipts; full Dart analysis passed with no
+issues; the default Flutter suite passed 189 tests with four skips.
+Non-generated line coverage is 84.42% (1,718/2,035), still short of the
+protected 90% gate. This commit remains local in the broad mobile batch.
+UI #1192's Rust Service Images, release contracts, and Rust analysis have
+passed at `148d85b8f`; Canvas, Rust contracts, and OpenBao plugin image
+jobs remain pending, with no completed exact-head failure observed.
