@@ -9988,3 +9988,20 @@ resolution through Core, and finish actual OID4VCI receipt and OID4VP
 presentation. The Core resolver is still local, mobile Dart/device acceptance
 is absent, and grouped PR heads/exact release artifacts have not been updated
 or qualified for this batch.
+
+2026-10-09 four-hour checkpoint (09:13–13:13 MDT): Core resolver commit
+`9abc621` is now published on draft PR #355; its new exact-head hosted CI is
+still running. Verifier commit `ea91db5` is published on PR #154 and pins its
+Core manifest and lockfile to that resolver; dependency-contract tests passed
+locally and exact-head CI is running. A local Verifier `marty-sync` Rust test is
+still in its first dependency build. The mobile Authenticator branch has six
+additional local commits for pairing, renewal, session binding, and a
+fail-closed legacy VP bridge. Its uncommitted Dart candidate fetches the
+fresh bearer-scoped issuer-key snapshot and requests exact-input remote
+signatures, with source tests; Flutter/Dart tooling is unavailable locally, so
+those tests have not run. Its uncommitted Rust manifest and lockfile now pin
+Core `9abc621` and Verifier `ea91db5`; the old Core revision is absent from
+both. These mobile transport methods are not yet wired into OID4VCI receipt
+or Core's verified OID4VP presenter. The grouped UI branch remains 25 local
+commits ahead of draft PR #1192. Do not count any of these as physical-device
+wallet acceptance or release qualification.
