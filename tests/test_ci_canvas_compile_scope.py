@@ -179,6 +179,8 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     classifier = next(step for step in changes["steps"] if step.get("id") == "classify")
     assert 'rust_matrix=\'["canvas","contracts"]\'' in classifier["run"]
     assert "rust_matrix='[\"contracts\"]'" in classifier["run"]
+    assert "rust_matrix='[\"worker\"]'" in classifier["run"]
+    assert "--emit-verified-worker-tests" in classifier["run"]
     steps = {step.get("name"): step for step in job["steps"]}
     compile_run = steps["Compile reusable Rust test executables"]["run"]
     assert "cargo test --locked --workspace --no-run" in compile_run
@@ -204,6 +206,7 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     gate_script = gate["steps"][0]["run"]
     assert '\'true:true:["canvas","contracts"]\'' in gate_script
     assert "'true:false:[\"contracts\"]'" in gate_script
+    assert "'true:false:[\"worker\"]'" in gate_script
     assert '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate_script
 
     packages = {
