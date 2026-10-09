@@ -714,6 +714,118 @@ class AffectedRustPlannerTests(unittest.TestCase):
             producer, {dep["name"] for dep in packages[consumer]["dependencies"]}
         )
 
+    def test_gateway_did_web_consumers_are_source_backed_and_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/gateway/src/runtime.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        gateway_edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-gateway"
+        ]
+        edges = {}
+        for consumer in ("marty-trust-profile", "marty-issuance-service"):
+            matches = [edge for edge in gateway_edges if edge["package"] == consumer]
+            self.assertEqual(len(matches), 1)
+            edges[consumer] = matches[0]
+        for consumer in edges:
+            self.assertNotIn(
+                "marty-gateway",
+                {dep["name"] for dep in packages[consumer]["dependencies"]},
+            )
+
+        source_paths = {
+            "rust/services/gateway/src/runtime.rs",
+            "contracts/gateway-routes.json",
+            "docker-compose.base.yml",
+        }
+        for edge in edges.values():
+            source_paths.update((edge["evidence"], edge["runtime_evidence"]))
+            source_paths.add(edge.get("request_evidence", edge.get("client_evidence")))
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8") for path in source_paths
+        }
+        witnesses = [
+            (
+                "rust/services/gateway/src/runtime.rs",
+                'request.uri().path() == "/.well-known/did.json"',
+            ),
+            ("rust/services/gateway/src/runtime.rs", '.strip_prefix("/orgs/")'),
+            ("rust/services/gateway/src/runtime.rs", "did_web_root_handler(state).await"),
+            (
+                "rust/services/gateway/src/runtime.rs",
+                "did_web_slug_handler(state, slug).await",
+            ),
+        ]
+        for edge in edges.values():
+            client_source = (
+                "request_evidence" if "request_evidence" in edge else "client_evidence"
+            )
+            for marker, source in (
+                ("binding", "evidence"),
+                ("runtime_marker", "runtime_evidence"),
+                ("client_marker", client_source),
+                ("request_marker", client_source),
+                ("registration_marker", "runtime_evidence"),
+            ):
+                if marker in edge:
+                    witnesses.append((edge[source], edge[marker]))
+
+        def assert_witnesses() -> None:
+            paths = {
+                route["path"]
+                for route in json.loads(sources["contracts/gateway-routes.json"])[
+                    "routes"
+                ]
+            }
+            self.assertIn("/.well-known/did.json", paths)
+            self.assertIn("/orgs/{org_slug}/did.json", paths)
+            compose = sources["docker-compose.base.yml"]
+
+            def service(name: str) -> str:
+                body = compose.split(f"\n  {name}:\n", 1)[1]
+                return re.split(r"(?m)^  [a-z][a-z0-9_-]*:\s*$", body, maxsplit=1)[0]
+
+            self.assertIn('GATEWAY_PORT: "8000"', service("gateway"))
+            for edge in edges.values():
+                self.assertIn(
+                    edge["deployment_marker"], service(edge["deployment_service"])
+                )
+            for path, marker in witnesses:
+                self.assertIn(marker, sources[path])
+
+        assert_witnesses()
+        for path, marker in witnesses:
+            original = sources[path]
+            sources[path] = original.replace(marker, "removed-runtime-witness")
+            with self.subTest(path=path, marker=marker), self.assertRaises(
+                AssertionError
+            ):
+                assert_witnesses()
+            sources[path] = original
+        for path, marker in (
+            ("contracts/gateway-routes.json", "/.well-known/did.json"),
+            ("contracts/gateway-routes.json", "/orgs/{org_slug}/did.json"),
+            ("docker-compose.base.yml", 'GATEWAY_PORT: "8000"'),
+            *(
+                ("docker-compose.base.yml", edge["deployment_marker"])
+                for edge in edges.values()
+            ),
+        ):
+            original = sources[path]
+            sources[path] = original.replace(marker, "removed-deployment-witness")
+            with self.subTest(path=path, marker=marker), self.assertRaises(
+                AssertionError
+            ):
+                assert_witnesses()
+            sources[path] = original
+
     def test_published_gateway_upstream_routes_are_observed_without_narrowing(
         self,
     ) -> None:
@@ -1255,6 +1367,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-credential-template",
                 "marty-verification-service",
                 "marty-issuance-service",
+                "marty-trust-profile",
                 "marty-presentation-policy",
                 "marty-flow",
                 "marty-auth",
@@ -1266,6 +1379,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-credential-template",
                 "marty-verification-service",
                 "marty-issuance-service",
+                "marty-trust-profile",
                 "marty-presentation-policy",
                 "marty-flow",
                 "marty-auth",
