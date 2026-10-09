@@ -1230,7 +1230,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 at `fef8da1` pins Core `d41d87c`, excludes LDAP from WASM and rejects isomdl local signing. Its 19 hosted checks pass, alongside local web WASM/package-load and Windows ABI3 wheel/surface checks. The authenticator browser flow, published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core draft PR #355 at `d41d87c` and Credentials draft PR #313 at `fef8da1` have green hosted checks; Core needs review and Credentials still needs browser/release qualification. UI draft PR #1192 at `81ab5df4d` has two corrected lane failures and one live Canvas lane; its reconciliation/correction head is local. Exact release artifacts, supported cutover and recovery remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy, Compliance Profile, Flow and Notification JSON boundaries. Focused tests and disposable PostgreSQL checks pass for earlier stores; the recently guarded packages pass tests and strict Clippy. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy, Compliance Profile, Flow and Notification JSON boundaries. Focused tests and disposable PostgreSQL checks pass for earlier stores; the recently guarded packages pass tests and strict Clippy. A read-only local-stack audit found an empty historical `issuer_signing_keys.encrypted_jwk_json` table still present in self-host PostgreSQL; beta has no private-key-named table or column. Fresh assembled-schema, self-host rebuild/cutover, remaining JSON/data-flow inventory and release-artifact proof remain. |
 
 ### First execution steps
 
@@ -7296,3 +7296,18 @@ contract test executable compiles with Rust 1.95, rustfmt and diff checks
 pass. This is a diagnosed candidate fix, not yet hosted Canvas acceptance;
 push the grouped UI batch and inspect all exact-head gates before claiming
 K8/K9/K10 qualification.
+
+2026-10-08/09 K10 existing-database read-only catalog audit: the running
+`marty-selfhost-prod-postgres-1` database still has the historical
+`issuance_service.issuer_signing_keys` table with an `encrypted_jwk_json`
+column, although its row count is zero. The running `elevenid-beta-postgres-1`
+database has no table or column matching the private-key/JWK storage markers
+used in this audit. Both still have legitimate public/hashed-key and opaque
+integration-secret tables. These are existing local stacks, not the new
+candidate's assembled fresh schema. No row value was read and neither stack
+was changed. The self-host table demonstrates that deleting the clean-install
+definition does not remove historical physical storage from an existing
+database. With no public deployments and no removal migration scripts by
+user direction, supported KMS-only cutover must use a separately qualified
+fresh database/rebuild for this local stack and verify the old table is absent
+before release; do not count a source-only schema search as deployed K10 proof.
