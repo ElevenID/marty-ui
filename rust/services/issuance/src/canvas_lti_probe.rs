@@ -6,10 +6,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use marty_key_material_policy::contains_private_key;
 use marty_oid4vci::lti::{
-    canvas_lti_trust_profile, normalize_canvas_base_url, probe_canvas_lti_platform,
-    CanvasLtiPlatformProbe,
+    canvas_lti_trust_profile, ensure_canvas_metadata_public_only, normalize_canvas_base_url,
+    probe_canvas_lti_platform, CanvasLtiPlatformProbe,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -142,8 +141,8 @@ pub async fn probe_canvas_lti_metadata(
     {
         return Err(CanvasLtiMetadataProbeError::EndpointMismatch);
     }
-    if contains_private_key(&probe.jwks_json)
-        || contains_private_key(&probe.raw_openid_configuration)
+    if ensure_canvas_metadata_public_only(&probe.jwks_json, &probe.raw_openid_configuration)
+        .is_err()
     {
         return Err(CanvasLtiMetadataProbeError::PrivateKeyMaterial);
     }

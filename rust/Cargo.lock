@@ -3705,7 +3705,7 @@ dependencies = [
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -3863,7 +3863,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -3962,7 +3962,7 @@ dependencies = [
 [[package]]
 name = "marty-didcomm"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -3985,7 +3985,7 @@ dependencies = [
 [[package]]
 name = "marty-emrtd-issuance"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "cms",
  "const-oid 0.9.6",
@@ -4178,7 +4178,7 @@ dependencies = [
 [[package]]
 name = "marty-iso18013"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "anyhow",
  "ciborium",
@@ -4220,7 +4220,6 @@ dependencies = [
  "marty-crypto",
  "marty-didcomm",
  "marty-emrtd-issuance",
- "marty-key-material-policy",
  "marty-oid4vci",
  "marty-passport-auth",
  "marty-platform-clock",
@@ -4323,7 +4322,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4645,7 +4644,7 @@ dependencies = [
 [[package]]
 name = "marty-status"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -4690,7 +4689,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=735a11f#735a11f1fc6c289fc006fb13a711007e532e822b"
+source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -7877,7 +7876,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
