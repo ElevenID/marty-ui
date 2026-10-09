@@ -9,8 +9,8 @@ use tracing::error;
 
 use crate::canvas_sync_worker::{
     maximum_attempts, random_job_retry_delay_seconds, CanvasSyncJob, CanvasSyncJobStatus,
-    CanvasSyncRepositoryError, CanvasSyncResult, CanvasSyncTarget, CanvasSyncTargetType,
-    CanvasSyncWorkerRepository, JobFailure, WorkerHeartbeat,
+    CanvasSyncProcessingError, CanvasSyncRepositoryError, CanvasSyncResult, CanvasSyncTarget,
+    CanvasSyncTargetType, CanvasSyncWorkerRepository, JobFailure, WorkerHeartbeat,
 };
 
 #[derive(Clone)]
@@ -63,6 +63,135 @@ fn incomplete_target_summary(fields: [&str; 4]) -> Option<&'static str> {
         index | (usize::from(value.trim().is_empty()) << bit)
     });
     SUMMARIES[index]
+}
+
+#[derive(Clone, Copy)]
+struct ValidationScope {
+    platform_enabled: bool,
+    binding_enabled: bool,
+    platform_archived: bool,
+    binding_archived: bool,
+    binding_config_version: i32,
+}
+
+struct ValidationRejection {
+    error: CanvasSyncProcessingError,
+    disable_target: bool,
+}
+
+fn validation_local(target: &CanvasSyncTarget) -> Result<(), CanvasSyncProcessingError> {
+    if let Some(summary) = incomplete_target_summary([
+        target.binding_id.as_str(),
+        target.logical_key.as_str(),
+        target.organization_id.as_str(),
+        target.platform_id.as_str(),
+    ]) {
+        return Err(CanvasSyncProcessingError::terminal(
+            "canvas_sync_target_incomplete",
+            summary,
+        ));
+    }
+    if metadata_contains_secret(&Value::Object(target.metadata.clone())) {
+        return Err(CanvasSyncProcessingError::terminal(
+            "canvas_sync_target_contains_secret",
+            "Canvas sync target metadata contains prohibited authentication material",
+        ));
+    }
+    Ok(())
+}
+
+fn validation_scope(
+    target: &CanvasSyncTarget,
+    scope: Option<ValidationScope>,
+) -> Result<(), ValidationRejection> {
+    let Some(scope) = scope else {
+        return Err(ValidationRejection {
+            error: CanvasSyncProcessingError::terminal(
+                "canvas_sync_target_scope_invalid",
+                "Canvas sync target platform or binding is unavailable",
+            ),
+            disable_target: false,
+        });
+    };
+    if !target.enabled
+        || !scope.platform_enabled
+        || !scope.binding_enabled
+        || scope.platform_archived
+        || scope.binding_archived
+    {
+        return Err(ValidationRejection {
+            error: CanvasSyncProcessingError::terminal(
+                "canvas_sync_target_inactive",
+                "Canvas sync target, platform, or binding is inactive",
+            ),
+            disable_target: true,
+        });
+    }
+    if target.config_version != scope.binding_config_version {
+        return Err(ValidationRejection {
+            error: CanvasSyncProcessingError::terminal(
+                "canvas_sync_target_config_stale",
+                "Canvas sync target does not match the active binding configuration",
+            ),
+            disable_target: true,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum ValidationReference<'a> {
+    Application(&'a str),
+    Candidate(&'a str),
+}
+
+fn validation_reference(
+    target: &CanvasSyncTarget,
+) -> Result<Option<ValidationReference<'_>>, CanvasSyncProcessingError> {
+    match target.target_type {
+        CanvasSyncTargetType::LearnerApplication | CanvasSyncTargetType::IssuedDrift => target
+            .application_id
+            .as_deref()
+            .map(ValidationReference::Application)
+            .map(Some)
+            .ok_or_else(|| {
+                CanvasSyncProcessingError::terminal(
+                    "canvas_sync_target_application_missing",
+                    "Canvas learner synchronization target has no application",
+                )
+            }),
+        CanvasSyncTargetType::AwardCandidate => target
+            .candidate_id
+            .as_deref()
+            .map(ValidationReference::Candidate)
+            .map(Some)
+            .ok_or_else(|| {
+                CanvasSyncProcessingError::terminal(
+                    "canvas_sync_target_candidate_missing",
+                    "Canvas award-candidate synchronization target has no candidate",
+                )
+            }),
+        CanvasSyncTargetType::BackgroundRoster => Ok(None),
+    }
+}
+
+fn validation_reference_exists(
+    reference: ValidationReference<'_>,
+    exists: bool,
+) -> Result<(), CanvasSyncProcessingError> {
+    if exists {
+        return Ok(());
+    }
+    Err(match reference {
+        ValidationReference::Application(_) => CanvasSyncProcessingError::terminal(
+            "canvas_sync_target_application_invalid",
+            "Canvas learner synchronization application is unavailable",
+        ),
+        ValidationReference::Candidate(_) => CanvasSyncProcessingError::terminal(
+            "canvas_sync_target_candidate_invalid",
+            "Canvas award candidate is unavailable",
+        ),
+    })
 }
 
 #[async_trait]
@@ -262,25 +391,7 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
         &self,
         target: &CanvasSyncTarget,
     ) -> Result<(), crate::canvas_sync_worker::CanvasSyncProcessingError> {
-        use crate::canvas_sync_worker::CanvasSyncProcessingError;
-
-        if let Some(summary) = incomplete_target_summary([
-            target.binding_id.as_str(),
-            target.logical_key.as_str(),
-            target.organization_id.as_str(),
-            target.platform_id.as_str(),
-        ]) {
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_sync_target_incomplete",
-                summary,
-            ));
-        }
-        if metadata_contains_secret(&Value::Object(target.metadata.clone())) {
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_sync_target_contains_secret",
-                "Canvas sync target metadata contains prohibited authentication material",
-            ));
-        }
+        validation_local(target)?;
         let scope = sqlx::query(
             "SELECT p.enabled AS platform_enabled, p.archived_at AS platform_archived_at,
                     b.enabled AS binding_enabled, b.archived_at AS binding_archived_at,
@@ -301,72 +412,61 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                 "Canvas synchronization resources are unavailable",
             )
         })?;
-        let Some(scope) = scope else {
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_sync_target_scope_invalid",
-                "Canvas sync target platform or binding is unavailable",
-            ));
-        };
-        let platform_enabled: bool = scope.try_get("platform_enabled").map_err(|_| {
-            CanvasSyncProcessingError::retryable(
-                "canvas_sync_resources_unavailable",
-                "Canvas synchronization resources are unavailable",
+        let scope = scope
+            .map(
+                |scope| -> Result<ValidationScope, CanvasSyncProcessingError> {
+                    let platform_enabled: bool =
+                        scope.try_get("platform_enabled").map_err(|_| {
+                            CanvasSyncProcessingError::retryable(
+                                "canvas_sync_resources_unavailable",
+                                "Canvas synchronization resources are unavailable",
+                            )
+                        })?;
+                    let binding_enabled: bool = scope.try_get("binding_enabled").map_err(|_| {
+                        CanvasSyncProcessingError::retryable(
+                            "canvas_sync_resources_unavailable",
+                            "Canvas synchronization resources are unavailable",
+                        )
+                    })?;
+                    let platform_archived_at: Option<chrono::DateTime<chrono::Utc>> =
+                        scope.try_get("platform_archived_at").map_err(|_| {
+                            CanvasSyncProcessingError::retryable(
+                                "canvas_sync_resources_unavailable",
+                                "Canvas synchronization resources are unavailable",
+                            )
+                        })?;
+                    let binding_archived_at: Option<chrono::DateTime<chrono::Utc>> =
+                        scope.try_get("binding_archived_at").map_err(|_| {
+                            CanvasSyncProcessingError::retryable(
+                                "canvas_sync_resources_unavailable",
+                                "Canvas synchronization resources are unavailable",
+                            )
+                        })?;
+                    let binding_config_version: i32 =
+                        scope.try_get("binding_config_version").map_err(|_| {
+                            CanvasSyncProcessingError::retryable(
+                                "canvas_sync_resources_unavailable",
+                                "Canvas synchronization resources are unavailable",
+                            )
+                        })?;
+                    Ok(ValidationScope {
+                        platform_enabled,
+                        binding_enabled,
+                        platform_archived: platform_archived_at.is_some(),
+                        binding_archived: binding_archived_at.is_some(),
+                        binding_config_version,
+                    })
+                },
             )
-        })?;
-        let binding_enabled: bool = scope.try_get("binding_enabled").map_err(|_| {
-            CanvasSyncProcessingError::retryable(
-                "canvas_sync_resources_unavailable",
-                "Canvas synchronization resources are unavailable",
-            )
-        })?;
-        let platform_archived_at: Option<chrono::DateTime<chrono::Utc>> =
-            scope.try_get("platform_archived_at").map_err(|_| {
-                CanvasSyncProcessingError::retryable(
-                    "canvas_sync_resources_unavailable",
-                    "Canvas synchronization resources are unavailable",
-                )
-            })?;
-        let binding_archived_at: Option<chrono::DateTime<chrono::Utc>> =
-            scope.try_get("binding_archived_at").map_err(|_| {
-                CanvasSyncProcessingError::retryable(
-                    "canvas_sync_resources_unavailable",
-                    "Canvas synchronization resources are unavailable",
-                )
-            })?;
-        let binding_config_version: i32 =
-            scope.try_get("binding_config_version").map_err(|_| {
-                CanvasSyncProcessingError::retryable(
-                    "canvas_sync_resources_unavailable",
-                    "Canvas synchronization resources are unavailable",
-                )
-            })?;
-        if !target.enabled
-            || !platform_enabled
-            || !binding_enabled
-            || platform_archived_at.is_some()
-            || binding_archived_at.is_some()
-        {
-            disable_target(&self.pool, target).await;
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_sync_target_inactive",
-                "Canvas sync target, platform, or binding is inactive",
-            ));
+            .transpose()?;
+        if let Err(rejection) = validation_scope(target, scope) {
+            if rejection.disable_target {
+                disable_target(&self.pool, target).await;
+            }
+            return Err(rejection.error);
         }
-        if target.config_version != binding_config_version {
-            disable_target(&self.pool, target).await;
-            return Err(CanvasSyncProcessingError::terminal(
-                "canvas_sync_target_config_stale",
-                "Canvas sync target does not match the active binding configuration",
-            ));
-        }
-        match target.target_type {
-            CanvasSyncTargetType::LearnerApplication | CanvasSyncTargetType::IssuedDrift => {
-                let Some(application_id) = target.application_id.as_deref() else {
-                    return Err(CanvasSyncProcessingError::terminal(
-                        "canvas_sync_target_application_missing",
-                        "Canvas learner synchronization target has no application",
-                    ));
-                };
+        match validation_reference(target)? {
+            Some(ValidationReference::Application(application_id)) => {
                 let exists: bool = sqlx::query_scalar(
                     "SELECT EXISTS(
                          SELECT 1 FROM issuance_service.applications
@@ -383,20 +483,12 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                         "Canvas synchronization resources are unavailable",
                     )
                 })?;
-                if !exists {
-                    return Err(CanvasSyncProcessingError::terminal(
-                        "canvas_sync_target_application_invalid",
-                        "Canvas learner synchronization application is unavailable",
-                    ));
-                }
+                validation_reference_exists(
+                    ValidationReference::Application(application_id),
+                    exists,
+                )?;
             }
-            CanvasSyncTargetType::AwardCandidate => {
-                let Some(candidate_id) = target.candidate_id.as_deref() else {
-                    return Err(CanvasSyncProcessingError::terminal(
-                        "canvas_sync_target_candidate_missing",
-                        "Canvas award-candidate synchronization target has no candidate",
-                    ));
-                };
+            Some(ValidationReference::Candidate(candidate_id)) => {
                 let exists: bool = sqlx::query_scalar(
                     "SELECT EXISTS(
                          SELECT 1 FROM issuance_service.canvas_award_candidates
@@ -413,14 +505,9 @@ impl CanvasSyncWorkerRepository for PostgresCanvasSyncWorkerRepository {
                         "Canvas synchronization resources are unavailable",
                     )
                 })?;
-                if !exists {
-                    return Err(CanvasSyncProcessingError::terminal(
-                        "canvas_sync_target_candidate_invalid",
-                        "Canvas award candidate is unavailable",
-                    ));
-                }
+                validation_reference_exists(ValidationReference::Candidate(candidate_id), exists)?;
             }
-            CanvasSyncTargetType::BackgroundRoster => {}
+            None => {}
         }
         Ok(())
     }
@@ -830,6 +917,207 @@ mod validation_summary_tests {
                     .unwrap_or_default()
                     .contains("SYNTHETIC_VALUE_NOT_FOR_ERRORS"));
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod validation_policy_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn all_published_repository_validation_decisions_have_one_fast_owner() {
+        // These inputs are typed snapshots, deliberately not interpreted from
+        // the SQL seed statements used by the independent published replay.
+        const CASES: [(&str, &str, &str, bool); 13] = [
+            (
+                "incomplete_logical_key",
+                "canvas_sync_target_incomplete",
+                "Canvas sync target is missing logical_key",
+                false,
+            ),
+            (
+                "prohibited_metadata",
+                "canvas_sync_target_contains_secret",
+                "Canvas sync target metadata contains prohibited authentication material",
+                false,
+            ),
+            (
+                "binding_platform_mismatch",
+                "canvas_sync_target_scope_invalid",
+                "Canvas sync target platform or binding is unavailable",
+                false,
+            ),
+            (
+                "target_disabled",
+                "canvas_sync_target_inactive",
+                "Canvas sync target, platform, or binding is inactive",
+                true,
+            ),
+            (
+                "platform_disabled",
+                "canvas_sync_target_inactive",
+                "Canvas sync target, platform, or binding is inactive",
+                true,
+            ),
+            (
+                "platform_archived",
+                "canvas_sync_target_inactive",
+                "Canvas sync target, platform, or binding is inactive",
+                true,
+            ),
+            (
+                "binding_disabled",
+                "canvas_sync_target_inactive",
+                "Canvas sync target, platform, or binding is inactive",
+                true,
+            ),
+            (
+                "binding_archived",
+                "canvas_sync_target_inactive",
+                "Canvas sync target, platform, or binding is inactive",
+                true,
+            ),
+            (
+                "stale_configuration",
+                "canvas_sync_target_config_stale",
+                "Canvas sync target does not match the active binding configuration",
+                true,
+            ),
+            (
+                "application_missing",
+                "canvas_sync_target_application_missing",
+                "Canvas learner synchronization target has no application",
+                false,
+            ),
+            (
+                "candidate_missing",
+                "canvas_sync_target_candidate_missing",
+                "Canvas award-candidate synchronization target has no candidate",
+                false,
+            ),
+            (
+                "application_removed_after_target_read",
+                "canvas_sync_target_application_invalid",
+                "Canvas learner synchronization application is unavailable",
+                false,
+            ),
+            (
+                "candidate_removed_after_target_read",
+                "canvas_sync_target_candidate_invalid",
+                "Canvas award candidate is unavailable",
+                false,
+            ),
+        ];
+        let scenarios: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-validation-scenarios.json"
+        ))
+        .unwrap();
+        let oracle: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-validation-oracle.json"
+        ))
+        .unwrap();
+        let repository_names = scenarios["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|case| case["boundary"] != "processor_dispatch")
+            .map(|case| case["name"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        let owned_names = CASES.iter().map(|case| case.0).collect::<BTreeSet<_>>();
+        assert_eq!(owned_names, repository_names);
+        assert_eq!(CASES.len(), repository_names.len());
+
+        for (name, code, summary, disables_target) in CASES {
+            let mut target = CanvasSyncTarget {
+                id: "target-review".into(),
+                organization_id: "org-review".into(),
+                platform_id: "platform-review".into(),
+                binding_id: "binding-review".into(),
+                target_type: CanvasSyncTargetType::LearnerApplication,
+                logical_key: "learner-review".into(),
+                application_id: Some("application-review".into()),
+                candidate_id: None,
+                enabled: true,
+                schedule_seconds: 30,
+                config_version: 1,
+                metadata: serde_json::Map::new(),
+                created_at: Utc::now(),
+            };
+            let mut scope = Some(ValidationScope {
+                platform_enabled: true,
+                binding_enabled: true,
+                platform_archived: false,
+                binding_archived: false,
+                binding_config_version: 1,
+            });
+            let mut reference_exists = true;
+            match name {
+                "incomplete_logical_key" => target.logical_key = "\t".into(),
+                "prohibited_metadata" => {
+                    target.metadata.insert(
+                        "access_token".into(),
+                        Value::String("synthetic-prohibited-material".into()),
+                    );
+                }
+                "binding_platform_mismatch" => scope = None,
+                "target_disabled" => target.enabled = false,
+                "platform_disabled" => scope.as_mut().unwrap().platform_enabled = false,
+                "platform_archived" => scope.as_mut().unwrap().platform_archived = true,
+                "binding_disabled" => scope.as_mut().unwrap().binding_enabled = false,
+                "binding_archived" => scope.as_mut().unwrap().binding_archived = true,
+                "stale_configuration" => scope.as_mut().unwrap().binding_config_version = 2,
+                "application_missing" => target.application_id = None,
+                "candidate_missing" => {
+                    target.target_type = CanvasSyncTargetType::AwardCandidate;
+                    target.application_id = None;
+                }
+                "application_removed_after_target_read" => reference_exists = false,
+                "candidate_removed_after_target_read" => {
+                    target.target_type = CanvasSyncTargetType::AwardCandidate;
+                    target.application_id = None;
+                    target.candidate_id = Some("candidate-review".into());
+                    reference_exists = false;
+                }
+                _ => unreachable!("unowned published validation case"),
+            }
+            let result = validation_local(&target)
+                .map_err(|error| ValidationRejection {
+                    error,
+                    disable_target: false,
+                })
+                .and_then(|()| validation_scope(&target, scope))
+                .and_then(|()| {
+                    let reference =
+                        validation_reference(&target).map_err(|error| ValidationRejection {
+                            error,
+                            disable_target: false,
+                        })?;
+                    if let Some(reference) = reference {
+                        validation_reference_exists(reference, reference_exists).map_err(
+                            |error| ValidationRejection {
+                                error,
+                                disable_target: false,
+                            },
+                        )?;
+                    }
+                    Ok(())
+                });
+            let rejection = result.expect_err(name);
+            assert_eq!(rejection.error.code, code, "{name}");
+            assert_eq!(rejection.error.summary, summary, "{name}");
+            assert!(!rejection.error.retryable, "{name}");
+            assert_eq!(rejection.error.retry_after_seconds, None, "{name}");
+            assert_eq!(rejection.disable_target, disables_target, "{name}");
+            assert_eq!(
+                oracle[name]["observations"][0]["jobs"][0]["last_error_code"], code,
+                "{name}"
+            );
+            assert_eq!(
+                oracle[name]["observations"][0]["jobs"][0]["last_error_summary"], summary,
+                "{name}"
+            );
         }
     }
 }

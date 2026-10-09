@@ -197,17 +197,29 @@ def test_unregistered_selected_case_fails_closed() -> None:
 
 
 FAST_ROWS = {
-    "contracts": "canvas_sync_worker::retry_handoff_tests::terminal_validation_errors_reach_actual_worker_dead_letter_port",
-    "canvas": "worker_validation_repository_matches_frozen_errors",
+    "contracts": [
+        "canvas_sync_worker::retry_handoff_tests::terminal_validation_errors_reach_actual_worker_dead_letter_port",
+        "canvas_sync_worker_postgres::validation_policy_tests::all_published_repository_validation_decisions_have_one_fast_owner",
+    ],
+    "canvas": ["worker_validation_repository_matches_frozen_errors"],
 }
 
 
-@pytest.mark.parametrize("lane,owner", FAST_ROWS.items())
+def fast_rows(lane: str) -> str:
+    return "".join(f"test {owner} ... ok\n" for owner in FAST_ROWS[lane])
+
+
+@pytest.mark.parametrize(
+    "lane,owner", [(lane, owner) for lane, owners in FAST_ROWS.items() for owner in owners]
+)
 def test_exact_fast_owner_success_row_is_required(lane: str, owner: str) -> None:
-    validate_fast_owner_execution(INVENTORY, lane, f"test {owner} ... ok\n")
+    assert owner in fast_rows(lane)
+    validate_fast_owner_execution(INVENTORY, lane, fast_rows(lane))
 
 
-@pytest.mark.parametrize("lane,owner", FAST_ROWS.items())
+@pytest.mark.parametrize(
+    "lane,owner", [(lane, owner) for lane, owners in FAST_ROWS.items() for owner in owners]
+)
 @pytest.mark.parametrize(
     "mutation", ["missing", "duplicate", "ignored", "failed", "substituted"]
 )
@@ -215,13 +227,14 @@ def test_fast_owner_execution_rows_fail_closed(
     lane: str, owner: str, mutation: str
 ) -> None:
     row = f"test {owner} ... ok\n"
-    changed = {
+    changed_row = {
         "missing": "",
         "duplicate": row * 2,
         "ignored": f"test {owner} ... ignored\n",
         "failed": f"test {owner} ... FAILED\n",
         "substituted": f"test other::{owner} ... ok\n",
     }[mutation]
+    changed = fast_rows(lane).replace(row, changed_row)
     with pytest.raises(ValueError, match="did not execute exactly once"):
         validate_fast_owner_execution(INVENTORY, lane, changed)
 
@@ -232,8 +245,16 @@ def test_fast_owner_manifest_identity_cannot_change(lane: str) -> None:
     inventory["native_validation"]["full_only"][0]["fast_owners"][0] = "new_owner"
     with pytest.raises(ValueError, match="fast-owner identity"):
         validate_fast_owner_execution(
-            inventory, lane, f"test {FAST_ROWS[lane]} ... ok\n"
+            inventory, lane, fast_rows(lane)
         )
+
+
+@pytest.mark.parametrize("field", ["policy_test", "repository_database_test", "repository_database_cases"])
+def test_validation_split_manifest_cannot_drift(field: str) -> None:
+    inventory = deepcopy(INVENTORY)
+    inventory["native_validation"][field] = []
+    with pytest.raises(ValueError, match="policy or database owner"):
+        validate_fast_owner_execution(inventory, "contracts", fast_rows("contracts"))
 
 
 def test_contracts_fast_owner_cli_reads_actual_log(tmp_path: Path) -> None:
@@ -247,10 +268,16 @@ def test_contracts_fast_owner_cli_reads_actual_log(tmp_path: Path) -> None:
     ]
     missing = subprocess.run(command, capture_output=True, text=True, check=False)
     assert missing.returncode != 0
-    log.write_text(f"test {FAST_ROWS['contracts']} ... ok\n", encoding="utf-8")
+    log.write_text(fast_rows("contracts"), encoding="utf-8")
     passed = subprocess.run(command, capture_output=True, text=True, check=False)
     assert passed.returncode == 0, passed.stderr
-    log.write_text(f"test {FAST_ROWS['contracts']} ... ignored\n", encoding="utf-8")
+    log.write_text(
+        fast_rows("contracts").replace(
+            f"test {FAST_ROWS['contracts'][1]} ... ok\n",
+            f"test {FAST_ROWS['contracts'][1]} ... ignored\n",
+        ),
+        encoding="utf-8",
+    )
     ignored = subprocess.run(command, capture_output=True, text=True, check=False)
     assert ignored.returncode != 0
 
