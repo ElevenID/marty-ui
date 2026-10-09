@@ -8,6 +8,8 @@ env:
   MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty_common-0.2.16-py3-none-any.whl
   MARTY_COMMON_DIGEST: sha256:e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
+  # Exact BuildKit index digest; the selected registry may be the public cache or Docker Hub.
+  MARTY_CI_BUILDKIT_PIN: moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
   # Weekly and manual runs retain the complete historical-reference matrices.
   MARTY_CANVAS_FULL_QUALIFICATION: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') && '1' || '0' }}
 
@@ -832,8 +834,15 @@ jobs:
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - name: Select the exact BuildKit image with registry fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh "$MARTY_CI_BUILDKIT_PIN")
+          echo "MARTY_CI_BUILDKIT_IMAGE=$image" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
+          driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Expose public image compiler cache credentials
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -913,6 +922,12 @@ jobs:
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - name: Select the exact BuildKit image with registry fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh "$MARTY_CI_BUILDKIT_PIN")
+          echo "MARTY_CI_BUILDKIT_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Start digest-pinned Rust test services after registry setup
         shell: bash
         run: |
@@ -933,6 +948,7 @@ jobs:
           echo "MARTY_RUST_CI_REDIS_ID=$redis_id" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
+          driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -1018,7 +1034,7 @@ jobs:
             [[ ${#builder_images[@]} == 1 ]]
             bookworm_builder="${builder_images[0]}"
             [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
-            docker pull "$bookworm_builder"
+            bookworm_builder="$(bash ../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder")"
             host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
             test -d "$host_cargo_home"
             mkdir -p target
@@ -1096,7 +1112,8 @@ jobs:
             [[ ${#builder_images[@]} == 1 ]]
             bookworm_builder="${builder_images[0]}"
             [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
-            run_host_phase builder_pull docker pull "$bookworm_builder"
+            bookworm_builder="$(run_host_phase builder_pull bash \
+              ../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder")"
             host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
             test -d "$host_cargo_home"
             mkdir -p target
@@ -2086,8 +2103,15 @@ jobs:
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
         run: bash scripts/ci/configure-dockerhub-mirror.sh
+      - name: Select the exact BuildKit image with registry fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh "$MARTY_CI_BUILDKIT_PIN")
+          echo "MARTY_CI_BUILDKIT_IMAGE=$image" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
+          driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
       - name: Verify merged Canvas worker deployment configuration
         run: python3 scripts/test_canvas_worker_compose_render.py
@@ -2904,7 +2928,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
-          toolchain: 1.85.0
+          toolchain: 1.95.0
       - name: Audit Rust advisories, licenses, bans, and sources
         run: bash scripts/ci/run-cargo-deny.sh
 

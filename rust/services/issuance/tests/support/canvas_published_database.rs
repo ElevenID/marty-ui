@@ -10,6 +10,36 @@ use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 
+fn selected_postgres_image(fixture: &Value, supplied: Option<&str>) -> Result<String, String> {
+    let canonical = fixture["observed_postgres_image"]
+        .as_str()
+        .ok_or("Missing pinned published PostgreSQL image")?;
+    let digest = canonical
+        .strip_prefix("postgres@sha256:")
+        .ok_or("Invalid pinned published PostgreSQL image")?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("Invalid pinned published PostgreSQL digest".into());
+    }
+    let mirrored = format!("mirror.gcr.io/library/{canonical}");
+    match supplied {
+        None => Ok(canonical.to_owned()),
+        Some(value) if value == canonical || value == mirrored => Ok(value.to_owned()),
+        Some(_) => Err("Published PostgreSQL image differs from pinned oracle".into()),
+    }
+}
+
+fn ci_postgres_image(fixture: &Value) -> Result<String, String> {
+    match std::env::var("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
+        Ok(value) => selected_postgres_image(fixture, Some(&value)),
+        Err(std::env::VarError::NotPresent) => selected_postgres_image(fixture, None),
+        Err(_) => Err("Invalid published PostgreSQL image override".into()),
+    }
+}
+
 // Fixed constructor origins only. Never print a probe argument, fixture
 // payload, Docker identity, or an unrecognized future script as a phase name.
 const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
@@ -335,8 +365,9 @@ fn checked_borrowed_url(info: &Value, id: &str, scope: &str) -> Result<String, S
         "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
     ))
     .unwrap();
+    let postgres_image = ci_postgres_image(&fixture)?;
     if info["State"]["Running"] != true
-        || info["Config"]["Image"] != fixture["observed_postgres_image"]
+        || info["Config"]["Image"].as_str() != Some(postgres_image.as_str())
     {
         return Err("Owned database must retain its running pinned image".into());
     }
@@ -412,6 +443,7 @@ fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<St
         "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
     ))
     .unwrap();
+    let postgres_image = ci_postgres_image(&fixture)?;
     let scope = scope.to_string();
     let mut postgres = None;
     let mut probe = None;
@@ -420,7 +452,7 @@ fn checked_recovery_rows(scope: Uuid, rows: &[(String, Value)]) -> Result<Vec<St
         if info["Id"] != *id || info["Config"]["Labels"][LABEL] != scope {
             return Err(error.into());
         }
-        if info["Config"]["Image"] == fixture["observed_postgres_image"] {
+        if info["Config"]["Image"].as_str() == Some(postgres_image.as_str()) {
             checked_database_storage(info, id, &scope)?;
             if postgres.replace(id.clone()).is_some()
                 || info["HostConfig"]["Tmpfs"]
@@ -1317,6 +1349,7 @@ impl PublishedDatabase {
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
         .unwrap();
+        let postgres_image = ci_postgres_image(&fixture)?;
         let mut owned = Self {
             scope: scope.to_string(),
             postgres: None,
@@ -1343,7 +1376,7 @@ impl PublishedDatabase {
             "POSTGRES_PASSWORD=synthetic-local-only",
             "--env",
             "POSTGRES_DB=canvas_published_schema_test",
-            fixture["observed_postgres_image"].as_str().unwrap(),
+            &postgres_image,
         ])?;
         Self::accept_id(&postgres)?;
         owned.postgres = Some(postgres.clone());

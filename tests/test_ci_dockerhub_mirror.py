@@ -17,11 +17,16 @@ WORKFLOW = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding
 JOBS = WORKFLOW["jobs"]
 MIRROR_SCRIPT = "bash scripts/ci/configure-dockerhub-mirror.sh"
 BUILDKIT_CONFIG = ".github/buildkit-ci-mirror.toml"
+BUILDKIT_PIN = (
+    "moby/buildkit:buildx-stable-1@sha256:"
+    "cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea"
+)
 
 
 def test_buildkit_uses_only_the_documented_docker_hub_cache() -> None:
     config = tomllib.loads((ROOT / BUILDKIT_CONFIG).read_text(encoding="utf-8"))
     assert config == {"registry": {"docker.io": {"mirrors": ["mirror.gcr.io"]}}}
+    assert WORKFLOW["env"]["MARTY_CI_BUILDKIT_PIN"] == BUILDKIT_PIN
     for owner in (
         "test-rust-passport-image",
         "test-rust-services",
@@ -34,6 +39,19 @@ def test_buildkit_uses_only_the_documented_docker_hub_cache() -> None:
         ]
         assert len(buildx) == 1, owner
         assert buildx[0]["with"]["buildkitd-config"] == BUILDKIT_CONFIG
+        if owner != "test-release-contracts":
+            assert buildx[0]["with"]["driver-opts"] == (
+                "image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}"
+            )
+            steps = JOBS[owner]["steps"]
+            select = [
+                (index, step) for index, step in enumerate(steps)
+                if step.get("name") == "Select the exact BuildKit image with registry fallback"
+            ]
+            assert len(select) == 1, owner
+            assert select[0][0] < steps.index(buildx[0])
+            assert 'pull-pinned-dockerhub-image.sh "$MARTY_CI_BUILDKIT_PIN"' in select[0][1]["run"]
+            assert 'echo "MARTY_CI_BUILDKIT_IMAGE=$image" >> "$GITHUB_ENV"' in select[0][1]["run"]
 
 
 def test_host_mirror_is_installed_before_docker_use_without_killing_services() -> None:
@@ -116,22 +134,35 @@ def test_disposable_postgres_prefers_exact_cache_digest_with_canonical_fallback(
 
 @pytest.mark.skipif(os.name != "posix", reason="stub Docker requires POSIX executable PATH")
 @pytest.mark.parametrize(
-    ("mode", "expected_status", "expected_prefix"),
+    ("canonical", "mirror_prefix"),
     [
-        ("local_canonical", 0, ""),
-        ("local_mirror", 0, "mirror.gcr.io/library/"),
-        ("mirror", 0, "mirror.gcr.io/library/"),
-        ("fallback", 0, ""),
-        ("fail", 1, ""),
+        (
+            "postgres:15-alpine@sha256:"
+            "fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+            "mirror.gcr.io/library/",
+        ),
+        (
+            "postgres@sha256:"
+            "fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+            "mirror.gcr.io/library/",
+        ),
+        (BUILDKIT_PIN, "mirror.gcr.io/"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("mode", "expected_status", "expect_mirror"),
+    [
+        ("local_canonical", 0, False),
+        ("local_mirror", 0, True),
+        ("mirror", 0, True),
+        ("fallback", 0, False),
+        ("fail", 1, False),
     ],
 )
 def test_pinned_pull_executes_safe_fallback(
-    mode: str, expected_status: int, expected_prefix: str, tmp_path: Path
+    canonical: str, mirror_prefix: str, mode: str,
+    expected_status: int, expect_mirror: bool, tmp_path: Path,
 ) -> None:
-    canonical = (
-        "postgres:15-alpine@sha256:"
-        "fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
-    )
     docker_stub = tmp_path / "docker"
     docker_stub.write_text("""#!/usr/bin/env bash
 mock_docker() {
@@ -141,7 +172,7 @@ mock_docker() {
       return
     fi
     if [[ "$DOCKER_TEST_MODE" == local_mirror ]]; then
-      [[ "$3" == mirror.gcr.io/library/* ]]
+      [[ "$3" == mirror.gcr.io/* ]]
       return
     fi
     return 1
@@ -150,9 +181,9 @@ mock_docker() {
     return 99
   fi
   if [[ "$DOCKER_TEST_MODE" == mirror ]]; then
-    [[ "$2" == mirror.gcr.io/library/* ]]
+    [[ "$2" == mirror.gcr.io/* ]]
   elif [[ "$DOCKER_TEST_MODE" == fallback ]]; then
-    [[ "$2" != mirror.gcr.io/library/* ]]
+    [[ "$2" != mirror.gcr.io/* ]]
   else
     return 1
   fi
@@ -174,21 +205,26 @@ mock_docker "$@"
     )
     assert result.returncode == expected_status, result.stderr
     assert result.stdout.strip() == (
-        expected_prefix + canonical if expected_status == 0 else ""
+        (mirror_prefix if expect_mirror else "") + canonical
+        if expected_status == 0 else ""
     )
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Bash subprocess requires POSIX runner")
-def test_pinned_pull_rejects_unpinned_input_before_docker() -> None:
+@pytest.mark.parametrize(
+    "reference",
+    ["postgres:latest", "moby/buildkit:buildx-stable-1@sha256:" + "0" * 64],
+)
+def test_pinned_pull_rejects_unpinned_input_before_docker(reference: str) -> None:
     result = subprocess.run(
-        ["bash", "scripts/ci/pull-pinned-dockerhub-image.sh", "postgres:latest"],
+        ["bash", "scripts/ci/pull-pinned-dockerhub-image.sh", reference],
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
     assert result.returncode == 2
-    assert "Expected one digest-pinned" in result.stderr
+    assert "Expected one approved digest-pinned" in result.stderr
 
 
 def test_image_smokes_use_the_same_pinned_cache_fallback() -> None:
@@ -211,6 +247,31 @@ def test_image_smokes_use_the_same_pinned_cache_fallback() -> None:
             assert '"$redis_image"' in source
 
 
+def test_packaged_worker_startup_uses_the_exact_oracle_postgres_digest() -> None:
+    source = (ROOT / "scripts/test_canvas_worker_image_startup.py").read_text(
+        encoding="utf-8"
+    )
+    assert 'pins["observed_postgres_image"]' in source
+    assert '"scripts/ci/pull-pinned-dockerhub-image.sh"' in source
+    assert "selected_postgres" in source
+
+
+def test_published_canvas_and_flow_acceptance_keep_frozen_digest_with_mirror() -> None:
+    for path in (
+        "scripts/ci/run-published-canvas-contracts.sh",
+        "scripts/ci/run-flow-acceptance-contracts.sh",
+    ):
+        source = (ROOT / path).read_text(encoding="utf-8")
+        assert "pull-pinned-dockerhub-image.sh" in source
+        assert "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE" in source
+        assert "observed_postgres_image" in source
+    flow = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2" in flow
+    assert 'docker tag "$redis_image" redis:7-alpine' in flow
+
+
 def test_both_supply_chain_workflows_run_the_same_pinned_native_audit() -> None:
     script = (ROOT / "scripts/ci/run-cargo-deny.sh").read_text(encoding="utf-8")
     assert "version=0.20.2" in script
@@ -229,7 +290,7 @@ def test_both_supply_chain_workflows_run_the_same_pinned_native_audit() -> None:
             step for step in job["steps"]
             if step.get("uses", "").startswith("dtolnay/rust-toolchain@")
         )
-        assert toolchain["with"]["toolchain"] == "1.85.0"
+        assert toolchain["with"]["toolchain"] == "1.95.0"
         assert any(
             step.get("run") == "bash scripts/ci/run-cargo-deny.sh"
             for step in job["steps"]

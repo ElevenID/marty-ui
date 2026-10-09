@@ -4218,11 +4218,12 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     assert "bookworm-host-phases.tsv" in compile_step
     for phase, command in (
         ("cargo_fetch", "cargo fetch --locked"),
-        ("builder_pull", "docker pull"),
         ("container_compile", "docker run --rm --network none --read-only"),
         ("verify_artifacts", "python3 ../scripts/ci/verify-canvas-test-artifacts.py"),
     ):
         assert f"run_host_phase {phase} {command}" in compile_step
+    assert "run_host_phase builder_pull bash \\" in compile_step
+    assert '../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder"' in compile_step
     assert (
         'printf "phase\\telapsed_seconds\\ttarget_bytes\\texit_code\\n"' in compile_step
     )
