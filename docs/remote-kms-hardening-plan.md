@@ -10005,3 +10005,18 @@ both. These mobile transport methods are not yet wired into OID4VCI receipt
 or Core's verified OID4VP presenter. The grouped UI branch remains 25 local
 commits ahead of draft PR #1192. Do not count any of these as physical-device
 wallet acceptance or release qualification.
+
+2026-10-09 continuation: Verifier's exact `ea91db5` local `marty-sync`
+library run finished with 35 passed and one ignored; Verifier PR #154
+exact-head CI still has Rust tests and Clippy in progress. Core PR #355
+exact-head CI still has preflight and affected Rust tests in progress, while
+its completed checks pass. Authenticator local commit `4a4cc92` groups the
+paired bearer issuer-snapshot fetch and remote exact-input signing transport
+with the single Core `9abc621` / Verifier `ea91db5` Rust graph. `cargo
+metadata --locked --no-deps` passed; the old Core revision is absent from its
+manifest and lockfile. Dart tests remain unrun without a local Dart/Flutter
+SDK. A Rust snapshot-to-Core resolver adapter is under development and is not
+yet called by a presenter. The Authenticator Rust test attempt reached the
+Longfellow C++ build and emitted tool-execution failures; await its terminal
+result before classifying the attempt. Neither transport nor resolver adapter
+constitutes OID4VCI receipt, verified OID4VP, or physical-device acceptance.
