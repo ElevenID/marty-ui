@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(address).await?;
     let release_version = env_value("MARTY_RELEASE_VERSION", env!("CARGO_PKG_VERSION"));
     let build_revision = env_value("MARTY_UI_SHA", "unknown");
-    info!(backend="rust", native_kernel="marty-verification::device_auth", version=%release_version, revision=%build_revision, %address, "device registration native backend ready");
+    info!(backend="rust", native_kernel="marty-device-registration::repository", version=%release_version, revision=%build_revision, %address, "device registration native backend ready");
     axum::serve(
         listener,
         router(HttpState {

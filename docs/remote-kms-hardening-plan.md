@@ -9349,3 +9349,18 @@ The same preflight now rejects a holder Signing Keys credential shorter than
 service credential, without printing secret contents. Its focused synthetic
 secret-file test passed; real operator secret provisioning and live deployment
 qualification remain open.
+
+2026-10-09 Device Registration PS256 retirement stage: the public
+`/v1/devices/challenge` route is removed, and registration/update requests
+carrying device-held signing-key fields are rejected before proof processing.
+Both memory and PostgreSQL repository saves also reject a supplied device key
+projection. The service's native diagnostics now advertise keyless registration
+instead of the retired `device_authentication` capability. Its behavior suite
+no longer creates RSA private keys; it verifies keyless CRUD, Gateway service
+authentication, challenge-route unavailability and old-key input refusal.
+Four Rust behavior tests, seven library tests, five Python cutover tests,
+all-target Clippy and the full disposable OpenBao/PostgreSQL/Redis probe passed.
+This closes the public old-key route but does not yet remove dormant internal
+PS256 challenge/rotation methods, public-key projection columns, transition
+tables or Core device-auth fixtures. Remove those in this same grouped feature
+batch after keeping the KMS holder signing and notification behavior green.

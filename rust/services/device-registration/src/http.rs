@@ -3,7 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use serde::Deserialize;
@@ -13,8 +13,8 @@ use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    control_plane::MembershipAuthorizer, ChallengeRequest, CreateRegistration, DeviceError,
-    DeviceRegistration, DeviceService, ProofHeaders, UpdateRegistration,
+    control_plane::MembershipAuthorizer, CreateRegistration, DeviceError, DeviceRegistration,
+    DeviceService, ProofHeaders, UpdateRegistration,
 };
 
 #[derive(Clone)]
@@ -29,7 +29,6 @@ pub struct HttpState {
 pub fn router(state: HttpState) -> Router {
     Router::new()
         .route("/v1/devices", get(list_devices).post(register_device))
-        .route("/v1/devices/challenge", post(request_challenge))
         .route(
             "/v1/devices/{registration_id}",
             get(get_device).patch(update_device).delete(delete_device),
@@ -141,15 +140,6 @@ async fn authorize(
     Ok(())
 }
 
-async fn request_challenge(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Json(body): Json<ChallengeRequest>,
-) -> Result<Json<crate::ChallengeResponse>, ApiError> {
-    let user_id = identity(&headers)?;
-    Ok(Json(state.service.request_challenge(&user_id, body).await?))
-}
-
 async fn register_device(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -233,7 +223,7 @@ async fn health(State(state): State<HttpState>) -> Json<Value> {
 
 async fn native_health(State(state): State<HttpState>) -> Json<Value> {
     Json(
-        json!({"status":"ready","available":true,"backend":"marty-verification","version":env!("CARGO_PKG_VERSION"),"build_revision":state.build_revision,"required_capability":"device_authentication","capabilities":["device_authentication"]}),
+        json!({"status":"ready","available":true,"backend":"marty-device-registration","version":env!("CARGO_PKG_VERSION"),"build_revision":state.build_revision,"required_capability":"keyless_registration","capabilities":["keyless_registration"]}),
     )
 }
 

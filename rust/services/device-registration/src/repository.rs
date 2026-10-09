@@ -59,6 +59,14 @@ impl DeviceRepository for MemoryDeviceRepository {
         &self,
         mut registration: DeviceRegistration,
     ) -> Result<DeviceRegistration, DeviceError> {
+        if registration.public_key_der.is_some()
+            || registration.public_key_kid.is_some()
+            || registration.key_version.is_some()
+        {
+            return Err(DeviceError::BadRequest(
+                "device-held signing keys are retired".into(),
+            ));
+        }
         let mut state = self.state.lock().await;
         let existing = state
             .registrations

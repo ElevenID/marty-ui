@@ -208,6 +208,14 @@ impl DeviceService {
         proof: ProofHeaders,
     ) -> Result<DeviceRegistration, DeviceError> {
         let mut registration = self.get(user_id, registration_id).await?;
+        if body.public_key_der.is_some()
+            || body.public_key_kid.is_some()
+            || body.expected_key_version.is_some()
+        {
+            return Err(DeviceError::BadRequest(
+                "device-held signing keys are retired; use managed holder enrollment".into(),
+            ));
+        }
         if body.key_valid_from.is_some() || body.key_valid_until.is_some() {
             return Err(DeviceError::BadRequest(
                 "key validity timestamps are server-assigned".into(),
@@ -401,6 +409,11 @@ fn validate_create(user_id: &str, body: &CreateRegistration) -> Result<(), Devic
     }
     nonempty_max("device_id", &body.device_id, 255)?;
     nonempty_max("fcm_token", &body.fcm_token, 4096)?;
+    if body.public_key_der.is_some() || body.public_key_kid.is_some() {
+        return Err(DeviceError::BadRequest(
+            "device-held signing keys are retired; use managed holder enrollment".into(),
+        ));
+    }
     if body.public_key_der.is_some() && !body.is_active {
         return Err(DeviceError::BadRequest(
             "an initial device key requires an active registration".into(),

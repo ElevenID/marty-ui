@@ -179,6 +179,14 @@ async fn write_registration(
 #[async_trait]
 impl DeviceRepository for PostgresDeviceRepository {
     async fn save(&self, mut value: DeviceRegistration) -> Result<DeviceRegistration, DeviceError> {
+        if value.public_key_der.is_some()
+            || value.public_key_kid.is_some()
+            || value.key_version.is_some()
+        {
+            return Err(DeviceError::BadRequest(
+                "device-held signing keys are retired".into(),
+            ));
+        }
         validate_public_projection(
             value.public_key_der.as_deref(),
             value.public_key_kid.as_deref(),
