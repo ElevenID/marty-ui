@@ -8994,3 +8994,15 @@ Python SQL preparer or protected beta PowerShell entrypoints. The deleted
 Issuance Alembic bridge is therefore absent from this candidate image input.
 This source inspection is narrower than an exact digest filesystem inspection
 and does not replace the new signed-image qualification gate.
+
+The first grouped UI CI run for `daa74b80e` is still active. Its Release
+Contract Tests job failed 15 of 6,128 cases: 14 parametrizations expected the
+former single-package Issuance Bookworm build, and one Flow-only selector test
+omitted the newly reported `openbao: false` field. The build now deliberately
+includes Organization and Credential Template binaries for the fresh-schema
+qualification. Local commit `2300b503e`, after merging current `origin/main`,
+updates the assertions to require all four binaries and the OpenBao selector;
+71 base-runtime fixture tests, all 141 CI-workflow performance tests, Ruff and
+`git diff --check` pass. This fix is local and not part of the published run.
+Keep the failed run as evidence; inspect its four unfinished OpenBao, Rust
+contract, Rust image and Canvas jobs before batching the next PR update.
