@@ -8,6 +8,7 @@ pub mod holder_key_cleanup;
 pub mod holder_key_client;
 pub mod holder_key_provisioner;
 pub mod holder_key_repository;
+pub mod holder_signer;
 pub mod http;
 pub mod migration;
 pub mod postgres;

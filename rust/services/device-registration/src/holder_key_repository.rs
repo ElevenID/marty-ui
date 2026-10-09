@@ -355,7 +355,7 @@ impl PostgresHolderKeyRepository {
     }
 }
 
-fn stored(row: &sqlx::postgres::PgRow) -> Result<HolderKeyRecord, DeviceError> {
+pub(crate) fn stored(row: &sqlx::postgres::PgRow) -> Result<HolderKeyRecord, DeviceError> {
     Ok(HolderKeyRecord {
         id: row.try_get("id").map_err(persistence)?,
         registration_id: row.try_get("registration_id").map_err(persistence)?,

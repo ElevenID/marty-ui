@@ -4,13 +4,19 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
 use ed25519_dalek::{Signature, VerifyingKey};
 use marty_device_registration::{
-    holder_key_cleanup::HolderKeyCleanup, holder_key_client::HolderKeyClient,
+    holder_credential::issue,
+    holder_credential_repository::{
+        HolderCredentialRepository, PostgresHolderCredentialRepository,
+    },
+    holder_key_cleanup::HolderKeyCleanup,
+    holder_key_client::HolderKeyClient,
     holder_key_provisioner::HolderKeyProvisioner,
-    holder_key_repository::PostgresHolderKeyRepository, migration::migrate,
-    postgres::PostgresDeviceRepository, CreateRegistration, DeviceRegistration, DeviceRepository,
-    Platform,
+    holder_key_repository::PostgresHolderKeyRepository,
+    holder_signer::HolderSigner,
+    migration::migrate,
+    postgres::PostgresDeviceRepository,
+    CreateRegistration, DeviceRegistration, DeviceRepository, Platform,
 };
-use marty_holder_key_reference::{HolderKeyScope, SignHolderKeyRequest};
 use marty_signing_keys::{
     kms::{read_managed_openbao, ProviderRequest},
     managed_holder_http,
@@ -103,23 +109,39 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("real non-exportable OpenBao key binding");
     assert!(key.valid_for(&registration));
-    let scope = HolderKeyScope {
-        organization_id: key.organization_id.clone(),
-        registration_id: key.registration_id.clone(),
-        purpose: key.purpose.clone(),
-        provider_reference: key.provider_reference.clone(),
-    };
-    let payload = b"exact managed holder proof";
-    let signature = client
-        .sign(&SignHolderKeyRequest {
-            scope: scope.clone(),
-            algorithm: key.algorithm.clone(),
-            key_version: key.remote_version as u64,
-            public_jwk: key.public_jwk(),
-            payload_b64: URL_SAFE_NO_PAD.encode(payload),
-        })
+    let database_now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
         .await
-        .expect("version-pinned remote signature");
+        .expect("database credential issue time");
+    let credential = issue(&registration, database_now, chrono::Duration::hours(1))
+        .expect("new scoped device bearer");
+    let credentials = PostgresHolderCredentialRepository::new(pool.clone());
+    credentials
+        .replace(credential.record, database_now)
+        .await
+        .expect("persist only bearer digest");
+    let signer = HolderSigner::new(pool.clone(), client.clone());
+    let payload = b"exact managed holder proof";
+    assert!(signer
+        .sign(
+            "invalid",
+            &registration.user_id,
+            key.organization_id.as_str(),
+            "holder_binding",
+            payload
+        )
+        .await
+        .is_err());
+    let signature = signer
+        .sign(
+            &credential.bearer,
+            &registration.user_id,
+            key.organization_id.as_str(),
+            "holder_binding",
+            payload,
+        )
+        .await
+        .expect("authorized version-pinned remote signature");
     assert_eq!(signature.signature_encoding, "raw");
     let coordinate: [u8; 32] = URL_SAFE_NO_PAD
         .decode(&key.public_x)
@@ -131,11 +153,52 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         Signature::from_slice(&URL_SAFE_NO_PAD.decode(signature.signature_b64).unwrap()).unwrap();
     verifying.verify_strict(payload, &signature).unwrap();
 
+    let database_now: chrono::DateTime<Utc> = sqlx::query_scalar("SELECT clock_timestamp()")
+        .fetch_one(&pool)
+        .await
+        .expect("database credential rotation time");
+    let replacement = issue(&registration, database_now, chrono::Duration::hours(1))
+        .expect("rotated device bearer");
+    credentials
+        .replace(replacement.record, database_now)
+        .await
+        .expect("atomically rotate bearer digest");
+    assert!(signer
+        .sign(
+            &credential.bearer,
+            &registration.user_id,
+            key.organization_id.as_str(),
+            "holder_binding",
+            payload,
+        )
+        .await
+        .is_err());
+    signer
+        .sign(
+            &replacement.bearer,
+            &registration.user_id,
+            key.organization_id.as_str(),
+            "holder_binding",
+            payload,
+        )
+        .await
+        .expect("rotated bearer signs through KMS");
+
     devices
         .deactivate(&registration.id)
         .await
         .expect("device deactivation")
         .expect("registered device");
+    assert!(signer
+        .sign(
+            &replacement.bearer,
+            &registration.user_id,
+            key.organization_id.as_str(),
+            "holder_binding",
+            payload
+        )
+        .await
+        .is_err());
     let cleanup = HolderKeyCleanup::new(keys.clone(), client);
     assert_eq!(cleanup.run_once().await.expect("remote cleanup"), (1, 0));
     let read = read_managed_openbao(ProviderRequest {

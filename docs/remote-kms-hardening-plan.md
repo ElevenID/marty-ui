@@ -9274,3 +9274,18 @@ service/DB/provider lifecycle on a local source build. It does not authorize
 public enrollment or signing, exercise the wallet, prove packaged-image
 deployment, or supply the actual operator service credential; those gates
 remain open.
+
+2026-10-09 local internal signing authorization: Rust Device Registration now
+has one internal `HolderSigner` path that checks a digest-only device bearer,
+live user/organization/registration scope and the current public-only key
+record while holding the registration transaction lock through the bounded
+Signing Keys call. Credential rotation and device deactivation acquire that
+same lock, so they cannot revoke midway through this signature operation.
+The guarded disposable PostgreSQL/OpenBao test passed actual remote signing,
+rejection of an invalid bearer, rejection of the rotated-out bearer, signing
+with the replacement bearer, rejection after deactivation and remote deletion.
+The test uses PostgreSQL time for bearer issuance because Windows and the
+disposable database clock can differ; any production bearer issuance endpoint
+must likewise use database time or a verified clock-skew policy. This is an
+internal service boundary only. Public enrollment/pairing authorization and
+wallet use are still unimplemented and must be qualified before exposure.

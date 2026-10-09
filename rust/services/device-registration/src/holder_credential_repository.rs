@@ -141,7 +141,7 @@ impl PostgresHolderCredentialRepository {
     }
 }
 
-fn stored(row: &sqlx::postgres::PgRow) -> Result<HolderCredentialRecord, DeviceError> {
+pub(crate) fn stored(row: &sqlx::postgres::PgRow) -> Result<HolderCredentialRecord, DeviceError> {
     let raw: Vec<u8> = row.try_get("token_sha256").map_err(persistence)?;
     let token_sha256 = raw
         .try_into()
