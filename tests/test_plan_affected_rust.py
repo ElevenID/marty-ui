@@ -521,6 +521,103 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
         )
 
+    def test_flow_auth_credential_login_grpc_edge_is_source_backed_and_shadow_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/flow/src/grpc_service.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-flow" and edge["package"] == "marty-auth"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        markers = (
+            ("binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("client_marker", "client_evidence"),
+            ("client_wiring_marker", "client_evidence"),
+            ("request_marker", "client_evidence"),
+            ("request_auth_marker", "client_evidence"),
+            ("registration_marker", "registration_evidence"),
+            ("callsite_marker", "callsite_evidence"),
+            ("route_marker", "route_evidence"),
+            ("route_handler_marker", "route_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_auth_marker", "provider_evidence"),
+            ("provider_start_marker", "provider_evidence"),
+            ("provider_registration_marker", "provider_registration_evidence"),
+            ("provider_serving_marker", "provider_registration_evidence"),
+            ("deployment_marker", "deployment_evidence"),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for _, source in markers
+            if (path := edge[source])
+        }
+
+        def method_body(text: str, start: str, end: str) -> str:
+            self.assertIn(start, text)
+            body = text.split(start, 1)[1]
+            self.assertIn(end, body)
+            return body.split(end, 1)[0]
+
+        def assert_markers(snapshot: dict[str, str]) -> None:
+            for marker, source in markers:
+                content = snapshot[edge[source]]
+                if marker in {"request_marker", "request_auth_marker"}:
+                    content = method_body(
+                        content,
+                        "impl CredentialVerificationStarter for GrpcCredentialVerificationStarter {",
+                        "pub fn credential_verification_request(",
+                    )
+                if marker == "client_wiring_marker":
+                    content = method_body(
+                        content,
+                        "    pub fn credential_verification(&self)",
+                        "    pub fn organization_provisioning(",
+                    )
+                if marker == "route_handler_marker":
+                    content = method_body(
+                        content,
+                        "async fn credential_login(State(state): State<AuthHttpState>)",
+                        "async fn credential_login_status(",
+                    )
+                if marker in {"provider_auth_marker", "provider_start_marker"}:
+                    content = method_body(
+                        content,
+                        "    async fn start_verification(",
+                        "    async fn application_approved(",
+                    )
+                if marker == "provider_serving_marker":
+                    content = method_body(
+                        content, "let grpc = grpc_builder", "    runtime.activate()?"
+                    )
+                if marker == "deployment_marker":
+                    content = method_body(content, "\n  auth:\n", "\n  organization:\n")
+                self.assertIn(edge[marker], content)
+
+        assert_markers(sources)
+        for marker, source in markers:
+            with self.subTest(marker=marker):
+                path = edge[source]
+                changed = dict(sources)
+                changed[path] = sources[path].replace(edge[marker], "removed-edge")
+                with self.assertRaises(AssertionError):
+                    assert_markers(changed)
+        self.assertNotIn(
+            "marty-flow",
+            {dep["name"] for dep in packages["marty-auth"]["dependencies"]},
+        )
+
     def test_flow_applicant_webhook_is_observed_without_narrowing(self) -> None:
         self.assert_source_bound_service_edge(
             producer="marty-flow",
@@ -886,6 +983,141 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertNotIn(
             "marty-organization",
             {dep["name"] for dep in packages["marty-trust-profile"]["dependencies"]},
+        )
+
+    def test_organization_auth_jit_grpc_edge_is_source_backed_and_shadow_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/organization/src/grpc_service.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-organization"
+            and edge["package"] == "marty-auth"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        scopes = {
+            "config": (
+                "let organization_grpc_target = grpc_target(",
+                "let event_stream_grpc_target",
+            ),
+            "connection": (
+                "let organization = workload_channel_factory(",
+                "let grpc_clients =",
+            ),
+            "clients": (
+                "pub fn new(flow: Channel",
+                "pub fn credential_verification(&self)",
+            ),
+            "wiring": (
+                "pub fn organization_provisioning(",
+                "pub struct GrpcCredentialVerificationStarter",
+            ),
+            "startup": ("let organizations = Arc::new(", "let user_provisioner:"),
+            "jit": (
+                "pub async fn provision_at(",
+                "impl UserProvisioner for JitUserProvisioner",
+            ),
+            "callback": (
+                "pub async fn handle_callback(",
+                "async fn publish_login_events(",
+            ),
+            "add_request": (
+                "async fn ensure_default_member(&self",
+                "async fn resolve_default_context(",
+            ),
+            "lookup_requests": (
+                "async fn resolve_default_context(",
+                "pub struct MmfApplicantProfileProvisioner",
+            ),
+            "get_organization": (
+                "async fn get_organization(",
+                "async fn create_organization(",
+            ),
+            "get_member": ("async fn get_member(", "async fn add_member("),
+            "add_member": ("async fn add_member(", "async fn update_member("),
+            "server": ("let organization_server =", "runtime.activate()?"),
+            "compose": ("\n  auth:\n", "\n  organization:\n"),
+        }
+        markers = (
+            ("binding", "evidence", "config", 1),
+            ("runtime_marker", "runtime_evidence", "connection", 1),
+            ("client_marker", "client_evidence", "clients", 1),
+            ("wiring_marker", "client_evidence", "wiring", 1),
+            ("wiring_client_marker", "client_evidence", "wiring", 1),
+            ("wiring_token_marker", "client_evidence", "wiring", 1),
+            ("registration_marker", "registration_evidence", "startup", 1),
+            ("jit_registration_marker", "registration_evidence", "startup", 1),
+            ("jit_add_marker", "jit_evidence", "jit", 1),
+            ("jit_context_marker", "jit_evidence", "jit", 1),
+            ("callback_marker", "callback_evidence", "callback", 1),
+            ("add_request_marker", "client_evidence", "add_request", 1),
+            ("request_auth_marker", "client_evidence", "add_request", 1),
+            ("member_request_marker", "client_evidence", "lookup_requests", 1),
+            ("organization_request_marker", "client_evidence", "lookup_requests", 1),
+            ("request_auth_marker", "client_evidence", "lookup_requests", 2),
+            (
+                "organization_provider_marker",
+                "provider_evidence",
+                "get_organization",
+                1,
+            ),
+            ("provider_auth_marker", "provider_evidence", "get_organization", 1),
+            ("member_provider_marker", "provider_evidence", "get_member", 1),
+            ("provider_auth_marker", "provider_evidence", "get_member", 1),
+            ("add_provider_marker", "provider_evidence", "add_member", 1),
+            ("provider_auth_marker", "provider_evidence", "add_member", 1),
+            (
+                "provider_registration_marker",
+                "provider_registration_evidence",
+                "server",
+                1,
+            ),
+            ("provider_serving_marker", "provider_registration_evidence", "server", 1),
+            ("deployment_marker", "deployment_evidence", "compose", 1),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for _, source, _, _ in markers
+            if (path := edge[source])
+        }
+
+        def scoped_parts(content: str, scope: str) -> tuple[str, str, str]:
+            start, end = scopes[scope]
+            self.assertIn(start, content)
+            before, tail = content.split(start, 1)
+            self.assertIn(end, tail)
+            body, after = tail.split(end, 1)
+            return before + start, body, end + after
+
+        def assert_markers(snapshot: dict[str, str]) -> None:
+            for marker, source, scope, count in markers:
+                _, body, _ = scoped_parts(snapshot[edge[source]], scope)
+                self.assertEqual(body.count(edge[marker]), count, marker)
+
+        assert_markers(sources)
+        for marker, source, scope, _ in markers:
+            with self.subTest(marker=marker, scope=scope):
+                path = edge[source]
+                before, body, after = scoped_parts(sources[path], scope)
+                changed = dict(sources)
+                changed[path] = (
+                    before + body.replace(edge[marker], "removed-edge", 1) + after
+                )
+                with self.assertRaises(AssertionError):
+                    assert_markers(changed)
+        self.assertNotIn(
+            "marty-organization",
+            {dep["name"] for dep in packages["marty-auth"]["dependencies"]},
         )
 
     def test_organization_membership_consumers_are_observed_only(self) -> None:

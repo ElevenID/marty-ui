@@ -79,6 +79,27 @@ def _tracked_paths(root: Path, pattern: str) -> list[str]:
     return result.stdout.splitlines()
 
 
+def _tracked_regular_mode(root: Path, path: str) -> bool:
+    result = subprocess.run(
+        ["git", "ls-files", "--stage", "-z", "--", path],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    records = result.stdout.split(b"\0")
+    if len(records) != 2 or records[-1] != b"":
+        return False
+    header, separator, recorded_path = records[0].partition(b"\t")
+    fields = header.split()
+    return (
+        separator == b"\t"
+        and recorded_path == path.encode("utf-8")
+        and len(fields) == 3
+        and fields[0] in {b"100644", b"100755"}
+        and fields[2] == b"0"
+    )
+
+
 def _copying_rust_contexts(root: Path, candidates: list[str] | None = None) -> set[str]:
     if candidates is None:
         candidates = _tracked_paths(root, "*Dockerfile*")
@@ -330,6 +351,15 @@ def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() ->
     assert _tracked_paths(ROOT, WORKER_TEST_ROOT) == [
         WORKER_TEST_ROOT + name for name in WORKER_TEST_FILES
     ]
+    for name in WORKER_TEST_FILES:
+        path = WORKER_TEST_ROOT + name
+        source = ROOT / path
+        assert source.is_file() and not source.is_symlink(), (
+            f"Worker test must be a regular checkout file: {path}"
+        )
+        assert _tracked_regular_mode(ROOT, path), (
+            f"Worker test must have a regular Git index mode: {path}"
+        )
     manifest = tomllib.loads(
         (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(
             encoding="utf-8"
@@ -363,6 +393,70 @@ def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() ->
         )
     root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert not _is_ignored(WORKER_TEST_ROOT + "support/unreviewed.rs", root_lines)
+
+
+def test_verified_worker_test_paths_require_six_context_proof() -> None:
+    result = subprocess.run(
+        [sys.executable, __file__, "--emit-verified-worker-tests"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    assert result.stderr == b""
+    assert (
+        result.stdout
+        == b"\0".join(
+            (WORKER_TEST_ROOT + name).encode("utf-8") for name in WORKER_TEST_FILES
+        )
+        + b"\0"
+    )
+
+
+def test_worker_context_proof_rejects_reincluded_worker_test(
+    monkeypatch,
+) -> None:
+    import pytest
+
+    original = Path.read_text
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+
+        def with_reincluded_test(path: Path, *args, **kwargs) -> str:
+            source = original(path, *args, **kwargs)
+            if path == ROOT / ignore_path:
+                return source + "\n!" + WORKER_TEST_ROOT + WORKER_TEST_FILES[0] + "\n"
+            return source
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", with_reincluded_test)
+            with pytest.raises(AssertionError, match="Docker COPY includes"):
+                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+
+
+def test_worker_context_proof_rejects_symlink_or_gitlink(monkeypatch) -> None:
+    import pytest
+
+    original_is_symlink = Path.is_symlink
+    original_mode = _tracked_regular_mode
+    for name in WORKER_TEST_FILES:
+        suspect = WORKER_TEST_ROOT + name
+
+        def synthetic_symlink(path: Path) -> bool:
+            return path == ROOT / suspect or original_is_symlink(path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "is_symlink", synthetic_symlink)
+            with pytest.raises(AssertionError, match="regular checkout file"):
+                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+
+        def synthetic_gitlink(root: Path, path: str) -> bool:
+            return path != suspect and original_mode(root, path)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                sys.modules[__name__], "_tracked_regular_mode", synthetic_gitlink
+            )
+            with pytest.raises(AssertionError, match="regular Git index mode"):
+                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
 
 
 def test_oid4vp_verified_path_proof_rejects_new_rust_consumer(
@@ -505,15 +599,23 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv != [sys.argv[0], "--emit-verified-leaves"]:
+    if sys.argv == [sys.argv[0], "--emit-verified-worker-tests"]:
+        # The classifier consumes this only after proving exact tracked test
+        # ownership and exclusions in every Rust-copying Docker context.
+        test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+        for name in WORKER_TEST_FILES:
+            sys.stdout.buffer.write((WORKER_TEST_ROOT + name).encode("utf-8") + b"\0")
+    elif sys.argv == [sys.argv[0], "--emit-verified-leaves"]:
+        # CI may narrow only when both exact module and auto-target ownership,
+        # corpus and image-context proofs still hold. Release pytest repeats them.
+        test_exact_test_only_leaves_do_not_invalidate_release_docker_copy()
+        test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts()
+        for leaf in TEST_LEAVES:
+            sys.stdout.buffer.write((ISSUANCE_SRC + leaf).encode("utf-8") + b"\0")
+        for name in OID4VP_TEST_TARGETS:
+            sys.stdout.buffer.write((OID4VP_TEST_ROOT + name).encode("utf-8") + b"\0")
+    else:
         raise SystemExit(
-            "Usage: test_rust_test_only_docker_context.py --emit-verified-leaves"
+            "Usage: test_rust_test_only_docker_context.py "
+            "--emit-verified-leaves|--emit-verified-worker-tests"
         )
-    # CI may narrow only when both exact module and auto-target ownership,
-    # corpus and image-context proofs still hold. Release pytest repeats them.
-    test_exact_test_only_leaves_do_not_invalidate_release_docker_copy()
-    test_oid4vp_auto_test_targets_stay_out_of_production_rust_contexts()
-    for leaf in TEST_LEAVES:
-        sys.stdout.buffer.write((ISSUANCE_SRC + leaf).encode("utf-8") + b"\0")
-    for name in OID4VP_TEST_TARGETS:
-        sys.stdout.buffer.write((OID4VP_TEST_ROOT + name).encode("utf-8") + b"\0")

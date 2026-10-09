@@ -740,6 +740,65 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert on_main["rust_matrix"] == '["canvas","contracts"]'
 
 
+def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-worker-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 4
+    worker_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert worker_tests == [
+        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
+        "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
+        "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["worker"]',
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert (
+        _classify_changed_paths(worker_tests, tmp_path, include_rust_plan=True)
+        == [expected] * 3
+    )
+    assert _classify_changed_paths(
+        worker_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [worker_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [worker_tests[1], "rust/crates/canvas-worker-acceptance/src/lib.rs"],
+        ["rust/crates/canvas-worker-acceptance/tests/support/unreviewed.rs"],
+        [worker_tests[2] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts"]'
+    without_proof = _classify_changed_paths(
+        [worker_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert without_proof["rust_runtime"] == "true"
+    assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    queued = _classify_changed_paths(
+        [worker_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
+
+
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
     tmp_path: Path,
 ) -> None:
@@ -1029,9 +1088,10 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         result_count=None,
         selection_overrides=None,
         leaf_only=False,
+        worker_only=False,
     ):
         selected = set(flags)
-        if "rust" in selected and not leaf_only:
+        if "rust" in selected and not (leaf_only or worker_only):
             selected.add("rust_runtime")
         active = {"changes", "lint"}
         for flag, names in groups.items():
@@ -1055,7 +1115,11 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update(selection_overrides or {})
         environment.setdefault("ROLLBACK_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
-            '["contracts"]' if leaf_only else '["canvas","contracts"]'
+            '["worker"]'
+            if worker_only
+            else '["contracts"]'
+            if leaf_only
+            else '["canvas","contracts"]'
         )
         environment.update(selection_overrides or {})
         environment.update({key: results[name] for name, key in result_env.items()})
@@ -1085,6 +1149,42 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         assert result.returncode == 0, (flags, result.stdout, result.stderr)
     assert exercise(("rust",), {"test-rust-services": "skipped"}).returncode != 0
     assert exercise(("rust",), leaf_only=True).returncode == 0
+    assert exercise(("rust",), worker_only=True).returncode == 0
+    assert exercise(("rust",), worker_only=True, event="merge_group").returncode != 0
+    assert (
+        exercise(
+            ("rust",),
+            worker_only=True,
+            selection_overrides={"RUST_RUNTIME_SELECTED": "true"},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",),
+            worker_only=True,
+            selection_overrides={"RUST_MATRIX": '["contracts","worker"]'},
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), worker_only=True, overrides={"rust-lint-policy": "skipped"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), worker_only=True, overrides={"rust-supply-chain": "skipped"}
+        ).returncode
+        != 0
+    )
+    assert (
+        exercise(
+            ("rust",), worker_only=True, overrides={"test-release-contracts": "skipped"}
+        ).returncode
+        != 0
+    )
     assert (
         exercise(
             ("rust",),
