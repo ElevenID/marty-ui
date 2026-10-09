@@ -9866,3 +9866,24 @@ acknowledgment; the canonical bearer
 Rust unit test passed. Dart/Flutter tooling is absent on this host;
 run analyzer, mobile tests, and physical-device network acceptance on the
 grouped PR before claiming release readiness.
+
+2026-10-09 Authenticator presentation bridge review (local `afc7219`,
+grouped PR not yet updated): the generated FRB
+`walletBuildAndSubmitPresentation` entry point is unused by the scanner but
+its Rust implementation reconstructed a request with empty `client_id` and
+`nonce`, discarded `state` and `response_mode`, and submitted a VP without
+issuer verification or holder key binding. The local Authenticator follow-up
+retains the generated symbol for bridge compatibility but makes it fail closed
+with `REMOTE_KMS_REQUIRED`; no presentation is submitted through it. The
+replacement must parse the original request in Rust, validate the response
+URI/mode and verifier audience, preserve nonce/state, select credentials from
+secure storage, resolve trusted issuer verification keys under an allowlist,
+run Core `prepare_verified_sd_jwt_presentation`, sign its exact input using
+the bearer-scoped remote ES256 endpoint, complete the signature, and submit
+through `submit_presentation_for_request`. Core currently parses these request
+fields but does not itself enforce response URI/mode policy; the mobile
+integration must do so before any credential disclosure. The physical-device
+OID4VP and separate mDoc flows remain acceptance gates. Local `cargo fmt
+--check` passed; the targeted Authenticator Rust test could not compile on
+this Windows host because the Longfellow ZK C++ dependency cannot find
+`openssl/sha.h`. Run the test and generated-bridge verification in hosted CI.
