@@ -7834,7 +7834,7 @@ Canvas image and Rust image lanes should finish before the batch is pushed.
 Further Authenticator production-surface inventory found a web custody violation in
 `lib/services/spruce_platform_service_web.dart`: `generateKeyPair` calls the
 local WASM P-256 generator and returns its JWK under both `publicKey` and
-`privateKey`. A direct isolated call to the bundled WASM confirms both its
+`privateKey`. A direct isolated call to the checked-in WASM confirms both its
 P-256 and Ed25519 generated JWKs contain the private `d` parameter (only
 parameter names were printed). Thus the web DID creation and key-generation
 returns exposed private material. The conditional web WASM wrapper also exposes Ed25519 generation,
@@ -7848,7 +7848,7 @@ that consumer. Do not treat the Rust bridge pin or mock ZK pass as this proof.
 
 An Authenticator candidate follow-up now makes web `createDid` and
 `generateKeyPair` fail closed with a remote-KMS-required error, removing those
-direct application return paths. The bundled WASM still exports local
+direct application return paths. The checked-in WASM still exports local
 generation and raw-JWK signing functions, and the remote holder flow is not
 implemented. Do not qualify or ship the Authenticator consumer from this
 intermediate fail-closed change; rebuild or remove the raw-key WASM surface
@@ -7859,9 +7859,11 @@ local key-generation, raw-JWK credential-signing and presentation-signing
 methods from both web and non-web stubs, and replaces the loader's wildcard
 global export with an explicit public/verification method list. JavaScript
 syntax and reference/diff checks pass; Flutter/Dart verification is unavailable
-locally. The packaged WASM module itself still includes raw-key exports and
-remains directly fetchable, so this narrows application access but is not the
-required final artifact boundary.
+locally. The checked-in WASM module itself still includes raw-key exports.
+`web/marty_wasm_loader.js` requests it under `/assets/packages/marty_rs/`, but
+the present `pubspec.yaml` does not declare that package; actual web release
+packaging and fetchability remain unverified. This narrows application access
+but is not the required final artifact boundary.
 
 UI run `37885206206` subsequently completed `Test OpenBao DIDComm plugin
 image` successfully, including the coordinated PostgreSQL/Raft restore lane,
