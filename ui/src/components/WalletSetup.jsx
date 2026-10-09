@@ -35,13 +35,12 @@ import { useAuth } from '../hooks/useAuth';
 import { useBranding } from '../hooks/useBranding';
 import {
   buildPairingState,
-  createPairingCode,
   formatCountdown,
-  loadWalletStatus,
+  issueRemotePairingTicket,
+  loadRemotePairingStatus,
   registerWalletPushNotifications,
   resolveNotificationPermissionState,
   resolveNotificationRequestOutcome,
-  resolveSimulatedPairing,
   resolveSkipNotifications,
   resolveWalletSetupComplete,
   shouldPollWalletStatus,
@@ -63,6 +62,7 @@ const WalletSetup = () => {
 
   // QR code pairing state
   const [pairingCode, setPairingCode] = useState(null);
+  const [pairingId, setPairingId] = useState(null);
   const [qrContent, setQrContent] = useState(null);
   const [expiresIn, setExpiresIn] = useState(300);
 
@@ -77,37 +77,47 @@ const WalletSetup = () => {
   const generatePairingCode = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setPairingCode(null);
+    setPairingId(null);
+    setQrContent(null);
+    setWalletConnected(false);
     try {
-      const nextPairingCode = createPairingCode();
+      const ticket = await issueRemotePairingTicket({ organizationId });
+      const apiOrigin = new URL(import.meta.env.VITE_API_URL || window.location.origin, window.location.origin).origin;
       const nextPairingState = buildPairingState({
-        deepLinkProtocol: branding.deepLinkProtocol,
-        pairingCode: nextPairingCode,
+        pairingCode: ticket.pairing_code,
+        pairingId: ticket.pairing_id,
+        expiresAt: ticket.expires_at,
+        apiOrigin,
       });
       setPairingCode(nextPairingState.pairingCode);
+      setPairingId(nextPairingState.pairingId);
       setQrContent(nextPairingState.qrContent);
       setExpiresIn(nextPairingState.expiresIn);
+    } catch (err) {
+      setError(err.message || 'Could not issue a wallet pairing code');
     } finally {
       setLoading(false);
     }
-  }, [branding]);
+  }, [organizationId]);
 
   const checkWalletStatus = useCallback(async () => {
-    const nextState = await loadWalletStatus({
-      userId: user?.user_id,
-      activeStep,
-    });
-
-    if (nextState.walletConnected) {
-      setWalletConnected(nextState.walletConnected);
-      setWalletDeviceId(nextState.walletDeviceId);
-      if (nextState.nextStep !== null) {
-        setActiveStep(nextState.nextStep);
+    if (!pairingId || activeStep !== 0) return;
+    try {
+      const status = await loadRemotePairingStatus({ pairingId });
+      if (status.state === 'paired' && status.registration_id) {
+        setWalletConnected(true);
+        setWalletDeviceId(status.registration_id);
+        setActiveStep(1);
+        setSuccess('Wallet paired successfully!');
+      } else if (status.state === 'expired') {
+        setError('Pairing expired. Refresh the QR code and try again.');
+        setPairingId(null);
       }
-      if (nextState.successMessage) {
-        setSuccess(nextState.successMessage);
-      }
+    } catch (err) {
+      setError(err.message || 'Could not check wallet pairing status');
     }
-  }, [user, activeStep]);
+  }, [pairingId, activeStep]);
 
   const checkNotificationPermission = useCallback(() => {
     if ('Notification' in window) {
@@ -142,9 +152,8 @@ const WalletSetup = () => {
   // Generate pairing code on mount
   useEffect(() => {
     generatePairingCode();
-    checkWalletStatus();
     checkNotificationPermission();
-  }, [generatePairingCode, checkWalletStatus, checkNotificationPermission]);
+  }, [generatePairingCode, checkNotificationPermission]);
 
   // Countdown timer for QR code expiry
   useEffect(() => {
@@ -157,12 +166,12 @@ const WalletSetup = () => {
   // Poll for wallet connection status
   useEffect(() => {
     const pollInterval = setInterval(async () => {
-      if (shouldPollWalletStatus({ activeStep, walletConnected })) {
+      if (pairingId && shouldPollWalletStatus({ activeStep, walletConnected })) {
         await checkWalletStatus();
       }
     }, walletSetupDefaults.pollIntervalMs);
     return () => clearInterval(pollInterval);
-  }, [activeStep, walletConnected, checkWalletStatus]);
+  }, [activeStep, walletConnected, pairingId, checkWalletStatus]);
 
   const requestNotificationPermission = async () => {
     setLoading(true);
@@ -272,19 +281,6 @@ const WalletSetup = () => {
                 >
                   Refresh QR
                 </Button>
-                <Button
-                  variant="contained"
-                  onClick={() => {
-                    // For testing: simulate successful pairing
-                    const nextState = resolveSimulatedPairing();
-                    setWalletConnected(nextState.walletConnected);
-                    setActiveStep(nextState.nextStep);
-                    setSuccess(nextState.successMessage);
-                  }}
-                  data-testid="simulate-pairing-button"
-                >
-                  Simulate Pairing
-                </Button>
               </Box>
 
               {walletConnected && (
@@ -385,7 +381,7 @@ const WalletSetup = () => {
               <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                 <CheckIcon color="success" />
                 <Typography>
-                  Wallet ID: <code data-testid="wallet-device-id">{walletDeviceId || 'Connected'}</code>
+                  Wallet registration ID: <code data-testid="wallet-device-id">{walletDeviceId || 'Connected'}</code>
                 </Typography>
               </Box>
 

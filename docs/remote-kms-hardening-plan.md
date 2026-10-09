@@ -9775,3 +9775,38 @@ browser should poll that scoped status under its authenticated session, then
 replace the local code generator and simulated completion. Review QR
 shoulder-surfing/race behavior and require the user to approve the displayed
 API origin on mobile; do not expose the bearer or status capability in logs.
+
+2026-10-09 exact-ticket wallet confirmation candidate (local, not yet pushed):
+Device Registration now persists a UUID pairing identifier separately from the
+single-use Redis secret. The fresh schema records ticket issue, enrollment,
+confirmation, and expiry without storing bearer or private key material.
+Enrollment binds its registration to that exact identifier. General holder
+signing fails before mobile confirmation; the pending device may only ask
+remote KMS to sign the fixed challenge for its identifier. A current bearer,
+active registration, matching user/organization, live membership, and an
+Ed25519 signature verified against the stored public key are all required to
+acknowledge. A lost acknowledgment response can
+be retried with the same live bearer. A retrying expiry worker deactivates
+unconfirmed registrations, revokes their bearer, and queues both remote keys
+for deletion. Gateway exposes public bearer-only `POST /v1/devices/pairing-ack`
+and keeps `GET /v1/devices/pairing-confirmations/{pairing_id}` session-bound;
+Device Registration checks the user's live membership before returning status.
+The browser now requests the server ticket, renders `marty://pair` with the
+bare HTTPS API origin, polls only that identifier, and has no simulated
+success button or arbitrary-device completion check. Mobile saves the bearer
+to secure storage before calling the acknowledgment endpoint and offers a
+retry if its response fails. This still does not migrate the wallet's
+credential/presentation signer, renewal, or mobile network acceptance.
+
+Local validation of this candidate: the guarded disposable
+`python scripts/probe_signing_keys_openbao_policy.py --rust-adapter` passed
+after the expanded test covered pending-sign denial, exact status, remote
+acknowledgment and retry, EdDSA/ES256 signing, rotation, revocation, expiry
+deactivation, and remote key cleanup. Device Registration behavior tests 8/8,
+Gateway contract tests 15/15, Gateway public-ack/private-status route test,
+all-target Device Registration/Gateway Clippy, UI wallet tests 11/11, and UI
+TypeScript build check passed. Flutter/Dart is unavailable on this Windows
+host, so the changed mobile parser/service tests, analyzer, and device build
+remain unverified. The source changes are still local on both feature branches;
+run exact-head hosted CI after the grouped wallet work is ready. This is no
+release qualification and does not close the KMS-only wallet goal.

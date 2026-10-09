@@ -9,7 +9,8 @@ use uuid::Uuid;
 use crate::{
     control_plane::MembershipAuthorizer,
     holder_credential_repository::PostgresHolderCredentialRepository,
-    holder_key_provisioner::HolderKeyProvisioner, pairing_ticket::PairingTicketRepository,
+    holder_key_provisioner::HolderKeyProvisioner,
+    pairing_confirmation::PostgresPairingConfirmations, pairing_ticket::PairingTicketRepository,
     CreateRegistration, DeviceError, DevicePreferences, DeviceService, Platform,
 };
 
@@ -31,6 +32,7 @@ pub struct PairingRedeemRequest {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PairingRedeemResult {
+    pub pairing_id: String,
     pub registration_id: String,
     pub device_id: String,
     pub device_credential: String,
@@ -45,6 +47,7 @@ pub struct PairingEnrollment {
     devices: Arc<DeviceService>,
     keys: HolderKeyProvisioner,
     credentials: PostgresHolderCredentialRepository,
+    confirmations: PostgresPairingConfirmations,
 }
 
 impl PairingEnrollment {
@@ -54,6 +57,7 @@ impl PairingEnrollment {
         devices: Arc<DeviceService>,
         keys: HolderKeyProvisioner,
         credentials: PostgresHolderCredentialRepository,
+        confirmations: PostgresPairingConfirmations,
     ) -> Self {
         Self {
             tickets,
@@ -61,6 +65,7 @@ impl PairingEnrollment {
             devices,
             keys,
             credentials,
+            confirmations,
         }
     }
 
@@ -139,7 +144,11 @@ impl PairingEnrollment {
                     CREDENTIAL_LIFETIME,
                 )
                 .await?;
+            self.confirmations
+                .record_redeemed(&scope, &registration.id)
+                .await?;
             Ok::<_, DeviceError>(PairingRedeemResult {
+                pairing_id: scope.pairing_id.clone(),
                 registration_id: registration.id.clone(),
                 device_id: registration.device_id.clone(),
                 device_credential: issued.bearer,

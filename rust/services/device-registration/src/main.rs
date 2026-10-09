@@ -8,6 +8,7 @@ use marty_device_registration::{
     holder_signer::HolderSigner,
     http::{router, HttpState},
     migration::{migrate, validate},
+    pairing_confirmation::PostgresPairingConfirmations,
     pairing_enrollment::PairingEnrollment,
     pairing_ticket::RedisPairingTickets,
     postgres::PostgresDeviceRepository,
@@ -107,6 +108,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?);
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
+    let pairing_confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));
+    tokio::spawn(
+        (*pairing_confirmations)
+            .clone()
+            .expire_forever(repository.clone()),
+    );
     let (pairing_enrollment, holder_signer) =
         if let (Some(origin), Some(key)) = (holder_origin, holder_service_key) {
             if key == gateway_key || token.as_deref() == Some(key.as_str()) {
@@ -126,7 +133,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 memberships.clone(),
                 service.clone(),
                 HolderKeyProvisioner::new(repository, keys, client),
-                PostgresHolderCredentialRepository::new(pool),
+                PostgresHolderCredentialRepository::new(pool.clone()),
+                (*pairing_confirmations).clone(),
             ));
             (Some(enrollment), Some(signer))
         } else {
@@ -144,6 +152,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             service,
             memberships,
             pairing_tickets,
+            pairing_confirmations: Some(pairing_confirmations),
             pairing_enrollment,
             holder_signer,
             release_version,

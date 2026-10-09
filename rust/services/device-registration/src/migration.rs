@@ -43,6 +43,7 @@ async fn verify(
         .collect();
     for required in [
         "device_registrations",
+        "device_pairing_confirmations",
         "device_holder_credentials",
         "device_holder_keys",
         "device_holder_key_provisions",

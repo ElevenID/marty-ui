@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
+use uuid::Uuid;
 
 use crate::DeviceError;
 
@@ -31,6 +32,7 @@ fn random_token(bytes: usize) -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingScope {
+    pub pairing_id: String,
     pub user_id: String,
     pub organization_id: String,
     pub issued_at: DateTime<Utc>,
@@ -86,6 +88,7 @@ fn issue_scope(
     Ok(IssuedPairingTicket {
         token: random_token(TOKEN_BYTES),
         scope: PairingScope {
+            pairing_id: Uuid::new_v4().to_string(),
             user_id: user_id.into(),
             organization_id: organization_id.into(),
             issued_at,

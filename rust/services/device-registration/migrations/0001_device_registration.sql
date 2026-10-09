@@ -18,6 +18,20 @@ CREATE TABLE IF NOT EXISTS device_registration_service.device_registrations (
 );
 CREATE INDEX IF NOT EXISTS ix_device_registrations_user_id ON device_registration_service.device_registrations(user_id);
 CREATE INDEX IF NOT EXISTS ix_device_registrations_organization_id ON device_registration_service.device_registrations(organization_id);
+
+CREATE TABLE IF NOT EXISTS device_registration_service.device_pairing_confirmations (
+    pairing_id varchar(36) PRIMARY KEY,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    registration_id varchar(36) UNIQUE REFERENCES device_registration_service.device_registrations(id),
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    confirmed_at timestamptz,
+    expired_at timestamptz,
+    CONSTRAINT device_pairing_time_order CHECK (expires_at > issued_at),
+    CONSTRAINT device_pairing_confirmation_requires_registration CHECK (confirmed_at IS NULL OR registration_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_device_pairing_expiry ON device_registration_service.device_pairing_confirmations(expires_at) WHERE confirmed_at IS NULL AND expired_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_device_registrations_device_id ON device_registration_service.device_registrations(device_id);
 CREATE INDEX IF NOT EXISTS ix_device_registrations_user_org ON device_registration_service.device_registrations(user_id, organization_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ux_device_registrations_active_identity

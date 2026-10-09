@@ -6542,6 +6542,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pairing_ack_is_bearer_public_but_exact_status_requires_browser_session() {
+        let (router, recorder) = actor_test_router();
+        let ack = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pairing-ack")
+                    .header("content-type", "application/json")
+                    .header("authorization", "Bearer opaque-device-credential")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(r#"{"pairing_id":"exact-ticket-id"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(ack.status(), StatusCode::OK);
+        let denied = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/devices/pairing-confirmations/exact-ticket-id")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+        let status = router
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/devices/pairing-confirmations/exact-ticket-id")
+                    .header("cookie", "sessionId=pairing-session")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(status.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].1.path, "/v1/devices/pairing-ack");
+        assert_eq!(
+            calls[0].1.header("authorization"),
+            Some("Bearer opaque-device-credential")
+        );
+        assert_eq!(calls[0].1.header("x-user-id"), None);
+        assert_eq!(
+            calls[1].1.path,
+            "/v1/devices/pairing-confirmations/exact-ticket-id"
+        );
+        assert_eq!(calls[1].1.header("x-user-id"), Some("pairing-session"));
+    }
+
+    #[tokio::test]
     async fn native_passport_gateway_forwards_all_eight_public_routes_with_tenant_key() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let router = gateway_router(runtime_state_with_upstream_and_passport(

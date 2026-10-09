@@ -6,7 +6,7 @@ use axum::{
 use marty_device_registration::{
     control_plane::{AllowMembership, MembershipAuthorizer},
     http::{router, HttpState},
-    pairing_ticket::{MemoryPairingTickets, PairingTicketRepository},
+    pairing_ticket::MemoryPairingTickets,
     CreateRegistration, DeviceError, DeviceService, MemoryDeviceRepository, Platform,
     UpdateRegistration,
 };
@@ -50,7 +50,7 @@ fn contract_retires_device_private_key_challenge() {
         "../../../../contracts/device-registration-service-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract["routes"].as_array().unwrap().len(), 8);
+    assert_eq!(contract["routes"].as_array().unwrap().len(), 10);
     assert!(contract["challenge"].is_null());
     assert!(contract["invariants"]
         .as_array()
@@ -147,6 +147,7 @@ async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
         service: Arc::new(service()),
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
         release_version: "test".into(),
@@ -220,6 +221,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         service: Arc::new(service()),
         memberships: Arc::new(AllowMembership),
         pairing_tickets: tickets.clone(),
+        pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
         release_version: "test".into(),
@@ -247,20 +249,13 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         .oneshot(request(Some(&gateway_key), "org-1"))
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(response.headers()["cache-control"], "no-store");
-    let body: Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
-    let code = body["pairing_code"].as_str().unwrap();
-    let scope = tickets.take(code).await.unwrap().unwrap();
-    assert_eq!(scope.user_id, "user-1");
-    assert_eq!(scope.organization_id, "org-1");
-    assert!(tickets.take(code).await.unwrap().is_none());
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     let denied = router(HttpState {
         service: Arc::new(service()),
         memberships: Arc::new(RejectMembership),
         pairing_tickets: tickets,
+        pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
         release_version: "test".into(),
@@ -280,6 +275,7 @@ async fn mobile_redemption_cannot_use_a_missing_remote_kms_authority() {
         service: Arc::new(service()),
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
         release_version: "test".into(),
@@ -320,6 +316,7 @@ async fn mobile_signing_requires_gateway_and_remote_kms_authority() {
         service: Arc::new(service()),
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        pairing_confirmations: None,
         pairing_enrollment: None,
         holder_signer: None,
         release_version: "test".into(),

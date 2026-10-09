@@ -16,6 +16,7 @@ use tower_http::trace::TraceLayer;
 use crate::{
     control_plane::MembershipAuthorizer,
     holder_signer::HolderSigner,
+    pairing_confirmation::PostgresPairingConfirmations,
     pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
     pairing_ticket::PairingTicketRepository,
     CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
@@ -26,6 +27,7 @@ pub struct HttpState {
     pub service: Arc<DeviceService>,
     pub memberships: Arc<dyn MembershipAuthorizer>,
     pub pairing_tickets: Arc<dyn PairingTicketRepository>,
+    pub pairing_confirmations: Option<Arc<PostgresPairingConfirmations>>,
     pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
     pub holder_signer: Option<Arc<HolderSigner>>,
     pub release_version: String,
@@ -43,6 +45,14 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/v1/devices/pair",
             axum::routing::post(redeem_pairing_ticket),
+        )
+        .route(
+            "/v1/devices/pairing-confirmations/{pairing_id}",
+            get(pairing_status),
+        )
+        .route(
+            "/v1/devices/pairing-ack",
+            axum::routing::post(confirm_pairing),
         )
         .route(
             "/v1/devices/holder-signatures",
@@ -137,12 +147,17 @@ async fn issue_pairing_ticket(
         .memberships
         .require_active(&user_id, organization_id)
         .await?;
+    let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
+    })?;
     let ticket = state
         .pairing_tickets
         .issue(&user_id, organization_id)
         .await?;
+    confirmations.record_issued(&ticket.scope).await?;
     let mut response = Json(json!({
         "pairing_code": ticket.token,
+        "pairing_id": ticket.scope.pairing_id,
         "expires_at": ticket.scope.expires_at,
     }))
     .into_response();
@@ -151,6 +166,63 @@ async fn issue_pairing_ticket(
         axum::http::HeaderValue::from_static("no-store"),
     );
     Ok(response)
+}
+
+async fn pairing_status(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(pairing_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let user_id = identity(&headers)?;
+    let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
+    })?;
+    let status = confirmations.status(&pairing_id, &user_id).await?;
+    state
+        .memberships
+        .require_active(&user_id, &status.organization_id)
+        .await?;
+    let mut response = Json(json!({
+        "state": status.state,
+        "registration_id": status.registration_id,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn confirm_pairing(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<PairingAckRequest>,
+) -> Result<Response, ApiError> {
+    let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
+    })?;
+    let signer = state
+        .holder_signer
+        .as_ref()
+        .ok_or_else(|| DeviceError::PairingStore("remote holder signing is unavailable".into()))?;
+    let bearer = bearer(&headers)?;
+    signer
+        .sign_pairing_confirmation(bearer, &body.pairing_id)
+        .await?;
+    confirmations.confirm(&body.pairing_id, bearer).await?;
+    let mut response = Json(json!({"confirmed": true})).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingAckRequest {
+    pairing_id: String,
 }
 
 async fn redeem_pairing_ticket(
@@ -185,12 +257,7 @@ async fn sign_holder_payload(
         .holder_signer
         .as_ref()
         .ok_or_else(|| DeviceError::Persistence("remote holder signing is unavailable".into()))?;
-    let bearer = headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
-        .filter(|value| !value.is_empty() && !value.contains(' '))
-        .ok_or_else(|| DeviceError::Forbidden("holder signing authorization is invalid".into()))?;
+    let bearer = bearer(&headers)?;
     if body.payload_b64.len() > 87_384 {
         return Err(DeviceError::BadRequest("holder signing input is invalid".into()).into());
     }
@@ -206,6 +273,17 @@ async fn sign_holder_payload(
         axum::http::HeaderValue::from_static("no-store"),
     );
     Ok(response)
+}
+
+fn bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty() && !value.contains(' '))
+        .ok_or_else(|| {
+            DeviceError::Forbidden("holder signing authorization is invalid".into()).into()
+        })
 }
 
 const fn default_limit() -> usize {

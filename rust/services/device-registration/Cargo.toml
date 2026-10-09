@@ -18,6 +18,7 @@ async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
+ed25519-dalek.workspace = true
 marty-holder-key-reference = { path = "../../crates/holder-key-reference" }
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
 prost.workspace = true
@@ -43,7 +44,6 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
-ed25519-dalek.workspace = true
 p256.workspace = true
 marty-signing-keys = { path = "../signing-keys" }
 tower.workspace = true

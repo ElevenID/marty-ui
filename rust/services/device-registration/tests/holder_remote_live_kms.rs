@@ -13,6 +13,7 @@ use marty_device_registration::{
     holder_signer::HolderSigner,
     http::{router, HttpState},
     migration::migrate,
+    pairing_confirmation::PostgresPairingConfirmations,
     pairing_enrollment::{PairingEnrollment, PairingRedeemResult},
     pairing_ticket::{MemoryPairingTickets, PairingTicketRepository},
     postgres::PostgresDeviceRepository,
@@ -92,6 +93,9 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let organization_id = Uuid::new_v4().to_string();
     let tickets = Arc::new(MemoryPairingTickets::new(300));
     let ticket = tickets.issue(&user_id, &organization_id).await.unwrap();
+    let pairing_id = ticket.scope.pairing_id.clone();
+    let confirmations = PostgresPairingConfirmations::new(pool.clone());
+    confirmations.record_issued(&ticket.scope).await.unwrap();
 
     let service_key = "disposable-device-registration-signing-key-32-chars";
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -119,6 +123,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         device_service.clone(),
         provisioner,
         credentials.clone(),
+        confirmations.clone(),
     ));
     let gateway_key = "disposable-gateway-device-registration-key-32-chars";
     let device_listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -128,7 +133,8 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let app = router(HttpState {
         service: device_service,
         memberships: memberships.clone(),
-        pairing_tickets: tickets,
+        pairing_tickets: tickets.clone(),
+        pairing_confirmations: Some(Arc::new(confirmations.clone())),
         pairing_enrollment: Some(enrollment),
         holder_signer: Some(signer.clone()),
         release_version: "test".into(),
@@ -151,6 +157,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     assert!(paired.status().is_success());
     assert_eq!(paired.headers()["cache-control"], "no-store");
     let enrolled: PairingRedeemResult = paired.json().await.expect("wallet pairing JSON");
+    assert_eq!(enrolled.pairing_id, pairing_id);
     let replay = http
         .post(format!("{device_origin}/v1/devices/pair"))
         .header("x-service-token", gateway_key)
@@ -192,6 +199,59 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .is_err());
     let payload = b"exact managed holder proof";
+    let premature = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"purpose":"holder_binding","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
+        .await
+        .expect("premature holder signing response");
+    assert_eq!(premature.status(), reqwest::StatusCode::FORBIDDEN);
+    let status = http
+        .get(format!(
+            "{device_origin}/v1/devices/pairing-confirmations/{pairing_id}"
+        ))
+        .header("x-service-token", gateway_key)
+        .header("x-user-id", &user_id)
+        .send()
+        .await
+        .expect("pending pairing status");
+    assert_eq!(
+        status.json::<serde_json::Value>().await.unwrap()["state"],
+        "pending"
+    );
+    let confirmed = http
+        .post(format!("{device_origin}/v1/devices/pairing-ack"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"pairing_id":pairing_id}))
+        .send()
+        .await
+        .expect("remote confirmation proof");
+    assert!(confirmed.status().is_success());
+    let retried = http
+        .post(format!("{device_origin}/v1/devices/pairing-ack"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"pairing_id":pairing_id}))
+        .send()
+        .await
+        .expect("lost-response confirmation retry");
+    assert!(retried.status().is_success(), "{}", retried.status());
+    let status = http
+        .get(format!(
+            "{device_origin}/v1/devices/pairing-confirmations/{pairing_id}"
+        ))
+        .header("x-service-token", gateway_key)
+        .header("x-user-id", &user_id)
+        .send()
+        .await
+        .expect("paired status");
+    assert_eq!(
+        status.json::<serde_json::Value>().await.unwrap()["state"],
+        "paired"
+    );
     assert!(signer
         .sign(
             "invalid",
@@ -332,6 +392,49 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .expect("scoped inventory after deletion");
     assert!(!remaining.contains(&key.provider_reference));
     assert!(!remaining.contains(&presentation.provider_reference));
+
+    let orphan_ticket = tickets.issue(&user_id, &organization_id).await.unwrap();
+    confirmations
+        .record_issued(&orphan_ticket.scope)
+        .await
+        .unwrap();
+    let orphan_pairing_id = orphan_ticket.scope.pairing_id.clone();
+    let orphan = http
+        .post(format!("{device_origin}/v1/devices/pair"))
+        .header("x-service-token", gateway_key)
+        .json(&json!({"pairing_code":orphan_ticket.token,"platform":"android"}))
+        .send()
+        .await
+        .expect("unconfirmed enrollment response");
+    assert!(orphan.status().is_success());
+    let orphan: PairingRedeemResult = orphan.json().await.unwrap();
+    sqlx::query("UPDATE device_registration_service.device_pairing_confirmations SET issued_at=clock_timestamp()-interval '2 minutes',expires_at=clock_timestamp()-interval '1 minute' WHERE pairing_id=$1")
+        .bind(&orphan_pairing_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(confirmations.expire_once(&devices).await.unwrap(), 1);
+    assert!(
+        !devices
+            .get(&orphan.registration_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_active
+    );
+    let rejected = http
+        .post(format!("{device_origin}/v1/devices/pairing-ack"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&orphan.device_credential)
+        .json(&json!({"pairing_id":orphan_pairing_id}))
+        .send()
+        .await
+        .expect("expired enrollment acknowledgment response");
+    assert_eq!(rejected.status(), reqwest::StatusCode::FORBIDDEN);
+    assert_eq!(
+        cleanup.run_once().await.expect("orphan key cleanup"),
+        (2, 0)
+    );
     device_server.abort();
     server.abort();
 }
