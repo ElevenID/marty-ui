@@ -45,6 +45,20 @@ def test_reviewed_graph_passes() -> None:
     guard.check(reviewed_graph())
 
 
+def test_standalone_probe_uses_reviewed_core_head(tmp_path: Path) -> None:
+    lock = SCRIPT.parents[2] / ".github/feature-regression/rust-probe/Cargo.lock"
+    guard.check_standalone_probe_lock(lock)
+    stale = tmp_path / "Cargo.lock"
+    stale.write_text(
+        lock.read_text(encoding="utf-8").replace(
+            guard.CORE_SOURCE, guard.CORE_SOURCE.replace("?rev=", "?rev=stale-"), 1
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="not pinned to reviewed Core"):
+        guard.check_standalone_probe_lock(stale)
+
+
 @pytest.mark.parametrize("feature", sorted(guard.FORBIDDEN_FEATURES))
 def test_core_private_key_features_fail(feature: str) -> None:
     graph = reviewed_graph()

@@ -2,6 +2,8 @@
 
 import json
 import sys
+import tomllib
+from pathlib import Path
 
 
 CORE_REVISION = "735a11f1fc6c289fc006fb13a711007e532e822b"
@@ -31,6 +33,7 @@ KMS_ONLY_CRATES = {
     "marty-oid4vci",
     "marty-verification",
 }
+PROBE_CORE_CRATES = CORE_CRATES - {"marty-iso18013", "marty-status"}
 FORBIDDEN_FEATURES = {"default", "local-key-operations", "test-fixtures"}
 
 
@@ -68,8 +71,25 @@ def check(metadata: dict) -> None:
         raise ValueError("isomdl enables local issuer signing")
 
 
+def check_standalone_probe_lock(path: Path) -> None:
+    packages = tomllib.loads(path.read_text(encoding="utf-8"))["package"]
+    core = [
+        package
+        for package in packages
+        if "github.com/ElevenID/marty-core" in package.get("source", "")
+    ]
+    if {package["name"] for package in core} != PROBE_CORE_CRATES:
+        raise ValueError("Standalone feature probe Core package graph changed")
+    if any(package["source"] != CORE_SOURCE for package in core):
+        raise ValueError("Standalone feature probe is not pinned to reviewed Core")
+
+
 if __name__ == "__main__":
     try:
         check(json.load(sys.stdin))
+        check_standalone_probe_lock(
+            Path(__file__).resolve().parents[2]
+            / ".github/feature-regression/rust-probe/Cargo.lock"
+        )
     except (KeyError, ValueError) as error:
         raise SystemExit(str(error)) from error

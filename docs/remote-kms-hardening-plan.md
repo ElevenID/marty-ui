@@ -10289,3 +10289,26 @@ local commit `423674a` applies the same Flutter 3.44.6 formatter. The
 full Dart format check is clean and 17 focused pairing/retirement tests
 pass. The Android and generated-binding jobs are still pending; hold
 the Authenticator correction for one grouped follow-up push.
+
+2026-10-09 exact-head grouped CI triage: Core PR #355 at `735a11f` and
+Verifier PR #154 at `7cd9a54` have green hosted CI gates; Core remains
+blocked on protected-branch review. Authenticator PR #57 at `0966587`
+passed Android, unsigned iOS configuration, build, and generated-bindings
+checks. Its only failed source check was Flutter formatting, corrected and
+pushed as `423674a`; that new head requires its own hosted checks.
+UI PR #1192 at `bee21fa6c` passed four UI test shards, the MIP browser
+gate, public protocol contract, Python lint, security scanning, and crawler
+build artifacts. Its standalone Rust feature-probe lock retained old Core
+`7c50d31`, causing both the probe and Rust lint/packaging jobs to fail at
+locked `cargo fetch`. The local correction pins the six probe Core sources
+to `735a11f`, and extends the production graph guard plus a regression test
+to enforce the standalone lock. Locked probe fetch, boundary tests (10/10),
+and the full locked workspace metadata boundary check pass locally. Multiple
+independent UI image/test/supply-chain jobs failed while Docker Hub returned
+unauthenticated HTTP 429 pull-limit responses; this is an external hosted
+registry failure, not evidence of real KMS qualification. The reusable
+workflow-quality job also failed while preparing its runtime image, with
+image pull exit status 1. Release contract and Rust CodeQL jobs remain in
+progress at this checkpoint. Keep the UI correction local until the remaining
+checks are triaged, then publish it in one batch; do not mark PR #1192 or the
+goal qualified on partial checks.
