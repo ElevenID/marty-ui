@@ -2688,10 +2688,13 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
 
 
 def _assert_required_canvas_target_completion(published: str) -> None:
-    assert "(( composition_status == 0 && worker_status == 0 ))" in published
-    assert published.index(
-        "(( composition_status == 0 && worker_status == 0 ))"
-    ) < published.index("if (( expected_skipped_config_tests == 0 )); then")
+    target_success = (
+        "(( composition_status == 0 && worker_status == 0 && selfhost_status == 0 ))"
+    )
+    assert target_success in published
+    assert published.index(target_success) < published.index(
+        "if (( expected_skipped_config_tests == 0 )); then"
+    )
     assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
     assert (
         published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2
