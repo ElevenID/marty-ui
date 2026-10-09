@@ -10782,3 +10782,17 @@ path is available; do not add tests that bless the simulated success as
 production behavior. The mobile PR batch remains local and unqualified.
 At this checkpoint UI #1192's Rust contract job has also passed; Canvas and
 OpenBao plugin image jobs are still pending at its published head.
+
+2026-10-09 mobile approval and fabricated-config review: local Authenticator
+commit `246d1f8` adds security behavior tests proving malformed DCQL claims
+never reach remote signing, and a verifier rejection remains an error and
+consumes the approval session. Local commit `c249c58` retires the expired
+pass info route and its no-op configuration screen, which displayed a
+fabricated event, email, address, and switches unrelated to the verified
+receipt. The real delete/unhide actions remain and their focused tests pass.
+Full Dart analysis reports no issues; the full Flutter suite passes 192
+tests with four skips. Non-generated line coverage is 87.81% (1,750/1,993),
+still below the 90% gate. These mobile commits remain local for one grouped
+PR update; the liveness custody and actual native/device checks remain open.
+UI #1192's published head still has no completed failure; only Canvas and
+the OpenBao plugin image job are pending at this observation.
