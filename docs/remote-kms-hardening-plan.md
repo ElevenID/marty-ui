@@ -10250,5 +10250,14 @@ worktree target path, before bridge compilation. With the previously used
 short target `C:\marty-kms-auth-target` and `USE_ZK_MOCK=1`, locked library
 check and strict Clippy both passed. This is source-graph evidence under
 the mock ZK build, not real-ZK or device qualification. No new published
-downstream head or release
-artifact is qualified by these local checks.
+downstream head or release artifact is qualified by these local checks.
+
+2026-10-09 exact-head Verifier qualification: PR #154 at `7cd9a54`
+completed its hosted checks successfully, including Rust tests, Clippy,
+frontend checks, security audit, and CI Gate. Core PR #355 at `735a11f`
+still has running checks with no failure reported at this checkpoint.
+The local UI service check first stopped before compilation because the
+host's default Rust 1.93 is below this workspace's Rust 1.95 minimum;
+the explicit Rust 1.97.1 locked check of Gateway, Auth and Device
+Registration passed. This toolchain mismatch is not a source regression;
+the check does not replace full hosted CI or the real KMS release probes.
