@@ -10030,3 +10030,11 @@ isolated Rust harness importing the actual module and current Core source
 passed both positive and negative tests (2/2); `cargo fmt --check` passed.
 This adapter is not yet invoked by an OID4VP presenter. The complete
 Authenticator Rust build and Dart/mobile checks remain outstanding.
+
+2026-10-09 published dependency CI update: Core PR #355 at `9abc621` and
+Verifier PR #154 at `ea91db5` now report passing exact-head CI gates and all
+required completed checks (with only declared skipped jobs). Core's affected
+Rust tests, Rust preflight, native ZKP boundary, and security checks passed;
+Verifier's Rust tests, Clippy, frontend checks, dependency contract, and
+security checks passed. These are dependency-branch checks, not validation of
+the unpublished Authenticator/UI grouped heads or a physical wallet flow.
