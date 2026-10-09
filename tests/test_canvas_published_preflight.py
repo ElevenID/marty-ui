@@ -1537,9 +1537,16 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
     )
     assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert steps[full]["run"] == (
-        "python3 ../scripts/ci/run-db-contract-groups.py "
-        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
+        "set -euo pipefail\n"
+        'if [[ "${{ matrix.lane }}" == worker ]]; then\n'
+        "  python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
+        "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas\n"
+        "else\n"
+        "  python3 ../scripts/ci/run-db-contract-groups.py "
+        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}\n"
+        "fi\n"
     )
+    assert steps[image]["if"] == "matrix.lane == 'canvas'"
     assert "if" not in steps[full]
     for index in (preflight, full):
         assert not steps[index].get("continue-on-error", False)

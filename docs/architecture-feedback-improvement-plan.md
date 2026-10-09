@@ -2261,10 +2261,17 @@ workspace-wide Clippy and release-policy jobs remain possible bottlenecks.
 The exact initial PR head was independently reviewed after rebase onto the
 merged worker-only runner; it is not live worker-only evidence.
 The first labeled [PR run 37861477220](https://github.com/ElevenID/marty-ui/actions/runs/37861477220)
-selected all three Rust lanes but its public-protocol job rejected the new
-matrix syntax using a stale exact-string owner guard. The follow-up updates
-that guard to require the PR-only condition and normal-matrix fallback, with
-negative mutation tests; hosted success and worker timings remain pending.
+selected all three Rust lanes. Its worker-only job passed in 13m36s (5m56s
+compile, 6m51s database/process step): both pinned-process preflights passed,
+the routine worker run reported 110 passed / 2 ignored with the retained
+147-case migration inventory, and every worker timing-artifact row was `ok`.
+This is feasibility evidence, not a complete PR run or comparable CI speedup.
+The public-protocol and contracts-vector jobs rejected the new matrix syntax
+using a stale exact-string owner guard; release pytest also found structural
+assertions written for only one compile/preflight lane. The reviewed follow-up
+requires the active PR-only matrix and normal fallback and updates the stale
+tests without relaxing full Canvas obligations. A corrected hosted run and
+full-Canvas comparison remain pending.
 
 ## Design references
 
