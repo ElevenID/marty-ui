@@ -127,22 +127,21 @@ impl OpenBaoHolderProofProvider {
             hex::encode(&tenant_digest[..8]),
             Uuid::new_v4().simple()
         );
-        let client = Client::new();
-        let key_url = format!("{}/v1/transit/keys/{key_name}", self.endpoint);
-        if let Err(error) = self
-            .post(
-                &client,
-                &key_url,
-                &json!({"type":"ed25519","exportable":false,"allow_plaintext_backup":false}),
-            )
-            .await
+        let config = self.service_config(&key_name);
+        let metadata = match kms::create_managed_openbao(ProviderRequest {
+            service_config: config.clone(),
+        })
+        .await
         {
-            // A timed-out create may have succeeded remotely. Try to delete it.
-            let _ = self.delete_key(&key_name).await;
-            return Err(error);
-        }
+            Ok(metadata) => metadata,
+            Err(_) => {
+                // A timed-out create may have succeeded remotely. Try to delete it.
+                let _ = self.delete_key(&key_name).await;
+                return Err(HolderProofError::Provider);
+            }
+        };
 
-        let result = self.issue_with_key(&key_name, &request).await;
+        let result = self.issue_with_key(config, metadata, &request).await;
         let cleanup = self.delete_key(&key_name).await;
         if cleanup.is_err() {
             tracing::error!(key_reference = %key_name, "ephemeral VC-API holder key cleanup failed");
@@ -217,15 +216,10 @@ impl OpenBaoHolderProofProvider {
 
     async fn issue_with_key(
         &self,
-        key_name: &str,
+        config: Value,
+        metadata: Value,
         request: &HolderProofRequest,
     ) -> Result<String, HolderProofError> {
-        let config = self.service_config(key_name);
-        let metadata = kms::read_managed_openbao(ProviderRequest {
-            service_config: config.clone(),
-        })
-        .await
-        .map_err(|_| HolderProofError::Provider)?;
         if metadata["status"] != "active"
             || metadata["type"] != "ed25519"
             || metadata["exportable"] != false
@@ -275,22 +269,6 @@ impl OpenBaoHolderProofProvider {
         )
         .map_err(|_| HolderProofError::Provider)?;
         Ok(proof)
-    }
-
-    async fn post(&self, client: &Client, url: &str, body: &Value) -> Result<(), HolderProofError> {
-        let response = client
-            .post(url)
-            .timeout(TIMEOUT)
-            .header("X-Vault-Token", &self.token)
-            .json(body)
-            .send()
-            .await
-            .map_err(|_| HolderProofError::Provider)?;
-        response
-            .status()
-            .is_success()
-            .then_some(())
-            .ok_or(HolderProofError::Provider)
     }
 }
 

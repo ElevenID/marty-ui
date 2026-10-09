@@ -8701,3 +8701,25 @@ The repaired provisioning/model/ownership suites pass 249 tests with two
 skips; 16 compose-deployment and Gateway/Device Registration cutover tests
 also pass. This correction is local and held with the larger UI batch while
 the previous published head's Canvas CI job is still running.
+
+The preceding published UI head `8215f28af` then completed exact-head CI
+`37908090888` successfully. After the affected tests and static checks above,
+the seven-commit grouped batch was pushed to draft UI PR #1192 at
+`167c5e7e4b9e4cd55f1571156746bd13eef26629`. The PR description now names
+the holder-key cleanup, dedicated Device Registration caller credential,
+paired deployment wiring, and still-open durable holder/wallet release gate.
+The new CI run is `37913136390`; Open-source policy completed successfully
+while CI, CodeQL and organization quality were queued or active at first
+inspection. Do not transfer the prior head's green result to this new head.
+
+Further local Rust DRY follow-up: the ephemeral VC-API holder proof now creates
+its non-exportable Ed25519 key through `kms::create_managed_openbao` and uses
+the returned public/custody metadata directly, removing its duplicate raw
+Transit create request and redundant metadata read. Error cleanup still
+attempts remote deletion after an uncertain create; successful proof paths
+delete the key before returning. Signing Keys' library suite passed 135 tests
+with eight ignored; warnings-denied Clippy passed. The disposable coordinated
+restore probe passed against real OpenBao, PostgreSQL and Redis after this
+refactor, including holder-proof verification/deletion, DIDComm rotation, the
+Go extension, HAIP and integration-secret reads before and after restore.
+This remains a local follow-up held for the next grouped UI push.
