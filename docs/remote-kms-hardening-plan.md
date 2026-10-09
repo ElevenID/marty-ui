@@ -9776,7 +9776,8 @@ replace the local code generator and simulated completion. Review QR
 shoulder-surfing/race behavior and require the user to approve the displayed
 API origin on mobile; do not expose the bearer or status capability in logs.
 
-2026-10-09 exact-ticket wallet confirmation candidate (local, not yet pushed):
+2026-10-09 exact-ticket wallet confirmation candidate (local UI commit
+`af613188e`, mobile follow-up commit `85efa95`; neither pushed yet):
 Device Registration now persists a UUID pairing identifier separately from the
 single-use Redis secret. The fresh schema records ticket issue, enrollment,
 confirmation, and expiry without storing bearer or private key material.
