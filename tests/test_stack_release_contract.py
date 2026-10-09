@@ -539,10 +539,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.83"
-    assert integration["commit"] == "3b665e1308c619e963aa8b084c90833c0888fdf1"
+    assert integration["version"] == "1.2.84"
+    assert integration["commit"] == "64d30543752e8838743e6950e2ef3a862e0facc7"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:ed6586aefe29f90c42cbf6ca0f4e4a20bddfc526bb5885b6f1d04edeb4228422"
+        "sha256:73ae9f338138b439b0803cde3204351583d3addee9882a62e4b995f58385bb47"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -560,7 +560,7 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     assert lock["release_state"] == "eligible"
     stack_tag_gate.require_release_eligible(ROOT, "v1.1.236")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.83"
+    assert components["marty-integration-tests"]["version"] == "1.2.84"
 
     documents = (
         _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
