@@ -2516,9 +2516,18 @@ the Linux gate. The detailed source and platform-count mapping is in
 `docs/rust-migrations/flow-acceptance-test-owner.md`. Canvas no longer has a
 direct `marty-flow` dev dependency, but `cargo tree` still reaches Flow via
 Gateway and deployment-profile, so this does **not** establish a compile
-surface reduction. Independent review found no P1-P3 issue after fixes; a
-protected Linux run and comparable timings remain pending. No end-to-end CI
-speedup is claimed.
+surface reduction. Independent review found no P1-P3 issue after fixes.
+The first hosted PR Canvas job (`37905105137`, job `113737047183`) passed:
+Linux discovered 130 Canvas cases (126 parallel passes and four filtered)
+plus nine Flow cases (all passed), preserving the 139-case total. Flow ran
+in 33.9 seconds while the other three targets ran concurrently. That job
+took 30m07s, including 10m09s compilation, 8m06s public-image build, and
+8m06s database suites. The earlier protected #1202 job took 26m59s with
+8m10s, 7m33s, and 7m14s for those respective stages; different heads and
+cache conditions make this a diagnostic comparison, not an attributable
+speedup. The same PR's Release Contract job exposed stale policy guards,
+which were corrected separately. Protected Linux validation and comparable
+repeat timings remain pending; no end-to-end CI speedup is claimed.
 
 ## Design references
 
