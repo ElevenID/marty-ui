@@ -85,8 +85,8 @@ FLOW_HISTORICAL_ROSTER = (
     "didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn",
 )
 PINS = [
-    f"registry.invalid/{name}@sha256:{letter * 64}"
-    for name, letter in (("postgres", "a"), ("issuance", "b"))
+    "postgres@sha256:" + "a" * 64,
+    "registry.invalid/issuance@sha256:" + "b" * 64,
 ]
 MANDATORY_REGISTRATION_COUNT = 165
 MANDATORY_REGISTRATION_SHA256 = (
@@ -444,6 +444,7 @@ printf '%s\n' "$record" >> "$TEST_LOG"
 if [[ $# == 3 && "$1" == rm && "$2" == -f && "$3" == canvas-kms-aaaaaaaaaaaa ]]; then
   exit 0
 fi
+if [[ $# == 3 && "$1" == image && "$2" == inspect ]]; then exit 1; fi
 [[ $# == 2 && "$1" == pull ]] || exit 90
 [[ "$TEST_FAILURE" != docker ]] || exit 13
 """,
@@ -1129,7 +1130,10 @@ def test_opt_in_worker_full_keeps_exact_worker_owner_without_composition(shell_c
     parallel = next(call for call in children if "--test-threads=4" in call)
     assert all(["--skip", target] == parallel[i : i + 2] for target in HISTORICAL_SERIAL for i in [parallel.index(target) - 1])
     assert [call for call in calls if call[0] == "docker"] == [
-        ["docker", "pull", pin] for pin in PINS
+        ["docker", "image", "inspect", PINS[0]],
+        ["docker", "image", "inspect", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", PINS[1]],
     ]
     assert (
         "Canvas tier inventory: exact compiled worker selection confirmed"
@@ -1355,7 +1359,10 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         ]
     )
     assert [call for call in calls if call[0] == "docker"] == [
-        *[["docker", "pull", pin] for pin in PINS],
+        ["docker", "image", "inspect", PINS[0]],
+        ["docker", "image", "inspect", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", PINS[1]],
         ["docker", "rm", "-f", "canvas-kms-aaaaaaaaaaaa"],
     ]
     assert len([call for call in calls if call[0] == "kms-start"]) == 1
