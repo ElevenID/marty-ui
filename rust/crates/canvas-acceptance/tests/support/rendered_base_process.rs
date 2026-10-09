@@ -194,6 +194,8 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             "policy_directory": directory.path(),
             "kms_url": "http://127.0.0.1:18200",
             "kms_token_file": token,
+            "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
+            "integration_secret_kms_ca_file": ca,
             "authcrypt": authenticated,
             "allow_private_ips": allow_private_ips
         });
@@ -215,6 +217,16 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
         assert_eq!(
             native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
             Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
+            Some("https://127.0.0.1:18201/internal")
+        );
+        assert_eq!(
+            native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str),
+            Some(ca)
         );
         assert_eq!(
             native

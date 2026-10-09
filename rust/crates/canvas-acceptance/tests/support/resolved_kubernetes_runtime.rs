@@ -315,6 +315,8 @@ struct Spec {
     policy_directory: PathBuf,
     kms_url: String,
     kms_token_file: PathBuf,
+    integration_secret_kms_url: String,
+    integration_secret_kms_ca_file: PathBuf,
     authcrypt: bool,
     allow_private_ips: bool,
 }
@@ -463,9 +465,15 @@ fn checked_spec(value: &Value) -> Result<Spec> {
     owned_url(&spec.peer_origin, &["http"])?;
     owned_url(&spec.legacy_origin, &["http"])?;
     owned_url(&spec.kms_url, &["http"])?;
+    owned_url(&spec.integration_secret_kms_url, &["https"])?;
+    let secret_url = url::Url::parse(&spec.integration_secret_kms_url).map_err(|_| ERROR)?;
     require(
         spec.peer_origin != spec.legacy_origin
+            && secret_url.path() == "/internal"
+            && secret_url.username().is_empty()
+            && secret_url.password().is_none()
             && spec.ca_file.is_file()
+            && spec.integration_secret_kms_ca_file.is_file()
             && spec.policy_directory.is_dir()
             && spec.ca_file.parent() == Some(spec.policy_directory.as_path())
             && spec.kms_token_file.is_file()
@@ -667,6 +675,17 @@ fn overlay(
     native.insert(
         "DIDCOMM_TLS_CA_FILE".into(),
         spec.ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    native.insert(
+        "INTEGRATION_SECRET_KMS_URL".into(),
+        spec.integration_secret_kms_url.clone(),
+    );
+    native.insert(
+        "INTEGRATION_SECRET_KMS_CA_FILE".into(),
+        spec.integration_secret_kms_ca_file
+            .to_str()
+            .ok_or(ERROR)?
+            .into(),
     );
     if spec.authcrypt {
         require(
@@ -885,6 +904,8 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         "policy_directory": directory.path(),
         "kms_url": "http://127.0.0.1:18200",
         "kms_token_file": token,
+        "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
+        "integration_secret_kms_ca_file": ca,
         "authcrypt": false,
         "allow_private_ips": false
     });
@@ -929,6 +950,16 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         assert_eq!(
             native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
             Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
+            Some("https://127.0.0.1:18201/internal")
+        );
+        assert_eq!(
+            native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str),
+            Some(ca_path)
         );
         assert_eq!(
             native

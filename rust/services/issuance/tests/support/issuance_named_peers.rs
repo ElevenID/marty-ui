@@ -41,7 +41,9 @@ pub(super) const TEMPLATE: &str = "didcomm-template";
 pub(super) const PROFILE: &str = "didcomm-status";
 pub(super) const TOKEN: &str = "synthetic-renewal-fresh-main-service-token";
 pub(super) const API_KEY: &str = "synthetic-renewal-fresh-main-management-key";
-pub(super) const SIGNING_KEY: &str = "synthetic-renewal-fresh-main-signing-key";
+// Issuance uses this same internal service token for Signing Keys and its
+// remote integration-secret endpoint. Keep both owned peers on one token.
+pub(super) const SIGNING_KEY: &str = super::issuance_process::remote_integration_secret::API_KEY;
 pub(super) const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 pub(super) const CLIENT_KEY: &str = "synthetic-base-gateway-client-key";
 pub(super) const CANVAS_CLIENT_KEY: &str = "synthetic-base-canvas-client-key";

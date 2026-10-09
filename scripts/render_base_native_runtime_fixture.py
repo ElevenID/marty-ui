@@ -46,6 +46,8 @@ SPEC_KEYS = frozenset(
         "policy_directory",
         "kms_url",
         "kms_token_file",
+        "integration_secret_kms_url",
+        "integration_secret_kms_ca_file",
         "authcrypt",
         "allow_private_ips",
     }
@@ -97,6 +99,12 @@ def validate_spec(spec):
     assert ca.is_file() and ca.parent.resolve() == directory.resolve()
     token_file = Path(spec["kms_token_file"])
     assert token_file.is_file() and token_file.parent.resolve() == directory.resolve()
+    owned_url(spec["integration_secret_kms_url"], {"https"})
+    secret_kms = urlsplit(spec["integration_secret_kms_url"])
+    assert not secret_kms.username and not secret_kms.password
+    assert secret_kms.path == "/internal"
+    secret_ca = Path(spec["integration_secret_kms_ca_file"])
+    assert secret_ca.is_absolute() and secret_ca.is_file()
     if spec["authcrypt"]:
         assert (directory / "didcomm-encryption-policy.json").is_file()
 
@@ -117,6 +125,8 @@ def fixture_overlay(spec, selected):
         "DIDCOMM_TLS_CA_FILE": spec["ca_file"],
         "DIDCOMM_KMS_ADDR": spec["kms_url"],
         "DIDCOMM_KMS_TOKEN_FILE": spec["kms_token_file"],
+        "INTEGRATION_SECRET_KMS_URL": spec["integration_secret_kms_url"],
+        "INTEGRATION_SECRET_KMS_CA_FILE": spec["integration_secret_kms_ca_file"],
     }
     if spec["authcrypt"]:
         native["DIDCOMM_ENCRYPTION_POLICY_FILE"] = str(

@@ -34,6 +34,8 @@ def spec(tmp_path):
         "policy_directory": str(tmp_path),
         "kms_url": "http://127.0.0.1:28200",
         "kms_token_file": str(tmp_path / "openbao-token"),
+        "integration_secret_kms_url": "https://127.0.0.1:28201/internal",
+        "integration_secret_kms_ca_file": str(tmp_path / "ca.pem"),
         "authcrypt": True,
         "allow_private_ips": False,
     }
@@ -60,6 +62,10 @@ def test_spec_has_only_owned_explicit_addresses_and_paths(spec):
         ("kms_url", "http://production.example:8200"),
         ("kms_url", "http://user:password@127.0.0.1:28200"),
         ("kms_token_file", "absent"),
+        ("integration_secret_kms_url", "http://127.0.0.1:28201/internal"),
+        ("integration_secret_kms_url", "https://production.example:8018/internal"),
+        ("integration_secret_kms_url", "https://user:password@127.0.0.1:28201/internal"),
+        ("integration_secret_kms_ca_file", "absent"),
     ],
 )
 def test_spec_rejects_unowned_or_ambiguous_inputs(spec, field, value):
@@ -176,6 +182,8 @@ def test_actual_authcrypt_render_binds_owned_kms_address_and_token_file(spec):
     native = rendered["native_environment"]
     assert native["DIDCOMM_KMS_ADDR"] == spec["kms_url"]
     assert native["DIDCOMM_KMS_TOKEN_FILE"] == spec["kms_token_file"]
+    assert native["INTEGRATION_SECRET_KMS_URL"] == spec["integration_secret_kms_url"]
+    assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == spec["integration_secret_kms_ca_file"]
     assert native["DIDCOMM_ENCRYPTION_POLICY_FILE"] == str(
         Path(spec["policy_directory"]) / "didcomm-encryption-policy.json"
     )

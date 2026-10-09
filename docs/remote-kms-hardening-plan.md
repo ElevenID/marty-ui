@@ -7273,3 +7273,26 @@ Clippy, Python retirement and unit gates, WASM, local Marty Python binding,
 Core wheel, dependency/security checks and aggregate CI. It remains a draft
 because exact published artifacts and authenticator browser integration are
 still outstanding; green branch CI alone does not satisfy K7/K9.
+
+2026-10-08/09 UI Canvas hosted follow-up: PR #1192 head `81ab5df4d`
+completed with 25 successful checks, three failing lanes and their failed
+aggregate gate. Release Contract Tests had one obsolete fixture assertion,
+and the Rust contracts lane had a standalone worker test expecting startup
+without remote KMS; both have locally tested corrections in the unpushed
+batch. The Rust Canvas lane passed its 110-test worker parity suite but seven
+packaged base/Kubernetes composition and renewal cases timed out waiting for
+the Issuance health endpoint. The retained CI child diagnostics report the
+health failure, not the process stderr. Source review found two deterministic
+fixture defects affecting those cases: the synthetic integration-secret KMS
+requires `test-remote-secret` while the packaged Issuance process was given a
+different Signing Keys internal token; and the exact rendered Compose and
+Kubernetes child environments retained deployment-only integration-secret
+KMS URL/CA locations. The local correction aligns the shared internal token
+with the synthetic remote peer and overlays only the owned HTTPS KMS URL and
+CA file while preserving the closed rendered configuration model. Its input
+validator rejects non-HTTPS, non-owned, embedded-credential and missing-CA
+values. Focused Python renderer/renewal tests pass (106), the Canvas Rust
+contract test executable compiles with Rust 1.95, rustfmt and diff checks
+pass. This is a diagnosed candidate fix, not yet hosted Canvas acceptance;
+push the grouped UI batch and inspect all exact-head gates before claiming
+K8/K9/K10 qualification.

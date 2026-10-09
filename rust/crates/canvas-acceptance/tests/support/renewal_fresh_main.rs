@@ -340,6 +340,8 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "peer_origin":origin, "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
                 "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
                 "kms_url":remote_sender.base_url, "kms_token_file":remote_sender.token_file,
+                "integration_secret_kms_url":super::issuance_process::remote_integration_secret::base_url(),
+                "integration_secret_kms_ca_file":super::issuance_process::remote_integration_secret::ca_file(),
                 "authcrypt":authenticated, "allow_private_ips":allow_private_ips
             });
             // Native-only stage reserves but does not launch the gateway. The
