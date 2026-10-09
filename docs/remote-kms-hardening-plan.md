@@ -10517,3 +10517,13 @@ has no issues; 177 tests pass with four skips. Non-generated line coverage is
 77.04% (1,366/1,773), still below the protected 90% gate. This Authenticator
 commit remains local and unpushed for the broad PR #57 batch; mobile-device
 review and remote-KMS end-to-end acceptance remain open.
+
+2026-10-09 presentation-definition coverage addition: local Authenticator
+commit `70f0888` exercises the supported Presentation Exchange definition path
+through credential selection, approved disclosure, and the remote-signing
+bridge. It also proves filtered fields, duplicate claim requests, and
+unsupported paths fail before signing. These are Dart orchestration tests
+with a fake bridge, not cryptographic custody acceptance. Flutter analysis is
+clean and the full suite passes 179 tests with four skips. Non-generated line
+coverage is 79.30% (1,406/1,773), still below the protected 90% gate; the
+commit remains local in the grouped Authenticator PR #57 batch.
