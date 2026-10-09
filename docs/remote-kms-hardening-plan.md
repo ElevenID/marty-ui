@@ -8017,3 +8017,222 @@ After the native published-process parity gate is qualified, replace or retire
 these raw-key reference executions and preserve only non-executable frozen
 evidence needed for review. Keep rejection tests that supply synthetic
 private-material markers to prove fail-closed behavior.
+
+Credentials artifact checkpoint: downloaded the exact retained
+`core-python-Linux` artifact from green PR #313 CI run `37870545663` at head
+`fef8da1`. It contains `marty_rs-0.2.0-cp311-abi3-linux_x86_64.whl`
+(SHA-256 `adeb13256b0a39f1b6ae99ecb065f700c9c92ff0c6e2f9ee1cf21b36656e5b58`)
+and `marty_verification_py-0.2.0-cp311-abi3-linux_x86_64.whl`
+(SHA-256 `f4b75ce07d916a66c8182df88e27f5afa381b92da3ec8aa46a1ad1635c5e7d11`).
+Both installed without network dependencies into a disposable glibc Python
+3.12 container. Import and callable public OID4VCI/Open Badge verification
+exports passed; retired local DIDComm, symmetric-key, local generation and
+Open Badge issuer exports were absent. The container was removed. This is
+pre-release branch artifact evidence, not proof of the final published wheel
+or Authenticator browser/mobile integration.
+
+Core Python test custody follow-up: `marty-verification/python/tests/test_dtc_external_signing.py`
+still held a fixed private PEM and locally signed DTC payloads. In the Core
+hardening worktree, replace this with a pre-signed public ECDSA vector plus
+the public key, and fix the DTC ID and creation date so the canonical payload
+is stable. The positive external-signature assembly and tampering rejection
+tests both pass (`2 passed`); Ruff and `git diff --check` pass. This local
+test-only correction is not yet on Core PR #355. Batch it with any remaining
+Core follow-up before one hosted CI rerun and coordinate downstream exact
+revision pins. Do not count the current green Core PR head as including this
+test cleanup.
+
+The first public DTC vector was generated against an older installed
+`marty_verification` 0.1.60 binding, which hid a canonical payload difference.
+That vector was corrected using a local `maturin develop --locked` build of
+the current Core 0.2.0 source with the repository's full Python feature set.
+The Core conformance selection now passes all 10 tests: production KMS
+surface, DTC external signing and tamper rejection, MRZ, and eMRTD. The
+test-only Core local commit is `e9a0495`; it remains unpushed for the next
+grouped Core follow-up and downstream pin coordination.
+
+Credentials/Auth public verification boundary follow-up: a self-review found
+the Credentials Python `verify_jwt` and WASM `verify_jwt_claims` exports only
+parsed claims, while the WASM `extract_credentials_from_vp` export returned
+credential objects from an unverified VP JWT. There were no repository callers
+of these functions beyond the unused Authenticator wrapper method. Local
+Credentials commit `5eaedab` removes all three misleading exports and adds
+a Python public-API guard while retaining Core-backed `verify_vcdm_jwt`.
+WASM release build from this source passed, Python `marty-rs` Clippy with
+warnings denied passed, and the locally built Python extension passed six
+production-surface/Core-boundary tests with `verify_jwt` absent.
+
+Local Authenticator commit `bb0d90e` removes the unused Dart VP extraction
+wrapper and global loader export, replaces the tracked WASM/JS bindings with
+the artifact built from Credentials `5eaedab`, and makes its artifact audit
+forbid both unverified JWT exports in JS and raw WASM. The Node public-artifact
+audit and JS syntax check pass. The new WASM SHA-256 is
+`806f2d0a0e9516525bc1dccab145b88db8e2cb54d7b6756f6189b3566d1d2eac`;
+generated JS SHA-256 is
+`54e5e73ed2b0f42d9a00980a1e1d17bb2ca8993f5f51cd3bca3835aa5ec32775`.
+Credentials `5eaedab` has now been pushed into grouped draft PR #313; its
+new exact-head hosted CI/artifact result is pending. Authenticator `bb0d90e`
+remains local and unpushed while its wallet feature gaps are addressed. Web
+cryptographic JWT/SD-JWT verification and mobile KMS-backed holder flows
+remain required before Authenticator can be shipped.
+
+UI exact-head run `37891713276` at `f9317b67a` has now passed Release
+Contract Tests, Rust Lint and Packaging, and Rust Feature Regression Probe.
+At this checkpoint 18 jobs passed, four long jobs were still running:
+OpenBao plugin image with PostgreSQL/Raft restore, Canvas tests including
+public selfhost image, Rust contracts including live Signing Keys Redis,
+and Rust Service Images. No failure has been observed on this head. Require
+terminal aggregate CI Gate before qualifying PR #1192.
+
+Credentials PR #313 description now distinguishes its green prior head
+`fef8da1` from the new unverified-export retirement head `5eaedab`.
+Exact-head CI run `37893495477` and organization/license policy runs are
+queued or in progress; Open-source policy has passed. Require the new CI
+artifact and exact-head checks before promoting this PR or rebuilding the
+Authenticator artifact for release from a published Credentials revision.
+
+Authenticator native self-review found that the iOS JWT, PKI and W3C channel
+extensions returned placeholder JWTs/signatures, unconditional verification
+success, a fabricated DID/credential result, or local `KeyManager` key
+creation. Local Authenticator commit `c6415b9` removes these placeholder
+implementations and makes the affected channels fail closed with explicit
+remote-KMS or cryptographic-verification errors. Source/diff checks show no
+remaining private-key generation, placeholder signature, or unconditional
+`valid: true` in those three handlers. Swift/iOS compilation was unavailable
+on this Windows host, so this commit is not a mobile qualification. The
+Android `SpruceIdHandlerRefactored` still generates device-local signing keys
+and uses them for issuance/presentation; that is an active blocker, not an
+accepted KMS-only holder implementation. Preserve the unshipped Authenticator
+branch until both platforms use remote custody and wallet features are
+requalified.
+
+UI run `37891713276` has now passed the OpenBao DIDComm plugin image lane,
+including its coordinated PostgreSQL/Raft restore, and the Rust contracts
+lane. At this checkpoint 20 jobs passed and only Canvas's public selfhost
+image build and Rust Service Images remained live. The aggregate CI Gate
+still requires terminal results. Credentials exact-head CI `37893495477`
+has six passing jobs and four active build/test jobs, with no failure yet.
+
+Further iOS review found mDoc and wallet channel methods also returned mock
+sessions, fake age/ID/X.509 verification, fabricated mDoc responses, and
+storage success without persistence. The unreferenced iOS
+`W3CMethodHandlerRefactored.swift`/`SignerAdapter.swift` pair still compiled
+device-local key generation/signing code. Local Authenticator commit `2f79125`
+removes that unused pair and the mock mDoc/wallet implementations, with
+explicit errors at all prior channel method names. A source comparison
+confirmed the five affected iOS channel dispatchers still recognize the
+same 44 method names (7 JWT, 4 PKI, 13 W3C, 12 mDoc, 8 wallet), now failing
+closed where no real operation exists. No local signing-key generation,
+placeholder response, or unconditional verification success remains in
+`ios/Runner/SpruceID`; `git diff --check` passed. This is source-level
+containment, not restoration or compiled iOS acceptance. Real mobile
+remote-KMS holder, mDoc session, and persistent wallet implementations
+remain mandatory before the Authenticator branch can ship.
+
+Credentials PR #313 exact head `5eaedab` now has 19 successful checks and
+one intentionally skipped check; CI run `37893495477` completed all 11 jobs
+successfully, including WASM, local Marty Python binding, Python retirement,
+Rust and Python tests, security, and aggregate gate. Its only retained run
+artifact is `core-python-Linux`, containing the pinned Core wheels; the
+Credentials wheel built in the local-binding job is not retained. The hosted
+checks prove the branch CI, but a publishable Credentials wheel and its API
+export audit still require release-artifact qualification. Keep PR #313 draft
+for coordinated Core/UI and browser/mobile cutover gates.
+
+Android Authenticator containment follow-up: local commit `cae6bd5` removes
+the default signing-key creation from `SpruceIdHandlerRefactored.initialize`.
+All 20 existing channel method names remain in its dispatcher, but DID/VC,
+OID4VC/VP, mDoc, SD-JWT and unqualified wallet storage routes now return
+explicit remote-KMS, trusted-verification, session, or persistent-wallet
+errors; advertised DID methods/credential formats are empty until real
+implementations exist. A source comparison found no dispatch-name loss and
+no local key generation in initialization; `git diff --check` passed. The
+old private Android helper methods and signer adapter are still compiled
+behind unreachable private paths, and Android compilation is unavailable
+here. Remove those paths and implement/requalify remote holder signing plus
+wallet/session behavior before shipping. This is fail-closed containment,
+not completed Android KMS custody.
+
+Authenticator desktop audit also found local signing-key generation in
+`macos/Runner/SpruceIdSupport.swift`; this surface has not been changed or
+qualified by the mobile containment commits. The final consumer gate must
+cover every shipped platform (including macOS if it remains supported),
+remove the now-dead Android signer code, and restore real remote signing,
+verification, wallet persistence and mDoc sessions before enabling release.
+
+UI exact-head run `37891713276` has advanced to 21 passing jobs; Rust
+Service Images is now green. Only `Rust Service Tests (canvas)` remains live,
+currently building the public selfhost image. No exact-head failure has
+appeared; the run and aggregate CI Gate are not yet terminal.
+
+The Android containment was then tightened in local Authenticator commit
+`0a2396b`: the unreachable SDK key-manager/signing helper code and
+`PresentationSignerAdapter.kt` were removed, along with the no-op
+initialization claim. `ChannelRegistry` still registers the same channels,
+and a source comparison confirmed all 20 previous Android method names
+remain in the dispatcher with explicit fail-closed responses or empty
+capability lists. A scan of active Android Kotlin app sources found no
+`KeyManager`, `generateSigningKey`, `signPayload`, or `Signer` call; diff
+checks pass. Android/Flutter compilation is unavailable locally and has not
+run in hosted CI for this unpushed branch. This removes the old local signing
+surface but does not restore functional remote holder signing, wallet or
+mDoc capabilities; release remains prohibited until those are implemented
+and tested.
+
+macOS Authenticator containment now matches the mobile boundary. Local
+commit `30764df` removes the single-file macOS mock `KeyManager`, fabricated
+JWT/PKI/W3C signatures, unconditional verification, mDoc sessions and
+wallet success responses. It retains all five previous channel names and
+all 30 method names with explicit fail-closed errors. Source comparison,
+forbidden-marker scan and diff checks passed. macOS/Swift compilation is
+unavailable locally and the branch has not been pushed to hosted CI. The
+goal still requires actual remote holder signing, trusted verification,
+wallet persistence and mDoc sessions across every supported platform;
+these fail-closed channel stubs must not be marketed as feature parity.
+
+The repository also contains `local_plugins/pi-authenticator-legacy` with
+Android keystore private-key signing helpers. This plugin is absent from
+the root `pubspec.yaml`/`pubspec.lock` and active
+`lib`/`android/app/src/main` references in the current Authenticator
+worktree, so it is not evidence of a shipped key path. Retire or archive the
+unused plugin after a release graph audit rather than accidentally pulling
+it into a KMS-only package.
+
+After the Android/macOS edits, the Authenticator candidate still passes its
+Node public-WASM artifact audit and loader syntax check. A targeted scan of
+active Android app Kotlin, iOS `Runner/SpruceID` Swift and macOS `Runner`
+Swift sources found no `KeyManager`, `generateSigningKey`, `signPayload`,
+placeholder signature/response markers, or unconditional verification
+success in those paths. This is a source audit only; compiled mobile/desktop
+artifacts and real wallet behavior are still unqualified.
+
+Local Authenticator commit `274ffaf` adds a fast CI source guard to the
+existing Flutter Test workflow. It scans active Android handler, iOS
+SpruceID and macOS runner sources for SDK local key-manager/signing calls
+and placeholder or unconditional-success responses, and rejects an accidental
+root `pubspec` dependency on the retired legacy plugin. The guard and Node
+syntax check pass locally. This guard preserves the source boundary while
+the branch is under construction; it does not prove compiled mobile/desktop
+artifacts or restore wallet functions.
+
+Remote-holder feasibility check: Signing Keys already exposes
+`/v1/signing-keys/holder-keys`, but its request only registers a device and
+credential's **public** JWK; it does not create or sign with a remote holder
+private key. `/internal/vc-api/holder-proof` creates a one-request ephemeral
+OpenBao Ed25519 proof for the Gateway VC-API organization flow and deletes
+that key after use. Neither endpoint is an authenticated, durable
+device-scoped Authenticator signing API. Do not wire the mobile wallets to
+either as if they solved remote holder custody. The replacement needs a
+device-authorized create/reference/sign/rotate/revoke contract with public
+verification projection and recovery semantics, followed by end-to-end
+wallet and mDoc qualification.
+
+The grouped Authenticator candidate is now pushed at exact head
+`274ffaf5d6b2e15b2b615ae8324df117f3ab2f7b` as draft PR #57. Its PR
+description makes the fail-closed scope, upstream Core/Credentials/UI pins,
+local evidence and remaining remote-holder/wallet/browser gates explicit.
+Hosted Flutter Test run `37895163573`, Flutter Build `37895163276`, Rust
+Bridge Codegen `37895163219` and policy/quality runs have started or queued;
+none is qualified until terminal. Keep PR #57 draft and do not release the
+feature-reduced candidate. The current UI run `37891713276` remains live in
+the Canvas isolated database contract step with 21 earlier jobs passing.
