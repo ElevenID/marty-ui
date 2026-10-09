@@ -10589,3 +10589,7 @@ not been published or run against a full
 assembled product database. The exact-head UI CI run `37999429439` remains
 in progress; at observation all completed jobs, including Nginx integration,
 UI shards, service tests, security scanning and Rust supply chain, were green.
+Organization Quality run `37999430821`, Open-source policy run
+`37999429420`, and CodeQL Actions run `37999429505` have since completed
+successfully at the same published head; CodeQL Rust and the main CI run
+remain in progress.
