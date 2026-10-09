@@ -55,7 +55,9 @@ def test_internal_application_postgres_contract_is_required_in_ci() -> None:
     runtime = text("scripts/ci/run-rust-db-contracts.sh")
     assert 'name = "internal_application_postgres_contract"' in manifest
     assert 'path = "tests/internal_application_postgres_contract.rs"' in manifest
-    assert "internal_application_postgres_contract-*" in runtime
+    assert (
+        "resolve_contract_executable internal_application_postgres_contract" in runtime
+    )
     assert "Expected one internal Application PostgreSQL contract executable" in runtime
 
 
@@ -65,12 +67,14 @@ def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -
     workflow = text(".github/workflows/ci.yml")
     assert 'name = "oid4vci_migration_postgres_contract"' in manifest
     assert 'path = "tests/oid4vci_migration_postgres_contract.rs"' in manifest
-    assert "oid4vci_migration_postgres_contract-*" in runtime
+    assert "resolve_contract_executable oid4vci_migration_postgres_contract" in runtime
     assert "Expected one Issuance OID4VCI migration PostgreSQL contract executable" in runtime
     assert '.target.name == "oid4vci_migration_postgres_contract"' in workflow
     assert "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
-    assert runtime.index("oid4vci_migration_postgres_contract-*") < runtime.index(
-        "issuance_transaction_postgres_contract-*"
+    assert runtime.index(
+        "resolve_contract_executable oid4vci_migration_postgres_contract"
+    ) < runtime.index(
+        "resolve_contract_executable issuance_transaction_postgres_contract"
     ), "the following transaction suite must recreate tables after the rollback fixture"
 
 

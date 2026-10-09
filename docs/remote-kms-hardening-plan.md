@@ -7760,3 +7760,46 @@ Packaging (`duplicate_mod`) and Rust contracts (duplicate executable hash in
 the CI runner) failed, plus their aggregate gate. Both corrections are
 already locally validated and grouped for one push to PR #1192. The next
 exact-head run must turn those two lanes green before UI is ready for review.
+The grouped fixes and tracker updates were pushed as UI PR #1192 head
+`cf2f701fe`; exact-head CI run `37885206206` has started. Do not infer
+qualification from the prior head's passing Canvas/OpenBao/image lanes;
+require all required checks on this exact commit.
+
+Potential DRY basis for the remaining Authenticator holder proof: UI Signing
+Keys already has a Rust `OpenBaoHolderProofProvider` for the internal VC-API
+Gateway bridge (`/internal/vc-api/holder-proof`). It creates a non-exportable
+ephemeral Ed25519 Transit key, signs the OID4VCI proof JWT, verifies the
+result and deletes the key. This is **not yet** an Authenticator mobile API:
+it has an internal trust boundary and one-request ephemeral holder identity,
+while the native wallet may require stable holder keys and device-scoped
+authorization. Evaluate reuse or extraction of its Rust proof logic and
+define authenticated remote holder key lifecycle before replacing Android/iOS
+SDK signers. Do not expose the internal route directly to devices.
+
+Authenticator isolated candidate now compiles its Rust bridge with hardened
+Core and Verifier pins using a short Windows build target and debug-only ZK
+mock. Enabling Core's `marty-zkp/prover` feature and borrowing the claim name
+resolved five bridge errors. The unused `wallet_create_proof_jwt` export and
+its stale Rust/Dart/native/web binding entries were removed; no non-generated
+Dart caller referenced it. The pinned Flutter Rust Bridge 2.13 generator
+could not finish locally because `ffigen` requires a real Flutter SDK, which
+is absent here. A hand-pruned generated diff remains provisional; the actual
+Flutter 3.44.6 codegen CI job must regenerate and compare it before any
+Authenticator PR can be qualified. Rust bridge tests are running. Android/iOS
+SDK holder signing is still an active KMS-only release gap.
+
+At UI PR #1192 exact head `cf2f701fe`, Rust Lint and Packaging has completed
+successfully. This confirms the duplicate-module correction; the contracts,
+Canvas, OpenBao restore and image lanes remain live in run `37885206206`.
+The same run's Release Contract Tests lane found two stale source assertions
+in `test_issuance_rust_candidate.py`: they searched for the old executable
+globs removed by the manifest-based CI resolver. Its other 6,196 tests
+passed. The two assertions now require the new resolver calls and retain the
+OID4VCI-migration-before-transaction ordering check. Both focused tests,
+Ruff and diff checks pass locally. Hold this correction until the still-live
+contracts, Canvas, OpenBao and image lanes finish, then group any further
+findings in one push.
+The exact-head Rust contracts lane has since progressed past the database
+contract groups and into authenticated Gateway Signing acceptance, indicating
+the manifest-based executable selection cleared its previous duplicate-hash
+stop. Wait for the lane's final result before claiming it green.
