@@ -9647,3 +9647,17 @@ failures; only Rust Service Tests (canvas) was still running. The OpenBao
 plugin-image, Rust service contracts, service images, Rust Lint and Packaging,
 release contracts and UI lanes had passed on the published head. Keep the
 local candidate changes batched until that exact-head run is terminal.
+
+2026-10-09 Gateway pairing policy candidate: the trusted Gateway identity
+now has an explicit `permits_pairing_ticket` predicate. It accepts only a
+session actor with a nonempty user ID and a validated OIDC `auth_time` no
+older than five minutes and no later than current time. Missing, stale,
+future and API-key values fail. The focused Gateway unit test and formatting
+check passed. This policy is not yet wired to a public route or sufficient
+on its own: the selected organization still needs active membership
+authorization, the device service needs a Redis-backed issue/redeem runtime,
+and the mobile wallet must consume the ticket and receive a remote-key-bound
+credential. Current `ui/src/components/WalletSetup.jsx` still calls the
+simulated pairing-code application helper, so no wallet cutover is claimed.
+Keep this as one local batch in draft UI PR #1192 until the running head's
+Canvas lane finishes and the complete routing and release checks are ready.

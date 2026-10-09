@@ -164,6 +164,24 @@ pub struct GatewayIdentity {
     pub api_key_scopes: Vec<String>,
 }
 
+const PAIRING_STEP_UP_MAX_AGE_SECONDS: i64 = 300;
+
+/// A pairing ticket may only be requested by a recently reauthenticated
+/// browser session. Tenant membership is checked separately for the selected
+/// organization before ticket issuance.
+#[must_use]
+pub fn permits_pairing_ticket(identity: &GatewayIdentity, now_unix: i64) -> bool {
+    if identity.source != AuthenticationSource::Session || identity.user_id.trim().is_empty() {
+        return false;
+    }
+    let Some(authenticated_at) = identity.authentication_time_unix else {
+        return false;
+    };
+    authenticated_at > 0
+        && authenticated_at <= now_unix
+        && now_unix - authenticated_at <= PAIRING_STEP_UP_MAX_AGE_SECONDS
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum AuthenticationOutcome {
     Bypass,
@@ -635,6 +653,30 @@ mod tests {
             panic!("API-key authentication must succeed");
         };
         assert_eq!(api_key.authentication_time_unix, None);
+    }
+
+    #[test]
+    fn pairing_ticket_policy_rejects_stale_future_and_non_session_actors() {
+        let now = 1_700_000_500;
+        let session = session_context(SessionIdentity {
+            user_id: "user-1".into(),
+            authentication_time_unix: Some(now - PAIRING_STEP_UP_MAX_AGE_SECONDS),
+            ..SessionIdentity::default()
+        });
+        assert!(permits_pairing_ticket(&session, now));
+        for candidate in [
+            None,
+            Some(now - PAIRING_STEP_UP_MAX_AGE_SECONDS - 1),
+            Some(now + 1),
+            Some(0),
+        ] {
+            let mut altered = session.clone();
+            altered.authentication_time_unix = candidate;
+            assert!(!permits_pairing_ticket(&altered, now));
+        }
+        let mut api_key = session;
+        api_key.source = AuthenticationSource::ApiKey;
+        assert!(!permits_pairing_ticket(&api_key, now));
     }
 
     #[tokio::test]
