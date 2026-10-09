@@ -1227,9 +1227,9 @@ assembled Core matrix is still due.
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; UI and Credentials candidates now pin grouped Core PR #355 head `d41d87c`. Six UI no-default-feature native library suites pass (969 active tests, 17 ignored) and compile locked on CI Rust 1.95. Credentials' locked graph verifier and focused Rust/Python tests pass at that pin. Core remains draft/review-required; ignored live tests, full consumer packaging and published release artifacts remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
-| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 pins Core `d41d87c`, excludes LDAP from WASM, rejects isomdl local signing in CI and passes local web WASM/package-load and Windows ABI3 wheel/surface checks. Hosted checks, the authenticator browser flow, published wheels, release manifest, replacement vectors and artifact qualification remain. |
+| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 at `fef8da1` pins Core `d41d87c`, excludes LDAP from WASM and rejects isomdl local signing. Its 19 hosted checks pass, alongside local web WASM/package-load and Windows ABI3 wheel/surface checks. The authenticator browser flow, published wheels, release manifest, replacement vectors and artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core draft PR #355 at `d41d87c` has green hosted checks but needs review. Grouped UI draft PR #1192 at `81ab5df4d` and Credentials draft PR #313 at `c532926` are in hosted qualification. Exact release artifacts, supported cutover and recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. Core draft PR #355 at `d41d87c` and Credentials draft PR #313 at `fef8da1` have green hosted checks; Core needs review and Credentials still needs browser/release qualification. UI draft PR #1192 at `81ab5df4d` has two corrected lane failures and one live Canvas lane; its reconciliation/correction head is local. Exact release artifacts, supported cutover and recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials has removed its private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. The UI candidate uses one shared private-material policy for signing-key documents, Organization settings/audit JSON, Trust Profile, Deployment Profile, Presentation Policy, Compliance Profile, Flow and Notification JSON boundaries. Focused tests and disposable PostgreSQL checks pass for earlier stores; the recently guarded packages pass tests and strict Clippy. Cross-repository assembled schema, remaining JSON/data-flow inventory and release-artifact proof remain. |
 
 ### First execution steps
@@ -7244,3 +7244,32 @@ revision files are absent from the current runtime migration directory, so
 the snapshot is historical metadata rather than an executable clean-install
 table creator. This static inventory does not replace the pending assembled
 fresh PostgreSQL schema and runtime-write audit.
+
+Credentials PR #313 correction `99e0cc0` is pushed. Its new hosted native
+preflight, Rust tests and Clippy pass; the pinned-Core wheel build from the
+previous head also passed and installed wheels whose exported surfaces reject
+retired local DIDComm and symmetric-key methods. The new Python unit job found
+one test asserting the removed Nextest command; the local `fef8da1` correction
+requires the current Cargo native test command and its focused suite passes.
+The local full unit collection showed five additional failures only because
+this worktree retains 100 ignored `.pyc` files under the retired
+`services/issuance` directory; `git ls-files services/issuance` is empty and
+the hosted fresh checkout passed those tests. WASM and local binding jobs
+remain live; hold `fef8da1` for any further findings before pushing again.
+The UI OpenBao image job passed at `81ab5df4d`, including coordinated
+integration-secret recovery; its Canvas lane is still building the published
+selfhost image. The local UI merge/correction head remains unpushed pending
+that last result. A local full Windows release-test run was interrupted after
+slow progress around 12%, so it is not acceptance evidence; the 213 focused
+workflow/contract tests and the prior hosted 6,169-pass release run remain
+the relevant evidence until the new hosted head is checked.
+Credentials PR #313 was pushed again at `fef8da1`. Its corrected Python job
+passed on a clean hosted checkout. Remaining new-head Rust/WASM/binding jobs
+are still in progress, and this is not yet an all-checks-green result.
+The full Credentials PR #313 head `fef8da1` hosted rollup subsequently
+completed with 19 successes, one intentionally skipped scorecard and no
+failures. This includes KMS-only feature preflight, Rust compile/test and
+Clippy, Python retirement and unit gates, WASM, local Marty Python binding,
+Core wheel, dependency/security checks and aggregate CI. It remains a draft
+because exact published artifacts and authenticator browser integration are
+still outstanding; green branch CI alone does not satisfy K7/K9.
