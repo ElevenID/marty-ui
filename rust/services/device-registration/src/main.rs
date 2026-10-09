@@ -5,6 +5,7 @@ use marty_device_registration::{
     holder_key_client::HolderKeyClient,
     holder_key_provisioner::HolderKeyProvisioner,
     holder_key_repository::PostgresHolderKeyRepository,
+    holder_signer::HolderSigner,
     http::{router, HttpState},
     migration::{migrate, validate},
     pairing_enrollment::PairingEnrollment,
@@ -106,25 +107,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?);
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
-    let pairing_enrollment = if let (Some(origin), Some(key)) = (holder_origin, holder_service_key)
-    {
-        if key == gateway_key || token.as_deref() == Some(key.as_str()) {
-            return Err("holder Signing Keys credential must be dedicated".into());
-        }
-        let client = HolderKeyClient::new(&origin, key)?;
-        let keys = PostgresHolderKeyRepository::new(pool.clone());
-        let cleanup = HolderKeyCleanup::new(keys.clone(), client.clone());
-        tokio::spawn(cleanup.run_forever());
-        Some(Arc::new(PairingEnrollment::new(
-            pairing_tickets.clone(),
-            memberships.clone(),
-            service.clone(),
-            HolderKeyProvisioner::new(repository, keys, client),
-            PostgresHolderCredentialRepository::new(pool),
-        )))
-    } else {
-        None
-    };
+    let (pairing_enrollment, holder_signer) =
+        if let (Some(origin), Some(key)) = (holder_origin, holder_service_key) {
+            if key == gateway_key || token.as_deref() == Some(key.as_str()) {
+                return Err("holder Signing Keys credential must be dedicated".into());
+            }
+            let client = HolderKeyClient::new(&origin, key)?;
+            let keys = PostgresHolderKeyRepository::new(pool.clone());
+            let cleanup = HolderKeyCleanup::new(keys.clone(), client.clone());
+            tokio::spawn(cleanup.run_forever());
+            let signer = Arc::new(HolderSigner::new(
+                pool.clone(),
+                client.clone(),
+                memberships.clone(),
+            ));
+            let enrollment = Arc::new(PairingEnrollment::new(
+                pairing_tickets.clone(),
+                memberships.clone(),
+                service.clone(),
+                HolderKeyProvisioner::new(repository, keys, client),
+                PostgresHolderCredentialRepository::new(pool),
+            ));
+            (Some(enrollment), Some(signer))
+        } else {
+            (None, None)
+        };
     let port = env_value("DEVICE_REGISTRATION_SERVICE_PORT", "8014").parse()?;
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let listener = TcpListener::bind(address).await?;
@@ -138,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             memberships,
             pairing_tickets,
             pairing_enrollment,
+            holder_signer,
             release_version,
             build_revision,
             gateway_key,

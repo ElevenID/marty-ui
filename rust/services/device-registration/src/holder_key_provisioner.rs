@@ -28,8 +28,8 @@ impl HolderKeyProvisioner {
         }
     }
 
-    /// The caller must authorize enrollment separately. No public route calls
-    /// this until the device-pairing or step-up policy is settled.
+    /// The caller must authorize enrollment separately. Pairing enrollment
+    /// consumes a browser-approved ticket and checks live membership.
     pub async fn provision(
         &self,
         user_id: &str,

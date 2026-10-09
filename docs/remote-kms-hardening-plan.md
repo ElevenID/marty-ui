@@ -9711,3 +9711,22 @@ Clippy check passed. Before wallet cutover, review compensation under failures,
 expose an authorized remote signing path to the mobile wallet, replace the
 wallet's local holder-key behavior and simulated pairing, and qualify the
 exact signed image/release.
+
+2026-10-09 local holder signing route candidate: Device Registration now serves
+`POST /v1/devices/holder-signatures` only behind its dedicated Gateway key and
+a digest-backed device bearer. It derives user and tenant scope from the stored
+credential, checks the current active membership, holds registration and key
+locks during the bounded remote call, and returns a version-pinned OpenBao
+signature with `no-store`. Gateway exposes exactly this path without session
+auth, forwards the bearer and its own service key, and strips forged client
+user/tenant/service headers. Its full-router proof passed. The guarded
+disposable OpenBao/PostgreSQL/Redis probe passed real HTTP EdDSA and ES256
+signing and verification, ticket replay rejection, membership-revocation
+denial, bearer rotation, deactivation and remote deletion. The seven-test
+Device Registration behavior suite and Gateway library suite passed (156
+passed, one ignored); both service all-target Clippy checks passed with
+warnings denied. This remains local, beyond published PR #1192 head. The
+Authenticator still uses local holder signing, the browser still simulates
+pairing, and the final mobile credential renewal, bearer handling, user
+presence, actual wallet-to-Gateway network path and signed release need review
+and qualification before calling the wallet KMS-only.

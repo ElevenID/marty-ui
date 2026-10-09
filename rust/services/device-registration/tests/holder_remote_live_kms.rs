@@ -18,6 +18,7 @@ use marty_device_registration::{
     postgres::PostgresDeviceRepository,
     DeviceError, DeviceRepository, DeviceService,
 };
+use marty_holder_key_reference::HolderSignature;
 use marty_signing_keys::{
     kms::{read_managed_openbao, ProviderRequest},
     managed_holder_http,
@@ -107,6 +108,11 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let credentials = PostgresHolderCredentialRepository::new(pool.clone());
     let device_service = Arc::new(DeviceService::new(devices.clone()));
     let memberships = Arc::new(SwitchMembership(AtomicBool::new(true)));
+    let signer = Arc::new(HolderSigner::new(
+        pool.clone(),
+        client.clone(),
+        memberships.clone(),
+    ));
     let enrollment = Arc::new(PairingEnrollment::new(
         tickets.clone(),
         memberships.clone(),
@@ -124,6 +130,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         memberships: memberships.clone(),
         pairing_tickets: tickets,
         pairing_enrollment: Some(enrollment),
+        holder_signer: Some(signer.clone()),
         release_version: "test".into(),
         build_revision: "disposable".into(),
         gateway_key: gateway_key.into(),
@@ -184,7 +191,6 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         )
         .await
         .is_err());
-    let signer = HolderSigner::new(pool.clone(), client.clone(), memberships.clone());
     let payload = b"exact managed holder proof";
     assert!(signer
         .sign(
@@ -196,16 +202,17 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         )
         .await
         .is_err());
-    let signature = signer
-        .sign(
-            &enrolled.device_credential,
-            &registration.user_id,
-            key.organization_id.as_str(),
-            "holder_binding",
-            payload,
-        )
+    let signed = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"purpose":"holder_binding","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
         .await
-        .expect("authorized version-pinned remote signature");
+        .expect("holder signing HTTP response");
+    assert!(signed.status().is_success());
+    assert_eq!(signed.headers()["cache-control"], "no-store");
+    let signature: HolderSignature = signed.json().await.unwrap();
     assert_eq!(signature.signature_encoding, "raw");
     let coordinate: [u8; 32] = URL_SAFE_NO_PAD
         .decode(&key.public_x)
@@ -217,16 +224,16 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         Signature::from_slice(&URL_SAFE_NO_PAD.decode(signature.signature_b64).unwrap()).unwrap();
     verifying.verify_strict(payload, &signature).unwrap();
 
-    let presentation_signature = signer
-        .sign(
-            &enrolled.device_credential,
-            &registration.user_id,
-            key.organization_id.as_str(),
-            "presentation_signing",
-            payload,
-        )
+    let signed = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"purpose":"presentation_signing","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
         .await
-        .expect("version-pinned ES256 signature from remote KMS");
+        .expect("presentation signing HTTP response");
+    assert!(signed.status().is_success());
+    let presentation_signature: HolderSignature = signed.json().await.unwrap();
     assert_eq!(presentation_signature.signature_encoding, "der");
     let mut public_point = vec![4_u8];
     public_point.extend(URL_SAFE_NO_PAD.decode(&presentation.public_x).unwrap());
@@ -245,16 +252,15 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     verifier.verify(payload, &signature).unwrap();
 
     memberships.0.store(false, Ordering::SeqCst);
-    assert!(signer
-        .sign(
-            &enrolled.device_credential,
-            &registration.user_id,
-            key.organization_id.as_str(),
-            "holder_binding",
-            payload,
-        )
+    let revoked_membership = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"purpose":"holder_binding","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
         .await
-        .is_err());
+        .expect("revoked membership signing response");
+    assert_eq!(revoked_membership.status(), reqwest::StatusCode::FORBIDDEN);
     memberships.0.store(true, Ordering::SeqCst);
 
     let replacement = credentials

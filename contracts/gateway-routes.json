@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 446,
+  "route_count": 447,
   "routes": [
     {
       "include_in_schema": true,
@@ -717,6 +717,12 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/devices/pair",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/holder-signatures",
       "status_code": 200
     },
     {

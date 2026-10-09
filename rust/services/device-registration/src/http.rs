@@ -6,6 +6,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     control_plane::MembershipAuthorizer,
+    holder_signer::HolderSigner,
     pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
     pairing_ticket::PairingTicketRepository,
     CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
@@ -25,6 +27,7 @@ pub struct HttpState {
     pub memberships: Arc<dyn MembershipAuthorizer>,
     pub pairing_tickets: Arc<dyn PairingTicketRepository>,
     pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
+    pub holder_signer: Option<Arc<HolderSigner>>,
     pub release_version: String,
     pub build_revision: String,
     pub gateway_key: String,
@@ -40,6 +43,10 @@ pub fn router(state: HttpState) -> Router {
         .route(
             "/v1/devices/pair",
             axum::routing::post(redeem_pairing_ticket),
+        )
+        .route(
+            "/v1/devices/holder-signatures",
+            axum::routing::post(sign_holder_payload),
         )
         .route(
             "/v1/devices/{registration_id}",
@@ -155,6 +162,45 @@ async fn redeem_pairing_ticket(
     })?;
     let enrolled = enrollment.redeem(body).await?;
     let mut response = Json(enrolled).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HolderSignRequest {
+    purpose: String,
+    payload_b64: String,
+}
+
+async fn sign_holder_payload(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<HolderSignRequest>,
+) -> Result<Response, ApiError> {
+    let signer = state
+        .holder_signer
+        .as_ref()
+        .ok_or_else(|| DeviceError::Persistence("remote holder signing is unavailable".into()))?;
+    let bearer = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty() && !value.contains(' '))
+        .ok_or_else(|| DeviceError::Forbidden("holder signing authorization is invalid".into()))?;
+    if body.payload_b64.len() > 87_384 {
+        return Err(DeviceError::BadRequest("holder signing input is invalid".into()).into());
+    }
+    let payload = URL_SAFE_NO_PAD
+        .decode(&body.payload_b64)
+        .map_err(|_| DeviceError::BadRequest("holder signing input is invalid".into()))?;
+    let signature = signer
+        .sign_from_bearer(bearer, &body.purpose, &payload)
+        .await?;
+    let mut response = Json(signature).into_response();
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-store"),

@@ -40,6 +40,32 @@ impl HolderSigner {
         }
     }
 
+    /// Resolve scope from the digest-only bearer record. No public caller may
+    /// select a user or organization for holder signing.
+    pub async fn sign_from_bearer(
+        &self,
+        bearer: &str,
+        purpose: &str,
+        payload: &[u8],
+    ) -> Result<HolderSignature, DeviceError> {
+        let digest: [u8; 32] = Sha256::digest(bearer.as_bytes()).into();
+        let row = sqlx::query("SELECT * FROM device_registration_service.device_holder_credentials WHERE token_sha256=$1")
+            .bind(digest.as_slice())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(persistence)?
+            .ok_or_else(|| DeviceError::Forbidden(INVALID.into()))?;
+        let credential = holder_credential_repository::stored(&row)?;
+        self.sign(
+            bearer,
+            &credential.user_id,
+            &credential.organization_id,
+            purpose,
+            payload,
+        )
+        .await
+    }
+
     /// Internal only. A public caller must separately establish device enrollment
     /// and user/session authorization before issuing the bearer.
     pub async fn sign(

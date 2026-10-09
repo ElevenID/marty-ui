@@ -50,7 +50,7 @@ fn contract_retires_device_private_key_challenge() {
         "../../../../contracts/device-registration-service-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract["routes"].as_array().unwrap().len(), 7);
+    assert_eq!(contract["routes"].as_array().unwrap().len(), 8);
     assert!(contract["challenge"].is_null());
     assert!(contract["invariants"]
         .as_array()
@@ -138,6 +138,7 @@ async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
         pairing_enrollment: None,
+        holder_signer: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -210,6 +211,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: tickets.clone(),
         pairing_enrollment: None,
+        holder_signer: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -250,6 +252,7 @@ async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
         memberships: Arc::new(RejectMembership),
         pairing_tickets: tickets,
         pairing_enrollment: None,
+        holder_signer: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -268,6 +271,7 @@ async fn mobile_redemption_cannot_use_a_missing_remote_kms_authority() {
         memberships: Arc::new(AllowMembership),
         pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
         pairing_enrollment: None,
+        holder_signer: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -283,6 +287,47 @@ async fn mobile_redemption_cannot_use_a_missing_remote_kms_authority() {
         builder
             .body(Body::from(
                 r#"{"pairing_code":"synthetic","platform":"android","fcm_token":"push-token"}"#,
+            ))
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(request(None)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.oneshot(request(Some(&gateway_key)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
+async fn mobile_signing_requires_gateway_and_remote_kms_authority() {
+    let gateway_key = "g".repeat(32);
+    let app = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(AllowMembership),
+        pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        pairing_enrollment: None,
+        holder_signer: None,
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    });
+    let request = |token: Option<&str>| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/devices/holder-signatures")
+            .header("authorization", "Bearer synthetic-device-credential")
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            builder = builder.header("x-service-token", token);
+        }
+        builder
+            .body(Body::from(
+                r#"{"purpose":"holder_binding","payload_b64":"cHJvb2Y"}"#,
             ))
             .unwrap()
     };
