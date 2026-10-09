@@ -1,0 +1,88 @@
+name: Passport Beta Rust Readiness
+
+on:
+  workflow_dispatch:
+    inputs:
+      deletion_head:
+        description: Exact merged marty-credentials #305 deletion head.
+        required: true
+      fence_installation_receipt:
+        description: Absolute WSL path to the fenced beta installation receipt.
+        required: true
+
+concurrency:
+  group: passport-beta-rust-readiness
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, linux, x64, passport-beta-wsl2]
+    environment: beta-lifecycle
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DELETION_HEAD: ${{ inputs.deletion_head }}
+      FENCE_RECEIPT: ${{ inputs.fence_installation_receipt }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+      - name: Collect fenced beta and production readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check_passport_beta_runner.py --output "$RUNNER_TEMP/passport-beta-runner-preflight.json"
+          test "$GITHUB_SHA" = "$(git rev-parse HEAD)"
+          test "$(git branch --show-current)" = main
+          test "$DELETION_HEAD" = "$(gh api repos/ElevenID/marty-credentials/pulls/305 --jq .head.sha)"
+          test -f "$FENCE_RECEIPT"
+          snapshot="passport-beta-cutover-snapshot-$GITHUB_RUN_ID.json"
+          report="passport-beta-rust-readiness-$GITHUB_RUN_ID.json"
+          installation="passport-beta-fence-installation-$GITHUB_RUN_ID.json"
+          cp -- "$FENCE_RECEIPT" "$installation"
+          python3 scripts/probe_passport_beta_cutover_snapshot.py \
+            --fence-installation-receipt "$FENCE_RECEIPT" --output "$snapshot"
+          python3 scripts/collect_passport_beta_rust_readiness.py \
+            --snapshot "$snapshot" --installation-receipt "$FENCE_RECEIPT" \
+            --deletion-head "$DELETION_HEAD" --output "$report"
+          cmp -- "$FENCE_RECEIPT" "$installation"
+          jq -e --argjson run "$GITHUB_RUN_ID" --arg source "$GITHUB_SHA" \
+            '.schema == "marty.passport-beta-rust-readiness/v1" and
+             .status == "accepted" and .run_id == $run and
+             .source_commit == $source' "$report"
+      - name: Attest exact fenced beta snapshot
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-cutover-snapshot-${{ github.run_id }}.json
+      - name: Attest exact Rust readiness report
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-rust-readiness-${{ github.run_id }}.json
+      - name: Attest exact fence installation receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: passport-beta-fence-installation-${{ github.run_id }}.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-cutover-snapshot-${{ github.run_id }}
+          path: passport-beta-cutover-snapshot-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-rust-readiness-${{ github.run_id }}
+          path: passport-beta-rust-readiness-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: passport-beta-fence-installation-${{ github.run_id }}
+          path: passport-beta-fence-installation-${{ github.run_id }}.json
+          if-no-files-found: error
+          retention-days: 30
