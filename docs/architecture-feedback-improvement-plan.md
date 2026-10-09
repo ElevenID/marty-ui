@@ -2179,8 +2179,10 @@ Canvas execution and protected validation remain required before merge.
 The public-image loader's two root cases and eight embedded support cases
 have one deployment/packaging obligation. [UI #1202](https://github.com/ElevenID/marty-ui/pull/1202)
 moved their unchanged assertions and exact ten libtest IDs into
-`marty-selfhost-acceptance`, while composition retains its 136 other discovered
-cases. It moves the two self-host support files together, reuses the original
+`marty-selfhost-acceptance`, while composition retains its 139 other discovered
+cases on the final protected #1202 head (135 routine parallel passes, four
+intentionally filtered in that invocation). It moves the two self-host
+support files together, reuses the original
 single-source bundle, renewal, database, and bounded-command fixtures, and
 shares only the generic cleanup-result combiner with composition. The
 composition manifest can then drop three direct development edges:
