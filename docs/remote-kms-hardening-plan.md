@@ -10038,3 +10038,13 @@ Rust tests, Rust preflight, native ZKP boundary, and security checks passed;
 Verifier's Rust tests, Clippy, frontend checks, dependency contract, and
 security checks passed. These are dependency-branch checks, not validation of
 the unpublished Authenticator/UI grouped heads or a physical wallet flow.
+
+2026-10-09 Authenticator local Rust test terminal result: `cargo +1.95.0 test
+--lib operations::issuer_trust::tests --locked` failed in the Windows native
+dependency build before compiling the bridge tests. `marty-zkp` Longfellow C++
+compilation reported tool-execution failures, and vendored `openssl-sys`
+OpenSSL `nmake build_libs` exited 2. This does not contradict the isolated
+actual-module resolver harness passing 2/2; it leaves full Authenticator Rust
+validation for a suitable hosted/mobile build. Core PR #355 is mergeable but
+branch protection reports `REVIEW_REQUIRED`, while Verifier PR #154 is clean;
+both are still open. Do not bypass the Core review requirement.
