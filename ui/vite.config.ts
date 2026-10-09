@@ -471,34 +471,34 @@ export default defineConfig(async ({ mode }) => {
       proxy: {
         // Proxy /v1/* API requests to microservices gateway
         '/v1': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
         // Proxy /auth/* requests to the backend (OIDC flows)
         '/auth': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
         // Legacy /api/* proxy (for backwards compatibility during transition)
         '/api': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
         // Proxy health check
         '/health': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
         },
         // Proxy OpenAPI schema for API documentation
         '/openapi.json': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
         },

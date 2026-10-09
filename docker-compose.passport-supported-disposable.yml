@@ -132,6 +132,8 @@ services:
         condition: service_completed_successfully
       organization:
         condition: service_healthy
+      credential-template:
+        condition: service_healthy
     healthcheck:
       disable: true
     networks: [private]
