@@ -2207,6 +2207,20 @@ took 386.7s concurrently. #1202 merged as `a9845070e`; one required review
 was restored immediately. The split changes no skip or release qualification,
 and these runs do not establish an overall CI wall-time saving.
 
+## A0/A3 Gateway DID-web runtime consumers (2026-10-09 local candidate)
+
+Gateway's root and organization-slug DID-web routes are consumed by two Rust
+services without Cargo dependencies on Gateway. Trust Profile defaults its
+issuer-key resolver to `http://gateway:8000` and the base Compose profile
+binds that URL. Issuance's DIDComm recipient resolver uses the same Gateway
+URL when its optional internal DID-web setting is configured; base Compose
+provides that default. The candidate records both source-, route-contract-,
+and scoped-Compose-backed shadow edges. Mutation-checked tests require the
+consumer binding and call, Gateway route dispatch, published paths, and
+deployment wiring. Gateway source changes still select the full Rust
+workspace, including both consumers; this does not establish complete
+non-Cargo input closure, alter any check, or claim a speedup.
+
 ## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
 
 The shadow planner already records Gateway's public Auth HTTP proxy, but
