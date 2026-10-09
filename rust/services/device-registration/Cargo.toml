@@ -44,6 +44,8 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
+ed25519-dalek.workspace = true
+marty-signing-keys = { path = "../signing-keys" }
 rand08.workspace = true
 rsa.workspace = true
 sha2.workspace = true

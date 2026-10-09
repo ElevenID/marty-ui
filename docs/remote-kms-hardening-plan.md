@@ -9259,3 +9259,18 @@ The standalone `scripts/check-selfhost-production.py` invocation currently
 fails before its checks because it imports the absent `packages/marty_common`;
 qualify or retire that old Python preflight as part of the supported release
 path rather than treating this configuration pass as a complete cutover.
+
+2026-10-09 local combined holder lifecycle acceptance: the guarded Signing
+Keys OpenBao policy probe now starts disposable pinned PostgreSQL alongside
+OpenBao and runs a Rust Device Registration integration test through the real
+Signing Keys HTTP router. It creates a keyless registration, reserves and
+binds a non-exportable Ed25519 key using only public metadata and a scoped
+reference, signs with the stored OpenBao key version, and independently
+verifies the signature against the returned public JWK. Deactivation drives
+the real retry worker; the test then requires both a 404 on remote key read
+and absence from the scoped OpenBao key inventory. The full disposable probe
+passed with that stronger assertion. This proves the internal combined
+service/DB/provider lifecycle on a local source build. It does not authorize
+public enrollment or signing, exercise the wallet, prove packaged-image
+deployment, or supply the actual operator service credential; those gates
+remain open.

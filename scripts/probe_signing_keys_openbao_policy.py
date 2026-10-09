@@ -26,6 +26,9 @@ IMAGE = OPENBAO["reference"]
 REDIS_IMAGE = json.loads(CATALOG.read_text(encoding="utf-8"))["images"]["redis"][
     "reference"
 ]
+POSTGRES_IMAGE = json.loads(CATALOG.read_text(encoding="utf-8"))["images"][
+    "postgres"
+]["reference"]
 
 
 def docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -56,9 +59,12 @@ def qualify(*, rust_adapter: bool = False) -> None:
     )
     name = f"kms-signing-policy-{uuid.uuid4().hex[:12]}"
     redis_name = f"kms-signing-redis-{uuid.uuid4().hex[:12]}"
+    postgres_name = f"kms-holder-postgres-{uuid.uuid4().hex[:12]}"
     root_token = f"disposable-root-{uuid.uuid4().hex}"
+    postgres_password = f"disposable-holder-{uuid.uuid4().hex}"
     started = False
     redis_started = False
+    postgres_started = False
     try:
         require_docker(
             "run",
@@ -338,6 +344,28 @@ def qualify(*, rust_adapter: bool = False) -> None:
                 "marty:tests:disposable-guard",
                 redis_nonce,
             )
+            require_docker(
+                "run", "--rm", "-d", "--name", postgres_name,
+                "--label", "marty.disposable=kms-signing-policy",
+                "-e", f"POSTGRES_PASSWORD={postgres_password}",
+                "-e", "POSTGRES_DB=marty_holder_test",
+                "-p", "127.0.0.1::5432", POSTGRES_IMAGE,
+            )
+            postgres_started = True
+            postgres_port = int(
+                require_docker("port", postgres_name, "5432/tcp")
+                .splitlines()[0].rsplit(":", 1)[1]
+            )
+            for _ in range(80):
+                ready = docker(
+                    "exec", postgres_name, "pg_isready", "-U", "postgres",
+                    "-d", "marty_holder_test",
+                )
+                if ready.returncode == 0:
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError("Disposable holder PostgreSQL did not become healthy")
             nonce = uuid.uuid4().hex
             status, _ = call(
                 "POST",
@@ -356,6 +384,10 @@ def qualify(*, rust_adapter: bool = False) -> None:
                     "BAO_TOKEN": managed,
                     "MARTY_TEST_REDIS_URL": f"redis://127.0.0.1:{redis_port}/13",
                     "MARTY_TEST_REDIS_DISPOSABLE_NONCE": redis_nonce,
+                    "DEVICE_REGISTRATION_POSTGRES_TEST_URL": (
+                        f"postgres://postgres:{postgres_password}@127.0.0.1:"
+                        f"{postgres_port}/marty_holder_test"
+                    ),
                 }
             )
             provider_environment = dict(environment)
@@ -406,6 +438,22 @@ def qualify(*, rust_adapter: bool = False) -> None:
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
                     f"Rust managed-key adapter failed:\n{detail[-2000:]}"
+                )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-device-registration",
+                    "--test", "holder_remote_live_kms", "--locked", "--offline",
+                    "-j2", "--", "--ignored", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                detail = detail.replace(postgres_password, "[postgres]")
+                raise RuntimeError(
+                    f"Rust holder service/DB/OpenBao lifecycle failed:\n{detail[-2000:]}"
                 )
             result = subprocess.run(
                 [
@@ -530,9 +578,11 @@ def qualify(*, rust_adapter: bool = False) -> None:
         )
         if rust_adapter:
             print(
-                "Rust managed-key adapter, tenant routes, and managed-profile routes passed"
+                "Rust managed-key adapter, holder service/DB/OpenBao lifecycle, tenant routes, and managed-profile routes passed"
             )
     finally:
+        if postgres_started:
+            docker("rm", "-f", postgres_name, timeout=30)
         if redis_started:
             docker("rm", "-f", redis_name, timeout=30)
         if started:
