@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 13:37 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-09 15:14 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -46,6 +46,11 @@ bounded synthetic renderer-test deadline correction; the full protected
 Canvas, contracts, image, release, and security checks passed. It changes no
 runtime behavior or service-package selection. The broader dependency input
 graph remains incomplete.
+UI #1209 moved the existing synthetic renderer deadline/output proof to an
+image-free exact case before image/database setup, retaining both real
+rendered-process cases. Its PR and protected merge-group CI passed; the
+one-reviewer rule was restored after merge. This is earlier diagnostic
+feedback and duplicate-probe cleanup, not a measured full-job saving.
 
 ## Objective and scope
 
@@ -2240,44 +2245,50 @@ review protection was restored. Gateway source changes still select the full
 Rust workspace, including both consumers; this does not establish complete
 non-Cargo input closure, alter any check, or claim a speedup.
 
-## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
+## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-09 merged)
 
 The shadow planner already records Gateway's public Auth HTTP proxy, but
 Gateway also connects to Auth gRPC for session validation before accepting
-identity claims. This candidate enriches that existing producer-to-consumer
-edge with the configured/deployed target, Gateway channel and request,
-nonempty user-ID guard, and Auth server implementation/registration. A
-source-backed regression checks each marker and rejects its removal. It adds
-no second edge, changes no runtime behavior or CI selection, and does not
+identity claims. #1193 enriched that existing producer-to-consumer edge with
+the configured/deployed target, Gateway channel and request, nonempty user-ID
+guard, and Auth server implementation/registration. A source-backed regression
+checks each marker and rejects its removal. It added no second edge, changed
+no runtime behavior or CI selection, and does not
 prove the complete non-Cargo graph; service changes still select full Rust
 validation. Its value is accurate impact evidence for later fail-closed
 planning, not a measured CI speedup.
+The source-backed witness and mutation regression merged in
+[#1193](https://github.com/ElevenID/marty-ui/pull/1193).
 
-## A0/A3 Flow-to-Auth credential-login gRPC witness (2026-10-08 local candidate)
+## A0/A3 Flow-to-Auth credential-login gRPC witness (2026-10-09 merged)
 
-The existing Flow-to-Auth shadow edge records only Auth's target and startup
-connection. Auth also constructs a Flow gRPC client, supplies it to credential
+Before #1195, the Flow-to-Auth shadow edge recorded only Auth's target and
+startup connection. Auth also constructs a Flow gRPC client, supplies it to credential
 login, and calls `StartVerification` when the login route starts a request.
 Flow authorizes that method and registers its gRPC server; Compose deploys the
-target. This slice adds source-backed witnesses for that existing edge, with a
+target. #1195 added source-backed witnesses for that existing edge, with a
 regression that detects removal of each binding, request, callsite, provider,
 registration, or deployment marker. It does not add a second edge or change
 runtime behavior, CI selection, required gates, or the service-wide fail-closed
 fallback. The wider non-Cargo input graph remains unmapped; no speedup is
-claimed.
+claimed. This source-backed witness and its mutation regression landed in
+[#1195](https://github.com/ElevenID/marty-ui/pull/1195); it is not a pending
+implementation slice.
 
-## A0/A3 Organization-to-Auth JIT provisioning gRPC witness (2026-10-08 local candidate)
+## A0/A3 Organization-to-Auth JIT provisioning gRPC witness (2026-10-09 merged)
 
-The existing Organization-to-Auth shadow edge records only Auth's configured
-target and startup connection. Auth's JIT provisioner also uses an Organization
+Before #1195, the Organization-to-Auth shadow edge recorded only Auth's
+configured target and startup connection. Auth's JIT provisioner also uses an Organization
 gRPC client to add the authenticated principal to the default organization,
 read membership context, and optionally read the organization name before
-creating a session. This slice records those request, callsite, token, server,
+creating a session. #1195 recorded those request, callsite, token, server,
 and deployment witnesses on that one existing edge. A source-scoped mutation
 regression guards the chain while the planner remains observational and
 service changes still select the full Rust workspace. This does not prove
 cross-service wire compatibility or the complete non-Cargo graph, change any
 CI gate or skip, or establish a speedup.
+The witness and its source-scoped mutation regression landed in
+[#1195](https://github.com/ElevenID/marty-ui/pull/1195), not a separate PR.
 
 ## A5 REST fresh-run provenance boundary (2026-10-08 candidate)
 
@@ -2607,19 +2618,36 @@ lease/deadline tests. The host `sccache` snapshot had zero hits because the
 hermetic Bookworm compiler does not use that host wrapper; it is not a cache
 hit-rate measurement for the container compile.
 
-## A4/A6 image-free renderer bounds proof (2026-10-09, candidate)
+## A4/A6 image-free renderer bounds proof (2026-10-09, merged)
 
-The synthetic renderer deadline/output-limit proof currently runs inside two
-late Canvas composition cases, after image and database preparation. Move that
-same proof into one named test in the existing Canvas composition executable
-and include it in the early image-free config-proof roster. Keep the real
-rendered-configuration and native-process assertions in both original cases,
-including their explicit Python requirement. Exact same-run executable digest,
-run identity, tier, named-case success, and completion marker must authorize
-the later skip; missing or stale evidence must run the entire composition
-suite and require the new marker there. This is a fail-fast and duplicate-test
-cleanup candidate, not a measured wall-clock saving. Protected Linux CI must
-still prove the registered test and fallback paths before merge.
+[#1209](https://github.com/ElevenID/marty-ui/pull/1209) moved the unchanged
+synthetic renderer deadline/output-limit proof from two late composition cases
+into one named test in the existing Canvas executable. The early image-free
+config-proof roster runs it before image/database setup; exact same-run
+executable digest, run identity, tier, named-case success, and completion marker
+authorize its later skip. Missing or stale evidence falls back to the full
+composition suite and requires the marker there. Both original cases still
+require explicit Python and retain their real rendered-configuration and
+native-process assertions. Independent review found no P1-P3 issue; the
+protected [merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/37946137334)
+passed and #1209 merged as `7f52ade71` at 15:14:33 UTC. The exact-head early
+proof passed in four seconds; the full PR Canvas job took 31m28s versus 22m11s
+in the preceding protected sample. Compilation, image build, and all main
+acceptance targets were slower together, so no attributable end-to-end saving
+is claimed. Main's one-reviewer protection was restored and verified.
+
+## A0/A3 Gateway base-Compose upstream parity (2026-10-09, candidate)
+
+Gateway's published `/v1/verify` route and `SERVICE_URLS` table select the
+Verification upstream. Kubernetes supplies `http://verification:8012`, but
+base Compose omitted `VERIFICATION_SERVICE_URL`, leaving the gateway container
+with the `http://localhost:8012` development default. Since Verification runs
+as a separate Compose service, that default does not target it. Add the missing
+base-Compose binding and an independent exact-value regression for every one
+of the 15 configured Gateway upstream URLs, scoped to the Gateway environment
+and requiring each target service stanza. This repairs deployment wiring and
+closes one A0/A3 input gap; it does not change check selection or claim a CI
+speedup. Rendered Compose validation and protected checks remain required.
 
 ## Design references
 

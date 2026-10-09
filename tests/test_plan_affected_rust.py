@@ -907,6 +907,48 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     {dep["name"] for dep in packages["marty-gateway"]["dependencies"]},
                 )
 
+    def test_base_compose_wires_every_configured_gateway_upstream(self) -> None:
+        # An in-container localhost default cannot reach a sibling service.
+        expected = {
+            "AUTH_SERVICE_URL": "http://auth:8001",
+            "ORGANIZATION_SERVICE_URL": "http://organization:8002",
+            "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
+            "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
+            "ISSUANCE_SERVICE_URL": "http://issuance:8005",
+            "APPLICANT_SERVICE_URL": "http://applicant:8006",
+            "NOTIFICATION_SERVICE_URL": "http://notification:8007",
+            "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
+            "PRESENTATION_POLICY_SERVICE_URL": "http://presentation-policy:8009",
+            "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
+            "FLOW_SERVICE_URL": "http://flow:8011",
+            "VERIFICATION_SERVICE_URL": "http://verification:8012",
+            "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
+            "DEVICE_REGISTRATION_SERVICE_URL": "http://device-registration:8014",
+            "SIGNING_KEYS_SERVICE_URL": "http://signing-keys:8017",
+        }
+        config = (ROOT / "rust/services/gateway/src/config.rs").read_text(
+            encoding="utf-8"
+        )
+        table = config.split("const SERVICE_URLS:", 1)[1].split("\n];", 1)[0]
+        bindings = re.findall(r'"([A-Z_]+_SERVICE_URL)"', table)
+        self.assertEqual(len(bindings), len(expected))
+        self.assertEqual(set(bindings), set(expected))
+
+        compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+        gateway = compose.split("\n  gateway:\n", 1)[1]
+        gateway = re.split(r"(?m)^  [a-z][a-z0-9_-]*:\s*$", gateway, maxsplit=1)[0]
+        for binding, url in expected.items():
+            with self.subTest(binding=binding):
+                self.assertEqual(
+                    re.findall(
+                        rf"(?m)^      {re.escape(binding)}: (https?://[^\s#]+)$",
+                        gateway,
+                    ),
+                    [url],
+                )
+                service = url.split("://", 1)[1].split(":", 1)[0]
+                self.assertIn(f"\n  {service}:\n", compose)
+
     def test_auth_gateway_session_grpc_edge_is_source_backed_and_shadow_only(
         self,
     ) -> None:
