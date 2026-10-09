@@ -369,6 +369,7 @@ services:
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
       FLOW_SERVICE_URL: http://flow:8011
+      VERIFICATION_SERVICE_URL: http://verification:8012
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
