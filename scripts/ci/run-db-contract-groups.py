@@ -218,6 +218,8 @@ TIMING_NAMES = {
         {
             "sql_logging",
             "json_consumer",
+            "mixed_roster_reference",
+            "oauth_lease_reference",
             *PREFLIGHT_MODES,
             "mixed-roster-preflight",
             "body-timeout-preflight",

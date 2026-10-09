@@ -186,7 +186,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
     )
     serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
-    worker_full = '"$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
+    worker_full = '"$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
     composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
     assert (
@@ -206,6 +206,16 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     deadline_serial = '"$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1'
     assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
     assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
+    assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
+    assert 'historical_serial_tests=("$mixed_roster_serial_test" "$oauth_lease_serial_test")' in script
+    for case, phase in (
+        ("mixed_roster_serial_test", "mixed_roster_reference"),
+        ("oauth_lease_serial_test", "oauth_lease_reference"),
+    ):
+        assert (
+            f'timed canvas_serial {phase} "$worker_executable" "${case}" --exact --nocapture --test-threads=1'
+            in script
+        )
     assert (
         sum(
             line.strip() == "timed canvas_serial json_consumer " + json_serial
@@ -214,7 +224,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         == 1
     )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((3 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
+        "[[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in script
     )
     assert script.count(composition_full + ' >"$composition_log" 2>&1 &') == 1
