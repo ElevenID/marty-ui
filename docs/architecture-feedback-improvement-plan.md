@@ -2503,7 +2503,9 @@ and protected Canvas runner include both executables; the contracts lane
 excludes both. The runner checks the exact nine Flow IDs, duplicate IDs across
 targets, and all four target statuses before the gate can pass. Shared Redis,
 Gateway, and published-database fixtures retain one implementation and owned
-cleanup, while their five fixture unit tests stay Canvas-owned.
+cleanup, while their five fixture unit tests stay Canvas-owned. The eight new
+test-only files are excluded from all six Rust-copying Docker contexts;
+a fail-closed guard preserves runtime inputs and catches new consumers.
 
 One local Rust 1.95 locked invocation linked both targets. On Windows the
 Canvas list is 127 and Flow list nine, with no duplicate IDs; the three
