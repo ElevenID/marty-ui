@@ -474,6 +474,21 @@ def qualify(*, rust_adapter: bool = False) -> None:
             result = subprocess.run(
                 [
                     "cargo", "+1.95", "test", "-p", "marty-device-registration",
+                    "--test", "postgres_custody", "--locked", "--offline", "-j2",
+                    "--", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(postgres_password, "[postgres]")
+                raise RuntimeError(
+                    f"Rust fresh keyless schema custody failed:\n{detail[-2000:]}"
+                )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-device-registration",
                     "--test", "pairing_ticket_redis", "--locked", "--offline",
                     "-j2", "--", "--ignored", "--nocapture",
                 ],

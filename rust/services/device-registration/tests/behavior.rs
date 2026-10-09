@@ -3,7 +3,6 @@ use axum::{
     http::{Request, StatusCode},
 };
 use marty_device_registration::{
-    challenge::{ChallengeRepository, MemoryChallengeRepository},
     control_plane::AllowMembership,
     http::{router, HttpState},
     CreateRegistration, DeviceError, DeviceService, MemoryDeviceRepository, Platform,
@@ -14,9 +13,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 fn service() -> DeviceService {
-    let repository = Arc::new(MemoryDeviceRepository::default());
-    let challenges: Arc<dyn ChallengeRepository> = Arc::new(MemoryChallengeRepository::new(300));
-    DeviceService::new(repository, challenges, 300).unwrap()
+    DeviceService::new(Arc::new(MemoryDeviceRepository::default()))
 }
 
 fn registration() -> CreateRegistration {
@@ -30,10 +27,6 @@ fn registration() -> CreateRegistration {
         os_version: None,
         device_model: None,
         preferences: Default::default(),
-        public_key_der: None,
-        public_key_kid: None,
-        key_valid_from: None,
-        key_valid_until: None,
         is_active: true,
     }
 }
@@ -56,12 +49,12 @@ fn contract_retires_device_private_key_challenge() {
 #[tokio::test]
 async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
     let service = service();
-    let first = service
-        .register("user-1", registration(), Default::default())
-        .await
-        .unwrap();
+    let first = service.register("user-1", registration()).await.unwrap();
     assert!(first.is_active);
-    assert!(first.public_key_der.is_none());
+    assert!(serde_json::to_value(&first)
+        .unwrap()
+        .get("public_key_der")
+        .is_none());
     let changed = service
         .update(
             "user-1",
@@ -70,7 +63,6 @@ async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
                 fcm_token: Some("next-push-token".into()),
                 ..Default::default()
             },
-            Default::default(),
         )
         .await
         .unwrap();
@@ -88,15 +80,11 @@ async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
                     is_active: Some(true),
                     ..Default::default()
                 },
-                Default::default()
             )
             .await,
         Err(DeviceError::Conflict(_))
     ));
-    let second = service
-        .register("user-1", registration(), Default::default())
-        .await
-        .unwrap();
+    let second = service.register("user-1", registration()).await.unwrap();
     assert_ne!(first.id, second.id);
     assert!(matches!(
         service.get("other-user", &second.id).await,
@@ -106,26 +94,27 @@ async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
 
 #[tokio::test]
 async fn device_held_key_inputs_are_rejected_without_generating_private_keys() {
-    let service = service();
-    let mut input = registration();
-    input.public_key_der = Some("retired-public-projection".into());
-    input.public_key_kid = Some("retired-kid".into());
-    assert!(
-        matches!(service.register("user-1", input, Default::default()).await,
-        Err(DeviceError::BadRequest(message)) if message.contains("retired"))
-    );
-    let registered = service
-        .register("user-1", registration(), Default::default())
-        .await
-        .unwrap();
-    let old_update: UpdateRegistration = serde_json::from_value(json!({
+    let create = json!({
+        "device_id": "device-1", "platform": "web", "fcm_token": "push-token",
+        "public_key_der": "retired-public-projection"
+    });
+    assert!(serde_json::from_value::<CreateRegistration>(create).is_err());
+    assert!(serde_json::from_value::<UpdateRegistration>(json!({
         "public_key_der": "retired-public-projection", "public_key_kid": "retired-kid"
     }))
-    .unwrap();
-    assert!(
-        matches!(service.update("user-1", &registered.id, old_update, Default::default()).await,
-        Err(DeviceError::BadRequest(message)) if message.contains("retired"))
-    );
+    .is_err());
+    assert!(serde_json::from_value::<CreateRegistration>(json!({
+        "device_id": "device-1", "platform": "web", "fcm_token": "push-token",
+        "preferences": {"private_key": "retired"}
+    }))
+    .is_err());
+    let service = service();
+    let mut input = registration();
+    input.preferences.quiet_hours_start = Some("-----BEGIN PRIVATE KEY-----synthetic".into());
+    assert!(matches!(
+        service.register("user-1", input).await,
+        Err(DeviceError::BadRequest(_))
+    ));
 }
 
 #[tokio::test]

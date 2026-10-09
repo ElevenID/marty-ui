@@ -1,4 +1,3 @@
-pub mod challenge;
 pub mod control_plane;
 pub mod domain;
 pub mod holder_credential;

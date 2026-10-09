@@ -14,7 +14,7 @@ use tower_http::trace::TraceLayer;
 
 use crate::{
     control_plane::MembershipAuthorizer, CreateRegistration, DeviceError, DeviceRegistration,
-    DeviceService, ProofHeaders, UpdateRegistration,
+    DeviceService, UpdateRegistration,
 };
 
 #[derive(Clone)]
@@ -77,12 +77,12 @@ impl From<DeviceError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0 {
-            DeviceError::BadRequest(_) | DeviceError::Native(_) => StatusCode::BAD_REQUEST,
+            DeviceError::BadRequest(_) => StatusCode::BAD_REQUEST,
             DeviceError::Forbidden(_) => StatusCode::FORBIDDEN,
             DeviceError::NotFound(_) => StatusCode::NOT_FOUND,
             DeviceError::Conflict(_) => StatusCode::CONFLICT,
             DeviceError::Persistence(_)
-            | DeviceError::ChallengeStore(_)
+            | DeviceError::PairingStore(_)
             | DeviceError::AuthorizationUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
         (status, Json(json!({"detail": self.0.to_string()}))).into_response()
@@ -112,20 +112,6 @@ fn identity(headers: &HeaderMap) -> Result<String, ApiError> {
         .ok_or_else(|| DeviceError::BadRequest("X-User-Id header is required".into()).into())
 }
 
-fn proof(headers: &HeaderMap) -> ProofHeaders {
-    ProofHeaders {
-        challenge_id: header(headers, "x-device-challenge-id"),
-        signature: header(headers, "x-device-challenge-signature"),
-    }
-}
-
-fn header(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
 async fn authorize(
     state: &HttpState,
     user_id: &str,
@@ -147,12 +133,7 @@ async fn register_device(
 ) -> Result<Json<DeviceRegistration>, ApiError> {
     let user_id = identity(&headers)?;
     authorize(&state, &user_id, body.organization_id.as_deref()).await?;
-    Ok(Json(
-        state
-            .service
-            .register(&user_id, body, proof(&headers))
-            .await?,
-    ))
+    Ok(Json(state.service.register(&user_id, body).await?))
 }
 
 async fn list_devices(
@@ -195,12 +176,7 @@ async fn update_device(
     let user_id = identity(&headers)?;
     let current = state.service.get(&user_id, &id).await?;
     authorize(&state, &user_id, current.organization_id.as_deref()).await?;
-    Ok(Json(
-        state
-            .service
-            .update(&user_id, &id, body, proof(&headers))
-            .await?,
-    ))
+    Ok(Json(state.service.update(&user_id, &id, body).await?))
 }
 
 async fn delete_device(

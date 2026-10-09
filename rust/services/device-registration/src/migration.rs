@@ -2,7 +2,7 @@ use sqlx::{PgPool, Row};
 
 use crate::DeviceError;
 
-pub const REVISION: &str = "20260809_0001";
+pub const REVISION: &str = "20261009_0001";
 
 pub async fn migrate(pool: &PgPool) -> Result<(), DeviceError> {
     let mut transaction = pool.begin().await.map_err(persistence)?;
@@ -30,8 +30,6 @@ async fn verify(
         .collect();
     for required in [
         "device_registrations",
-        "device_registration_keys",
-        "device_key_transitions",
         "device_holder_credentials",
         "device_holder_keys",
         "device_holder_key_provisions",
@@ -43,6 +41,25 @@ async fn verify(
                 "Device Registration migrations are required; missing table: {required}"
             )));
         }
+    }
+    for retired in ["device_registration_keys", "device_key_transitions"] {
+        if tables.contains(retired) {
+            return Err(DeviceError::Persistence(format!(
+                "fresh KMS-only Device Registration schema required; retired table: {retired}"
+            )));
+        }
+    }
+    let retired_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='device_registration_service' AND table_name='device_registrations' AND column_name IN ('public_key_der','public_key_kid','key_valid_from','key_valid_until','key_version')",
+    )
+    .fetch_all(&mut **transaction)
+    .await
+    .map_err(persistence)?;
+    if !retired_columns.is_empty() {
+        return Err(DeviceError::Persistence(
+            "fresh KMS-only Device Registration schema required; retired device-key columns remain"
+                .into(),
+        ));
     }
     let version: Option<String> = sqlx::query_scalar(
         "SELECT version_num FROM device_registration_service.alembic_version WHERE version_num=$1",

@@ -1,5 +1,4 @@
 use marty_device_registration::{
-    challenge::{ChallengeRepository, MemoryChallengeRepository, RedisChallengeRepository},
     control_plane::{MembershipAuthorizer, OrganizationMembershipClient},
     holder_key_cleanup::HolderKeyCleanup,
     holder_key_client::HolderKeyClient,
@@ -42,25 +41,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     migrate(&pool).await?;
     let repository: Arc<dyn DeviceRepository> =
         Arc::new(PostgresDeviceRepository::new(pool.clone()));
-    let challenge_ttl: u64 = env_value("DEVICE_CHALLENGE_TTL", "300").parse()?;
-    if challenge_ttl == 0 || challenge_ttl > 3600 {
-        return Err("DEVICE_CHALLENGE_TTL must be between 1 and 3600".into());
-    }
-    let challenges: Arc<dyn ChallengeRepository> = match env::var("REDIS_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(url) => Arc::new(RedisChallengeRepository::connect(&url, challenge_ttl).await?),
-        None if deployed => {
-            return Err(
-                "REDIS_URL is required for atomic device challenges in deployed environments"
-                    .into(),
-            )
-        }
-        None => Arc::new(MemoryChallengeRepository::new(challenge_ttl)),
-    };
-    let rotation_grace = env_value("DEVICE_KEY_ROTATION_GRACE_SECONDS", "300").parse()?;
-    let service = Arc::new(DeviceService::new(repository, challenges, rotation_grace)?);
+    let service = Arc::new(DeviceService::new(repository));
     let token = optional_secret("GRPC_SERVICE_TOKEN")?;
     if deployed && token.is_none() {
         return Err("GRPC_SERVICE_TOKEN is required in deployed environments".into());

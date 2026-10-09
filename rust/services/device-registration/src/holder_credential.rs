@@ -42,11 +42,6 @@ pub(crate) fn eligible(registration: &DeviceRegistration) -> bool {
             .organization_id
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty())
-        && registration.public_key_der.is_none()
-        && registration.public_key_kid.is_none()
-        && registration.key_valid_from.is_none()
-        && registration.key_valid_until.is_none()
-        && registration.key_version.is_none()
 }
 
 pub(crate) fn valid_record_for(
@@ -146,10 +141,6 @@ mod tests {
                 os_version: None,
                 device_model: None,
                 preferences: DevicePreferences::default(),
-                public_key_der: None,
-                public_key_kid: None,
-                key_valid_from: None,
-                key_valid_until: None,
                 is_active: true,
             },
             Utc::now(),
@@ -199,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn expired_revoked_inactive_or_local_key_registration_is_denied() {
+    fn expired_revoked_or_inactive_registration_is_denied() {
         let now = Utc::now();
         let mut registration = registration();
         let mut issued = issue(&registration, now, Duration::hours(1)).unwrap();
@@ -225,9 +216,6 @@ mod tests {
         registration.is_active = false;
         assert!(issue(&registration, now, Duration::hours(1)).is_err());
         registration.is_active = true;
-        registration.public_key_der = Some("legacy-local-key".into());
-        assert!(issue(&registration, now, Duration::hours(1)).is_err());
-        registration.public_key_der = None;
         assert!(issue(&registration, now, Duration::zero()).is_err());
         assert!(issue(&registration, now, Duration::days(31)).is_err());
     }

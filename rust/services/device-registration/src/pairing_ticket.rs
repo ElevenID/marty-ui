@@ -3,13 +3,14 @@
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
+use rand::RngCore;
 use redis::{aio::ConnectionManager, Script};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
-use crate::{challenge::random_token, DeviceError};
+use crate::DeviceError;
 
 const PREFIX: &str = "device-registration:pairing:";
 const TOKEN_BYTES: usize = 32;
@@ -21,6 +22,12 @@ if not value then return nil end
 redis.call('DEL', KEYS[1])
 return value
 "#;
+
+fn random_token(bytes: usize) -> String {
+    let mut value = vec![0_u8; bytes];
+    rand::rng().fill_bytes(&mut value);
+    URL_SAFE_NO_PAD.encode(value)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PairingScope {
@@ -119,7 +126,7 @@ impl PairingTicketRepository for MemoryPairingTickets {
                 return Ok(ticket);
             }
         }
-        Err(DeviceError::ChallengeStore(
+        Err(DeviceError::PairingStore(
             "pairing ticket allocation failed".into(),
         ))
     }
@@ -150,16 +157,15 @@ impl RedisPairingTickets {
                 "pairing ticket TTL is invalid".into(),
             ));
         }
-        let client = redis::Client::open(url).map_err(|_| {
-            DeviceError::ChallengeStore("pairing ticket Redis URL is invalid".into())
-        })?;
+        let client = redis::Client::open(url)
+            .map_err(|_| DeviceError::PairingStore("pairing ticket Redis URL is invalid".into()))?;
         let mut connection = ConnectionManager::new(client)
             .await
-            .map_err(|_| DeviceError::ChallengeStore("pairing ticket Redis unavailable".into()))?;
+            .map_err(|_| DeviceError::PairingStore("pairing ticket Redis unavailable".into()))?;
         redis::cmd("PING")
             .query_async::<String>(&mut connection)
             .await
-            .map_err(|_| DeviceError::ChallengeStore("pairing ticket Redis unavailable".into()))?;
+            .map_err(|_| DeviceError::PairingStore("pairing ticket Redis unavailable".into()))?;
         Ok(Self {
             ttl_seconds,
             connection,
@@ -178,9 +184,8 @@ impl PairingTicketRepository for RedisPairingTickets {
         for _ in 0..4 {
             let ticket = issue_scope(user_id, organization_id, self.ttl_seconds)?;
             let key = digest_key(&ticket.token).expect("issued ticket format");
-            let value = serde_json::to_string(&ticket.scope).map_err(|_| {
-                DeviceError::ChallengeStore("pairing ticket encoding failed".into())
-            })?;
+            let value = serde_json::to_string(&ticket.scope)
+                .map_err(|_| DeviceError::PairingStore("pairing ticket encoding failed".into()))?;
             let created: Option<String> = redis::cmd("SET")
                 .arg(key)
                 .arg(value)
@@ -190,13 +195,13 @@ impl PairingTicketRepository for RedisPairingTickets {
                 .query_async(&mut connection)
                 .await
                 .map_err(|_| {
-                    DeviceError::ChallengeStore("pairing ticket Redis unavailable".into())
+                    DeviceError::PairingStore("pairing ticket Redis unavailable".into())
                 })?;
             if created.is_some() {
                 return Ok(ticket);
             }
         }
-        Err(DeviceError::ChallengeStore(
+        Err(DeviceError::PairingStore(
             "pairing ticket allocation failed".into(),
         ))
     }
@@ -210,10 +215,10 @@ impl PairingTicketRepository for RedisPairingTickets {
             .key(key)
             .invoke_async(&mut connection)
             .await
-            .map_err(|_| DeviceError::ChallengeStore("pairing ticket Redis unavailable".into()))?;
+            .map_err(|_| DeviceError::PairingStore("pairing ticket Redis unavailable".into()))?;
         let Some(value) = value else { return Ok(None) };
         let scope: PairingScope = serde_json::from_str(&value)
-            .map_err(|_| DeviceError::ChallengeStore("pairing ticket decoding failed".into()))?;
+            .map_err(|_| DeviceError::PairingStore("pairing ticket decoding failed".into()))?;
         Ok((scope.expires_at > Utc::now()).then_some(scope))
     }
 }

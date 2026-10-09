@@ -9364,3 +9364,16 @@ This closes the public old-key route but does not yet remove dormant internal
 PS256 challenge/rotation methods, public-key projection columns, transition
 tables or Core device-auth fixtures. Remove those in this same grouped feature
 batch after keeping the KMS holder signing and notification behavior green.
+
+2026-10-09 Device Registration key-history retirement: the Rust service now
+uses keyless registration CRUD without PS256 challenge/rotation modules or
+device-key projection fields. The fresh PostgreSQL baseline no longer creates
+`device_registration_keys`, `device_key_transitions`, or the associated
+registration columns, and startup rejects a database that still has that
+retired schema. No upgrade script is supplied because this is a fresh-only
+deployment cutover. Registration input rejects old key fields, including
+unknown preference fields, and repository saves reject embedded private-key
+material. The fresh-schema custody check is included in the disposable
+OpenBao/PostgreSQL/Redis probe. This is source and local integration evidence;
+Core device-auth fixtures, public wallet pairing/signing, and operator
+deployment qualification remain open.
