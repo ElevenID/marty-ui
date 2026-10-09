@@ -828,6 +828,22 @@ parallel and feed the same CI gate. A new preflight job would add runner and
 cache startup without shortening either observed critical path, so A7 remains
 deferred pending evidence that its position on the critical path changes.
 
+2026-10-09 refresh: three successful revisions of Core's still-open security
+[PR #355](https://github.com/ElevenID/marty-core/pull/355) now place preflight
+on the *PR* critical path: [run 37946893659](https://github.com/ElevenID/marty-core/actions/runs/37946893659)
+had 14.6m preflight versus 11.6m affected tests; earlier
+[runs 37900258708](https://github.com/ElevenID/marty-core/actions/runs/37900258708)
+and [37897508392](https://github.com/ElevenID/marty-core/actions/runs/37897508392)
+had 14.6m/11.7m and 12.0m/10.2m. The latest preflight spent about 440 seconds
+on the exact KMS/public-key graph and 163 seconds on disposable OpenBao
+issuer signing. These are revisions of one large security PR, not independent
+workloads or proof that another job reduces total time. The latest protected
+[#354 run](https://github.com/ElevenID/marty-core/actions/runs/37828982922)
+still had a 17.1m feature-matrix lane alongside 16.9m preflight and 15.7m
+Windows. A7 remains deferred until a post-#355 representative run and a
+no-duplicate-compilation split design show an actual critical-path benefit;
+all security, feature, benchmark, and platform obligations remain required.
+
 ## Next renewal decomposition: bounded obligations (unpublished)
 
 The additive library owner is
@@ -2702,7 +2718,7 @@ passed and it merged as `1afa80a5e` at 17:28:48 UTC. Its protected Canvas job
 took 30m20s. This addresses observed flakiness; it does not establish a CI
 speedup or authorize weaker timing semantics.
 
-## A6 Kubernetes/consumer policy test-source ownership (2026-10-09, candidate)
+## A6 Kubernetes/consumer policy test-source ownership (2026-10-09, merged)
 
 Six exact root Python test sources covering issuance consumer bindings,
 Kubernetes service coverage and signed release selection, token-secret shell
@@ -2717,8 +2733,34 @@ manifests, unknown siblings, and mixed changes on the conservative classifier
 path. Synthetic classifier tests require the exact result tuple, a broad
 unknown-sibling fallback, mixed source selection, and full merge-group
 selection. This does not remove a test or narrow any deployed-source check.
-Hosted exact-source and protected outcomes are required before claiming faster
-feedback.
+[#1213](https://github.com/ElevenID/marty-ui/pull/1213) passed exact-head and
+[protected CI](https://github.com/ElevenID/marty-ui/actions/runs/37970884691),
+then merged as `5c6844d44`. The protected Canvas step spent 602 seconds on
+reusable Rust test compilation, 369 seconds on the public self-host image,
+and 648 seconds in its database group. Against #1212's 618/375/647 seconds,
+these are different combined heads and runner conditions, not an attributable
+speedup or regression.
+
+The first actual exact-source [PR #1214](https://github.com/ElevenID/marty-ui/pull/1214)
+ran all eleven `test_passport_supported_consumer_routing.py` cases and the
+release owner's full root pytest; its [PR CI run](https://github.com/ElevenID/marty-ui/actions/runs/37974689079)
+reached the aggregate gate in 9m17s with 6,116 passed and 19 skipped root
+tests. CodeQL, open-source policy, and public protocol checks also passed.
+Its full [protected merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/37975973978)
+passed every required check, and #1214 merged as `b44c482dc`. This proves
+scoped feedback for this exact test-only path, not a general pipeline saving.
+
+The next reviewed local candidate runs all six named Kubernetes/consumer
+test sources plus workflow-policy tests for a nonempty PR changing only those
+regular files. It skips the unchanged frozen Credentials mirror replay and
+OCI archive proof in that PR path; unknown, mixed, deleted, symlinked, and
+protected merge-group inputs retain the complete release job. The exact
+proposed command passed 268 local cases in 93 seconds on the #1214 main base,
+including all five new passport-consumer cases. The standalone workflow-policy
+suite passed all 141 cases. A pre-rebase 263-case run exposed and then cleared
+a stale policy reference count; it is not the final validation result.
+The full protected gate and an actual later source-only PR are still needed
+before attributing a hosted feedback saving to this second narrowing.
 
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
