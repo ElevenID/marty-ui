@@ -7880,3 +7880,12 @@ Its real certificate/JWKS/DID/slug round-trip passed (1 passed, 0 failed);
 the container was removed. The full 12-test release-contract source file also
 passes locally. This validates the fixture choice and contract behavior, not
 the workflow wiring on a hosted runner.
+
+UI run `37885206206` has now passed the Canvas lane's public selfhost image
+build, host/namespace KMS fixture probes and isolated database suites. Its
+OpenBao plugin image, service images and Rust lint also passed. All substantive
+lanes are terminal; only Release Contract Tests and Rust contracts failed on
+the known assertions/Redis fixture corrected in the local grouped batch.
+The aggregate CI Gate was still queued at this checkpoint. Push the grouped
+batch once, then require a new exact-head rollup before claiming UI PR #1192
+qualified.
