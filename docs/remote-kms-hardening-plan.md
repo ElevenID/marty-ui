@@ -7584,3 +7584,8 @@ Rustfmt and staged diff checks pass. These historical vectors intentionally
 test signature/policy semantics, while package time validity remains covered
 by a separate fixed-clock test. The optional demo fixture generators and
 eMRTD conformance suite remain unqualified.
+UI PR #1192 exact pushed head `f798dcde6` run `37879061558` has now
+passed `Release Contract Tests`, including the corrected OpenBao classifier
+expectation. Rust lint/packaging and the feature-regression probe also
+passed. Rust contracts, Canvas, OpenBao plugin image and service images
+remain live at this checkpoint; do not claim those gates yet.
