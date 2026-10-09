@@ -7403,3 +7403,12 @@ authenticator as explicit downstream consumer work, preserving verifier and
 wallet capabilities while removing obsolete local-signing fixture paths.
 The probe changes are isolated and uncommitted; the three primary feature
 PRs remain the immediate landing path.
+Source review narrows the Verifier impact: the `sod-builder` call is in
+`src-tauri/tests/emrtd_conformance.rs` and the local Core key generator is in
+`src-tauri/tests/open_badge_conformance.rs`; the optional `marty-sync`
+`demo-fixtures` module also creates local Ed25519 keys and SODs. Yet
+`src-tauri/Cargo.toml` enables `sod-builder` and `local-key-operations` on
+its production dependencies, so those test-only abilities enter its normal
+feature graph. An aligned Verifier change would move fixture capability out
+of that production graph and replace the tests with public vectors or
+remote-custody fixtures while retaining their conformance assertions.
