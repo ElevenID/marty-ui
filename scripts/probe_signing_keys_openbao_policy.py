@@ -473,6 +473,22 @@ def qualify(*, rust_adapter: bool = False) -> None:
                 )
             result = subprocess.run(
                 [
+                    "cargo", "+1.95", "test", "-p", "marty-device-registration",
+                    "--test", "pairing_ticket_redis", "--locked", "--offline",
+                    "-j2", "--", "--ignored", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                detail = detail.replace(postgres_password, "[postgres]")
+                raise RuntimeError(
+                    f"Rust one-time pairing Redis contract failed:\n{detail[-2000:]}"
+                )
+            result = subprocess.run(
+                [
                     "cargo",
                     "+1.95",
                     "test",
@@ -594,7 +610,7 @@ def qualify(*, rust_adapter: bool = False) -> None:
         )
         if rust_adapter:
             print(
-                "Rust managed-key adapter, holder service/DB/OpenBao lifecycle, credential durability, tenant routes, and managed-profile routes passed"
+                "Rust managed-key adapter, holder service/DB/OpenBao lifecycle, credential durability, Redis pairing tickets, tenant routes, and managed-profile routes passed"
             )
     finally:
         if postgres_started:

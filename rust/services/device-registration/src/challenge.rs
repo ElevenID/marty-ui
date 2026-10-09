@@ -36,7 +36,7 @@ pub trait ChallengeRepository: Send + Sync {
     fn ttl_seconds(&self) -> u64;
 }
 
-fn random_token(bytes: usize) -> String {
+pub(crate) fn random_token(bytes: usize) -> String {
     let mut value = vec![0_u8; bytes];
     rand::rng().fill_bytes(&mut value);
     URL_SAFE_NO_PAD.encode(value)

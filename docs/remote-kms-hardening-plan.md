@@ -9301,3 +9301,36 @@ checks. The guarded disposable probe passed both the live OpenBao holder
 lifecycle (including wrong-scope refusal and credential rotation) and the
 existing PostgreSQL credential-durability tests. There is still no public
 issuance route; its caller authorization policy remains a release gate.
+
+2026-10-09 wallet pairing/product-path audit: UI `WalletSetup` currently
+generates an eight-character `Math.random` pairing code and QR content in the
+browser, offers a `Simulate Pairing` button that marks success without a server
+exchange, and treats the first returned device registration as a paired wallet.
+The vendor onboarding step calls `/wallet/pairing/generate` and polls status,
+but no Rust Gateway or service route owns that path in the inspected source.
+Authenticator's `credential_selection_view.dart` still calls
+`generateSecureKeySDK` for presentation signing before creating a presentation.
+These paths cannot count as KMS-only wallet acceptance. Replace them together
+in the grouped feature PR with server-issued one-time pairing state, a
+device-bound revocable bearer, Remote Signing Keys references, an Authenticator
+remote-signing client, and a status projection that requires actual paired
+remote custody. Remove the simulated success and local signing-key generation
+when the complete path is wired; retain independent-wallet OID4VCI/OID4VP
+transport. Enrollment authorization must include the selected session/step-up
+policy and be tested against replay, wrong user/organization, expiry and
+revocation before any public signing route is exposed.
+
+2026-10-09 local server-owned pairing ticket foundation: Rust Device
+Registration now has internal memory/Redis pairing-ticket repositories using a
+256-bit random one-time token, a SHA-256-derived Redis lookup key, a maximum
+five-minute TTL, user/organization scope and atomic Redis redemption. Neither
+the raw token nor any private key is persisted. A guarded disposable Redis
+test verified the sentinel, digest-only key/value inventory, TTL and exactly
+one winner from concurrent redemptions; its unit and Clippy checks passed, and
+the full OpenBao/PostgreSQL/Redis probe passed with this new test included.
+This is not a public pairing API or a completed wallet flow. The ticket may
+only be issued after Gateway session and selected step-up authorization, then
+redeemed with a server-created keyless registration, remote holder and
+presenter keys, one-time device bearer delivery, real paired status and
+Authenticator remote signing. Remove the browser simulation and local SDK
+signing-key path in that grouped cutover.
