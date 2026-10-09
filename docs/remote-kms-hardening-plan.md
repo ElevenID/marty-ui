@@ -10421,3 +10421,19 @@ full Flutter analysis found no issues, and the complete Flutter suite passed
 coverage workaround or claim the mobile PR ready; the remaining active
 legacy wrapper and wallet-storage surfaces need retirement/replacement or
 behavioral qualification without losing the verified remote wallet flows.
+
+2026-10-09 verified wallet card-source retirement: local Authenticator commit
+`a203fbe` removes the card provider's legacy Spruce native/web credential
+source. The native handlers already reject that source, while the web wrapper
+had accepted arbitrary unverified maps in memory. Both base and web platform
+storage interfaces now reject writes, reads and deletes before dispatch; the
+card list reads only receipts written by the Rust-verified OID4VCI completion
+path. Deletion targets the credential ID and updates persistent receipt
+storage before removing the UI card, so two cards with the same title no
+longer disappear together. The focused same-title and fail-closed tests pass
+(8/8); full Flutter analysis reports no issues, and full tests pass 171 with
+four skips. Local non-generated coverage is 61.66% (1,113/1,805), still below
+the protected 90% gate. This commit and the earlier `8fee8c3` remain local in
+the grouped Authenticator PR #57 batch; do not push only to collect another
+failing hosted coverage run. The active wallet credential store and other
+supported UI paths still need behavioral coverage and native-device review.
