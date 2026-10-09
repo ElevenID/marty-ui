@@ -9832,7 +9832,8 @@ issuer-key resolver, the bearer-scoped Gateway ES256 signer, and
 state, and response mode. Preserve the separate mDoc session path and prove
 both on mobile; add bearer renewal with lost-response recovery before release.
 
-2026-10-09 holder bearer renewal candidate (local grouped batch): Device
+2026-10-09 holder bearer renewal candidate (local UI `328bdf3f0`,
+Authenticator `e712ad4`; grouped PRs not yet updated): Device
 Registration now offers bearer-only `POST
 /v1/devices/holder-credential-rotations` through Gateway. A confirmed,
 active registration and current organization membership are required. The
