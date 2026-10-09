@@ -19,6 +19,9 @@ const PASSWORD: &str = "SyntheticSelfhostDatabasePassword5837";
 const WRONG_PASSWORD: &str = "SyntheticDifferentDatabasePassword9014";
 const SERVICE_TOKEN: &str = "synthetic-selfhost-production-grpc-service-token";
 const HMAC: &str = "synthetic-selfhost-native-token-hmac-key";
+const KMS_CA_CERT: &str = include_str!(
+    "../../../../services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
+);
 const STAGE_PREFIX: &str = "SELFHOST_PUBLIC_LOADER_STAGE:";
 pub(super) const CHILD_TEST: &str = "selfhost_public_image_loader_child";
 
@@ -567,6 +570,7 @@ fn write_synthetic_secrets(directory: &Path, case: SecretCase) -> Result<Vec<Str
             "synthetic-selfhost-canvas-shared-secret",
         ),
         ("grpc_service_token", SERVICE_TOKEN),
+        ("workload_identity_ca_cert", KMS_CA_CERT),
     ];
     if case == SecretCase::Empty {
         values[5].1 = "";
@@ -768,6 +772,22 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn synthetic_secret_inputs_cover_packaged_issuance_mounts() {
+        let directory = tempfile::tempdir().unwrap();
+        write_synthetic_secrets(directory.path(), SecretCase::Correct).unwrap();
+        let actual = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = super::super::selfhost_prepared::expected_secrets("issuance-native")
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(actual, expected);
+        assert!(KMS_CA_CERT.starts_with("-----BEGIN CERTIFICATE-----\n"));
+    }
 
     #[test]
     fn child_stage_diagnostic_accepts_only_closed_values() {

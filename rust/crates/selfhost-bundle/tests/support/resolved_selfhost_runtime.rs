@@ -335,7 +335,7 @@ const MAPPINGS: &[(&str, &str, Role, &str)] = &[
     ),
 ];
 
-fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
+pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
     match owner {
         "issuance-native" => [
             "marty_db_password",

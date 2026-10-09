@@ -7525,3 +7525,20 @@ root rejection case to Canvas worker startup attestation. The KMS branch
 merged it locally without conflicts. The focused new test passes on Windows
 with Rust 1.95 (`marty-canvas-worker-acceptance`, one executed case); this
 merge is held with the same correction batch while Canvas remains live.
+
+UI run `37875662633` completed with three failed lanes and the aggregate
+gate: Release Contract and Rust contracts are the two locally corrected
+expectations above. Canvas's isolated database suites executed 144 passing
+cases and one failure, `selfhost_public_image_loader_isolated`; its separate
+worker suite passed 110. The selfhost child reached `correct:create` and
+stopped with an incomplete native-create operation. The rendered
+`issuance-native` Compose model mounts the new
+`workload_identity_ca_cert`, but the loader's synthetic secret writer still
+created only its previous six files. The local correction writes an existing
+public test CA certificate to that seventh exact-owned path and checks the
+writer's file set against the packager's closed `issuance-native` mount set.
+The focused Canvas Rust test passes with Rust 1.95; targeted Canvas and
+selfhost Rustfmt plus diff checks pass. This is a source-diagnosed candidate
+fix to a Docker create failure, not yet a passing Linux public-image test.
+The complete prior run has stopped, so push the accumulated UI corrections
+together and require exact-head requalification.
