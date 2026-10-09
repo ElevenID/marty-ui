@@ -8524,3 +8524,15 @@ staged diff and merged tree were checked for conflict markers and whitespace.
 The local merge remains unpushed while both the current KMS and Rust-only PR
 exact-head CI runs finish; its replacement release gates still require
 assembled/artifact qualification and a rollback-path review.
+
+Release-gate self-review of that delta: the removed `--previous-manifest`
+comparison in CD related to an earlier public stack image and cannot qualify
+the first KMS-only cutover. This matches the superseding custody decision above:
+no public deployment or compatibility window is being preserved, and rollback
+to an old local-key artifact is outside KMS-only acceptance. The removed
+Credentials-image provenance/SBOM checks are paired with rejection of any
+retired Credentials issuance component or external OCI image in the Rust-only
+stack manifest/lock, plus exact attestation binding for the native services
+image. This review does **not** satisfy the requested rollback gate: a clean
+KMS-only artifact, PostgreSQL snapshot and OpenBao Raft restore must still be
+exercised together and rechecked for custody and behavior.
