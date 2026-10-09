@@ -43,6 +43,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
             - name: SIGNING_KEYS_REDIS_URL
               value: redis://redis:6379/2
             - name: ISSUER_BASE_URL

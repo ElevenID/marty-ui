@@ -21,6 +21,7 @@ Required files:
 - `issuance_api_key`
 - `grpc_service_token`
 - `device_registration_gateway_key` (distinct random value, at least 32 characters)
+- `device_registration_signing_keys_key` (a different random value, at least 32 characters)
 - `notification_webhook_secret`
 - `notification_applicant_event_token`
 - `workload_identity_ca_cert`

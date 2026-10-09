@@ -441,6 +441,22 @@ def assert_models(
         }
         assert service["secrets"].count(mount) == 1
         service["secrets"].remove(mount)
+    holder_secret = preserved["secrets"].pop("device_registration_signing_keys_key")
+    assert holder_secret["file"].endswith("/device_registration_signing_keys_key")
+    for name in ("device-registration", "signing-keys"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE") == (
+            "/run/secrets/device_registration_signing_keys_key"
+        )
+        mount = {
+            "source": "device_registration_signing_keys_key",
+            "target": "/run/secrets/device_registration_signing_keys_key",
+        }
+        assert service["secrets"].count(mount) == 1
+        service["secrets"].remove(mount)
+    assert preserved["services"]["device-registration"]["environment"].pop(
+        "SIGNING_KEYS_HOLDER_ORIGIN"
+    ) == "http://signing-keys:8017"
     assert preserved == before, "Unowned self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(before, sort_keys=True, indent=2).splitlines(keepends=True),

@@ -558,6 +558,10 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
             "DEVICE_REGISTRATION_GATEWAY_KEY".into(),
             "synthetic-distinct-kubernetes-device-gateway-key-32-chars".into(),
         ),
+        (
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "synthetic-distinct-kubernetes-device-signing-key-32-chars".into(),
+        ),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
         ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (
@@ -585,6 +589,15 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
     let native = environment(owner(rows, "issuance-native")?, &maps, &secrets)?;
     let gateway = environment(owner(rows, "gateway")?, &maps, &secrets)?;
     let signing = environment(owner(rows, "signing-keys")?, &maps, &secrets)?;
+    let device_registration = environment(owner(rows, "device-registration")?, &maps, &secrets)?;
+    require(
+        signing["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+            == device_registration["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+            && signing["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+                != gateway["DEVICE_REGISTRATION_GATEWAY_KEY"]
+            && !gateway.contains_key("DEVICE_REGISTRATION_SIGNING_KEYS_KEY")
+            && device_registration["SIGNING_KEYS_HOLDER_ORIGIN"] == "http://signing-keys:8017",
+    )?;
     require(
         signing["SIGNING_KEYS_INTERNAL_API_KEY"] == native["SIGNING_KEYS_INTERNAL_API_KEY"]
             && signing["SIGNING_KEYS_INTERNAL_API_KEY"] == gateway["SIGNING_KEYS_INTERNAL_API_KEY"],

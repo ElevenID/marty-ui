@@ -929,6 +929,7 @@ services:
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE: /run/secrets/device_registration_signing_keys_key
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       BAO_ADDR: ${BAO_ADDR:-}
@@ -937,6 +938,7 @@ services:
       RUST_LOG: info
     secrets:
       - issuance_api_key
+      - device_registration_signing_keys_key
       - signing_keys_openbao_token
       - haip_kms_token
       - signing_keys_workload_server_cert
@@ -1108,6 +1110,8 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DEVICE_REGISTRATION_GATEWAY_KEY_FILE: /run/secrets/device_registration_gateway_key
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE: /run/secrets/device_registration_signing_keys_key
+      SIGNING_KEYS_HOLDER_ORIGIN: http://signing-keys:8017
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -1117,6 +1121,7 @@ services:
       - marty_db_password
       - grpc_service_token
       - device_registration_gateway_key
+      - device_registration_signing_keys_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1269,6 +1274,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
   device_registration_gateway_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/device_registration_gateway_key
+  device_registration_signing_keys_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/device_registration_signing_keys_key
   notification_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_webhook_secret
   notification_applicant_event_token:

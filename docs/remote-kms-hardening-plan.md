@@ -9236,3 +9236,26 @@ Registration-to-Signing Keys-to-OpenBao behavior still needs acceptance.
 The Device Registration client and binding projection also reject private
 material anywhere in returned metadata, rather than checking only the
 projected public JWK.
+
+2026-10-09 local supported-profile holder credential wiring: a new cataloged,
+non-placeholder, at-least-32-character Device Registration-to-Signing Keys
+credential is mounted only on those two services in self-host Compose and
+resolved from one Kubernetes Secret key in the two corresponding Deployments.
+Device Registration receives the internal Signing Keys origin; beta and
+development Compose use paired values, with beta requiring an explicit
+credential. Kubernetes and local beta setup reject reuse of the device
+Gateway or gRPC credential. Self-host operator examples and secret inventory
+include the new file. The self-host whole-model ownership check passed, base
+Compose rendered matching service values, Kubernetes manifests resolved the
+same secret reference and expected origin, 24 Kubernetes secret-helper tests,
+61 Device Registration/Signing Keys/beta-profile tests and 85 local beta
+release/physical-provider tests passed. Canvas's Kubernetes acceptance test
+compiled with the new secret model, but the direct Windows run stopped in its
+preparation stage because `envsubst` is absent; no Canvas runtime acceptance
+is claimed from that compile. These are local configuration checks. The real
+operator secret has not been provisioned, and the public holder enrollment
+authorization, signing route and wallet acceptance remain open.
+The standalone `scripts/check-selfhost-production.py` invocation currently
+fails before its checks because it imports the absent `packages/marty_common`;
+qualify or retire that old Python preflight as part of the supported release
+path rather than treating this configuration pass as a complete cutover.

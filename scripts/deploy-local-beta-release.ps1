@@ -764,7 +764,9 @@ $requiredFlowSecrets = @(
     "FLOW_WEBHOOK_SECRET",
     "FLOW_APPLICATION_EVENT_HMAC_KEY",
     "ISSUANCE_API_KEY",
-    "SIGNING_KEYS_INTERNAL_API_KEY"
+    "SIGNING_KEYS_INTERNAL_API_KEY",
+    "DEVICE_REGISTRATION_GATEWAY_KEY",
+    "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
 )
 if ($EnablePassportNative -and $EnablePassportPhysicalProvider) {
     $requiredFlowSecrets += @(
@@ -777,6 +779,11 @@ foreach ($name in $requiredFlowSecrets) {
     if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
         throw "$name must be a non-placeholder value of at least 32 characters"
     }
+}
+$deviceGatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_GATEWAY_KEY"
+$deviceSigningKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
+if ($deviceSigningKey -eq $deviceGatewayKey -or $deviceSigningKey -eq $grpcServiceToken) {
+    throw "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from device and gRPC credentials"
 }
 $operatorGatewayKeys = @{}
 if ($EnablePassportNative) {

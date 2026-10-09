@@ -1955,6 +1955,13 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: DEVICE_REGISTRATION_GATEWAY_KEY
+            - name: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
+            - name: SIGNING_KEYS_HOLDER_ORIGIN
+              value: http://signing-keys:8017
             - name: DEVICE_REGISTRATION_SERVICE_PORT
               value: "8014"
             - name: DATABASE_URL

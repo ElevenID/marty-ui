@@ -811,6 +811,7 @@ services:
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/dev_integration_secret_server_cert
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/dev_integration_secret_server_key
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:-dev-device-registration-signing-keys-key-change-me}
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       BAO_ADDR: http://openbao:8200
@@ -1139,6 +1140,8 @@ services:
       <<: *native_issuance_grpc_auth
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:-dev-device-registration-gateway-key-change-me}
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:-dev-device-registration-signing-keys-key-change-me}
+      SIGNING_KEYS_HOLDER_ORIGIN: http://signing-keys:8017
       DATABASE_URL: postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       REDIS_URL: redis://redis:6379/5
       ORG_GRPC_TARGET: organization:9002
