@@ -9537,6 +9537,18 @@ wallet and release gates. Exact-head CI run `37960926646` was queued after
 the push; its result is not yet known. Do not treat the prior green lanes as
 qualification of this new head.
 
+2026-10-09 test-custody review finding: the Canvas published-worker Python
+oracles still set a synthetic `INTEGRATION_SECRET_MASTER_KEY` in
+`scripts/run_canvas_worker_rest_oracle.py` and
+`scripts/run_canvas_worker_startup_oracle.py`. Those scripts launch the frozen
+historical Python oracle image for parity, not a candidate Rust production
+service, but they still exercise the retired local master-key configuration in
+the acceptance graph. K8 review must either replace that oracle with public
+expected behavior and live remote-custody Rust acceptance, or document and
+isolate the frozen historical comparison so it cannot serve as custody proof
+or ship in a product image. Preserve Canvas regression coverage when retiring
+the oracle path. The exact-head Canvas pass does not close this finding.
+
 2026-10-09 pairing authorization interface review: the Auth service session
 record retains creation time and OIDC claims, but its current gRPC
 `ValidateSession` response and Gateway `SessionIdentity` expose user and
