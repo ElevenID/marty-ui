@@ -2172,6 +2172,29 @@ versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
 
+Next bounded A1 self-host owner candidate (2026-10-09 reviewed local draft,
+not yet hosted): the public-image loader's two root cases and eight
+embedded support cases have one deployment/packaging obligation. The draft
+moves their unchanged assertions and exact ten libtest IDs into
+`marty-selfhost-acceptance`, while composition retains its 136 other discovered
+cases. It moves the two self-host support files together, reuses the original
+single-source bundle, renewal, database, and bounded-command fixtures, and
+shares only the generic cleanup-result combiner with composition. The
+composition manifest can then drop three direct development edges:
+`marty-selfhost-bundle`, `serde_yaml`, and `zip` (41 to 38); this is a declared
+edge change, not an independently timed compile saving. The Canvas CI job
+still builds the public image and packager exactly once, then executes the
+dedicated self-host target alongside composition and worker. An exact ten-ID
+runner guard, artifact verifier, timing allowlist, target status/log cleanup,
+and contracts-lane exclusion retain the mandatory owner. Local locked Rust
+1.95 compilation and discovered-ID checks passed for both self-host and
+composition; strict package Clippy passed. The full synthetic runner policy
+suite passed 221 cases with one skip after a caught preflight-closure defect
+was corrected; focused selector and ownership policy tests passed.
+Independent review found no P1-P3 regression. Full hosted Linux
+image/PostgreSQL/cleanup execution and protected CI remain required; this
+split changes no skip or release qualification.
+
 ## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
 
 The shadow planner already records Gateway's public Auth HTTP proxy, but
@@ -2397,9 +2420,9 @@ the original full Canvas/contracts protected merge-group plan and merged as
 This establishes faster feedback for the exact three-file class, not for
 mixed/shared/runtime edits or final merge qualification.
 
-## A6 worker roster support source ownership (2026-10-09 local candidate)
+## A6 worker roster support source ownership (2026-10-09, merged)
 
-The next reviewed draft moves only
+The reviewed change moves only
 `canvas_worker_roster_metadata.rs` byte-for-byte from issuance's shared test
 support into the worker acceptance package, which is its sole Rust source
 consumer. It updates that target's explicit path and admits this one fourth
@@ -2408,10 +2431,15 @@ Docker-context proof remain fail-closed; neighboring shared support files
 still select the full Rust matrix. The move preserves the six fast database
 roster and two real expiry cases, all 147 migration-ledger worker IDs, and two
 ignored historical captures. Local Rust 1.95 locked compilation and 237
-focused policy tests passed; independent review found no P1-P3 issue. This is
-not yet hosted evidence or a measured speedup. Full PR qualification, a
-separate one-file selector pilot, and protected full Canvas/contracts
-validation remain required before promotion.
+focused policy tests passed; independent review found no P1-P3 issue.
+[UI #1199](https://github.com/ElevenID/marty-ui/pull/1199) passed full
+[PR run 37882465625](https://github.com/ElevenID/marty-ui/actions/runs/37882465625)
+and protected [merge-group run 37884784355](https://github.com/ElevenID/marty-ui/actions/runs/37884784355),
+then merged as `df93dc3f2`. The fourth file's worker-only eligibility is not
+yet a measured feedback speedup; the separate one-file
+[pilot #1201](https://github.com/ElevenID/marty-ui/pull/1201) must prove it on
+hosted CI. Protected merge groups retain full Canvas/contracts validation,
+and one required approval was restored after #1199 merged.
 
 ## Design references
 

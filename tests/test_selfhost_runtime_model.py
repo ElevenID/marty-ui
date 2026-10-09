@@ -10,8 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EXECUTABLE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
 SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
 ADAPTER = "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
-PACKAGED = "rust/crates/canvas-acceptance/tests/support/selfhost_packaged_runtime.rs"
-SIDECAR = "rust/crates/canvas-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+PACKAGED = "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
+SIDECAR = "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+OWNER = "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
 NAME = (
     "actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_references"
 )
@@ -73,9 +74,12 @@ def test_actual_extracted_runtime_model_is_mandatory():
 
 
 def assert_public_image_loader_connected(reader):
-    source = reader("rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs")
+    source = reader(OWNER)
     runtime = reader(PACKAGED)
     sidecar = reader(SIDECAR)
+    root_ignore = reader(".dockerignore")
+    for test_only in (OWNER, PACKAGED, SIDECAR):
+        assert root_ignore.splitlines().count(test_only) == 1
     assert '#[path = "support/selfhost_packaged_runtime.rs"]' in source
     assert '#[path = "support/selfhost_runtime_sidecar.rs"]' in source
     main = reader("rust/services/issuance/src/main.rs")
@@ -206,7 +210,7 @@ def test_public_image_loader_refuses_disconnected_or_weakened_gates(fault):
         source = read(name)
         replacements = {
             "source": (
-                "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs",
+                OWNER,
                 "selfhost_packaged_runtime::run_isolated_child()",
             ),
             "runner": (

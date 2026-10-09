@@ -192,7 +192,8 @@ pub(super) fn repository_root_from(start: &Path) -> Option<&Path> {
     if !start.is_absolute()
         || !(start.ends_with("rust/services/issuance")
             || start.ends_with("rust/crates/canvas-acceptance")
-            || start.ends_with("rust/crates/canvas-worker-acceptance"))
+            || start.ends_with("rust/crates/canvas-worker-acceptance")
+            || start.ends_with("rust/crates/selfhost-acceptance"))
     {
         return None;
     }

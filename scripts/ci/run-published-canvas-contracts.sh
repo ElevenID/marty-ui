@@ -61,6 +61,7 @@ find_executable() {
   case "$target" in
     canvas_published_schema_contract) package=marty-canvas-acceptance ;;
     canvas_published_worker_contract) package=marty-canvas-worker-acceptance ;;
+    selfhost_public_image_contract) package=marty-selfhost-acceptance ;;
     *) echo "Unknown Canvas contract target: $target" >&2; return 1 ;;
   esac
   local -a matches=()
@@ -207,8 +208,28 @@ export MARTY_CANVAS_WORKER_TEST_BINARY="$worker_binary"
 export MARTY_ISSUANCE_TEST_BINARY="$issuance_binary"
 composition_tests=$("$composition_executable" --list)
 worker_tests=$("$worker_executable" --list)
+selfhost_tests=''
+if [[ -z "$preflight_target" ]]; then
+  selfhost_executable=$(find_executable selfhost_public_image_contract)
+  selfhost_tests=$("$selfhost_executable" --list)
+  expected_selfhost_tests=$(printf '%s\n' \
+  'selfhost_public_image_loader_isolated: test' \
+  'selfhost_public_image_loader_child: test' \
+  'selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values: test' \
+  'selfhost_packaged_runtime::tests::database_authentication_failure_never_qualifies_as_healthy: test' \
+  'selfhost_packaged_runtime::tests::process_control_child: test' \
+  'selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery: test' \
+  'selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure: test' \
+  'selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch: test' \
+  'selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed: test' \
+  'selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts: test')
+  [[ "$(printf '%s\n' "$selfhost_tests" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected_selfhost_tests" | LC_ALL=C sort)" ]] || {
+    echo 'Selfhost executable changed its exact ten-case owner inventory' >&2
+    exit 1
+  }
+fi
 printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy: test'
-all_test_names=$(printf '%s\n%s\n' "$composition_tests" "$worker_tests" | grep ': test$')
+all_test_names=$(printf '%s\n%s\n%s\n' "$composition_tests" "$worker_tests" "$selfhost_tests" | grep ': test$')
 if [[ -z "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py"
 fi
@@ -449,8 +470,9 @@ all_tests=$(printf '%s\n' "$all_test_names" | grep -c ': test$')
 composition_parallel_tests=$("$composition_executable" --list --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" | grep -c ': test$')
 worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
+selfhost_parallel_tests=$(printf '%s\n' "$selfhost_tests" | grep -c ': test$')
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test"
-parallel_tests=$((composition_parallel_tests + worker_parallel_tests))
+parallel_tests=$((composition_parallel_tests + worker_parallel_tests + selfhost_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
 timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
@@ -458,24 +480,27 @@ timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --no
 # runs; contention must not turn its contract into an intermittent timeout.
 timed canvas_serial json_consumer "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
-# output separate, normally wait for both owners to finish cleanup, and fail
-# if either suite fails. The serial SQL-logging positive control stays outside
-# the pair. Forced cancellation still has the runner's usual teardown limits.
+# output separate, normally wait for all owners to finish cleanup, and fail
+# if any suite fails. The serial SQL-logging positive control stays outside
+# the parallel group. Forced cancellation still has the runner's usual teardown limits.
 target_logs=$(mktemp -d "${RUNNER_TEMP:?}/canvas-targets.XXXXXX")
 composition_log="$target_logs/composition.log"
 worker_log="$target_logs/worker.log"
+selfhost_log="$target_logs/selfhost.log"
 composition_end="$target_logs/composition.end"
 worker_end="$target_logs/worker.end"
+selfhost_end="$target_logs/selfhost.end"
 cleanup_target_logs() {
-  rm -f -- "$composition_log" "$worker_log" "$composition_end" "$worker_end"
+  rm -f -- "$composition_log" "$worker_log" "$selfhost_log" "$composition_end" "$worker_end" "$selfhost_end"
   rmdir -- "$target_logs"
 }
 trap cleanup_target_logs EXIT
 # A background child's redirection may not create its log before the relay
-# starts. Create both files after registering owned cleanup and before either
+# starts. Create all log files after registering owned cleanup and before any
 # tail follows one, so a scheduling race cannot drop that target's phase rows.
 : > "$composition_log"
 : > "$worker_log"
+: > "$selfhost_log"
 relay_target_timing() {
   local pid="$1" log="$2" end_file="$3"
   # This observer cannot own or obscure the Rust child exit status. Its
@@ -484,6 +509,11 @@ relay_target_timing() {
     python3 -c 'import time; print(time.monotonic_ns())' >"$end_file"
   fi
 }
+selfhost_started=$(python3 -c 'import time; print(time.monotonic_ns())')
+"$selfhost_executable" --nocapture --test-threads=4 >"$selfhost_log" 2>&1 &
+selfhost_pid=$!
+relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" &
+selfhost_relay_pid=$!
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
@@ -513,6 +543,7 @@ drain_target_relays() {
   # or gate status. Drain before deleting the complete raw diagnostic logs.
   wait "$composition_relay_pid" || true
   wait "$worker_relay_pid" || true
+  wait "$selfhost_relay_pid" || true
 }
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"
@@ -521,30 +552,37 @@ report_target_logs() {
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$composition_log"
   printf 'Canvas worker target exit: %s\n' "$2"
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
+  printf 'Selfhost target exit: %s\n' "$3"
+  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$selfhost_log"
 }
 stop_targets() {
-  local composition_stopped=0 worker_stopped=0
+  local composition_stopped=0 worker_stopped=0 selfhost_stopped=0
   trap - INT TERM
-  kill "$composition_pid" "$worker_pid" 2>/dev/null || true
+  kill "$composition_pid" "$worker_pid" "$selfhost_pid" 2>/dev/null || true
   wait "$composition_pid" 2>/dev/null || composition_stopped=$?
   wait "$worker_pid" 2>/dev/null || worker_stopped=$?
+  wait "$selfhost_pid" 2>/dev/null || selfhost_stopped=$?
   drain_target_relays
   report_target_timing composition "$composition_started" "$composition_stopped" "$composition_end"
   report_target_timing worker "$worker_started" "$worker_stopped" "$worker_end"
-  report_target_logs "$composition_stopped" "$worker_stopped"
+  report_target_timing selfhost "$selfhost_started" "$selfhost_stopped" "$selfhost_end"
+  report_target_logs "$composition_stopped" "$worker_stopped" "$selfhost_stopped"
   exit "$1"
 }
 trap 'stop_targets 130' INT
 trap 'stop_targets 143' TERM
 composition_status=0
 worker_status=0
+selfhost_status=0
 wait "$composition_pid" || composition_status=$?
 wait "$worker_pid" || worker_status=$?
+wait "$selfhost_pid" || selfhost_status=$?
 drain_target_relays
 report_target_timing composition "$composition_started" "$composition_status" "$composition_end"
 report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
-report_target_logs "$composition_status" "$worker_status"
-(( composition_status == 0 && worker_status == 0 ))
+report_target_timing selfhost "$selfhost_started" "$selfhost_status" "$selfhost_end"
+report_target_logs "$composition_status" "$worker_status" "$selfhost_status"
+(( composition_status == 0 && worker_status == 0 && selfhost_status == 0 ))
 timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$composition_log" | wc -l || true)
 [[ "$timeout_completions" == "$((1 - expected_skipped_timeout_tests))" ]] || {
   echo 'Published HTTPX timeout reference did not match the selected qualification tier' >&2

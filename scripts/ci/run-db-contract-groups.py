@@ -223,7 +223,7 @@ TIMING_NAMES = {
             "body-timeout-preflight",
         }
     ),
-    "canvas_target": frozenset({"composition", "worker"}),
+    "canvas_target": frozenset({"composition", "worker", "selfhost"}),
     "image_pull": frozenset({"postgres", "published_probe"}),
 }
 

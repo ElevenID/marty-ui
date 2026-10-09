@@ -168,7 +168,7 @@ fn finish_parent_scope(
             owned.path().display()
         );
     }
-    super::base_runtime_container::retain_failure(operation, cleanup)
+    super::owned_cleanup::retain_failure(operation, cleanup)
 }
 
 fn child_result(
@@ -742,7 +742,7 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
             }
             let cleanup = service.close_verified();
             let cleanup_failed = cleanup.is_err();
-            let combined = super::base_runtime_container::retain_failure(operation, cleanup);
+            let combined = super::owned_cleanup::retain_failure(operation, cleanup);
             drop(service);
             if cleanup_failed {
                 if let Some(path) = prepared.finish(true) {
