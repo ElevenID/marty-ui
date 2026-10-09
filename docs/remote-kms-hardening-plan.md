@@ -7157,3 +7157,11 @@ tests. This does not claim Compose runtime enforcement; upstream tracks a
 Compose 5 issue where `create_host_path: false` can be ignored, so supported
 deployment must validate bind sources before `up`. Packaged image and live
 plugin jobs remain active at this checkpoint.
+The exact CI smoke setup was verified locally in an isolated PostgreSQL 16
+container: after creating empty upstream Organization and Credential Template
+catalogs, the production Rust Issuance `migrate` command succeeded, and all
+six `executable_smoke` tests passed against that database. The disposable
+container was stopped. The source profile still declares no host-path
+creation; upstream Compose issue
+https://github.com/docker/compose/issues/13602 documents why that directive
+alone cannot serve as an operator-side missing-path preflight.

@@ -1403,6 +1403,21 @@ jobs:
           # Executable startup verifies every persisted integration-secret row.
           # Seed this dedicated database through the production Rust owner so
           # the complete issuance baseline is present before the process boots.
+          # The owner requires the upstream catalogs even when this smoke
+          # database intentionally contains no organizations or templates.
+          docker exec --interactive "${{ job.services.postgres.id }}" \
+            psql -v ON_ERROR_STOP=1 --username postgres --dbname marty_issuance_executable_smoke_test <<'SQL'
+          CREATE SCHEMA organization_service;
+          CREATE TABLE organization_service.organizations (
+            id text PRIMARY KEY, name text, slug text
+          );
+          CREATE SCHEMA credential_template_service;
+          CREATE TABLE credential_template_service.credential_templates (
+            id text PRIMARY KEY, organization_id text, name text,
+            description text, claims jsonb, issuer_requirements jsonb,
+            status text, created_at timestamptz
+          );
+          SQL
           test -x rust/target/debug/marty-issuance-service
           DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             rust/target/debug/marty-issuance-service migrate
