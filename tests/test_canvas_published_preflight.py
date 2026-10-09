@@ -1882,7 +1882,7 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         "set -euo pipefail\n"
         'if [[ "${{ matrix.lane }}" == contracts ]]; then\n'
         '  nonce="$(openssl rand -hex 16)"\n'
-        '  docker exec "${{ job.services.redis.id }}" redis-cli -n 14 SET '
+        '  docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET '
         'marty:tests:disposable-guard "$nonce" >/dev/null\n'
         '  export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"\n'
         "fi\n"

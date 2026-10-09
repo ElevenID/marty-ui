@@ -4,7 +4,7 @@ use marty_trust_profile::{
     CascadeRevocationPolicy, ComplianceStatus, IssuerEntityComplianceStatus, IssuerEntityType,
     RegistryImportType, RegistryOperation, RegistrySource, RevocationCheckMode, TrustAnchorType,
     TrustProfileStatus, TrustProfileType, TrustPurpose, TrustRelationshipStatus, TrustSourceType,
-    TrustedAssertionFormat, HTTP_OPERATIONS,
+    TrustedAssertionFormat, TRUST_PROFILE_HTTP_OPERATIONS,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -26,9 +26,9 @@ fn values<T: Serialize + Copy>(values: &[T]) -> Vec<Value> {
 #[test]
 fn complete_surface_and_domain_inventory_match_the_shared_contract() {
     let contract = contract();
-    let actual_operations = HTTP_OPERATIONS
+    let actual_operations = TRUST_PROFILE_HTTP_OPERATIONS
         .iter()
-        .map(|(method, path)| [*method, *path])
+        .map(|operation| [operation.method, operation.path])
         .collect::<Vec<_>>();
     assert_eq!(
         serde_json::to_value(actual_operations).unwrap(),
