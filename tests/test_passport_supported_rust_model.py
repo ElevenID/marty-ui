@@ -95,6 +95,8 @@ def safe_model(root: Path) -> dict:
         "ORG_GRPC_TARGET": "organization:9002",
         "ES_GRPC_TARGET": "event-stream:9015",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "DEVICE_REGISTRATION_GATEWAY_KEY_FILE":
+            "/run/secrets/device_registration_gateway_key",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
         "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
@@ -138,6 +140,8 @@ def safe_model(root: Path) -> dict:
             {"source": "issuance_api_key"},
             {"source": "signing_keys_internal_api_key"},
         ]
+    services["gateway"]["secrets"].append(
+        {"source": "device_registration_gateway_key"})
     services["flow"]["secrets"].append(
         {"source": "flow_application_event_hmac_key"})
     services["issuance-native"]["secrets"].extend([
@@ -430,6 +434,8 @@ def safe_model(root: Path) -> dict:
                 "db": {"file": str(root / "secrets/db")},
                 "marty_db_password": {"file": str(root / "secrets/marty_db_password")},
                 "grpc_service_token": {"file": str(root / "secrets/grpc_service_token")},
+                "device_registration_gateway_key": {
+                    "file": str(root / "secrets/device_registration_gateway_key")},
                 "passport_beta_reconciliation_operator_token": {
                     "file": str(root / "secrets/passport_beta_reconciliation_operator_token")},
                 "bao_root_token": {"file": str(root / "secrets/bao_root_token")},

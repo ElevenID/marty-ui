@@ -177,6 +177,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+            "device_registration_gateway_key",
             "passport_beta_reconciliation_operator_token",
             "bureau_database_url", "token_hmac_key",
             "flow_webhook_secret", "flow_application_event_hmac_key",
@@ -191,6 +192,13 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             encoding="ascii")
         assert len(operator_token) == 64
         assert operator_token not in {
+            (secret_dir / "grpc_service_token").read_text(encoding="ascii"),
+            (secret_dir / "issuance_api_key").read_text(encoding="ascii"),
+        }
+        gateway_key = (secret_dir / "device_registration_gateway_key").read_text(
+            encoding="ascii")
+        assert len(gateway_key) == 64
+        assert gateway_key not in {
             (secret_dir / "grpc_service_token").read_text(encoding="ascii"),
             (secret_dir / "issuance_api_key").read_text(encoding="ascii"),
         }

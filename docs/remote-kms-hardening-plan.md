@@ -8692,3 +8692,12 @@ credential authenticates the Gateway as caller; it does not by itself
 authorize a holder signing request or establish durable device-owned KMS
 keys. The current public device registration API will require a coordinated
 deployment of both services so direct callers receive 401.
+
+The first broader acceptance run exposed a missing disposable passport
+Gateway secret mount: its model verifier correctly rejected the rendered
+stack. The candidate now stages a distinct disposable key, mounts it in the
+protected passport Gateway, and checks that binding and live ownership.
+The repaired provisioning/model/ownership suites pass 249 tests with two
+skips; 16 compose-deployment and Gateway/Device Registration cutover tests
+also pass. This correction is local and held with the larger UI batch while
+the previous published head's Canvas CI job is still running.

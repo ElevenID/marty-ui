@@ -70,7 +70,8 @@ SECRETS = {
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
     "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
-                "grpc_service_token", "dsc_issue_gateway_key", "csca_issue_gateway_key"),
+                "grpc_service_token", "device_registration_gateway_key",
+                "dsc_issue_gateway_key", "csca_issue_gateway_key"),
 }
 DATA = {
     "postgres": ("postgres_data", "/var/lib/postgresql/data"),
@@ -184,6 +185,8 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                 "/run/secrets/csca_issue_gateway_key",
         }
         gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true",
+                       "DEVICE_REGISTRATION_GATEWAY_KEY_FILE":
+                           "/run/secrets/device_registration_gateway_key",
                        "PUBLIC_DOMAIN": "localhost:29876",
                        "ISSUER_BASE_URL": "https://localhost:29876"}
         native_env = {"ISSUER_BASE_URL": "https://localhost:29876",
