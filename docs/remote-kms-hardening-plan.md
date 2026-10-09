@@ -7503,3 +7503,20 @@ requalification. The Release Contract classifier expectation was also
 corrected locally after merging current `main`; all 139 tests in its file
 pass. Hold both corrections until the still-running Canvas, plugin-image, and
 service-image lanes finish, then send one grouped PR update.
+
+Verifier consumer test sweep: `cargo +1.97.1 test --locked --offline -p
+marty-verifier --tests --no-run` found two remaining Core-local-key test
+callers: the eMRTD integration suite uses `cert_builder`, `keygen`, and
+`sod_builder`; one Tauri verification unit test creates a CSCA certificate.
+The latter now consumes the reviewed public-only Core eMRTD vector instead.
+The copied JSON fixture has the same SHA-256 as Core
+(`944a97005ed646adb995fb847f5ac7eeeb8da14afd0c4d40fa15006498b42e40`),
+and the targeted governed-CSCA unit case passes with Rust 1.97.1. Verifier
+workspace Rustfmt and diff checks pass. The eMRTD suite still requires
+public-vector/remote-custody migration with its multi-DG coverage preserved;
+the full Verifier test compile remains red until that is done. This consumer
+work is isolated and uncommitted, with no Verifier PR yet.
+
+UI run `37875662633` later passed both `Test OpenBao DIDComm plugin image`
+and `Rust Service Images`. Canvas remains live at this checkpoint. The two
+known failed lanes have local corrections and are held for the grouped push.
