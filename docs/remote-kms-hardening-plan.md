@@ -7107,3 +7107,15 @@ full PR check set ended with 22 successful, seven failed, and one skipped
 check; the failures are dependency review, Canvas/contracts compilation,
 strict Rust lint, release contracts, and CodeQL, all addressed in the local
 grouped correction batch. Push that batch once, then evaluate the new head.
+
+2026-10-08 grouped correction checkpoint: pushed the compiled/tested batch to
+UI PR #1192 at `888e7949b`. The new hosted run is in progress. Dependency
+review immediately found a separate high-severity gRPC-Go advisory,
+GHSA-2v4p-qf9q-27wj, affecting the batch's 1.83.1. Upstream identifies 1.83.2
+as patched. Locally upgraded the OpenBao plugin to 1.83.2 (and its required
+`golang.org/x/net` 0.58.0), then passed `go test ./...` and `go vet ./...` in
+Go 1.26. Keep this local until the rest of the hosted results are known and
+combine any corrections in one push. The Credentials WASM target check could
+not compile locally because the Windows environment lacks `clang` for
+`cc-rs`; that is an environment limitation, not evidence of a Rust source
+failure. Qualify the target with a suitable compiler or hosted artifact build.
