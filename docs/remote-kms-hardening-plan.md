@@ -9516,3 +9516,16 @@ merged candidate passed 113 focused Python tests, one skip and 348 subtests,
 plus the full CI packaging-render step under its declared environment. These
 local checks do not qualify the eventual pushed head; wait for the Canvas
 result so any final correction can share the next hosted run.
+
+2026-10-09 pairing authorization interface review: the Auth service session
+record retains creation time and OIDC claims, but its current gRPC
+`ValidateSession` response and Gateway `SessionIdentity` expose user and
+organization only. Gateway therefore cannot currently prove a recent user
+authentication event from the session it validates. Session creation time is
+not a substitute for a fresh step-up. If the pairing policy requires step-up,
+carry a verified authentication timestamp/assurance result through Auth and
+Gateway, reject API-key identities, and enforce freshness before issuing a
+pairing ticket. If an independent device ceremony is selected instead, prove
+its user-presence binding and stolen-session resistance before adding public
+routes. The existing ticket store and keyless registration alone do not meet
+that authorization gate.
