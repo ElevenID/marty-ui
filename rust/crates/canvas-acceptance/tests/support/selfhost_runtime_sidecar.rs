@@ -499,7 +499,7 @@ impl<'a> OwnedNative<'a> {
             .ok_or(ERROR)?;
         let template = environment["DATABASE_URL_TEMPLATE"].as_str().ok_or(ERROR)?;
         let prefix = template.strip_suffix("@postgres:5432/marty").ok_or(ERROR)?;
-        require(prefix == "postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}")?;
+        require(prefix == "postgresql://marty:$${MARTY_DB_PASSWORD}")?;
         environment.insert(
             "DATABASE_URL_TEMPLATE".into(),
             json!(format!("{prefix}@{database_host}:5432/marty")),
@@ -528,7 +528,7 @@ impl<'a> OwnedNative<'a> {
         }
         expected_environment.insert(
             "DATABASE_URL_TEMPLATE".into(),
-            format!("postgresql+asyncpg://marty:${{MARTY_DB_PASSWORD}}@{database_host}:5432/marty"),
+            format!("postgresql://marty:${{MARTY_DB_PASSWORD}}@{database_host}:5432/marty"),
         );
         std::fs::write(&config, serde_json::to_vec(&model).map_err(|_| ERROR)?)
             .map_err(|_| ERROR)?;
