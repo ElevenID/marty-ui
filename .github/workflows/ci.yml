@@ -692,26 +692,6 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
-  test-passport-fence-postgres:
-    name: Passport Fence PostgreSQL
-    needs: changes
-    if: needs.changes.outputs.rust_runtime == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-      - run: python -m pip install pytest==8.4.2 PyYAML==6.0.3
-      - name: Exercise atomic beta passport fence in disposable PostgreSQL
-        env:
-          BETA_FENCE_DISPOSABLE_DOCKER: "1"
-        run: python -m pytest -q tests/test_passport_beta_scoped_fence_postgres.py tests/test_probe_passport_beta_fence_target.py tests/test_check_passport_beta_fence_authority.py
-
   test-rust-feature-probe:
     name: Rust Feature Regression Probe
     needs: changes
@@ -2822,7 +2802,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -2846,7 +2826,6 @@ jobs:
       CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
       UI_RESULT: ${{ needs.test-ui.result }}
       SERVICES_RESULT: ${{ needs.test-services.result }}
-      PASSPORT_FENCE_RESULT: ${{ needs.test-passport-fence-postgres.result }}
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
       RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
       OPENBAO_RESULT: ${{ needs.test-openbao-didcomm-plugin.result }}
@@ -2865,7 +2844,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 18 ]]
+          [[ "${#results[@]}" -eq 17 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -2915,7 +2894,6 @@ jobs:
             require_selected test-ui "$UI_RESULT" "$UI_SELECTED"
             require_selected test-credential-lifecycle-browser "$LIFECYCLE_BROWSER_RESULT" "$UI_SELECTED"
             require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"
-            require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
             require_selected test-openbao-didcomm-plugin "$OPENBAO_RESULT" "$OPENBAO_SELECTED"

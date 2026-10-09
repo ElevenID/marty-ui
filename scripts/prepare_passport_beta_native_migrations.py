@@ -241,6 +241,9 @@ def build_sql(
 
 
 def prepare(manifest: Path, fence_receipt: Path) -> tuple[dict[str, object], bytes]:
+    raise NativeMigrationError(
+        "historical passport beta SQL handoff is retired; use fresh Rust migrations"
+    )
     head = protected_source()
     for relative in PROTECTED:
         protected_file(relative, run)

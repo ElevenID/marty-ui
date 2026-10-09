@@ -119,32 +119,11 @@ def test_receipt_binds_protected_source_and_sql_attests_database(tmp_path):
         checked_receipt(path, "b" * 40)
 
 
-def test_prepare_binds_protected_main_receipt_and_signed_image(monkeypatch, tmp_path):
-    checked = []
-    monkeypatch.setattr(native, "protected_source", lambda: "b" * 40)
-    monkeypatch.setattr(native, "protected_file", lambda relative, runner: checked.append(
-        (relative, runner)
-    ))
-    monkeypatch.setattr(native, "manifest_source", lambda _manifest, head, **_: {
-        "oci_digests": {native.IMAGE_REPOSITORY: "sha256:" + "a" * 64},
-        "source_commit": head,
-    })
-    monkeypatch.setattr(native, "checked_receipt", lambda _path, _head: {
-        "system_id": "123456", "database_oid": "9876",
-        "fence_epoch": "345", "container_id": "c" * 64,
-    })
-    monkeypatch.setattr(native, "checked_migrations", lambda _root, image: (
-        (MIGRATIONS[0], b"SELECT 1;\n"),
-    ) if image == IMAGE else ())
-    plan, payload = native.prepare(tmp_path / "stack-manifest.json",
-                                   tmp_path / "fence-receipt.json")
-    assert tuple(relative for relative, _ in checked) == native.PROTECTED
-    assert all(runner is native.run for _, runner in checked)
-    assert plan["source_commit"] == "b" * 40
-    assert plan["migration_image"] == IMAGE
-    assert plan["migrations"][0]["path"] == MIGRATIONS[0]
-    assert payload.endswith(b"COMMIT;\n")
-    assert plan["migration_set_sha256"] in payload.decode("ascii")
+def test_retired_preparer_rejects_before_touching_protected_source(monkeypatch, tmp_path):
+    monkeypatch.setattr(native, "protected_source", lambda: pytest.fail("legacy source read"))
+    with pytest.raises(NativeMigrationError, match="retired"):
+        native.prepare(tmp_path / "stack-manifest.json",
+                       tmp_path / "fence-receipt.json")
 
 
 def test_staged_native_sql_is_byte_exact_and_retry_safe(tmp_path):

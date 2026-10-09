@@ -8931,3 +8931,23 @@ still trust their receipts. Retire this whole old-schema path and its claims
 together; deleting only the SQL bridge would leave a misleading operator
 entrypoint. The supported fresh self-host and disposable passport routes must
 retain their native Rust migration and passport behavior.
+
+Local retirement stage after this audit: the three manual beta mutation
+entrypoints (`start-passport-beta-db-maintenance.ps1`,
+`run-passport-beta-native-db-gates.ps1`, and
+`run-passport-beta-aggregate-deploy.ps1`) have been reduced to terminal
+diagnostics, including the resume entrypoint. The native SQL preparer and
+aggregate handoff reject before protected-source or Docker reads, and the
+aggregate Compose CLI exits before a saved-plan verification can bypass that
+guard. Obsolete operator-order and SQL-stream tests were removed; a regression
+test asserts that the three PowerShell files contain no executable operation
+after their parameter blocks. The old `Passport Fence PostgreSQL` CI lane was
+removed from the aggregate gate, which now has 17 planned jobs; the Rust
+contract lane retains real fresh Organization, Credential Template and
+Issuance database migrations and schema verification. Focused affected suites
+passed 78/78 and 66/66 (17 disposable tests skipped on Windows), the CI-gate
+rehearsal and terminal-entrypoint tests passed 12/12, and workflow YAML parses.
+This is still an intermediate source change: historical Python SQL builders,
+receipt consumers and manual beta acceptance workflows remain in the tree and
+need cleanup/replacement before the grouped PR is publishable. No protected
+beta host or signed new-head image was exercised by these tests.

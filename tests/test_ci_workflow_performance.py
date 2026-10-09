@@ -984,7 +984,6 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-ui-crawler-artifacts",
         "test-ui-crawler-nginx",
         "test-services",
-        "test-passport-fence-postgres",
         "test-rust-feature-probe",
         "test-rust-services",
         "test-openbao-didcomm-plugin",
@@ -1040,7 +1039,6 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         },
         "openbao": {"test-openbao-didcomm-plugin"},
         "rust_runtime": {
-            "test-passport-fence-postgres",
             "test-rust-feature-probe",
             "test-rust-service-images",
         },
@@ -1133,7 +1131,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 18)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 17)
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -1223,7 +1221,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
     assert exercise((), {"changes": "failure"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
-    assert exercise((), result_count=17).returncode != 0
+    assert exercise((), result_count=16).returncode != 0
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
     assert (
         exercise(

@@ -900,6 +900,9 @@ def verify_resume_plan(
 
 
 def main() -> None:
+    raise SystemExit(
+        "Historical passport beta aggregate Compose path is retired; use fresh Rust deployment"
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--stack-manifest", required=True, type=Path)
     parser.add_argument("--fence-receipt", type=Path)
