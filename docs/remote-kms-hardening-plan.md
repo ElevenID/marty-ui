@@ -8494,3 +8494,11 @@ This is model evidence; actual signed-image startup remains to be exercised.
 UI PR #1192 published head `14f115ecc` completed CI run `37899481669`
 successfully, including the final Canvas database contract job. The grouped
 local KMS/Rust-only head still needs its own hosted checks after one push.
+
+The grouped KMS/Rust-only branch was pushed once at `aadcc39cf` after the
+older run finished, and UI PR #1192's description now describes the merged
+Rust owner, KMS/TLS custody and remaining gates. Its exact-head CI run is
+`37904347088`; CodeQL Rust, CodeQL Actions, open-source policy and organization
+quality runs were also created at that SHA. At first observation, policy had
+passed, Actions CodeQL was in progress, and the other runs were queued. Do
+not infer release qualification from the earlier `14f115ecc` checks.
