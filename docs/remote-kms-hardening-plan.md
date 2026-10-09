@@ -9404,3 +9404,17 @@ transitive Core revision from the lockfile. Authenticator's Windows bridge
 build is still under investigation after vendored C++/OpenSSL compiler failures;
 the graph repin is not yet qualified or published. These consumer PRs remain
 open, and exact release artifacts and wallet acceptance remain required.
+
+2026-10-09 consumer CI correction: Credentials PR #313 head `daf1164`
+passed Rust tests, Clippy, Python tests and security checks but its Fast Rust
+Preflight rejected the new Core graph because `MARTY_CORE_REVISION` and the
+graph guard still expected `6855721`; that made its CI gate fail. Commit
+`6269324` updates the graph guard, CI wheel checkout and cache revision to
+the full `7c50d31bf0b1d969f42f8cb1125995f1c99cb96c` hash; the exact
+`cargo metadata --locked` graph check passed locally, and the corrective
+head is published for a new hosted run. UI's equivalent guard was updated
+and passed against its locked full workspace graph before the grouped UI
+push. Core PR #355 hosted checks are green at `7c50d31`; Verifier PR #154
+hosted checks are green at `206f80e`. Authenticator's first Windows build
+against the unified graph reproduced the previously known MSVC OpenSSL
+`C1083` long-path failure; a short isolated target-path check is in progress.
