@@ -10472,3 +10472,19 @@ acceptance wiring and a local SQL proof, not a signed-image result. The
 protected producer still needs an exact released-image run and a final
 assembled table/column inventory with JSON runtime-write review before K10
 can close. The commit remains local in the grouped UI PR #1192 batch.
+
+2026-10-09 exact-head UI hosted result: CI run `37994913688` for published
+PR #1192 head `7f8ae9b9d` is terminal. Release Contract Tests passed 6,145
+tests (two skipped, 363 subtests) and failed only
+`test_reviewed_registry_indexes_are_available_now`: `docker buildx
+imagetools inspect` could not fetch the pinned Postgres digest from Docker
+Hub. Rust feature regression, Rust lint/packaging, public protocol, UI and
+service tests, browser gate, Python lint, security and CodeQL passed at this
+head. The container-backed Rust service tests, plugin image, Nginx, service
+images and supply-chain action failed during image initialization/build; the
+CI Gate consequently failed. The Organization Quality reusable workflow also
+failed while preparing its image. These are not KMS acceptance results. The
+reviewed Docker Hub digest and live registry-index requirement remain intact;
+the next grouped UI push should run after registry availability recovers or
+after a separately reviewed, provenance-preserving mirror change. Local
+schema-gate/tracker commits after this head have not had hosted CI.
