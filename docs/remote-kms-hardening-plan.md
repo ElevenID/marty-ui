@@ -7574,3 +7574,13 @@ signer-identity and signature-negative coverage. The app's process-local
 keyring is a separate offline verifier data-at-rest boundary and is not
 evidence of credential signing-key custody; audit its scope explicitly
 before applying the KMS-only cutover to that desktop storage design.
+Verifier consumer follow-up `0e43a26`: the `marty-sync` USB signature test
+now consumes two deterministic signed **public** package vectors plus a public
+Ed25519 key, instead of constructing a `SigningKey`. It retains the valid
+signature, declared-wrong-signer, payload tamper and transition tamper
+assertions. The focused case passes, and the full default `marty-sync` suite
+passes 35 tests (one intentionally ignored) with Rust 1.97.1; workspace
+Rustfmt and staged diff checks pass. These historical vectors intentionally
+test signature/policy semantics, while package time validity remains covered
+by a separate fixed-clock test. The optional demo fixture generators and
+eMRTD conformance suite remain unqualified.
