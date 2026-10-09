@@ -548,7 +548,7 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
             "synthetic-kubernetes-canvas-shared-secret".into(),
         ),
         (
-            "OPENBAO_SERVICE_TOKEN".into(),
+            "SIGNING_KEYS_OPENBAO_TOKEN".into(),
             "synthetic-not-an-openbao-capability".into(),
         ),
         (

@@ -416,6 +416,29 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
         inputs=inputs,
         policy_directory=policy_directory,
     )
+    if authcrypt:
+        # Linux Compose can omit an explicit false from its JSON projection.
+        # Admit that one presentation difference only after proving the exact
+        # source profile forbids host-path creation and the inputs exist.
+        source = yaml.safe_load((ROOT / POLICY_PROFILE).read_text(encoding="utf-8"))
+        policy_mount = source["x-native-issuance-policy"]["volumes"][0]
+        plugin_mount = source["services"]["openbao"]["volumes"][0]
+        assert policy_mount["bind"] == {"create_host_path": False}
+        assert plugin_mount["bind"] == {"create_host_path": False}
+        assert (ROOT / "docker/openbao-didcomm-dev.hcl").is_file()
+        actual = deepcopy(actual)
+        for name, target in (
+            ("issuance", POLICY["POLICY_TARGET"]),
+            ("issuance-native", POLICY["POLICY_TARGET"]),
+            ("openbao", "/bao/config/didcomm-plugin.hcl"),
+        ):
+            mounts = [
+                mount for mount in actual["services"][name]["volumes"]
+                if mount.get("target") == target
+            ]
+            assert len(mounts) == 1
+            if mounts[0].get("bind") == {}:
+                mounts[0]["bind"] = {"create_host_path": False}
     assert actual == expected, "".join(difflib.unified_diff(
         json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
         json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),

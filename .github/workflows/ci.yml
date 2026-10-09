@@ -1400,9 +1400,12 @@ jobs:
           for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test; do
             docker exec "${{ job.services.postgres.id }}" createdb -U postgres "$database"
           done
-          docker exec --interactive "${{ job.services.postgres.id }}" \
-            psql --username postgres --dbname marty_issuance_executable_smoke_test \
-            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
+          # Executable startup verifies every persisted integration-secret row.
+          # Seed this dedicated database through the production Rust owner so
+          # the complete issuance baseline is present before the process boots.
+          test -x rust/target/debug/marty-issuance-service
+          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+            rust/target/debug/marty-issuance-service migrate
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust

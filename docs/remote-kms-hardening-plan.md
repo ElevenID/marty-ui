@@ -7128,3 +7128,32 @@ graph excludes `mio` on WASM and retains `ldap3` on native Python; a Linux
 `cargo +1.97.1 check --locked -p marty-rs --no-default-features --features wasm
 --target wasm32-unknown-unknown` passed. This proves source compilation, not
 the exact wasm-pack artifact or authenticator browser flow.
+Linux `wasm-pack build --locked --target web --no-default-features --features wasm`
+subsequently passed for the Credentials candidate. It produced a 5,151,231-byte
+WASM artifact with SHA-256
+`268511f350ffefbd174358674c9090cbbeb325b2c54226941eb41f19e53621ae`;
+the generated TypeScript exports exclude the retired local-key methods. This
+qualifies the web package build but not its browser consumption or presentation
+flow.
+
+2026-10-08 second UI hosted run at `888e7949b`: CodeQL Rust, strict lint,
+security scanning, and Python lint passed. Dependency review found the separate
+gRPC 1.83.1 advisory; the local 1.83.2 correction above remains unpushed.
+The Canvas lane failed a Linux-only Kubernetes composition proof because its
+closed synthetic secret map used `OPENBAO_SERVICE_TOKEN` as a key, while the
+source Signing Keys manifest references `SIGNING_KEYS_OPENBAO_TOKEN`. Corrected
+that test fixture and reran the exact Linux Rust proof successfully with its
+2x2 marker. The contracts lane failed five Issuance executable smoke tests:
+the dedicated PostgreSQL database was initialized with only the old four-table
+OID4VCI fixture, and KMS-only startup now verifies the integration-secret
+table. CI now initializes that database through the production Rust `migrate`
+command. The release-contract lane passed 6,169 tests with 19 skips except for
+one Linux Compose projection difference: it omitted explicit
+`bind.create_host_path: false` on three authcrypt mounts. The model gate now
+accepts only that missing JSON field for those exact mounts after verifying
+the source profile declares false and the synthetic policy directory and
+checked-in plugin config exist. The local targeted Compose suite passes 66
+tests. This does not claim Compose runtime enforcement; upstream tracks a
+Compose 5 issue where `create_host_path: false` can be ignored, so supported
+deployment must validate bind sources before `up`. Packaged image and live
+plugin jobs remain active at this checkpoint.
