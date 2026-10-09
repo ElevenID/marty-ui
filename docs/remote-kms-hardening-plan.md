@@ -10271,3 +10271,21 @@ at this checkpoint; its other reported checks have no failure. Do not
 publish or qualify the broader local UI batch based on these three
 library suites alone; native image, database, wallet and exact-head hosted
 checks remain required.
+
+2026-10-09 grouped publication and integration review: the 44-commit UI
+batch was pushed to draft PR #1192 at `1fe2d3b9e`; Authenticator's
+13-commit remote-only wallet batch was pushed to draft PR #57 at `0966587`.
+Verifier PR #154 at `7cd9a54` and Core PR #355 at `735a11f` now have
+green exact-head hosted CI gates; Core still requires protected-branch
+review. UI's published head reported a merge conflict and no checks after
+six new main commits. Local merge commit `624affb5a` resolves only two
+Canvas preflight conflicts by retaining both main's serialized historical
+worker probes and this branch's scoped OpenBao signer probe. `bash -n`,
+diff hygiene and both focused full-mode preflight tests passed; the full
+preflight test file is still running at this checkpoint. Do not count
+the conflicted `1fe2d3b9e` head as qualified. Authenticator's first
+Flutter quality job failed at `dart format` on three pairing files;
+local commit `423674a` applies the same Flutter 3.44.6 formatter. The
+full Dart format check is clean and 17 focused pairing/retirement tests
+pass. The Android and generated-binding jobs are still pending; hold
+the Authenticator correction for one grouped follow-up push.
