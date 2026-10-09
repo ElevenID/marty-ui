@@ -1649,10 +1649,10 @@ protected combined-head CI passed, including the Canvas database lane.
 This change does not shorten real leases or establish an attributable CI
 speedup; collect comparable case timing before claiming one.
 
-## A4 validation-decision fast owner (2026-10-09 local candidate)
+## A4 validation-decision fast owner (2026-10-09, merged)
 
 The protected #1155 timing artifact measured the 13-case published
-`repository_validation` matrix at 13.499s. This reviewed candidate extracts
+`repository_validation` matrix at 13.499s. The merged change extracts
 its existing field, scope, and reference decisions from the PostgreSQL adapter
 without changing SQL reads, error precedence, target-disable calls, or job
 failure handling. A typed, literal fast table owns all 13 frozen repository
@@ -1671,8 +1671,15 @@ host the five-case pinned-schema boundary passed in 9.650s, while the earlier
 13-case hosted sample was 13.499s. These are not comparable conditions, so no
 CI speedup is claimed. Rust 1.95 package check and the fast unit test passed;
 293 focused policy/preflight tests passed with one existing skip. Independent
-review found no P1-P3 issue. Hosted Linux qualification and protected CI are
-still required before this candidate can merge.
+review found no P1-P3 issue. [UI #1198](https://github.com/ElevenID/marty-ui/pull/1198)
+passed full [PR run 37877894198](https://github.com/ElevenID/marty-ui/actions/runs/37877894198)
+and protected [merge-group run 37880523315](https://github.com/ElevenID/marty-ui/actions/runs/37880523315),
+then merged as `cdc184dba`. The fast Rust owner test and retained published
+database/worker suites executed successfully. The `repository_validation`
+scenario measured 22.928s in PR CI and 4.692s in protected CI, versus 13.499s
+in the earlier #1155 protected run. This spread does not establish an
+attributable wall-time improvement from the split. One required approval was
+restored after merge.
 
 ## Product packaging and integration workstream (added 2026-10-07)
 
@@ -2389,6 +2396,22 @@ the original full Canvas/contracts protected merge-group plan and merged as
 `fb93db737`; one required approval was restored immediately after merge.
 This establishes faster feedback for the exact three-file class, not for
 mixed/shared/runtime edits or final merge qualification.
+
+## A6 worker roster support source ownership (2026-10-09 local candidate)
+
+The next reviewed draft moves only
+`canvas_worker_roster_metadata.rs` byte-for-byte from issuance's shared test
+support into the worker acceptance package, which is its sole Rust source
+consumer. It updates that target's explicit path and admits this one fourth
+source file to the exact worker-only PR selector. The source-consumer and six
+Docker-context proof remain fail-closed; neighboring shared support files
+still select the full Rust matrix. The move preserves the six fast database
+roster and two real expiry cases, all 147 migration-ledger worker IDs, and two
+ignored historical captures. Local Rust 1.95 locked compilation and 237
+focused policy tests passed; independent review found no P1-P3 issue. This is
+not yet hosted evidence or a measured speedup. Full PR qualification, a
+separate one-file selector pilot, and protected full Canvas/contracts
+validation remain required before promotion.
 
 ## Design references
 
