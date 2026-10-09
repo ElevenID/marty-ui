@@ -9006,3 +9006,11 @@ updates the assertions to require all four binaries and the OpenBao selector;
 `git diff --check` pass. This fix is local and not part of the published run.
 Keep the failed run as evidence; inspect its four unfinished OpenBao, Rust
 contract, Rust image and Canvas jobs before batching the next PR update.
+
+Authenticator follow-up remains local for the eventual grouped consumer PR:
+`a3c4038` removes unused local-key source trees, and `1bb9db2` removes the
+unreferenced `errorMissingPrivateKey` translation from all eight ARB locales.
+All eight files parse as JSON and the mobile/desktop custody source guard
+passes. Neither cleanup supplies durable remote holder signing or wallet
+feature parity; do not publish the Authenticator branch as a KMS-only wallet
+on the strength of those source removals.
