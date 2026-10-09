@@ -7119,3 +7119,12 @@ combine any corrections in one push. The Credentials WASM target check could
 not compile locally because the Windows environment lacks `clang` for
 `cc-rs`; that is an environment limitation, not evidence of a Rust source
 failure. Qualify the target with a suitable compiler or hosted artifact build.
+The Linux Rust 1.97.1 WASM check exposed an actual Credentials feature-graph
+failure: its workspace-wide `marty-verification/icao-client` enabled LDAP,
+Tokio, and `mio` on `wasm32-unknown-unknown`. The Credentials candidate now
+enables `icao-client` only for native/Python features, retaining the LDAP
+client there while omitting it from browser builds. The corrected dependency
+graph excludes `mio` on WASM and retains `ldap3` on native Python; a Linux
+`cargo +1.97.1 check --locked -p marty-rs --no-default-features --features wasm
+--target wasm32-unknown-unknown` passed. This proves source compilation, not
+the exact wasm-pack artifact or authenticator browser flow.
