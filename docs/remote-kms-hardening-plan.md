@@ -10407,3 +10407,17 @@ weaken or exclude the gate solely to make CI green. Audit and retire old
 local-key wrappers or add behavioral coverage for still-supported methods,
 then rerun the exact-head gate. Physical-device and native wallet proof are
 still required beyond Flutter test coverage.
+
+2026-10-09 base mobile local-signing retirement candidate: local Authenticator
+commit `8fee8c3` replaces eight legacy Dart-to-native signing/key-generation
+paths (DID creation, VC signing, PKI generation/CSR/certificate signing,
+JWT/SD-JWT issuance and mDoc response signing) with one fail-closed remote
+KMS requirement. Android/iOS handlers already rejected these old channels;
+this removes the Dart invocation route before native dispatch. A focused
+negative test invokes each without private-key fixtures and passed 6/6,
+full Flutter analysis found no issues, and the complete Flutter suite passed
+169 tests with four skips. Local non-generated line coverage rose only to
+60.42% (997/1,650), still below the protected 90% gate. Do not publish a
+coverage workaround or claim the mobile PR ready; the remaining active
+legacy wrapper and wallet-storage surfaces need retirement/replacement or
+behavioral qualification without losing the verified remote wallet flows.
