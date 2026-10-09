@@ -9933,7 +9933,7 @@ operator-governed snapshot into this resolver. Do not treat the test-wallet
 environment configuration as mobile trust provenance.
 
 2026-10-09 authoritative wallet issuer trust source correction (local UI
-candidate): the native Trust Profile service already owns operator-managed,
+`a8c3cffd0`, grouped PR not yet updated): the native Trust Profile service already owns operator-managed,
 organization-scoped issuer relationships and public `verification_keys`,
 including DID assertion-method pinning and registry freshness checks. Its
 `/internal/v1/trust-profiles/{profile_id}` decision route includes this
