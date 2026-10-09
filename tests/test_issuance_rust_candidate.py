@@ -61,6 +61,18 @@ def test_internal_application_postgres_contract_is_required_in_ci() -> None:
     assert "Expected one internal Application PostgreSQL contract executable" in runtime
 
 
+def test_signing_document_contract_uses_guarded_disposable_redis_in_ci() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    contract = text("rust/services/signing-keys/tests/document_storage_contract.rs")
+
+    assert 'redis-cli -n 14 SET marty:tests:disposable-guard "$nonce"' in workflow
+    assert 'export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"' in workflow
+    assert "MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14" in runtime
+    assert "run_timed signing_document" in runtime
+    assert 'std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")' in contract
+
+
 def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -> None:
     manifest = text("rust/services/issuance/Cargo.toml")
     runtime = text("scripts/ci/run-rust-db-contracts.sh")

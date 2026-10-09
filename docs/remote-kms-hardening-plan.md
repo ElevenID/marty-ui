@@ -7785,7 +7785,7 @@ Dart caller referenced it. The pinned Flutter Rust Bridge 2.13 generator
 could not finish locally because `ffigen` requires a real Flutter SDK, which
 is absent here. A hand-pruned generated diff remains provisional; the actual
 Flutter 3.44.6 codegen CI job must regenerate and compare it before any
-Authenticator PR can be qualified. Rust bridge tests are running. Android/iOS
+Authenticator PR can be qualified. Android/iOS
 SDK holder signing is still an active KMS-only release gap.
 
 At UI PR #1192 exact head `cf2f701fe`, Rust Lint and Packaging has completed
@@ -7799,7 +7799,34 @@ OID4VCI-migration-before-transaction ordering check. Both focused tests,
 Ruff and diff checks pass locally. Hold this correction until the still-live
 contracts, Canvas, OpenBao and image lanes finish, then group any further
 findings in one push.
+
 The exact-head Rust contracts lane has since progressed past the database
 contract groups and into authenticated Gateway Signing acceptance, indicating
 the manifest-based executable selection cleared its previous duplicate-hash
 stop. Wait for the lane's final result before claiming it green.
+
+Authenticator isolated commit `3b67547` now checkpoints the hardened Core and
+Verifier sync pins, enabled ZK prover feature, corrected claim lookup and
+retired unused local holder proof bridge export across Rust/Dart/C headers.
+The Rust bridge compiles and all 36 library tests pass with the short Windows
+target and debug-only `USE_ZK_MOCK=1`; Rustfmt and diff checks pass. This is
+not a production ZK build, generated-binding equivalence proof, mobile
+signer replacement or Authenticator PR. The local 2.13 generator was tried
+twice but cannot complete its `ffigen` pass without the Flutter SDK; a
+version-only shim was discarded and the tracked generator config restored.
+The same isolated Authenticator checkpoint also passes locked/offline Rust
+Clippy for the bridge library with warnings denied. Cargo reports unused
+fork patch entries as resolver notices; there is no Rust lint failure.
+
+The Rust contracts lane at UI head `cf2f701fe` now selects the manifest-built
+`document_storage_contract` binary, clearing the earlier duplicate-hash
+failure. It exposed a separate CI fixture mismatch: the selected test requires
+a loopback Redis database numbered at least 13 and a matching disposable
+nonce guard, while the shared database runner supplied Redis database 0.
+The next grouped UI change seeds a fresh guard in database 14 before the
+contracts group and passes the nonce to the runner; only the document contract
+is scoped to database 14. A focused source contract verifies those CI wiring
+invariants, and its test, Ruff, Bash syntax and diff checks pass locally.
+This correction still needs an exact-head CI run. The Release Contract Tests
+source-assertion fix is in the same local batch; the current OpenBao restore,
+Canvas image and Rust image lanes should finish before the batch is pushed.

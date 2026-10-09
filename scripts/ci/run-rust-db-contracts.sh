@@ -57,7 +57,8 @@ if (( ${#document_contracts[@]} != 1 )); then
   printf 'Expected one signing document contract executable, found %s.\n' "${#document_contracts[@]}" >&2
   exit 1
 fi
-run_timed signing_document "${document_contracts[0]}" --ignored --test-threads=1
+MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 \
+  run_timed signing_document "${document_contracts[0]}" --ignored --test-threads=1
 mapfile -t issuer_profile_contracts < <(resolve_contract_executable issuer_profile_storage_contract)
 if (( ${#issuer_profile_contracts[@]} != 1 )); then
   printf 'Expected one issuer profile contract executable, found %s.\n' "${#issuer_profile_contracts[@]}" >&2
