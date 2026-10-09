@@ -10230,3 +10230,25 @@ grouped, unpublished PR #57 batch. The view itself is not referenced by the
 current app routes, and other mDoc and wallet wrappers still need real
 remote-only replacements or explicit product retirement; source inspection
 does not qualify a native artifact or physical device.
+
+2026-10-09 shared Core graph convergence: Core commit `735a11f` was pushed
+to PR #355 after its local 154/154 wallet-feature library tests, strict
+Clippy and formatting checks. Its new exact-head hosted CI is running;
+the previous `cd21cad` head was green but is superseded. Verifier commit
+`7cd9a54` repins six Core manifest entries and seven lockfile sources to
+`735a11f`, passed `marty-sync` library tests (35 passed, one existing
+ignored), and was pushed to PR #154 for exact-head checks. The Verifier's
+unrelated generated schema changes remain untouched. Local UI commit
+`c14deeed5` repins all eight native Core crates and the production graph
+guard to `735a11f`; full locked Cargo metadata passed the KMS-only graph
+checker. It remains local in the broad UI PR #1192 batch, which is still
+published at green head `6cc8159a5`. Authenticator local commit `0966587`
+repins its seven Core entries and Verifier to `735a11f`/`7cd9a54`, with only
+manifest and lockfile changes. Locked no-deps metadata passed. The first
+Windows Rust check failed while building vendored OpenSSL under the long
+worktree target path, before bridge compilation. With the previously used
+short target `C:\marty-kms-auth-target` and `USE_ZK_MOCK=1`, locked library
+check and strict Clippy both passed. This is source-graph evidence under
+the mock ZK build, not real-ZK or device qualification. No new published
+downstream head or release
+artifact is qualified by these local checks.
