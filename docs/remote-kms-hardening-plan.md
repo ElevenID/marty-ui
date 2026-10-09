@@ -7335,3 +7335,18 @@ marked ready for review. Its branch protection requires one approving review;
 no approval is recorded yet. Credentials PR #313 remains draft with 19 green
 checks at `fef8da1`; its description was updated to distinguish passing
 branch CI from the outstanding authenticator and published-artifact gates.
+
+2026-10-08/09 K10 candidate Rust Issuance fresh-schema audit: built the
+`marty-issuance-service` binary from the current local UI candidate and ran
+its `migrate` command against an isolated, ephemeral PostgreSQL 16 database
+with only the minimal upstream Organization and Credential Template catalogs
+seeded. The migration created 31 `issuance_service` tables. A read-only
+catalog inventory confirmed `to_regclass('issuance_service.issuer_signing_keys')`
+is null: the historical private-key table is absent from this fresh candidate
+schema. The key-named table inventory found
+`organization_integration_secrets`, whose `encrypted_secret_value` is the
+opaque integration-secret ciphertext, not an issuer signing-key table. The
+scratch container was stopped without touching either running local stack.
+This qualifies only the candidate Issuance migration on a fresh database;
+the assembled release schema, runtime writes, and self-host cutover still
+need K10 proof.
