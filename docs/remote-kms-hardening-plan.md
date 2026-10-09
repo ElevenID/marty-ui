@@ -7566,3 +7566,11 @@ or silently discard the existing demo behavior; replace those generators
 with public signed vectors or authorized remote-custody fixture generation
 and then re-run the complete feature/test graph. No local private-key
 fallback should be restored.
+The same Verifier consumer source inventory found `marty-sync/src/usb.rs`
+unit tests constructing an Ed25519 `SigningKey`, while its normal runtime
+path verifies signed trust packages. Replace the test signer with a public
+signed package vector or a remote-custody fixture without dropping replay,
+signer-identity and signature-negative coverage. The app's process-local
+keyring is a separate offline verifier data-at-rest boundary and is not
+evidence of credential signing-key custody; audit its scope explicitly
+before applying the KMS-only cutover to that desktop storage design.
