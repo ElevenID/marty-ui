@@ -251,7 +251,6 @@ def preflight_attested_plan(
 def validate_model(
     model: dict, project: str, services_reference: str, disposable_root: Path,
     *, migrations_reference: str | None = None,
-    issuance_reference: str | None = None,
 ) -> dict[str, object]:
     """Reject resolved configurations that can touch shared production resources."""
     project_match = PROJECT.fullmatch(project)
@@ -300,8 +299,7 @@ def validate_model(
                 "Compose secret does not match its private project file")
     configs = model.get("configs", {})
     require(isinstance(configs, dict)
-            and set(configs) == {"passport_supported_openbao_start", "passport_supported_edge",
-                                 "passport_supported_issuance_migrate"},
+            and set(configs) == {"passport_supported_openbao_start", "passport_supported_edge"},
             "Compose configs are invalid")
     start_config = configs["passport_supported_openbao_start"]
     require(isinstance(start_config, dict)
@@ -319,14 +317,6 @@ def validate_model(
             == (ROOT / "scripts/passport_supported_edge.conf").resolve()
             and (ROOT / "scripts/passport_supported_edge.conf").is_file(),
             "Compose HTTPS edge config differs from protected source")
-    issuance_config = configs["passport_supported_issuance_migrate"]
-    require(isinstance(issuance_config, dict)
-            and issuance_config.get("external") not in (True, "true")
-            and isinstance(issuance_config.get("file"), str)
-            and Path(issuance_config["file"]).resolve()
-            == (ROOT / "scripts/passport_supported_issuance_migrate.sh").resolve()
-            and (ROOT / "scripts/passport_supported_issuance_migrate.sh").is_file(),
-            "Compose Credentials migration script differs from protected source")
     edge_candidate = services.get("edge")
     edge_candidate_ports = (edge_candidate.get("ports")
                             if isinstance(edge_candidate, dict) else None)
@@ -351,6 +341,9 @@ def validate_model(
             require(service.get("entrypoint") == [
                 "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
                 "Compose OpenBao start command differs from protected source")
+        elif name == "issuance-migrations":
+            require(service.get("entrypoint") == ["/bin/sh", "-c"],
+                    "Compose Rust issuance migrator entrypoint differs")
         else:
             require(not service.get("entrypoint"),
                     f"Compose {name} has an unexpected entrypoint")
@@ -365,7 +358,7 @@ def validate_model(
                           or (services_reference if name in RUST_DEPENDENCIES | {"signing-keys"}
                               else None)
                           or (migrations_reference if name == "db-migrate" else None)
-                          or (issuance_reference if name == "issuance-migrations" else None))
+                          or (services_reference if name == "issuance-migrations" else None))
         if expected_image is not None:
             require(service.get("image") == expected_image,
                     f"Compose {name} differs from the protected image reference")
@@ -424,11 +417,6 @@ def validate_model(
             }] and {secret.get("source") for secret in service.get("secrets", [])}
             == {"passport_edge_tls_cert", "passport_edge_tls_key"},
             "Compose HTTPS edge config or TLS secrets differ from protected source")
-        elif name == "issuance-migrations":
-            require(service.get("configs") == [{
-                "source": "passport_supported_issuance_migrate",
-                "target": "/usr/local/bin/passport-supported-issuance-migrate",
-            }], "Compose Credentials migration script mount differs from protected source")
         else:
             require(not service.get("configs"),
                     f"Compose {name} has an unexpected config")
@@ -730,9 +718,13 @@ def validate_model(
     issuance_migration = services["issuance-migrations"]
     require(
         issuance_migration.get("command") == [
-            "/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate",
+            ". /app/load-secrets-env.sh\nexec /usr/local/bin/marty-issuance-service migrate\n",
         ]
-        and issuance_migration.get("environment", {}) == {}
+        and issuance_migration.get("environment", {}) == {
+            "SERVICE_NAME": "issuance_native",
+            "DATABASE_URL_TEMPLATE": "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        }
         and {secret.get("source") for secret in issuance_migration.get("secrets", [])}
         == {"marty_db_password"}
         and issuance_migration.get("depends_on", {}).get("db-migrate", {}).get("condition")
@@ -743,7 +735,7 @@ def validate_model(
         and issuance_migration.get("restart") == "no"
         and services["issuance-native"].get("depends_on", {}).get(
             "issuance-migrations", {}).get("condition") == "service_completed_successfully",
-        "Disposable Credentials issuance schema is not ordered before Rust issuance",
+        "Disposable Rust issuance schema is not ordered before runtime",
     )
     migration_env = migration.get("environment")
     dependencies = migration.get("depends_on")
@@ -1059,7 +1051,6 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
             and isinstance(plan.get("project"), str)
             and isinstance(plan.get("services_reference"), str)
             and isinstance(plan.get("migrations_reference"), str)
-            and isinstance(plan.get("issuance_reference"), str)
             and plan.get("infra_images") == qualified_images(verify_registry=False),
             "Protected plan image bindings are invalid")
     match = PROJECT.fullmatch(plan["project"])
@@ -1087,8 +1078,7 @@ def validate_planned_model(model: dict, plan: dict, disposable_root: Path) -> di
             "Disposable API key lease differs from protected plan")
     return validate_model(model, plan["project"], plan["services_reference"],
                           disposable_root,
-                          migrations_reference=plan["migrations_reference"],
-                          issuance_reference=plan["issuance_reference"])
+                          migrations_reference=plan["migrations_reference"])
 
 
 def main() -> int:

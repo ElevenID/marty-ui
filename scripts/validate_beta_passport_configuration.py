@@ -691,7 +691,7 @@ def validate_physical_model(model, files, provider_registry=None):
     except (OSError, UnicodeError, ValueError) as exc:
         raise PassportConfigurationError("Beta physical provider database binding is invalid") from exc
     physical_require(beta_db_password
-                     and native_database.scheme == "postgresql+asyncpg"
+                     and native_database.scheme == "postgresql"
                      and native_database.hostname == "postgres"
                      and native_database.port == 5432
                      and native_database.username == "marty"
@@ -843,9 +843,8 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
         if not (
             isinstance(database_url, str)
             and isinstance(native_database_url, str)
-            and native_database_url.startswith("postgresql+asyncpg://")
-            and database_url
-            == native_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+            and native_database_url.startswith("postgresql://")
+            and database_url == native_database_url
         ):
             raise PassportConfigurationError("Beta passport database target is invalid")
         database_target = urlsplit(database_url)

@@ -146,15 +146,16 @@ def test_native_worker_consumers_select_the_packaged_binary_without_changing_api
         assert "CANVAS_SYNC_PROCESSOR" not in worker["environment"]
 
 
-def test_deployments_migrate_issuance_from_the_released_credentials_image() -> None:
+def test_deployments_migrate_issuance_from_the_shared_rust_services_image() -> None:
     for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
         services = _yaml(path)["services"]
         migration = services["issuance-migrations"]
 
-        assert migration["image"] == services["issuance"]["image"]
+        assert migration["build"] == services["issuance"]["build"]
+        assert migration["build"]["args"]["SERVICE_NAME"] == "issuance-native"
         command = str(migration["command"])
-        assert "manage_migrations.py" in command
-        assert "upgrade" in command
+        assert "marty-issuance-service" in str(migration["entrypoint"] + migration["command"])
+        assert "migrate" in command
         assert migration["healthcheck"] == {"disable": True}
         assert migration["restart"] == "no"
         assert (
@@ -171,14 +172,13 @@ def test_deployments_migrate_issuance_from_the_released_credentials_image() -> N
     assert kubernetes["metadata"]["name"] == "issuance-migrations"
     container = kubernetes["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == "${MARTY_ISSUANCE_IMAGE}"
-    assert container["command"] == ["python", "manage_migrations.py", "upgrade"]
-    assert (
-        container["env"][0]["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
-    )
+    assert container["command"] == ["/usr/local/bin/marty-issuance-service", "migrate"]
+    database = next(item for item in container["env"] if item["name"] == "DATABASE_URL")
+    assert database["valueFrom"]["secretKeyRef"]["key"] == "DATABASE_SYNC_URL"
 
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     ui_wait = deploy.index("condition=complete job/db-migrate")
-    issuance_apply = deploy.index("06a-issuance-migrations.yaml")
+    issuance_apply = deploy.index('apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"')
     issuance_wait = deploy.index("condition=complete job/issuance-migrations")
     assert ui_wait < issuance_apply < issuance_wait
 
@@ -244,7 +244,7 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
 
 
 @pytest.mark.parametrize("service", ["issuance", "issuance-migrations"])
-def test_selfhost_bundle_does_not_override_unqualified_services(service) -> None:
+def test_selfhost_bundle_pins_rust_issuance_services(service) -> None:
     # Parse nodes rather than pretending Compose's !reset is ordinary YAML.
     # The executable rendering gate separately tests actual Compose merging.
     override = yaml.compose(
@@ -255,7 +255,12 @@ def test_selfhost_bundle_does_not_override_unqualified_services(service) -> None
     assert isinstance(override, yaml.MappingNode)
     services = next(value for key, value in override.value if key.value == "services")
     assert isinstance(services, yaml.MappingNode)
-    assert service not in {key.value for key, _ in services.value}
+    selected = {key.value: value for key, value in services.value}
+    assert service in selected
+    source = (ROOT / "docker-compose.selfhost.bundle.override.yml").read_text()
+    section = "\n".join(source.split(f"  {service}:\n", 1)[1].splitlines()[:5])
+    assert "<<: *selfhost-service-image" in section
+    assert "SERVICE_NAME: issuance_native" in section
 
 
 @pytest.fixture
@@ -362,38 +367,6 @@ def test_compose_renderer_only_reads_fixed_sources_without_secret_resolution(
             },
         )
     ]
-
-
-@pytest.mark.parametrize("service", ["issuance", "issuance-migrations"])
-@pytest.mark.parametrize(
-    "field",
-    [
-        None,
-        "image",
-        "entrypoint",
-        "command",
-        "environment",
-        "secrets",
-        "volumes",
-        "depends_on",
-        "healthcheck",
-        "restart",
-        "future_field",
-    ],
-)
-def test_bundle_issuance_comparison_preserves_every_field(
-    compose_worker_gate, service, field
-):
-    base = _yaml("docker-compose.selfhost.prod.yml")
-    bundle = deepcopy(base)
-    if field is not None:
-        bundle["services"][service][field] = "synthetic-unexpected-change"
-    compare = compose_worker_gate["assert_published_issuance_preserved"]
-    if field is None:
-        compare(base, bundle)
-    else:
-        with pytest.raises(AssertionError, match="complete unqualified Python"):
-            compare(base, bundle)
 
 
 @pytest.mark.parametrize("failure", ["command", "timeout", "invalid_json"])

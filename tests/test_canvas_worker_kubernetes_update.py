@@ -220,7 +220,7 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         # cannot reach the operator's installed cluster client.
         "PATH": tmp_path.as_posix(),
         "REPO_ROOT": ROOT.as_posix(),
-        "K8S_DIR": (ROOT / "k8s").as_posix(),
+        "K8S_DIR": (ROOT / "k8s/oracle").as_posix(),
         "PYTHON_BIN": Path(sys.executable).as_posix(),
         "NAMESPACE": NAMESPACE,
         "IMAGE_TAG": "synthetic-tag",
@@ -263,7 +263,6 @@ kubectl() {
       return "$GET_EXIT" ;;
     set:image)
       [[ $# == 6 && "$5" == -n && "$6" == "$NAMESPACE" ]] || return 93
-      [[ "$3" != deployment/issuance ]] || { printf 'FORBIDDEN-ISSUANCE-WRITE\n'; return 96; }
       if [[ "$3" == deployment/canvas-sync-worker ]]; then
         [[ "$4" == "canvas-sync-worker=${IMAGE_REGISTRY}/marty-ui/canvas-sync-worker:${IMAGE_TAG}" ]] || return 95
       fi
@@ -290,6 +289,8 @@ readonly -f kubectl
             "WRITE:deployment/signing-keys",
             "ROLLOUT",
             "WRITE:deployment/issuance-native",
+            "ROLLOUT",
+            "WRITE:deployment/issuance",
             "ROLLOUT",
             "WRITE:deployment/gateway",
             "WRITE:deployment/canvas-sync-worker",

@@ -8410,3 +8410,26 @@ qualified or landed, preserving the KMS custody changes; then run the
 assembled fresh-database catalog and runtime-write audit against that exact
 combined stack. The newly added self-host migration-image catalog check is
 useful defense but cannot substitute for this combined proof.
+
+The published Rust-only issuance PR #1203 head `cb10f9248` subsequently
+passed all 23 CI jobs. Its head was merged into the local KMS integration
+candidate with the KMS custody mounts, TLS secret wiring, Gateway signing
+route and native deployment guards preserved. The 13 textual conflicts were
+resolved explicitly; the obsolete Python issuance-image test was removed
+because its validator is retired by the Rust-only release gate. Focused
+overlap tests passed 401 cases. Thirty changed root Python test files then
+passed 1,133 tests with four skips. The other changed Canvas deployment test
+file could not finish locally: the combined 31-file run passed 303 cases
+before an import of the uninstalled external `marty_common` package stopped
+the run; hosted CI
+must cover that environment. Five changed whole-model scripts passed. Rust
+release-evidence tests passed 14 of 15 locally; the remaining test requires
+`envsubst`, unavailable in this Windows shell. Direct Rustfmt on changed
+files, Python compileall, Bash syntax and diff checks passed. The local
+merge remains unpushed while the previous UI CI run is live. It is not yet
+an assembled fresh-database, runtime-write or published-artifact proof.
+
+This Rust-only branch also carries a `merge_issuance_heads` to
+`issuance_event_owner` bridge for existing beta data. It is not needed for a
+fresh KMS-only database and needs an explicit no-migration review before the
+combined candidate can be considered the user-requested clean cutover.

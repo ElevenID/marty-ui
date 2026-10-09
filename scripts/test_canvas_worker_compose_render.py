@@ -86,6 +86,8 @@ def assert_shared_rust_services(base, bundle):
         if name == "issuance-native":
             assert selector == "issuance_native"
             original = native_dispatcher_model(original)
+        elif name in {"issuance", "issuance-migrations"}:
+            assert selector == "issuance_native"
         else:
             assert not original.get("command") and not original.get("entrypoint"), (
                 f"Review explicit Rust launch override: {name}"
@@ -206,21 +208,21 @@ def assert_no_canvas_overlay_activation(compose_command=None):
 
 def assert_inherited_service(base, bundle, service):
     assert bundle["services"][service] == base["services"][service], (
-        f"Bundle must preserve the complete unqualified Python {service} definition"
+        f"Bundle must preserve the complete unqualified Rust {service} definition"
     )
 
 
 def assert_published_issuance_preserved(base, bundle):
     original = base["services"]["issuance"]
     migration = base["services"]["issuance-migrations"]
-    assert original["image"].startswith("${MARTY_ISSUANCE_IMAGE:?"), (
-        "Unqualified issuance API must retain its immutable published image"
-    )
-    assert original["image"] == migration["image"]
+    for service in (original, migration):
+        assert service["build"]["dockerfile"] == "services/Dockerfile"
+        assert service["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert original["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
-    assert original["command"][:4] == ["python", "-m", "uvicorn", "main:app"]
-    for service in ("issuance", "issuance-migrations"):
-        assert_inherited_service(base, bundle, service)
+    assert original["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert migration["command"][0].endswith("exec /usr/local/bin/marty-issuance-service migrate\n")
+    # The bundle replaces source builds with the shared Rust image. Its full
+    # rendered launch and environment are checked by assert_shared_rust_services.
 
 
 def assert_worker_preserved(base, bundle):

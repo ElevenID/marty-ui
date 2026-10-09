@@ -17,6 +17,9 @@ IMAGE = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "a" * 64
 
 
 def source_tree(root):
+    baseline = root / "rust/services/issuance/migrations/0000_issuance_service_baseline.sql"
+    baseline.parent.mkdir(parents=True, exist_ok=True)
+    baseline.write_bytes(b"SELECT 0;\n")
     for index, relative in enumerate(MIGRATIONS):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,7 +34,7 @@ def test_image_must_match_every_normalized_protected_migration(tmp_path):
     )
     assert tuple(relative for relative, _ in source) == MIGRATIONS
     assert image_path(MIGRATIONS[0]) == (
-        "/app/passport-native-migrations/issuance/0001_oid4vci_public_protocol.sql"
+        "/app/passport-native-migrations/issuance/0000_merge_issuance_heads_bridge.sql"
     )
     with pytest.raises(NativeMigrationError, match="differs from protected source"):
         checked_migrations(tmp_path, IMAGE, lambda _image, _relative: b"SELECT 0;\n")
@@ -39,6 +42,34 @@ def test_image_must_match_every_normalized_protected_migration(tmp_path):
     extra.write_text("SELECT 1;\n", encoding="utf-8")
     with pytest.raises(NativeMigrationError, match="inventory changed"):
         checked_migrations(tmp_path, IMAGE, lambda _image, _relative: b"SELECT 0;\n")
+
+
+def test_checked_in_inventory_and_protected_ledger_cover_same_issuance_sql():
+    migrations = checked_migrations(
+        native.ROOT, IMAGE,
+        lambda _image, relative: normalized_sql(
+            (native.ROOT / relative).read_bytes(), relative,
+        ),
+    )
+    assert tuple(path for path, _ in migrations) == MIGRATIONS
+    target = {"system_id": "123", "database_oid": "456",
+              "fence_epoch": "7", "container_id": "c" * 64}
+    payload = build_sql(target, migrations, "b" * 40).decode("utf-8")
+    issuance_versions = [
+        path.rsplit("/", 1)[-1].removesuffix(".sql")
+        for path in MIGRATIONS if "/issuance/migrations/" in path
+    ]
+    for version in issuance_versions:
+        assert payload.count(f"('{version}')") == 1
+    assert "('0001_flow_schema')" not in payload
+
+
+def test_disposable_marker_without_issuance_sql_has_valid_baseline_ledger():
+    target = {"system_id": "123", "database_oid": "456",
+              "fence_epoch": "7", "container_id": "c" * 64}
+    payload = build_sql(target, (("disposable.sql", b"SELECT 1;\n"),), "b" * 40)
+    assert (b"INSERT INTO issuance_service.rust_schema_migrations (version) VALUES\n"
+            b"    ('issuance_service_baseline_v1');\n") in payload
 
 
 def test_sql_normalization_rejects_meta_commands_and_bad_line_endings():
@@ -73,6 +104,9 @@ def test_receipt_binds_protected_source_and_sql_attests_database(tmp_path):
     assert payload.endswith(b"COMMIT;\n")
     assert b"CREATE TABLE passport_cutover.native_migration_receipt" in payload
     assert b"source_commit, migration_set_sha256" in payload
+    assert b"CREATE TABLE issuance_service.rust_schema_migrations" in payload
+    assert b"GRANT SELECT ON issuance_service.rust_schema_migrations TO marty" in payload
+    assert b"('0000_merge_issuance_heads_bridge')" in payload
     assert b"expected_system_identifier = '123456'" in payload
     assert b"expected_fence_epoch = '345'" in payload
     assert b"pg_stat_activity" in payload
@@ -91,7 +125,7 @@ def test_prepare_binds_protected_main_receipt_and_signed_image(monkeypatch, tmp_
     monkeypatch.setattr(native, "protected_file", lambda relative, runner: checked.append(
         (relative, runner)
     ))
-    monkeypatch.setattr(native, "manifest_source", lambda _manifest, head: {
+    monkeypatch.setattr(native, "manifest_source", lambda _manifest, head, **_: {
         "oci_digests": {native.IMAGE_REPOSITORY: "sha256:" + "a" * 64},
         "source_commit": head,
     })

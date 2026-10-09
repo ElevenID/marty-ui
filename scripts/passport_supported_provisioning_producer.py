@@ -243,7 +243,6 @@ def stage_disposable_inputs(
     references = {
         "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
-        "PASSPORT_ACCEPTANCE_ISSUANCE_IMAGE": plan.get("issuance_reference"),
         **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
            for name, image in images.items()},
     }
@@ -416,7 +415,6 @@ def collect_record(
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
             "migrations_reference", "infra_images",
-            "issuance_reference",
             "created_at", "expires_at", "owner_labels",
         )},
     }
@@ -727,7 +725,6 @@ def destroy_partial_disposable_project(
               "source_commit": plan["source_commit"],
               "services_reference": plan["services_reference"],
               "migrations_reference": plan["migrations_reference"],
-              "issuance_reference": plan["issuance_reference"],
               "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
     return _destroy_recorded_project(

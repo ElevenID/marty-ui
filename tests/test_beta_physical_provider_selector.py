@@ -85,7 +85,7 @@ def model(tmp_path: Path) -> dict:
             "PERSONALIZATION_BUREAU_API_KEY": "",
             "PERSONALIZATION_BUREAU_API_KEY_FILE":
                 "/run/secrets/passport_physical_provider_api_key",
-            "DATABASE_URL": "postgresql+asyncpg://marty:beta-physical-secret-3333333333333333333333333333333333333333@postgres:5432/marty",
+            "DATABASE_URL": "postgresql://marty:beta-physical-secret-3333333333333333333333333333333333333333@postgres:5432/marty",
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
             "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",

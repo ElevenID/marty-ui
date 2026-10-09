@@ -13,7 +13,7 @@ import yaml
 from scripts import prepare_passport_beta_aggregate_compose as compose
 from scripts import verify_passport_beta_rust_owner as rust_owner
 from scripts.prepare_passport_beta_aggregate_compose import (
-    BETA_ORIGIN, ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
+    BETA_ORIGIN, ComposePlanError, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
     SIGNED_APPLICATIONS, NEW_SERVICES, prepare,
 )
 
@@ -39,7 +39,6 @@ def test_live_operator_binds_all_signed_image_interpolation_inputs():
                   encoding="utf-8")
     for variable, field in (
         ("MARTY_SERVICES_IMAGE", "services_image"),
-        ("MARTY_ISSUANCE_IMAGE", "issuance_image"),
         ("MARTY_UI_RELEASE_IMAGE", "ui_image"),
     ):
         binding = f"$env:{variable} = [string]$script:plan.{field}"
@@ -54,7 +53,7 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
     image_id = "sha256:" + "c" * 64
     signed = {
         "services_image": SERVICES_IMAGE + "d" * 64,
-        "issuance_image": ISSUANCE_IMAGE + "e" * 64,
+        "issuance_image": SERVICES_IMAGE + "d" * 64,
         "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "f" * 64},
         "build_only_artifacts": {},
     }
@@ -63,7 +62,7 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
                        "Labels": {"com.docker.compose.project": "elevenid-beta",
                                   "com.docker.compose.service": "docs"}}}
     observed = []
-    monkeypatch.setattr(compose, "manifest_source", lambda *_: signed)
+    monkeypatch.setattr(compose, "manifest_source", lambda *_, **__: signed)
     monkeypatch.setattr(compose, "inspect", lambda *_: docs)
     monkeypatch.setattr(compose, "render_candidate",
                         lambda handoff: ({"services": {"auth": {}, "gateway": {
@@ -83,7 +82,7 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
 def candidate():
     head = "a" * 40
     services_image = SERVICES_IMAGE + "b" * 64
-    issuance_image = ISSUANCE_IMAGE + "c" * 64
+    issuance_image = services_image
     old_names = sorted((SIGNED_APPLICATIONS - NEW_SERVICES) | {
         "issuance", "postgres", "openbao", "redis", "keycloak",
         "cloudflared", "nginx-proxy", "envoy",
@@ -162,7 +161,7 @@ def candidate():
     services["issuance-migrations"] = {
         "image": services_image,
         "entrypoint": ["/usr/local/bin/marty-issuance-service"],
-        "command": ["migrate"],
+        "command": ["verify-owned-schema"],
         "environment": {
             "SERVICE_NAME": "issuance_native",
             "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
@@ -224,6 +223,15 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     assert plan["preserved_infrastructure"] == ["openbao"]
     assert "openbao" not in plan["restart_infrastructure"]
     assert plan["ui_project"] == "elevenid-beta-ui"
+
+
+def test_aggregate_rejects_a_separate_python_issuance_image():
+    handoff, intent, rendered, ui = candidate()
+    handoff["issuance_image"] = (
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "e" * 64
+    )
+    with pytest.raises(ComposePlanError, match="image identities"):
+        prepare(handoff, intent, rendered, ui)
 
 
 @pytest.mark.parametrize("field", compose.TRANSITION_SQL_FILES)
@@ -443,10 +451,10 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
     }
     monkeypatch.setattr(compose, "verify_render_plan", lambda _: {"verified": True})
     monkeypatch.setattr(compose, "render_candidate", lambda _: (rendered, ui, {}))
-    monkeypatch.setattr(compose, "manifest_source", lambda *_: {
+    monkeypatch.setattr(compose, "manifest_source", lambda *_, **__: {
         "manifest_sha256": plan["stack_manifest_sha256"],
         "services_image": plan["services_image"],
-        "issuance_image": plan["issuance_image"],
+        "issuance_image": plan["services_image"],
         "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "d" * 64},
     })
     receipt_hashes = {"fence": plan["fence_receipt_sha256"],

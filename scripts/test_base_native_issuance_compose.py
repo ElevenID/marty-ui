@@ -56,8 +56,8 @@ CANVAS_PUBLICATION_INPUTS = {
     "CANVAS_CREDENTIALS_RECIPIENT_HASHED": "${CANVAS_CREDENTIALS_RECIPIENT_HASHED:-true}",
     "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS": "${CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS:-false}",
 }
-# Alias-only settings include the validated-schema startup mode. The native
-# instance alone runs the Canvas mirror automation loop.
+# The alias and native instance use the same Rust binary. Only the native
+# instance may run the Canvas mirror automation loop.
 LEGACY_ONLY = frozenset(
     """
 BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
@@ -153,12 +153,17 @@ def assert_sources(base, profile, runtime):
         }
     owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
     assert set(legacy) - set(env) - owner_selection == LEGACY_ONLY
-    assert set(env) - set(legacy) == set(NATIVE_ONLY) - {"GRPC_SERVICE_TOKEN"}
+    assert set(env) - set(legacy) == set(NATIVE_ONLY) - {
+        "GRPC_SERVICE_TOKEN", "SERVICE_NAME"
+    }
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
         if key == "SIGNING_KEYS_INTERNAL_URL":
             assert legacy[key] == "http://signing-keys:8017/internal"
             assert env[key] == "http://gateway:8000/internal/signing-keys"
+            continue
+        if key == "CANVAS_MIRROR_WORKER_ENABLED":
+            assert legacy[key] == "false"
             continue
         assert env[key] == legacy[key], "Native expression changed legacy precedence"
     publication_source = (

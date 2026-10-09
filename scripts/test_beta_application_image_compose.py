@@ -63,9 +63,8 @@ foreach ($case in $cases) {
     try {
         $selectedServices=if ($case.PSObject.Properties.Name -contains 'services') {@($case.services)} else {$services}
         $plan=@(New-BetaApplicationImagePlan -Services $selectedServices -ReleaseVersion $case.release `
-            -OfficialStackRelease $case.official -IssuanceReference $case.issuance_reference `
-            -IssuanceDigest $case.issuance_digest -ServicesReference $case.services_reference `
-            -ServicesDigest $case.services_digest -UseRustIssuance $case.rust_issuance)
+            -OfficialStackRelease $case.official -ServicesReference $case.services_reference `
+            -ServicesDigest $case.services_digest)
         # The serializer and evidence owner consume a persisted plan, not an
         # accidental live PowerShell array/dictionary implementation detail.
         $plan=ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @($plan) -Depth 20 -Compress)
@@ -104,14 +103,11 @@ def inputs(mode):
     return {
         "release": RELEASE,
         "official": mode == "official",
-        "issuance_reference": ISSUANCE_IMAGE,
-        "issuance_digest": ISSUANCE_DIGEST,
         "services_reference": SERVICES_IMAGE if mode == "official" else "",
         "services_digest": SERVICES_DIGEST if mode == "official" else "",
         "verification_digest": VERIFICATION_DIGEST,
         "retagged_verification_digest": RETAGGED_VERIFICATION_DIGEST,
         "synthetic_inspect_digest": "sha256:" + "e" * 64,
-        "rust_issuance": True,
     }
 
 
@@ -180,12 +176,18 @@ def expected_model(base, names, mode, *, pinned=False, bound=False):
         alias["entrypoint"] = ["/usr/local/bin/marty-issuance-service"]
         alias["command"] = []
         if mode == "local":
+            inherited_build = "build" in alias
+            if "build" in alias:
+                assert alias["build"] == {
+                    "context": ".", "dockerfile": "services/Dockerfile",
+                    "args": {"SERVICE_NAME": "issuance-native"},
+                }
             alias["build"] = {
-                "context": ".",
-                "dockerfile": "services/Dockerfile",
-                "args": {"SERVICE_NAME": "issuance-native"},
+                "context": ".", "dockerfile": "services/Dockerfile",
+                "args": (["SERVICE_NAME=issuance-native"] if inherited_build
+                         else {"SERVICE_NAME": "issuance-native"}),
             }
-        else:
+        elif mode == "official":
             alias.pop("build", None)
         owner = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
         alias_env = owner["environment_mapping"](alias.get("environment", {}))
@@ -230,8 +232,17 @@ def assert_model(actual, expected):
         normalized.append(model)
     if normalized[0] != normalized[1]:
         # Never print interpolated models or their environment values.
+        changed = {
+            name: sorted(key for key in normalized[0]["services"][name].keys()
+                         | normalized[1]["services"][name].keys()
+                         if normalized[0]["services"][name].get(key)
+                         != normalized[1]["services"][name].get(key))
+            for name in normalized[0]["services"].keys() & normalized[1]["services"].keys()
+            if normalized[0]["services"][name] != normalized[1]["services"][name]
+        }
         raise AssertionError(
-            "Generated beta overlay changed the complete runtime model"
+            f"Generated beta overlay changed the complete runtime model: {changed}; "
+            f"changed fields: {changed}"
         )
 
 

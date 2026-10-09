@@ -156,7 +156,7 @@ def prepare(
     head = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
-    source = manifest_source(manifest_path, head)
+    source = manifest_source(manifest_path, head, rust_only=True)
     receipt_target = checked_receipt(receipt_path, head)
     try:
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
@@ -318,7 +318,7 @@ def verify_plan(
     head = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
-    source = manifest_source(manifest_path, head)
+    source = manifest_source(manifest_path, head, rust_only=True)
     receipt = checked_receipt(receipt_path, head)
     receipt_raw = json.loads(receipt_path.read_text(encoding="utf-8"))
     require(plan.get("source_commit") == head

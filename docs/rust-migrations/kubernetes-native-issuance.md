@@ -61,11 +61,11 @@ pods. Its
 selector decides ownership; this is not an all-route switch. Flow still addresses
 `issuance:9005`, Envoy is unchanged, and all sibling services remain intact.
 
-The legacy Deployment and issuance migration Job retain their separate
-`MARTY_ISSUANCE_IMAGE` and published Python schema authority. Existing RP, UI and
-issuance migration ordering is unchanged. Native is deliberately not added to
-the global app image catalog, whose per-service tags do not describe the shared
-services artifact.
+The `issuance` Service alias and issuance migration Job now use the same signed
+Rust services image as `issuance-native`. The migration Job invokes the Rust
+`migrate` command. Existing RP and UI ordering remains in place. Native is
+deliberately not added to the global app image catalog, whose per-service tags
+do not describe the shared services artifact.
 
 `MARTY_SERVICES_IMAGE` requires a canonical immutable
 `ghcr.io/<lowercase-path>/services@sha256:<64-lowercase-hex>` reference. This new
@@ -75,8 +75,14 @@ record its acceptance of a trailing slash, mixed-case path and other
 noncanonical spellings that the new selector rejects. Normal reviewed immutable
 references remain accepted. Image syntax validation is **not provenance**:
 the external issuance stack lock does not authenticate the UI services artifact.
-Final deployment still requires the approved release's services digest and
-source/evidence binding.
+The deployment preflight now requires `MARTY_STACK_MANIFEST` to point to the
+downloaded official Rust-only `stack-manifest.json`, with `SHA256SUMS` beside it.
+Before any Kubernetes write, it checks the exact services digest and executing
+checkout commit against that manifest, then verifies the manifest plus all
+three UI OCI attestations from the protected main release workflow. A missing
+or historical Python issuance
+component fails closed. Keep the release bundle available during `deploy` and
+`update-images`.
 
 ## Complete selected-native configuration inventory
 

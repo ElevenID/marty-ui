@@ -621,18 +621,18 @@ def test_reviewer_bootstrap_requires_the_exact_existing_project(
         stack.main()
 
 
-def test_ghcr_profile_preserves_python_alias_until_protected_beta_transition() -> None:
+def test_ghcr_profile_uses_shared_rust_image_for_issuance() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     base = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
 
     native = profile.split("  issuance-native:\n", 1)[1].split("\n  ", 1)[0]
     alias = profile.split("  issuance:\n", 1)[1].split("\n  ", 1)[0]
     assert "<<: *service-image" in native
-    assert "MARTY_ISSUANCE_IMAGE" in alias
-    assert "  issuance-migrations:" not in profile
+    assert "<<: *service-image" in alias
+    assert "  issuance-migrations:" in profile
     assert "image: ${MARTY_SERVICES_IMAGE" in profile
-    assert "MARTY_ISSUANCE_IMAGE" in base
-    assert 'command: ["python", "manage_migrations.py", "upgrade"]' in base
+    assert "MARTY_ISSUANCE_IMAGE" not in base
+    assert 'command: ["migrate"]' in base
 
 
 def test_issuance_token_limiter_is_configurable_without_weakening_default() -> None:

@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import pytest
 
 from scripts.prepare_official_beta_release import (
     OfficialReleaseError,
+    _validated_components,
+    main,
     prepare_release,
     validate_release_inputs,
 )
+from scripts.check_passport_beta_fence_authority import HostProbeError, manifest_source
 
 
 UI_SHA = "1" * 40
@@ -152,6 +156,105 @@ def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
             "images",
         )
     }
+
+
+def test_rust_only_signed_source_uses_services_image_without_python_issuance(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    manifest["components"] = [
+        component for component in manifest["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    path, _ = _write_release(tmp_path, manifest)
+    attested = []
+
+    def attest(manifest_path, digests, commit):
+        attested.append((manifest_path, digests, commit))
+        return True
+
+    def legacy_attest(*_):
+        pytest.fail("Rust-only source must not attest a Python issuance image")
+
+    source = manifest_source(path, UI_SHA, attest, legacy_attest, rust_only=True)
+
+    assert source["issuance_image"] == source["services_image"]
+    assert source["issuance_source_commit"] == UI_SHA
+    assert len(attested) == 1
+    assert set(attested[0][1]) == {
+        "ghcr.io/elevenid/marty-ui-oss/ui",
+        "ghcr.io/elevenid/marty-ui-oss/services",
+        "ghcr.io/elevenid/marty-ui-oss/migrations",
+    }
+    assert source["build_only_artifacts"]
+
+
+def test_official_release_cli_accepts_only_explicit_rust_only_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _manifest()
+    manifest["components"] = [
+        component for component in manifest["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    path, checksums = _write_release(tmp_path, manifest)
+    args = ["prepare_official_beta_release.py", "--manifest", str(path),
+            "--checksums", str(checksums), "--recorder-revision", RECORDER_SHA,
+            "--expected-ui-revision", UI_SHA]
+    monkeypatch.setattr(sys, "argv", args)
+    assert main() == 1
+    assert "missing components" in capsys.readouterr().out
+
+    monkeypatch.setattr(sys, "argv", args + ["--rust-only"])
+    assert main() == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert set(plan["images"]) == {"ui", "services", "migrations"}
+    assert plan["images"]["services"]["reference"].endswith(SERVICES_DIGEST)
+    assert "marty-credentials" not in plan["source_manifest"]["repositories"]
+    assert validate_release_inputs(path, checksums, expected_ui_revision=UI_SHA,
+                                   rust_only=True)["images"] == plan["images"]
+
+
+def test_rust_only_source_rejects_legacy_issuance_component(tmp_path: Path) -> None:
+    path, _ = _write_release(tmp_path, _manifest())
+    with pytest.raises(HostProbeError, match="components are invalid"):
+        manifest_source(path, UI_SHA, lambda *_: True, lambda *_: True,
+                        rust_only=True)
+
+
+@pytest.mark.parametrize("disguise", ["repository", "artifact", "case-variant"])
+def test_rust_only_source_rejects_renamed_legacy_image(
+    tmp_path: Path, disguise: str,
+) -> None:
+    manifest = _manifest()
+    legacy = next(component for component in manifest["components"]
+                  if component["name"] == "marty-credentials-issuance")
+    legacy["name"] = "renamed-issuer"
+    if disguise == "repository":
+        legacy["artifacts"][0]["uri"] = "ghcr.io/elevenid/other-issuer"
+    elif disguise == "case-variant":
+        legacy["repository"] = "ElevenID/Marty-Credentials"
+        legacy["artifacts"][0]["uri"] = "ghcr.io/elevenid/other-issuer"
+    else:
+        legacy["repository"] = "ElevenID/other-issuer"
+    path, _ = _write_release(tmp_path, manifest)
+    with pytest.raises(HostProbeError, match="components are invalid"):
+        manifest_source(path, UI_SHA, lambda *_: True, lambda *_: True,
+                        rust_only=True)
+
+
+def test_rust_only_source_still_requires_signed_services_image(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["components"] = [
+        component for component in manifest["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    ui = next(component for component in manifest["components"]
+              if component["name"] == "marty-ui")
+    ui["artifacts"] = [artifact for artifact in ui["artifacts"]
+                       if not artifact["uri"].endswith("/services")]
+    with pytest.raises(OfficialReleaseError, match="one services image"):
+        _validated_components(manifest, UI_SHA, rust_only=True)
 
 
 def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(

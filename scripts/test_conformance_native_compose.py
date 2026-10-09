@@ -156,9 +156,17 @@ def assert_beta_shared_setting_repairs(previous, actual, inputs=None):
     assert "INTEGRATION_SECRET_MASTER_KEY" in before
     before.pop("INTEGRATION_SECRET_MASTER_KEY")
     legacy = expected["services"]["issuance"]["environment"]
+    assert before["DATABASE_URL"].startswith("postgresql+asyncpg://")
+    before["DATABASE_URL"] = before["DATABASE_URL"].replace(
+        "postgresql+asyncpg://", "postgresql://", 1
+    )
     for setting in SHARED_SETTING_REPAIRS:
         assert setting in legacy
-        selected = legacy[setting]
+        if setting == "CANVAS_MIRROR_WORKER_ENABLED":
+            assert legacy[setting] == "false"
+            selected = (inputs or {}).get(setting) or "false"
+        else:
+            selected = legacy[setting]
         if setting in before:
             assert before[setting] == selected
         else:
@@ -224,10 +232,19 @@ def run(command):
     ]
     assert "INTEGRATION_SECRET_MASTER_KEY" in expected_environment
     expected_environment.pop("INTEGRATION_SECRET_MASTER_KEY")
+    assert expected_environment["DATABASE_URL"].startswith("postgresql+asyncpg://")
+    expected_environment["DATABASE_URL"] = expected_environment["DATABASE_URL"].replace(
+        "postgresql+asyncpg://", "postgresql://", 1
+    )
     for setting in SHARED_SETTING_REPAIRS:
         assert setting not in expected_environment
         assert setting in legacy_environment
-        expected_environment[setting] = legacy_environment[setting]
+        if setting == "CANVAS_MIRROR_WORKER_ENABLED":
+            # The Rust alias cannot own the separate Canvas mirror worker.
+            assert legacy_environment[setting] == "false"
+            expected_environment[setting] = "${CANVAS_MIRROR_WORKER_ENABLED:-false}"
+        else:
+            expected_environment[setting] = legacy_environment[setting]
     for setting in PASSPORT_SHARED_INPUTS:
         assert setting not in expected_environment
         expected_environment[setting] = legacy_environment[setting]

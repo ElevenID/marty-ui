@@ -372,11 +372,18 @@ def safe_model(root: Path) -> dict:
         "secrets": [{"source": "bao_token"}],
     }
     services["issuance-migrations"] = {
-        "image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
+        "image": IMAGE,
         "networks": ["private"],
-        "command": ["/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"],
-        "configs": [{"source": "passport_supported_issuance_migrate",
-                     "target": "/usr/local/bin/passport-supported-issuance-migrate"}],
+        "entrypoint": ["/bin/sh", "-c"],
+        "command": [
+            ". /app/load-secrets-env.sh\n"
+            "exec /usr/local/bin/marty-issuance-service migrate\n",
+        ],
+        "environment": {
+            "SERVICE_NAME": "issuance_native",
+            "DATABASE_URL_TEMPLATE": "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        },
         "secrets": [{"source": "marty_db_password"}],
         "depends_on": {
             "db-migrate": {"condition": "service_completed_successfully"},
@@ -429,8 +436,6 @@ def safe_model(root: Path) -> dict:
             },
             "configs": {"passport_supported_openbao_start": {
                 "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
-                "passport_supported_issuance_migrate": {
-                    "file": str(preflight.ROOT / "scripts/passport_supported_issuance_migrate.sh")},
                 "passport_supported_edge": {
                     "file": str(preflight.ROOT / "scripts/passport_supported_edge.conf")}},
             }
@@ -590,7 +595,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "status": "blocked", "surface": "base", "project": PROJECT,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "issuance_reference": model["services"]["issuance-migrations"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
         "expires_at": "2026-09-27T12:55:00+00:00",
@@ -858,7 +862,6 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
         "source_commit": "a" * 40,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "issuance_reference": model["services"]["issuance-migrations"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "owner_labels": LABELS,
         "created_at": (now - timedelta(minutes=5)).isoformat(),

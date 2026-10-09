@@ -54,6 +54,10 @@ def synthetic_base():
     services["canvas-sync-worker"]["command"] = [
         "/usr/local/bin/marty-canvas-sync-worker",
     ]
+    services["issuance"]["build"] = {
+        "context": ".", "dockerfile": "services/Dockerfile",
+        "args": {"SERVICE_NAME": "issuance-native"},
+    }
     return {
         "services": services,
         "secrets": {"synthetic-key": {"file": "synthetic-file"}},
@@ -61,19 +65,21 @@ def synthetic_base():
 
 
 @pytest.mark.parametrize("mode", ["local", "official"])
-def test_beta_without_native_passport_keeps_python_issuance(gate, mode):
+def test_beta_issuance_stays_rust_owned_even_with_retired_selector(gate, mode):
     case = gate["inputs"](mode)
     case["rust_issuance"] = False
     with tempfile.TemporaryDirectory() as directory:
         report = gate["exercise"](Path(directory), [case])[0]
     assert not report["caught"]
     alias = next(row for row in report["plan"] if row["service"] == "issuance")
-    assert alias["artifact_role"] == "issuance"
-    assert alias["image_expression"] == "${MARTY_ISSUANCE_IMAGE}"
-    assert alias["effective_reference"] == gate["ISSUANCE_IMAGE"]
-    assert alias["build_eligible"] is False
-    assert not any("issuance-migrations:" in line for line in report["lines"])
-    assert not any("marty-issuance-service" in line for line in report["lines"])
+    assert alias["artifact_role"] == ("services" if mode == "official" else "local")
+    assert alias["image_expression"] == (
+        "${MARTY_SERVICES_IMAGE}" if mode == "official"
+        else f"elevenid-local/issuance:{gate['RELEASE']}"
+    )
+    assert alias["build_eligible"] is (mode == "local")
+    assert any("issuance-migrations:" in line for line in report["lines"])
+    assert any("marty-issuance-service" in line for line in report["lines"])
 
 
 @pytest.mark.parametrize("mode", ["local", "official"])
@@ -108,7 +114,7 @@ def test_expected_projection_preserves_all_nonselection_fields(gate, mode):
                 assert projected["build"] == {
                     "context": ".",
                     "dockerfile": "services/Dockerfile",
-                    "args": {"SERVICE_NAME": "issuance-native"},
+                    "args": ["SERVICE_NAME=issuance-native"],
                 }
                 projected["build"] = original["build"]
             projected["entrypoint"] = original["entrypoint"]
@@ -145,9 +151,10 @@ def test_complete_model_comparison_rejects_worker_field_loss_without_private_out
     del actual["services"]["canvas-sync-worker"][field]
     with pytest.raises(AssertionError) as error:
         gate["assert_model"](actual, expected)
-    assert (
-        str(error.value) == "Generated beta overlay changed the complete runtime model"
+    assert str(error.value).startswith(
+        "Generated beta overlay changed the complete runtime model"
     )
+    assert "canvas-sync-worker" in str(error.value)
     assert "synthetic-private-value" not in str(error.value)
 
 

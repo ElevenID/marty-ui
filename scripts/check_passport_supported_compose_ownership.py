@@ -36,8 +36,6 @@ IDENTIFIER = re.compile(r"[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[1-9][0-9]{0,19}\Z")
 MIGRATIONS_IMAGE = re.compile(
     r"ghcr\.io/elevenid/marty-ui-oss/migrations@sha256:[0-9a-f]{64}\Z")
-ISSUANCE_IMAGE = re.compile(
-    r"ghcr\.io/elevenid/marty-credentials-issuance@sha256:[0-9a-f]{64}\Z")
 OWNER_LABELS = {
     "com.marty.passport.acceptance.owner": "supported-consumer",
     "com.marty.passport.acceptance.run-id": "run_id",
@@ -397,10 +395,6 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
         expected.add(("bind", str(Path(__file__).resolve().parents[1]
                                    / "scripts/passport_supported_edge.conf"),
                       "/etc/nginx/conf.d/default.conf", False))
-    if service == "issuance-migrations":
-        expected.add(("bind", str(Path(__file__).resolve().parents[1]
-                                   / "scripts/passport_supported_issuance_migrate.sh"),
-                      "/usr/local/bin/passport-supported-issuance-migrate", False))
     if service in DATA_MOUNTS:
         expected.update(("volume", f"{project}_{name}", destination, True)
                         for name, destination in DATA_MOUNTS[service])
@@ -414,7 +408,7 @@ def _expected_image(record: dict, service: str) -> str | None:
     if service in {"passport-certificate-bootstrap", "passport-bureau-poll"}:
         return record.get("migrations_reference")
     return (record.get("migrations_reference") if service == "db-migrate" else
-            record.get("issuance_reference") if service == "issuance-migrations" else
+            record.get("services_reference") if service == "issuance-migrations" else
             record.get("services_reference")
             if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
             record.get("infra_images", {}).get(service))
@@ -442,9 +436,6 @@ def verify(record: dict, surface: str, now: datetime,
     require(isinstance(record.get("migrations_reference"), str)
             and MIGRATIONS_IMAGE.fullmatch(record["migrations_reference"]) is not None,
             "Released migration image is invalid")
-    require(isinstance(record.get("issuance_reference"), str)
-            and ISSUANCE_IMAGE.fullmatch(record["issuance_reference"]) is not None,
-            "Released Credentials issuance image is invalid")
     infra_images = record.get("infra_images")
     require(isinstance(infra_images, dict) and set(infra_images) == set(ROLES)
             and all(isinstance(infra_images[role], str)
@@ -534,11 +525,23 @@ def verify(record: dict, surface: str, now: datetime,
         require(labels.get("com.docker.compose.service") == service,
                 "Disposable container service identity changed")
         if service == "issuance-migrations":
-            require(config.get("Cmd") == [
-                "/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate",
-            ] and "DATABASE_URL" not in _runtime_environment(
-                config.get("Env"), service),
-                    "Disposable Credentials schema command differs from protected model")
+            migration_environment = _runtime_environment(config.get("Env"), service)
+            require(config.get("Entrypoint") == ["/bin/sh", "-c"]
+                    and config.get("Cmd") == [
+                        ". /app/load-secrets-env.sh\n"
+                        "exec /usr/local/bin/marty-issuance-service migrate\n",
+                    ] and all(migration_environment.get(key) == value
+                              for key, value in {
+                                  "SERVICE_NAME": "issuance_native",
+                                  "DATABASE_URL_TEMPLATE": (
+                                      "postgresql://marty:${MARTY_DB_PASSWORD}"
+                                      "@postgres:5432/marty"),
+                                  "MARTY_DB_PASSWORD_FILE": (
+                                      "/run/secrets/marty_db_password"),
+                              }.items())
+                    and "DATABASE_URL" not in migration_environment
+                    and "MARTY_DB_PASSWORD" not in migration_environment,
+                    "Disposable Rust schema command differs from protected model")
         if service == "organization":
             _organization_environment(config.get("Env"), record)
         elif service in {"gateway", "signing-keys"}:

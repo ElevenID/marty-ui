@@ -54,7 +54,7 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     )
     assert '-Phase "maintenance_quiesced"' in script
     assert "-WritersStopped $true" in script
-    assert "restore-local-beta-release.ps1" in script
+    assert "supervised-recovery.txt" not in script
 
 
 def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() -> None:
@@ -75,10 +75,8 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert 'Get-StackArtifact "marty-core-python" "python" "marty-core"' in script
     assert 'Get-StackArtifact "marty-api-core" "npm" "marty-cli"' in script
     assert 'Get-StackArtifact "marty-blog" "npm" "marty-blog"' in script
-    assert (
-        'Get-StackArtifact "marty-credentials-issuance" "oci" "marty-credentials"'
-        in script
-    )
+    assert 'Get-StackArtifact "marty-credentials-issuance"' not in script
+    assert "Get-BetaApplicationImageEvidence -Plan $applicationImagePlan" in script
     assert script.index("$stackLock = Get-Content") < script.index("if ($PlanOnly)")
     assert "Services runtime marker component revision set does not match" in script
     assert "bind_deployed_demo_manifest.py" in script
@@ -339,6 +337,7 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
     assert "[switch]$OfficialStackRelease" in script
     assert "[string]$RecorderRevision" in script
     assert "prepare_official_beta_release.py" in script
+    assert "--rust-only 2>&1" in script
     assert '"attestation", "verify"' in script
     assert '"--repo", "ElevenID/marty-ui"' in script
     assert (
@@ -365,7 +364,7 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
     assert "ConvertTo-BetaApplicationImageLines -Plan $applicationImagePlan" in script
     assert "Get-BetaApplicationImageEvidence -Plan $applicationImagePlan" in script
     assert "[string]$officialPlan.images.services.digest" in script
-    assert "[string]$officialPlan.images.issuance.digest" in script
+    assert "[string]$officialPlan.images.issuance.digest" not in script
     assert "[string]$officialPlan.images.ui.digest" in script
     assert "Official release inputs changed during deployment preparation" in script
     assert "official_stack_manifest = if ($OfficialStackRelease)" in script
@@ -489,6 +488,8 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     script = text("scripts/restore-local-beta-release.ps1")
 
     assert "-ConfirmBetaRestore is required" in script
+    assert "Rust-only beta restore cannot replay a legacy issuance image" in script
+    assert script.index("$priorIssuance = @(") < script.index("Start-BetaMutation -ResumePending")
     assert '$project = "elevenid-beta"' in script
     assert "com.docker.compose.project" in script
     assert 'throw "Refusing container outside $project"' in script
@@ -508,6 +509,15 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     assert 'PSObject.Properties["rollback_environment"]' in script
     assert '"postgresql", "postgresql+asyncpg"' in script
     assert '"GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC"' in script
+
+
+def test_postmutation_failure_keeps_beta_in_maintenance_for_rust_forward_repair() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    assert "Start-ContainersBestEffort $maintenanceContainers" in deploy
+    assert "if ($maintenanceStarted -and -not $liveMutationStarted)" in deploy
+    assert "supervised-recovery.txt" not in deploy
+    assert "This local runner cannot resume or restore the mutated state; do not rerun it" in deploy
+    assert "reviewed Rust-only forward repair" in deploy
 
 
 def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
@@ -550,12 +560,16 @@ def test_beta_compose_uses_the_generated_database_password_without_source_overla
     tunnel = text("docker-compose.profile.tunnel.yml")
 
     assert "postgresql+asyncpg://marty:marty_dev_password" not in base
-    assert (
-        base.count(
-            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
-        )
-        == 13
+    assert base.count(
+        "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
+    ) == 11
+    services = yaml.safe_load(base)["services"]
+    sync_url = (
+        "postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
+        "@postgres:5432/marty"
     )
+    assert services["issuance"]["environment"]["DATABASE_URL"] == sync_url
+    assert services["issuance-migrations"]["environment"]["DATABASE_URL"] == sync_url
     assert "./services/gateway/routes/signing_keys.py" not in tunnel
 
 
@@ -594,17 +608,16 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
         yaml.safe_load(beta),
         yaml.safe_load(text("docker-compose.service.issuance-native.yml")),
     )
-    assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
+    assert "[string]$TunnelEnvFile" in deploy
+    assert "[string]$GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.5.0"' in deploy
     assert 'mip_version = "0.5.0"' in deploy
     assert "name: elevenid-beta" in beta
     assert "name: elevenid-beta-network" in beta
     assert "container_name:" not in base
     assert "${MARTY_NETWORK_NAME:-marty-infra-network}" in base
-    assert (
-        '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"'
-        in restore
-    )
+    assert "MARTY_ISSUANCE_IMAGE" not in restore
+    assert '$env:MARTY_SERVICES_IMAGE = [string]$priorBureau[0].image_id' in restore
     assert "com.docker.compose.service=docs" in restore
     assert 'Find-ServiceContainer "issuance-native"' in restore
 
@@ -786,10 +799,8 @@ def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
     assert "$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest" in script
     assert "$env:MARTY_ISO18013_URI = $martyIso18013.Uri" in script
     assert "$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest" in script
-    assert (
-        '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"'
-        in script
-    )
+    assert "MARTY_ISSUANCE_IMAGE" not in script
+    assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
     assert "com.docker.compose.service=docs" in script
     assert "Existing beta docs image is not immutable" in script
 
@@ -867,25 +878,28 @@ def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
     helper = text("scripts/beta-application-image-plan.ps1")
     assert 'if ($service -eq "issuance") { "issuance_native" }' in helper
     assert "'${MARTY_SERVICES_IMAGE}'" in helper
-    assert 'UseRustIssuance = [bool]$EnablePassportNative' in script
-    assert 'if (-not $EnablePassportNative)' in script
-    assert '"pull", $env:MARTY_ISSUANCE_IMAGE' in script
+    assert 'UseRustIssuance' not in script
+    assert '"pull", $env:MARTY_ISSUANCE_IMAGE' not in script
+    assert 'foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage))' in script
+    assert '"pull", $image' in script
+    assert '"    entrypoint: [/usr/local/bin/marty-issuance-service]"' in helper
     assert "$imageRef = [string]$imageEvidence.inspect_reference" in script
     assert '"elevenid-local/issuance:${releaseVersion}"' not in script
 
 
-def test_beta_off_keeps_python_migration_upgrade_then_current() -> None:
+def test_issuance_migrations_use_rust_in_both_beta_modes() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
-    assert 'UseRustIssuance = [bool]$EnablePassportNative' in script
-    assert '"postgresql+asyncpg://marty:$copyPassword@${copyContainer}:5432/marty"' in script
-    assert '"postgresql+asyncpg://marty:${martyDbPassword}@postgres:5432/marty"' in script
+    assert 'UseRustIssuance' not in script
+    assert '"postgresql://marty:$copyPassword@${copyContainer}:5432/marty"' in script
+    assert '"postgresql://marty:${martyDbPassword}@postgres:5432/marty"' in script
+    assert "manage_migrations.py" not in script
     for prefix, verify_name in (("rehearsal", "$rehearsalIssuanceVerify"),
                                 ("live", "$liveIssuanceVerify")):
         upgrade_log = script.index(f'"issuance-migration-{prefix}.log"')
         verify_args = script.index(f"-Arguments {verify_name}", upgrade_log)
         verify_log = script.index(f'"issuance-migration-{prefix}-verify.log"', verify_args)
         assert upgrade_log < verify_args < verify_log
-    assert script.count('@("python", "manage_migrations.py", "current")') == 2
+    assert script.count('"issuance-migrations")') >= 4
 
 
 def test_beta_runner_proves_the_split_native_issuance_runtime() -> None:

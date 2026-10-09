@@ -112,6 +112,9 @@ def validate_spec(spec):
 def fixture_overlay(spec, selected):
     native = {
         "MARTY_ISSUANCE__SERVER__HOST": "127.0.0.1",
+        # This owned published-schema fixture seeds a legacy token before
+        # startup and proves that the Rust migration bounds its lifetime.
+        "MARTY_SCHEMA_STARTUP_MODE": "migrate",
         "DATABASE_URL": spec["database_url"],
         "ISSUANCE_SERVICE_PORT": str(spec["http_port"]),
         "ISSUANCE_GRPC_PORT": str(spec["grpc_port"]),

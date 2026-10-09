@@ -109,7 +109,6 @@ $martyCommon = Get-StackArtifact "marty-common" "python"
 $martyRs = Get-StackArtifact "marty-core-python" "python"
 $martyVerification = Get-StackArtifact "marty-verification-python" "python"
 $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python"
-$martyIssuance = Get-StackArtifact "marty-credentials-issuance" "oci"
 $env:MARTY_COMMON_URI = $martyCommon.uri
 $env:MARTY_COMMON_DIGEST = $martyCommon.digest
 $env:MARTY_RS_URI = $martyRs.uri
@@ -118,7 +117,6 @@ $env:MARTY_VERIFICATION_URI = $martyVerification.uri
 $env:MARTY_VERIFICATION_DIGEST = $martyVerification.digest
 $env:MARTY_ISO18013_URI = $martyIso18013.uri
 $env:MARTY_ISO18013_DIGEST = $martyIso18013.digest
-$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"
 $docsIds = @(& docker ps -a --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=docs" --format '{{.ID}}')
 if ($LASTEXITCODE -ne 0 -or $docsIds.Count -ne 1) { throw "Expected one existing beta docs container" }
 $env:MARTY_DOCS_IMAGE = & docker inspect $docsIds[0] --format '{{.Config.Image}}'
@@ -209,6 +207,13 @@ foreach ($name in $requiredFiles) {
 
 $preDeployDocument = Get-Content -LiteralPath $preDeployPath -Raw | ConvertFrom-Json
 $preDeploy = @($preDeployDocument | ForEach-Object { $_ })
+$priorIssuance = @($preDeploy | Where-Object { $_.service -eq "issuance" -and $_.running })
+$priorGateway = @($preDeploy | Where-Object { $_.service -eq "gateway" -and $_.running })
+if ($priorIssuance.Count -ne 1 -or $priorGateway.Count -ne 1 -or
+    $priorIssuance[0].image_id -notmatch '^sha256:[0-9a-f]{64}$' -or
+    $priorIssuance[0].image_id -cne $priorGateway[0].image_id) {
+    throw "Rust-only beta restore cannot replay a legacy issuance image; keep beta in maintenance and repair forward"
+}
 $applicationServices = @(
     "auth", "organization", "credential-template", "trust-profile", "applicant", "notification",
     "compliance-profile", "presentation-policy", "deployment-profile", "flow", "verification",

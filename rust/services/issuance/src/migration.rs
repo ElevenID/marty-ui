@@ -6,6 +6,10 @@ const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v1";
 const BASE_CATALOG: &str = include_str!("../migrations/0000_issuance_service_catalog.json");
 const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
     (
+        "0000_merge_issuance_heads_bridge",
+        include_str!("../migrations/0000_merge_issuance_heads_bridge.sql"),
+    ),
+    (
         "0001_oid4vci_public_protocol",
         include_str!("../migrations/0001_oid4vci_public_protocol.sql"),
     ),
@@ -120,9 +124,11 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
                 sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
                     .fetch_all(&mut *transaction)
                     .await?;
-            if heads.as_slice() != [ALEMBIC_FINAL_HEAD] {
+            if heads.as_slice() != [ALEMBIC_FINAL_HEAD]
+                && heads.as_slice() != ["merge_issuance_heads"]
+            {
                 return Err(sqlx::Error::Protocol(format!(
-                    "issuance Alembic head must be exactly {ALEMBIC_FINAL_HEAD}; observed {heads:?}"
+                    "issuance Alembic head must be merge_issuance_heads or {ALEMBIC_FINAL_HEAD}; observed {heads:?}"
                 )));
             }
         } else if !has_ledger {
@@ -145,7 +151,6 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         }
     }
 
-    validate_base_tables(&mut transaction).await?;
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS issuance_service.rust_schema_migrations (
             version TEXT PRIMARY KEY,
@@ -184,6 +189,47 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
             .execute(&mut *transaction)
             .await?;
     }
+    validate_base_tables(&mut transaction).await?;
+    validate_oid4vci(&mut transaction).await?;
+    validate_passport_connection(&mut transaction).await?;
+    transaction.commit().await
+}
+
+/// Verify the protected schema handoff as the application role. This path is
+/// read-only so a fenced deployment never needs schema DDL privileges.
+pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET TRANSACTION READ ONLY")
+        .execute(&mut *transaction)
+        .await?;
+    let heads: Vec<String> =
+        sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
+            .fetch_all(&mut *transaction)
+            .await?;
+    if heads.as_slice() != [ALEMBIC_FINAL_HEAD] {
+        return Err(sqlx::Error::Protocol(format!(
+            "issuance Alembic head differs from {ALEMBIC_FINAL_HEAD}: {heads:?}"
+        )));
+    }
+    let mut actual: Vec<String> =
+        sqlx::query_scalar("SELECT version FROM issuance_service.rust_schema_migrations")
+            .fetch_all(&mut *transaction)
+            .await?;
+    let mut expected: Vec<String> = std::iter::once(RUST_BASELINE_VERSION.to_owned())
+        .chain(
+            NATIVE_MIGRATIONS
+                .iter()
+                .map(|(version, _)| (*version).to_owned()),
+        )
+        .collect();
+    actual.sort();
+    expected.sort();
+    if actual != expected {
+        return Err(sqlx::Error::Protocol(format!(
+            "issuance Rust migration ledger differs from protected schema: {actual:?}"
+        )));
+    }
+    validate_base_tables(&mut transaction).await?;
     validate_oid4vci(&mut transaction).await?;
     validate_passport_connection(&mut transaction).await?;
     transaction.commit().await

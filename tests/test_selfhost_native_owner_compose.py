@@ -1,4 +1,4 @@
-"""Pure comparator mutation tests; actual Compose rendering is a separate gate."""
+"""Mutation tests against the frozen and current rendered self-host models."""
 
 from copy import deepcopy
 import hashlib
@@ -33,179 +33,19 @@ def test_reference_identity_and_descriptor_closure():
     assert "docker-compose.service.issuance-native-runtime.yml" in descriptor["assets"]
 
 
-@pytest.fixture
-def models():
-    # Small independently spelled models test the comparator, not Compose.
-    before = {
-        "services": {
-            "db-migrate": {
-                "environment": {"ENVIRONMENT": "production"},
-                "secrets": [{"source": "openbao_service_token",
-                             "target": "/run/secrets/openbao_service_token"}],
-            },
-            "issuance": {
-                "environment": {
-                    "ISSUANCE_AUTH_SESSION_TTL_MINUTES": GATE["SHARED_SETTINGS"][
-                        "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
-                    ],
-                    "ENVIRONMENT": "production",
-                    "BAO_ADDR": "legacy",
-                    "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-                    **{
-                        key: value
-                        for key, value in GATE["PUBLICATION_SETTINGS"].items()
-                        if key not in GATE["SHARED_ADDITIONS"]
-                    },
-                },
-                "secrets": [{"source": "token"}, {"source": "openbao_service_token"}],
-            },
-            "gateway": {
-                "environment": {"ISSUANCE_SERVICE_URL": "http://issuance:8005"},
-                "depends_on": {},
-            },
-            "flow": {
-                "environment": {"ISSUANCE_GRPC_TARGET": "issuance:9005"},
-                "secrets": [],
-            },
-            "signing-keys": {
-                "environment": {
-                    "BAO_TOKEN_FILE": "/run/secrets/openbao_service_token"
-                },
-                "secrets": [
-                    {
-                        "source": "openbao_service_token",
-                        "target": "/run/secrets/openbao_service_token",
-                    }
-                ],
-            },
-        },
-        "secrets": {
-            "openbao_service_token": {"file": "/synthetic/openbao_service_token"}
-        },
-        "volumes": {"preserved": {}},
-    }
-    after = deepcopy(before)
-    after["secrets"]["signing_keys_openbao_token"] = {
-        "file": "/synthetic/signing_keys_openbao_token"
-    }
-    after["secrets"]["didcomm_issuance_openbao_token"] = {
-        "file": "/synthetic/didcomm_issuance_openbao_token"
-    }
-    for suffix in ("cert", "key"):
-        name = f"signing_keys_workload_server_{suffix}"
-        after["secrets"][name] = {"file": f"/synthetic/{name}"}
-        after["services"]["signing-keys"]["environment"][
-            f"SIGNING_KEYS_INTEGRATION_SECRET_TLS_{suffix.upper()}_FILE"
-        ] = f"/run/secrets/{name}"
-    after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
-        "/run/secrets/signing_keys_openbao_token"
-    )
-    after["services"]["signing-keys"]["secrets"] = [
-        {
-            "source": "signing_keys_openbao_token",
-            "target": "/run/secrets/signing_keys_openbao_token",
-        }
-    ]
-    for suffix in ("cert", "key"):
-        name = f"signing_keys_workload_server_{suffix}"
-        after["services"]["signing-keys"]["secrets"].append(
-            {"source": name, "target": f"/run/secrets/{name}"}
-        )
-    after["services"]["db-migrate"]["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = (
-        "/run/secrets/notification_openbao_token"
-    )
-    after["services"]["db-migrate"]["secrets"].append({
-        "source": "notification_openbao_token",
-        "target": "/run/secrets/notification_openbao_token",
-    })
-    after["services"]["flow"]["environment"].update(
-        ISSUANCE_GRPC_TARGET="issuance-native:9005",
-        ISSUANCE_API_KEY_FILE="/run/secrets/issuance_api_key",
-        SIGNING_KEYS_INTERNAL_API_KEY_FILE="/run/secrets/issuance_api_key",
-        **GATE["PASSPORT_CONSUMER_ADDITIVE"]["flow"],
-    )
-    after["services"]["flow"]["secrets"].append(
-        {"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"}
-    )
-    after["x-issuance-application-env"] = {
-        "ENVIRONMENT": "production",
-        "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-        **GATE["SHARED_SETTINGS"],
-        **GATE["PUBLICATION_SETTINGS"],
-    }
-    after["services"]["issuance"]["environment"].update(GATE["SHARED_ADDITIONS"])
-    after["services"]["issuance"]["environment"].update(
-        DIDCOMM_DELIVERY_OWNER="native",
-        ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
-    )
-    after["services"]["issuance"]["depends_on"] = {
-        "issuance-native": {"condition": "service_healthy", "required": True}
-    }
-    after["services"]["gateway"]["environment"].update(
-        ISSUANCE_NATIVE_SERVICE_URL="http://issuance-native:8005",
-        GATEWAY_REQUIRED_READY_SERVICES=GATE["READY"],
-        SIGNING_KEYS_SERVICE_URL="http://signing-keys:8017",
-        **GATE["PASSPORT_CONSUMER_ADDITIVE"]["gateway"],
-    )
-    after["services"]["gateway"]["depends_on"]["issuance-native"] = {
-        "condition": "service_healthy",
-        "required": True,
-    }
-    after["services"]["issuance-native"] = {
-        "build": {
-            "context": ".",
-            "dockerfile": "services/Dockerfile",
-            "args": {"SERVICE_NAME": "issuance-native"},
-        },
-        "entrypoint": ["/app/services/entrypoint.sh"],
-        "command": [],
-        "environment": {
-            "ENVIRONMENT": "production",
-            "TOKEN_HMAC_KEY_FILE": "/run/secrets/token",
-            **GATE["SHARED_SETTINGS"],
-            **GATE["PUBLICATION_SETTINGS"],
-            "SERVICE_NAME": "issuance_native",
-            "DIDCOMM_KMS_ADDR": "${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}",
-            "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm_issuance_openbao_token",
-            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
-            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/workload_identity_ca_cert",
-            "ISSUANCE_GRPC_ENABLED": "true",
-            "RP_GRPC_TARGET": "revocation-profile:9013",
-            **GATE["NATIVE_ADDITIVE"],
-        },
-        "secrets": [
-            {"source": "token"},
-            {
-                "source": "didcomm_issuance_openbao_token",
-                "target": "/run/secrets/didcomm_issuance_openbao_token",
-            },
-            {
-                "source": "workload_identity_ca_cert",
-                "target": "/run/secrets/workload_identity_ca_cert",
-            },
-        ],
-        "depends_on": {
-            name: {"condition": condition, "required": True}
-            for name, condition in [
-                ("db-migrate", "service_completed_successfully"),
-                ("issuance-migrations", "service_completed_successfully"),
-                ("postgres", "service_healthy"),
-                ("signing-keys", "service_healthy"),
-                ("revocation-profile", "service_healthy"),
-            ]
-        },
-        "healthcheck": {
-            "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"],
-            "interval": "10s",
-            "timeout": "5s",
-            "retries": 3,
-        },
-        "restart": "unless-stopped",
-        "networks": {"default": None},
-    }
+@pytest.fixture(scope="module")
+def rendered_models():
+    # Compare the reviewed frozen source to the current complete Rust model.
+    render = GATE["GATE"]["render"]
+    before = render(GATE["FROZEN"])
+    after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
 
+
+@pytest.fixture
+def models(rendered_models):
+    return deepcopy(rendered_models)
 
 @pytest.mark.parametrize(
     "field",

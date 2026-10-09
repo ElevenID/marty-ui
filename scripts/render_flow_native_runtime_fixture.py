@@ -88,7 +88,8 @@ def render(spec, command):
     with tempfile.TemporaryDirectory(prefix="flow-render-model-") as temporary:
         root = Path(temporary)
         required = set()
-        for name in ("docker-compose.base.yml", SELFHOST["GATE"]["BASE"]):
+        for name in ("docker-compose.base.yml", SELFHOST["GATE"]["BASE"],
+                     SELFHOST["FROZEN"]):
             required.update(
                 re.findall(r"\$\{([A-Z0-9_]+):\?", (ROOT / name).read_text())
             )

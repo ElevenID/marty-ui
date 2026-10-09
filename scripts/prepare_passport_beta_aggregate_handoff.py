@@ -93,7 +93,7 @@ def prepare(
     source_commit = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)
-    signed = manifest_source(stack_manifest, source_commit)
+    signed = manifest_source(stack_manifest, source_commit, rust_only=True)
     intent_path = Path(str(maintenance_receipt) + ".intent.json")
     intent = read_object(intent_path, "marty.passport-beta-db-maintenance-plan/v1")
     docs = [item for item in intent.get("beta_generation", [])
@@ -209,7 +209,7 @@ def prepare(
         "services_image": signed["services_image"],
         "build_only_artifacts": signed["build_only_artifacts"],
         "docs_image": docs_image,
-        "issuance_image": signed["issuance_image"],
+        "issuance_image": signed["services_image"],
         "migration_image": plan["migration_image"],
     }
 

@@ -27,8 +27,8 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "  postgres: {image: 'postgres:15-alpine'}\n"
         "  db-migrate: {build: '.'}\n"
         "  gateway: {build: '.'}\n"
-        "  issuance-migrations: {image: 'issuance:v1'}\n"
-        "  issuance: {image: 'issuance:v1'}\n"
+        "  issuance-migrations: {build: '.'}\n"
+        "  issuance: {build: '.'}\n"
         "  ui: {image: 'nginx:alpine'}\n"
         "  cloudflared: {build: '.'}\n"
         "  cloudflared-beta: {build: '.'}\n", encoding="utf-8")
@@ -36,6 +36,8 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "services:\n"
         f"  db-migrate: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
         f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n"
+        f"  issuance-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
+        f"  issuance: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  ui: {{image: '{PREFIX}/ui-selfhost:1.2.3'}}\n"
         f"  cloudflared: {{image: '{PREFIX}/cloudflared-wrapper:1.2.3'}}\n"
         f"  cloudflared-beta: {{image: '{PREFIX}/cloudflared-wrapper:1.2.3'}}\n",
@@ -69,8 +71,8 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "postgres": {"image": "postgres:15-alpine"},
         "db-migrate": {"image": f"{PREFIX}/db-migrate:1.2.3"},
         "gateway": {"image": f"{PREFIX}/services:1.2.3"},
-        "issuance-migrations": {"image": reference("issuance", "6")},
-        "issuance": {"image": reference("issuance", "6")},
+        "issuance-migrations": {"image": f"{PREFIX}/services:1.2.3"},
+        "issuance": {"image": f"{PREFIX}/services:1.2.3"},
         "ui": {"image": f"{PREFIX}/ui-selfhost:1.2.3"},
         "cloudflared": {"image": f"{PREFIX}/cloudflared-wrapper:1.2.3"},
         "cloudflared-beta": {"image": f"{PREFIX}/cloudflared-wrapper:1.2.3"},
@@ -81,8 +83,6 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
     }
     external = {
         "postgres": "docker.io/library/postgres@sha256:" + "7" * 64,
-        "issuance": reference("issuance", "6"),
-        "issuance-migrations": reference("issuance", "6"),
     }
     return model, claim, lock_file, selfhost, external
 
@@ -105,6 +105,7 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result["schema"] == "marty.selfhost-image-lock/v1"
     assert result["release"] == "marty-ui@1.2.3"
     assert result["services"]["gateway"] == reference("services", "2")
+    assert result["services"]["issuance"] == result["services"]["issuance-migrations"] == reference("services", "2")
     assert result["services"]["db-migrate"] == reference("migrations", "3")
     assert result["services"]["ui"] == reference("ui-selfhost", "4")
     assert result["services"]["cloudflared"] == result["services"]["cloudflared-beta"]
@@ -118,7 +119,7 @@ def test_current_compose_source_ownership_is_closed() -> None:
     )
     assert set(roles) | {
         "postgres", "redis", "keycloak", "keycloak-configurator",
-        "issuance", "issuance-migrations", "edge", "tunnel-nginx-proxy",
+        "edge", "tunnel-nginx-proxy",
     } == names
     assert roles["gateway"] == "services"
     assert roles["db-migrate"] == "db-migrate"
@@ -130,7 +131,7 @@ def test_current_compose_source_ownership_is_closed() -> None:
     ("ui", f"{PREFIX}/services:1.2.3"),
     ("gateway", f"{PREFIX}/db-migrate:1.2.3"),
     ("gateway", "registry.example/gateway@sha256:" + "9" * 64),
-    ("issuance", f"{PREFIX}/services:1.2.3"),
+    ("issuance", reference("issuance", "6")),
 ])
 def test_rejects_wrong_role(tmp_path: Path, service: str, image: str) -> None:
     model, *_ = inputs(tmp_path)
@@ -203,7 +204,7 @@ def test_rejects_unrecorded_transaction_and_mismatched_issuance(tmp_path: Path) 
     with pytest.raises(builder.ImageLockError, match="no recorded image digests"):
         build(tmp_path, transaction=claim)
     external["issuance-migrations"] = reference("issuance", "8")
-    with pytest.raises(builder.ImageLockError, match="digest differs"):
+    with pytest.raises(builder.ImageLockError, match="extra Compose"):
         build(tmp_path, external_services=external)
     model["services"]["gateway"]["build"] = {"context": "."}
     with pytest.raises(builder.ImageLockError, match="image-only"):

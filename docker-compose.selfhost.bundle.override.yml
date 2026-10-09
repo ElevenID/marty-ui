@@ -76,7 +76,18 @@ services:
     environment:
       SERVICE_NAME: trust_profile
 
-  # The issuance API and migrations retain their immutable Python artifact.
+  issuance-migrations:
+    <<: *selfhost-service-image
+    build: *selfhost-build-reset
+    environment:
+      SERVICE_NAME: issuance_native
+
+  issuance:
+    <<: *selfhost-service-image
+    build: *selfhost-build-reset
+    environment:
+      SERVICE_NAME: issuance_native
+
   issuance-native:
     <<: *selfhost-service-image
     build: *selfhost-build-reset
