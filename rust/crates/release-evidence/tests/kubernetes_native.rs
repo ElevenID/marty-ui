@@ -1589,5 +1589,7 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
     cmd.arg("validate")
         .env("MARTY_SERVICES_IMAGE", "ignored-private-image");
     let (passed, output, errors) = execute(cmd, b"");
-    assert!(passed && output.is_empty() && errors.is_empty());
+    // Native issuance is selected by default. A missing or mutable image
+    // must fail preflight even when no explicit enable flag was supplied.
+    assert!(!passed && output.is_empty() && errors == format!("{REFUSAL}\n").as_bytes());
 }

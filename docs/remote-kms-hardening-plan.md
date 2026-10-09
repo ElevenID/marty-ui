@@ -7311,3 +7311,27 @@ database. With no public deployments and no removal migration scripts by
 user direction, supported KMS-only cutover must use a separately qualified
 fresh database/rebuild for this local stack and verify the old table is absent
 before release; do not count a source-only schema search as deployed K10 proof.
+
+2026-10-08/09 exact UI PR #1192 run `37871998969` exposed one Rust contracts
+assertion in `marty-release-evidence`: `actual_cli_arguments_bounded_input_and_real_envsubst_model`
+still expected `kubernetes-native-issuance validate` to succeed with only a
+mutable image reference and no explicit enable flag. The production CLI now
+selects native issuance by default and correctly rejects that input. The
+local test correction requires a nonzero exit, no output, and the fixed
+refusal message; it leaves production code unchanged. The adjacent parser,
+environment, and immutable-image policy test passes locally with Rust 1.95;
+rustfmt and diff checks pass. The Linux envsubst-backed assertion itself
+requires hosted requalification. Hold this correction with any remaining
+Canvas/release/image findings for one grouped push, rather than restarting
+the ongoing 40-minute CI run.
+The built Windows `kubernetes-native-issuance validate` CLI also confirmed
+this exact negative input exits 1 with no stdout and the fixed configuration
+refusal on stderr. The UI Release Contract Tests lane later passed at
+`543b9a96c`; Rust contracts remain the one completed failing lane while the
+Canvas, OpenBao plugin image and service-image lanes continue.
+Core PR #355 is green at `d41d87c`, its description now reflects the final
+KMS-only implementation and passed Native ZKP/WASM/wheel checks, and it was
+marked ready for review. Its branch protection requires one approving review;
+no approval is recorded yet. Credentials PR #313 remains draft with 19 green
+checks at `fef8da1`; its description was updated to distinguish passing
+branch CI from the outstanding authenticator and published-artifact gates.
