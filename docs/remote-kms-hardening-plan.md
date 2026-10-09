@@ -10561,3 +10561,12 @@ tests passed (142), candidate-workflow tests passed (15), and the impacted
 Canvas shell scenario passed (2). Ruff, Python compilation, Bash syntax and
 diff checks passed. This is local CI wiring evidence, not an exact-head
 hosted run or released-image K10 proof.
+
+2026-10-09 grouped UI publication: the 18-commit local batch after
+`7f8ae9b9d` was pushed to draft PR #1192 at exact head `8ee6790ba4eaa472892c2031874b6d50f3438b7d`.
+Its new hosted CI run `37999429439` and Organization Quality run
+`37999430821` were queued at observation; CodeQL and policy runs were also
+queued. No hosted result is claimed yet. The prior failed run
+`37994913688` remains immutable evidence and is not overwritten by this
+push. The untracked `rust/crates/canvas-acceptance/%SystemDrive%/` path was
+neither staged nor modified.
