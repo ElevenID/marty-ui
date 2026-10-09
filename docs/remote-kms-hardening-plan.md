@@ -9048,3 +9048,14 @@ and warnings-denied Clippy and Rustfmt pass. This does not change production
 Core APIs or replace the live OpenBao DIDComm decryption proof. Core PR #355
 and every downstream pin still point to its prior published head until this
 local correction is grouped into a deliberate cross-repository update.
+
+Grouped UI draft PR #1192 was pushed at exact head
+`a47fb79425d63f842df286b81300dc1e4233fe4d` after the terminal
+`daa74b80e` run. Its PR description now reflects the fresh schemas, signed
+image gate, retired beta SQL entrypoints, dead flow-envelope key, and still
+open passport/wallet acceptance. After merging the latest main Flow-owner
+refinement, a combined local run passed 424 focused Python checks with two
+Windows skips; Ruff and `git diff --check` passed. New exact-head CI run
+`37929521793` was queued immediately after the push; CodeQL and organization
+quality runs were active. This is a new qualification request, not an accepted
+release or a replacement for the immutable failed run.
