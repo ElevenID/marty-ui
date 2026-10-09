@@ -7169,6 +7169,18 @@ The exact generated Credentials web package also initialized with Node 24 via
 `initSync` over the compiled WASM bytes. `get_version()` returned `0.1.79` and
 `health_check()` returned status `ok` with credential-offer and verification
 features. This is a package-load check, not the authenticator browser flow.
+Credentials preflight review found a stale CI assertion that still required
+isomdl `issuer-local-signing`, directly contrary to the KMS-only dependency
+guard. Changed it to reject that feature in native, Python and WASM graphs;
+the current Python graph selects only isomdl `issuer-planning` and
+`presentation-verifier`, and the pinned-Core KMS graph check passes locally.
+Credentials `cargo +1.97.1 fmt --all -- --check`, native and Python feature
+checks, and a local ABI3 wheel build pass. The Windows wheel was 9,466,128
+bytes (SHA-256
+`c34e5dad6d517383628aca377d6f12f93ea76d0bb0a37d63e2a0cce9eb6ceb3e`);
+after installing it to an isolated target, the six focused Python Core/KMS
+surface tests passed. The generated wheel was removed from the worktree after
+qualification. Hosted cross-platform and exact publish-artifact gates remain.
 UI Rust Service Images completed successfully at `888e7949b`; the live OpenBao
 plugin image job was still active at this checkpoint.
 The live OpenBao plugin image job subsequently completed successfully at
@@ -7179,3 +7191,9 @@ successes, five failures, and one skip; the fifth failure is the aggregate CI
 gate reflecting the three corrected lane failures, while the separate
 dependency-review advisory is addressed by the local gRPC 1.83.2 patch.
 Push the combined corrections once and re-evaluate the exact new head.
+The UI correction batch was pushed as PR #1192 head `81ab5df4d`; its new
+hosted run is underway. Credentials was pushed as one broad feature branch
+and opened as draft PR #313 at `c5329260`, based on current `main` with no
+behind commits. Its hosted Rust, WASM, Python-wheel, dependency and security
+checks are queued. Keep both PRs draft until all required checks, cross-repo
+wallet compatibility, and exact release-artifact gates are satisfied.
