@@ -22,20 +22,29 @@ BIN_TARGETS = (
 )
 WORKER_TEST_TARGETS = (TEST_TARGETS[0],)
 WORKER_BIN_TARGETS = (BIN_TARGETS[1],)
+FLOW_TEST_TARGETS = (TEST_TARGETS[2],)
+FLOW_BIN_TARGETS = (BIN_TARGETS[0], BIN_TARGETS[3])
 
 
 def verify(
-    artifacts: Path, target_directory: Path, *, worker_only: bool = False
+    artifacts: Path,
+    target_directory: Path,
+    *,
+    worker_only: bool = False,
+    flow_only: bool = False,
 ) -> None:
+    if worker_only and flow_only:
+        raise ValueError("Artifact scope must have one owner")
     debug = target_directory.resolve() / "debug"
     records = [
         json.loads(line) for line in artifacts.read_text(encoding="utf-8").splitlines()
     ]
-    required = (
-        (*WORKER_TEST_TARGETS, *WORKER_BIN_TARGETS)
-        if worker_only
-        else (*TEST_TARGETS, *BIN_TARGETS)
-    )
+    if worker_only:
+        required = (*WORKER_TEST_TARGETS, *WORKER_BIN_TARGETS)
+    elif flow_only:
+        required = (*FLOW_TEST_TARGETS, *FLOW_BIN_TARGETS)
+    else:
+        required = (*TEST_TARGETS, *BIN_TARGETS)
     for package, target, kind in required:
         matches = {
             (record["executable"], record["profile"].get("test"))
@@ -64,11 +73,17 @@ def verify(
 
 if __name__ == "__main__":
     if len(sys.argv) not in (3, 4) or (
-        len(sys.argv) == 4 and sys.argv[1] != "--worker-only"
+        len(sys.argv) == 4 and sys.argv[1] not in ("--worker-only", "--flow-only")
     ):
         raise SystemExit(
-            "Usage: verify-canvas-test-artifacts.py [--worker-only] ARTIFACTS TARGET_DIRECTORY"
+            "Usage: verify-canvas-test-artifacts.py "
+            "[--worker-only|--flow-only] ARTIFACTS TARGET_DIRECTORY"
         )
-    worker_only = len(sys.argv) == 4
-    offset = 1 + worker_only
-    verify(Path(sys.argv[offset]), Path(sys.argv[offset + 1]), worker_only=worker_only)
+    scoped = len(sys.argv) == 4
+    offset = 1 + scoped
+    verify(
+        Path(sys.argv[offset]),
+        Path(sys.argv[offset + 1]),
+        worker_only=scoped and sys.argv[1] == "--worker-only",
+        flow_only=scoped and sys.argv[1] == "--flow-only",
+    )

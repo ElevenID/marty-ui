@@ -805,6 +805,70 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
     assert queued["rust_matrix"] == '["canvas","contracts"]'
 
 
+def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-flow-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 9
+    flow_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert flow_tests == [
+        "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
+        "rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_admission.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_public_startup.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs",
+        "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["flow"]',
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert _classify_changed_paths(
+        flow_tests, tmp_path, include_rust_plan=True
+    ) == [expected] * 8
+    assert _classify_changed_paths(
+        flow_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [flow_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [flow_tests[1], "rust/crates/flow-acceptance/Cargo.toml"],
+        [flow_tests[-1], "rust/services/issuance/tests/support/base_runtime_redis.rs"],
+        ["rust/crates/flow-acceptance/tests/support/unreviewed.rs"],
+        [flow_tests[2] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts"]'
+    without_proof = _classify_changed_paths(
+        [flow_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert without_proof["rust_runtime"] == "true"
+    assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    queued = _classify_changed_paths(
+        [flow_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
+
+
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
     tmp_path: Path,
 ) -> None:
@@ -1020,9 +1084,10 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         selection_overrides=None,
         leaf_only=False,
         worker_only=False,
+        flow_only=False,
     ):
         selected = set(flags)
-        if "rust" in selected and not (leaf_only or worker_only):
+        if "rust" in selected and not (leaf_only or worker_only or flow_only):
             selected.add("rust_runtime")
         active = {"changes", "lint"}
         for flag, names in groups.items():
@@ -1048,6 +1113,8 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment["RUST_MATRIX"] = (
             '["worker"]'
             if worker_only
+            else '["flow"]'
+            if flow_only
             else '["contracts"]'
             if leaf_only
             else '["canvas","contracts"]'
@@ -1080,6 +1147,18 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise(("rust",), {"test-rust-services": "skipped"}).returncode != 0
     assert exercise(("rust",), leaf_only=True).returncode == 0
     assert exercise(("rust",), worker_only=True).returncode == 0
+    assert exercise(("rust",), flow_only=True).returncode == 0
+    assert exercise(("rust",), flow_only=True, event="merge_group").returncode != 0
+    assert (
+        exercise(("rust",), flow_only=True, overrides={"rust-supply-chain": "skipped"})
+        .returncode
+        != 0
+    )
+    assert (
+        exercise(("rust",), flow_only=True, overrides={"test-release-contracts": "skipped"})
+        .returncode
+        != 0
+    )
     assert exercise(("rust",), worker_only=True, event="merge_group").returncode != 0
     assert (
         exercise(
@@ -1270,7 +1349,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas operation timeout TLS parity",
     }
     contracts = {
-        "Prepare pinned standalone Compose renderer for Rust contracts",
         "Verify feature-regression observer isolation",
         "Prepare database contract executables",
         "Create isolated Rust contract databases",
@@ -1292,6 +1370,9 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in contracts:
         assert steps[name]["if"] == "matrix.lane == 'contracts'"
         assert not steps[name].get("continue-on-error", False)
+    assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
+        "if"
+    ] == "matrix.lane == 'contracts' || matrix.lane == 'flow'"
     renderer = steps["Prepare pinned standalone Compose renderer for Rust contracts"]
     assert "bash scripts/ci/install-compose-renderer.sh" in renderer["run"]
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]
