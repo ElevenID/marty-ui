@@ -10213,3 +10213,20 @@ local, unpushed Authenticator batch addition for PR #57. Other registered
 W3C/JWT/mDoc/wallet channel entry points and the credential-selection view
 still need a source and artifact audit; this commit does not qualify a mobile
 build or physical-device wallet behavior.
+
+2026-10-09 registered mobile wrapper audit: Android routes its registered
+PKI, JWT, mDoc, wallet, and W3C method channels through a handler that
+returns explicit custody/verification/storage errors for supported method
+names; iOS JWT, mDoc, and wallet handlers likewise reject signing,
+verification, session, and storage methods. Authenticator local commit
+`a277df4` removes the remaining Dart `default-key` requests from the
+extended service's SD-JWT, mDoc, and credential-refresh wrappers and makes
+those unsupported methods fail before any native call. It also removes the
+unused credential-selection view's local Ed25519 key creation and ad hoc
+presentation attempt, replacing that action with a clear verified OID4VP
+remote-holder requirement. Targeted Dart analysis found no issues, and the
+remote-only entry-point suite passed 5/5. These local changes remain in the
+grouped, unpublished PR #57 batch. The view itself is not referenced by the
+current app routes, and other mDoc and wallet wrappers still need real
+remote-only replacements or explicit product retirement; source inspection
+does not qualify a native artifact or physical device.
