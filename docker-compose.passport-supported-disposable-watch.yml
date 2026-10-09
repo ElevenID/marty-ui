@@ -1,0 +1,30 @@
+# Local development override. Never use this file for protected evidence.
+services:
+  issuance-native:
+    image: marty-passport-rust-watch:local
+    build:
+      context: .
+      dockerfile: services/Dockerfile.passport-watch
+    entrypoint: ["/bin/bash", "/workspace/scripts/passport-rust-watch.sh"]
+    command: []
+    environment:
+      CARGO_TARGET_DIR: /cargo-target
+      CARGO_BUILD_JOBS: "4"
+      RUSTFLAGS: -C debuginfo=0
+    volumes:
+      - .:/workspace:ro
+      - passport_watch_target:/cargo-target
+      - passport_watch_registry:/usr/local/cargo/registry
+      - passport_watch_git:/usr/local/cargo/git
+    networks: [private, ingress]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30m
+
+volumes:
+  passport_watch_target:
+  passport_watch_registry:
+  passport_watch_git:
