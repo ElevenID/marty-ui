@@ -539,10 +539,10 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.82"
-    assert integration["commit"] == "dbf553d141dc4dc1695a52c39edef0a8083c22d5"
+    assert integration["version"] == "1.2.84"
+    assert integration["commit"] == "64d30543752e8838743e6950e2ef3a862e0facc7"
     assert integration["artifacts"][0]["digest"] == (
-        "sha256:1074cd501057c90c65477bab3220bedae54df026067d0fc70fe6f23c6dd114cd"
+        "sha256:73ae9f338138b439b0803cde3204351583d3addee9882a62e4b995f58385bb47"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -556,11 +556,11 @@ def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.235"
+    assert lock["release"] == "marty-ui@1.1.236"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.235")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.236")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.82"
+    assert components["marty-integration-tests"]["version"] == "1.2.84"
 
     documents = (
         _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
