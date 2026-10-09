@@ -2286,6 +2286,25 @@ requires the active PR-only matrix and normal fallback and updates the stale
 tests without relaxing full Canvas obligations. A corrected hosted run and
 full-Canvas comparison remain pending.
 
+## A6 exact worker-test-source PR selector (2026-10-08 local draft)
+
+The next bounded draft considers only the three tracked Rust files owned by
+`canvas_published_worker_contract`: its target and two explicit support
+modules. Before a pull request can select `rust_matrix=["worker"]`, the
+classifier requires regular non-symlink checkout files with regular Git index
+modes, executes the six-context Docker-copy guard, and compares the
+NUL-delimited proved file inventory against every changed path. A mixed,
+missing, renamed, deleted, unproved, or unknown path retains the full
+Canvas/contracts Rust matrix. Merge groups always retain both original lanes.
+The worker-only plan still requires the compiled published worker target,
+pinned-process preflights, worker suite, Rust lint and supply-chain checks,
+root release-policy pytest, public-protocol checks, and the aggregate gate;
+only unrelated runtime/image qualification is bypassed for these test-only
+sources. The gate accepts the exact worker tuple only on pull requests and
+rejects a skipped selected job. This is local code, not hosted evidence or a
+measured speedup. Do not activate it until the #1194 diagnostic is green and
+the selector receives independent review and a test-source-only hosted pilot.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
