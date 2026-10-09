@@ -2172,6 +2172,26 @@ versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
 
+Next bounded A1 self-host owner candidate (2026-10-08 local draft, not yet
+reviewed or hosted): the public-image loader's two root cases and eight
+embedded support cases have one deployment/packaging obligation. The draft
+moves their unchanged assertions and exact ten libtest IDs into
+`marty-selfhost-acceptance`, while composition retains its 136 other discovered
+cases. It moves the two self-host support files together, reuses the original
+single-source bundle, renewal, database, and bounded-command fixtures, and
+shares only the generic cleanup-result combiner with composition. The
+composition manifest can then drop three direct development edges:
+`marty-selfhost-bundle`, `serde_yaml`, and `zip` (41 to 38); this is a declared
+edge change, not an independently timed compile saving. The Canvas CI job
+still builds the public image and packager exactly once, then executes the
+dedicated self-host target alongside composition and worker. An exact ten-ID
+runner guard, artifact verifier, timing allowlist, target status/log cleanup,
+and contracts-lane exclusion retain the mandatory owner. Local locked Rust
+1.95 compilation and discovered-ID checks passed for both self-host and
+composition; focused selector and ownership policy tests passed. Full hosted
+Linux image/PostgreSQL/cleanup execution, protected CI, and independent
+review remain required; this split changes no skip or release qualification.
+
 ## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
 
 The shadow planner already records Gateway's public Auth HTTP proxy, but

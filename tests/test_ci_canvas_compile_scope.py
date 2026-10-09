@@ -93,12 +93,16 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "-p",
             "marty-canvas-worker-acceptance",
             "-p",
+            "marty-selfhost-acceptance",
+            "-p",
             "marty-issuance-service",
             "--lib",
             "--test",
             "canvas_published_worker_contract",
             "--test",
             "canvas_published_schema_contract",
+            "--test",
+            "selfhost_public_image_contract",
             "--test",
             "canvas_oauth_behavior",
             "--test",
@@ -188,10 +192,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     execution = steps["Run safe Rust contract groups concurrently"]
     assert execution["if"] == "matrix.lane == 'contracts'"
     assert (
-        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance "
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance "
         in execution["run"]
     )
-    assert execution["run"].count("--exclude") == 2
+    assert execution["run"].count("--exclude") == 3
 
     gate = workflow["jobs"]["ci-gate"]
     assert "test-rust-services" in gate["needs"]
@@ -218,6 +222,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
             "canvas_published_worker_contract",
             "//! Ownership boundary for published Canvas worker acceptance.",
         ),
+        "selfhost-acceptance": (
+            "selfhost_public_image_contract",
+            "//! Ownership boundary for published self-host image acceptance.",
+        ),
     }
     for directory, (target, marker) in packages.items():
         package = ROOT / "rust/crates" / directory
@@ -239,6 +247,7 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         assert target in runner
     assert '"$composition_executable" --skip' in runner
     assert '"$worker_executable" --skip' in runner
+    assert '"$selfhost_executable" --nocapture' in runner
 
 
 def _records(tmp_path: Path) -> tuple[Path, Path, list[dict]]:
@@ -283,7 +292,7 @@ def test_worker_only_artifacts_require_real_worker_without_composition(
     tmp_path: Path,
 ) -> None:
     artifacts, target_dir, records = _records(tmp_path)
-    worker = [records[0], records[6]]
+    worker = [records[0], records[len(TEST_TARGETS) + 1]]
     artifacts.write_text(
         "".join(json.dumps(record) + "\n" for record in worker), encoding="utf-8"
     )
@@ -303,7 +312,7 @@ def test_worker_only_artifacts_require_real_worker_without_composition(
             VERIFY["verify"](artifacts, target_dir, worker_only=True)
 
 
-@pytest.mark.parametrize("index", [0, 4, 5, 8])
+@pytest.mark.parametrize("index", [0, 5, 6, 9])
 @pytest.mark.parametrize(
     "profile", [{}, {"test": None}, {"test": "false"}, {"test": 0}, {"test": 1}]
 )
@@ -332,7 +341,7 @@ def test_real_worker_is_selected_when_cargo_also_reports_its_test_harness(
     _verify(artifacts, target_dir, [*records, harness])
 
 
-@pytest.mark.parametrize("index", [0, 2, 4, 5, 8])
+@pytest.mark.parametrize("index", [0, 2, 5, 6, 9])
 def test_missing_canvas_artifact_fails_closed(tmp_path: Path, index: int) -> None:
     artifacts, target_dir, records = _records(tmp_path)
     with pytest.raises(ValueError, match="Expected exactly one"):

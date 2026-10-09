@@ -1,0 +1,32 @@
+[package]
+name = "marty-selfhost-acceptance"
+version = "0.1.0"
+description = "Published self-host image and packager acceptance tests"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+autotests = false
+
+[dev-dependencies]
+futures-util.workspace = true
+marty-issuance-service = { path = "../../services/issuance" }
+marty-selfhost-bundle = { path = "../selfhost-bundle" }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+sqlx.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+url.workspace = true
+zip.workspace = true
+
+[[test]]
+name = "selfhost_public_image_contract"
+path = "tests/selfhost_public_image_contract.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
