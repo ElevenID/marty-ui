@@ -10616,3 +10616,19 @@ analysis is clean; 183 tests pass with four skips. Current non-generated
 coverage is 75.90% (1,493/1,967), below the protected 90% gate. This and
 the preceding mobile wallet commits remain local for one grouped PR #57
 update; live device, KMS custody, and end-to-end acceptance are still open.
+
+2026-10-09 Canvas LTI public-metadata boundary review: the Core LTI probe
+checked that a remote JWKS had keys but did not reject private JWK members;
+the native Issuance service could then persist that external JWKS and the raw
+OpenID configuration in JSON columns. Local UI changes now apply the shared
+Rust key-material policy to both values in the common metadata probe before
+all management and refresh persistence paths. A focused negative/positive
+probe test passed, as did all three affected module tests. Local Core commit
+`f8a8dc0` also rejects private material in discovered JWKS/configuration and
+in direct LTI JWT verification input, with a redacted error; its `lti::tests` passed
+10 with two disposable-OpenBao tests ignored, and warnings-denied library
+Clippy passed. These changes are unpushed.
+After the Core batch is published, repin all production consumers and replace
+the temporary UI policy call with the Core canonical boundary to avoid
+duplicating the same rule across repositories. The older database JSON guard
+remains a defense and acceptance check, not the only runtime barrier.
