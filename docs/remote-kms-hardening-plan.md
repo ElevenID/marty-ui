@@ -9580,6 +9580,25 @@ verification, then injected the retired `device_registration_keys` table;
 the same verification command exited nonzero with the expected fresh-schema
 error. The container was discarded after the probe.
 
+2026-10-09 K10 assembled inventory artifact (local candidate): the
+digest-bound self-host migration qualifier now captures every non-system
+ordinary, partitioned, materialized and foreign table column (schema, table,
+column name and SQL data type) after native and
+legacy-migration image execution. It requires a nonempty, well-formed JSON
+inventory, compares the two idempotent runs, and includes the complete list
+in its version-3 result alongside the existing private-key name scan. The
+focused qualifier tests passed (8), and the SQL query parsed against a fresh
+disposable Device Registration database: six tables and 51 columns, including
+the reference-only holder ledgers, with no retired device-key tables. This is
+not yet the final assembled product inventory; only the exact signed-image
+probe after merging can establish that evidence for all schemas.
+The inventory and private-key name scan now use PostgreSQL catalogs, so the
+probe sees non-system table definitions regardless of `information_schema`
+visibility. On a separate disposable PostgreSQL 15 database, the catalog
+guard returned no findings before injection and then reported both a
+`private_key_cache` table and its `encrypted_jwk_json` column. No product
+database was modified for this test.
+
 2026-10-09 pairing authorization interface review: the Auth service session
 record retains creation time and OIDC claims, but its current gRPC
 `ValidateSession` response and Gateway `SessionIdentity` expose user and

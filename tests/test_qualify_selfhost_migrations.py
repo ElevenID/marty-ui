@@ -11,7 +11,8 @@ import subprocess
 import pytest
 
 from scripts.qualify_selfhost_migrations import (
-    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_SCHEMA_QUERY, QualificationError,
+    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_SCHEMA_QUERY, SCHEMA_INVENTORY_QUERY,
+    QualificationError,
     _assert_run, native_command, qualify,
     validate_images, validate_model,
 )
@@ -206,6 +207,12 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
         if "psql" in args:
             if args[-1] == PRIVATE_KEY_SCHEMA_QUERY:
                 return result(args)
+            if args[-1] == SCHEMA_INVENTORY_QUERY:
+                return result(args, json.dumps([{
+                    "schema": "device_registration_service",
+                    "table": "device_holder_keys", "column": "public_x",
+                    "data_type": "character varying",
+                }]))
             if args[-1] == NOTIFICATION_HEAD:
                 return result(args, "20260808_0002\n")
             if "alembic_version" in args[-1]:
@@ -224,12 +231,17 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert report["services_image"] == IMAGES["services"]
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
-    assert sum("psql" in args for args in calls) == 6
+    assert sum("psql" in args for args in calls) == 8
     assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
     assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2
     assert all("marty-device-registration verify-owned-schema" in " ".join(args)
                for args in calls if "verify-owned-schema" in " ".join(args))
     assert sum(args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY] for args in calls) == 2
+    assert sum(args[-1:] == [SCHEMA_INVENTORY_QUERY] for args in calls) == 2
+    assert report["table_columns"] == [{
+        "schema": "device_registration_service", "table": "device_holder_keys",
+        "column": "public_x", "data_type": "character varying",
+    }]
     assert all("printf '\\n'" in " ".join(args) for args in calls
                if "bao read" in " ".join(args))
     assert any("down" in args and "--volumes" in args for args in calls)

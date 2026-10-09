@@ -34,20 +34,40 @@ NOTIFICATION_HEAD = (
     "SELECT version_num FROM notification_service.alembic_version LIMIT 1"
 )
 PRIVATE_KEY_SCHEMA_QUERY = """
-SELECT 'table:' || table_schema || '.' || table_name
-FROM information_schema.tables
-WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-  AND (table_name = 'issuer_signing_keys' OR table_name ILIKE '%private_key%'
-       OR table_name ILIKE '%private_jwk%' OR table_name ILIKE '%secret_key%')
+SELECT 'table:' || n.nspname || '.' || c.relname
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
+  AND (c.relname = 'issuer_signing_keys'
+       OR c.relname ~* '(private_key|private_jwk|secret_key)')
 UNION ALL
-SELECT 'column:' || table_schema || '.' || table_name || '.' || column_name
-FROM information_schema.columns
-WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-  AND (column_name ILIKE '%private_key%' OR column_name ILIKE '%private_jwk%'
-       OR column_name ILIKE '%encrypted_jwk%' OR column_name ILIKE '%secret_key%'
-       OR column_name ILIKE '%key_material%')
+SELECT 'column:' || n.nspname || '.' || c.relname || '.' || a.attname
+FROM pg_catalog.pg_attribute AS a
+JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND a.attnum > 0 AND NOT a.attisdropped
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
+  AND a.attname ~* '(private_key|private_jwk|encrypted_jwk|secret_key|key_material)'
 ORDER BY 1
 LIMIT 20
+"""
+SCHEMA_INVENTORY_QUERY = """
+SELECT COALESCE(json_agg(json_build_object(
+    'schema', n.nspname, 'table', c.relname,
+    'column', a.attname,
+    'data_type', pg_catalog.format_type(a.atttypid, a.atttypmod)
+) ORDER BY n.nspname, c.relname, a.attnum), '[]'::json)::text
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_attribute AS a ON a.attrelid = c.oid
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND a.attnum > 0 AND NOT a.attisdropped
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
 """
 REDIS_REGISTRY = f"org:{ORG_ID}:signing-key-services"
 NATIVE_BINARIES = (
@@ -297,6 +317,7 @@ def qualify(images: dict[str, str], *,
                           "postgres", "redis", "openbao"], environment, 240),
                      "Disposable dependencies did not become ready")
             ledger = None
+            inventory = None
             for _ in range(2):
                 migration = run([*compose, "run", "--no-deps", "--rm",
                                  "db-migrate"], environment, 900)
@@ -331,6 +352,24 @@ def qualify(images: dict[str, str], *,
                 ], environment), "Private-key schema inventory failed").strip()
                 require(not private_schema,
                         "Released self-host migrations created private-key storage")
+                raw_inventory = _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-Atqc", SCHEMA_INVENTORY_QUERY,
+                ], environment), "Assembled schema inventory failed").strip()
+                try:
+                    current_inventory = json.loads(raw_inventory)
+                except (TypeError, ValueError) as exc:
+                    raise QualificationError("Assembled schema inventory is invalid") from exc
+                require(isinstance(current_inventory, list) and current_inventory
+                        and all(isinstance(column, dict)
+                                and set(column) == {"schema", "table", "column", "data_type"}
+                                and all(isinstance(value, str) and value
+                                        for value in column.values())
+                                for column in current_inventory),
+                        "Assembled schema inventory is invalid")
+                require(inventory is None or current_inventory == inventory,
+                        "Assembled schema changed on idempotent rerun")
+                inventory = current_inventory
                 redis = _checked(run([*compose, "exec", "-T", "redis", "redis-cli",
                                       "-n", "2", "EXISTS", REDIS_REGISTRY], environment),
                                  "KMS registry verification failed").strip()
@@ -347,12 +386,13 @@ def qualify(images: dict[str, str], *,
                 ], environment), "OpenBao notification key verification failed").strip()
                 require(transit.splitlines() == ["aes256-gcm96", "false"],
                         "Notification envelope key has unsafe attributes")
-            return {"schema": "marty.selfhost-migrations-qualification/v2",
+            return {"schema": "marty.selfhost-migrations-qualification/v3",
                     "migrations_image": images["migrations"],
                     "services_image": images["services"],
                     "native_schemas": "verified",
                     "notification_head": ledger,
                     "private_key_storage": "absent",
+                    "table_columns": inventory,
                     "profile": "selfhost-production", "runs": "2"}
         finally:
             if started:
