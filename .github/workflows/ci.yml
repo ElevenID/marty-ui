@@ -182,7 +182,7 @@ jobs:
                 done
               fi
             fi
-            # Only the three tracked worker acceptance test sources may use
+            # Only the four tracked worker acceptance test sources may use
             # the published worker lane alone. The proof checks all six
             # Rust-copying Docker contexts before this PR-only narrowing.
             worker_test_only=false
@@ -193,7 +193,7 @@ jobs:
             fi
             for path in "${changed_files[@]}"; do
               case "$path" in
-                rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs) ;;
+                rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs) ;;
                 *) worker_candidate=false; break ;;
               esac
             done
@@ -202,7 +202,7 @@ jobs:
               if python3 tests/test_rust_test_only_docker_context.py \
                 --emit-verified-worker-tests > "$verified_worker_file"; then
                 mapfile -d '' -t owned_worker_tests < "$verified_worker_file"
-                if [[ ${#owned_worker_tests[@]} -eq 3 ]]; then
+                if [[ ${#owned_worker_tests[@]} -eq 4 ]]; then
                   worker_test_only=true
                   for path in "${changed_files[@]}"; do
                     owned=false

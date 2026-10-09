@@ -45,6 +45,7 @@ WORKER_TEST_FILES = (
     "canvas_published_worker_contract.rs",
     "support/canvas_rest_requalification.rs",
     "support/canvas_startup_attestation.rs",
+    "support/canvas_worker_roster_metadata.rs",
 )
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
@@ -395,6 +396,40 @@ def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() ->
     assert not _is_ignored(WORKER_TEST_ROOT + "support/unreviewed.rs", root_lines)
 
 
+def test_worker_roster_support_has_one_test_target_consumer() -> None:
+    name = "canvas_worker_roster_metadata.rs"
+    assert not (ROOT / "rust/services/issuance/tests/support" / name).exists()
+    references = subprocess.run(
+        ["git", "grep", "-l", "-F", name, "--", "*.rs"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    assert references == [WORKER_TEST_ROOT + WORKER_TEST_FILES[0]]
+
+
+def test_worker_roster_support_rejects_another_rust_consumer(monkeypatch) -> None:
+    import pytest
+
+    original = subprocess.run
+
+    def with_extra_consumer(command, *args, **kwargs):
+        result = original(command, *args, **kwargs)
+        if command[:3] == ["git", "grep", "-l"]:
+            return subprocess.CompletedProcess(
+                command,
+                result.returncode,
+                stdout=result.stdout + "rust/services/issuance/src/lib.rs\n",
+                stderr=result.stderr,
+            )
+        return result
+
+    monkeypatch.setattr(subprocess, "run", with_extra_consumer)
+    with pytest.raises(AssertionError):
+        test_worker_roster_support_has_one_test_target_consumer()
+
+
 def test_verified_worker_test_paths_require_six_context_proof() -> None:
     result = subprocess.run(
         [sys.executable, __file__, "--emit-verified-worker-tests"],
@@ -603,6 +638,7 @@ if __name__ == "__main__":
         # The classifier consumes this only after proving exact tracked test
         # ownership and exclusions in every Rust-copying Docker context.
         test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+        test_worker_roster_support_has_one_test_target_consumer()
         for name in WORKER_TEST_FILES:
             sys.stdout.buffer.write((WORKER_TEST_ROOT + name).encode("utf-8") + b"\0")
     elif sys.argv == [sys.argv[0], "--emit-verified-leaves"]:

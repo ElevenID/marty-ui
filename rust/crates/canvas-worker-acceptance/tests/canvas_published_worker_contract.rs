@@ -583,7 +583,7 @@ async fn worker_dispatch_reference_matches_published_process() {
 #[path = "../../../services/issuance/tests/support/canvas_worker_effect_expiry.rs"]
 mod canvas_worker_effect_expiry;
 
-#[path = "../../../services/issuance/tests/support/canvas_worker_roster_metadata.rs"]
+#[path = "support/canvas_worker_roster_metadata.rs"]
 mod canvas_worker_roster_metadata;
 
 const ROSTER_DATABASE_CASES: &[&str] = &[
