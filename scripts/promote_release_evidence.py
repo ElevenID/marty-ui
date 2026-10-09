@@ -25,7 +25,6 @@ REQUIRED_STACK_COMPONENTS = {
     "marty-core-python",
     "marty-verification-python",
     "marty-iso18013-python",
-    "marty-credentials-issuance",
     "marty-integration-tests",
     "marty-ui",
 }
@@ -143,6 +142,15 @@ def validate_stack_manifest(
     _require(
         not missing,
         f"Stack manifest is missing required components: {', '.join(sorted(missing))}",
+    )
+    _require(
+        "marty-credentials-issuance" not in by_name
+        and all(
+            artifact.get("type") != "oci"
+            for name, component in by_name.items() if name != "marty-ui"
+            for artifact in component["artifacts"]
+        ),
+        "Rust-only stack manifest contains a retired external issuance image",
     )
     ui = by_name["marty-ui"]
     _require(

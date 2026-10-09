@@ -722,31 +722,13 @@ jobs:
           echo "${API_CORE_DIGEST#sha256:}  /tmp/marty-api-core.tgz" | sha256sum --check --strict
           echo "${CLI_DIGEST#sha256:}  /tmp/marty-cli.tgz" | sha256sum --check --strict
           npm install --global /tmp/marty-api-core.tgz /tmp/marty-cli.tgz
-      - name: Validate upgrade and rollback image roles
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Render the exact Rust-only public stack images
         working-directory: integration-tests
         shell: bash
         run: |
-          previous_tag=""
-          while IFS= read -r candidate; do
-            if [ "$(gh release view "$candidate" --repo ElevenID/marty-ui --json assets \
-              --jq 'any(.assets[]; .name == "stack-manifest.json")')" = "true" ]; then
-              previous_tag="$candidate"
-              break
-            fi
-          done < <(gh release list --repo ElevenID/marty-ui --limit 20 --json tagName,isDraft \
-            --jq '.[] | select(.isDraft == false and .tagName != env.GITHUB_REF_NAME) | .tagName')
-          args=(--manifest stack-manifest.json --output .env.stack --pull)
-          if [ -n "$previous_tag" ]; then
-            mkdir previous
-            gh release download "$previous_tag" --repo ElevenID/marty-ui \
-              --pattern stack-manifest.json --dir previous
-            args+=(--previous-manifest previous/stack-manifest.json)
-          else
-            echo "No previous public stack release; rollback comparison begins with the next release."
-          fi
-          python scripts/render_stack_env.py "${args[@]}"
+          set -euo pipefail
+          python scripts/render_stack_env.py \
+            --manifest stack-manifest.json --output .env.stack --pull
           docker compose --env-file .env.stack config --quiet
       - name: Run the artifact-only public integration suite
         working-directory: integration-tests
