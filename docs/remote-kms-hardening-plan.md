@@ -7698,3 +7698,65 @@ than counting every executable left in `target/debug/deps`. Bash syntax and
 diff checks pass locally. This is a CI selection correction, not a change to
 the signing-document contract itself; hold it with the local lint correction
 until the still-running Canvas, OpenBao and image lanes finish.
+
+Authenticator follow-up source audit found a broader local-key surface beyond
+the Rust dependency graph. The web Dart `MartyWasm` interop still exposes
+`generate_p256_key`, `generate_ed25519_key` and a raw issuer-JWK credential
+creation call, although the hardened Credentials WASM branch removes those
+exports. `SpruceIdPlatformServiceWeb.createDid` and `generateKeyPair` call the
+removed key generators. The native `SpruceIdPlatformService` exposes the same
+channel methods; iOS `W3CMethodHandler.createDID` and `PKIMethodHandler`
+generate `KeyManager` signing keys, while Android's
+`SpruceIdHandlerRefactored.createDid` calls SDK `generateSigningKey` and reads
+the signing key's JWK. These handlers are callable even where no current view
+invokes them. The Authenticator consumer PR must remove these local-key
+methods from reachable production channel routes and Dart/WASM wrappers,
+preserve public DID resolution/verification and the active wallet issuance and
+presentation flows, and verify that no native or browser path can mint or
+export a private signing key. Do not interpret the hardened Rust dependency
+pin or a green bridge compile as whole-application KMS-only proof.
+The Android handler also creates a default SDK signing key at initialization
+and uses its `Signer` for OID4VCI proof of possession; its credential-signing
+route can create another key on demand. iOS `SignerAdapter` can generate an
+SDK signing key too. These are active holder-wallet integration paths, not
+just dormant wrappers. A KMS-only Authenticator release therefore needs a
+remote-custody holder proof implementation or an explicit removal of those
+wallet operations, followed by native and browser flow tests. Keep this gap
+open until the actual platform signer call graph is denied or remote-backed.
+
+UI run `37882379709` has now passed its packaged OpenBao DIDComm plugin
+image lane, including the coordinated PostgreSQL/Raft integration-secret
+restore probe that failed without diagnostics in the previous run. The Rust
+service images lane also passed. Rust lint and database-contract CI selection
+fixes remain local for the next grouped push; the Canvas public-image lane
+is still building its packaged image.
+
+The Authenticator short-target Windows debug build reached the Rust bridge
+after avoiding a vendored OpenSSL long-path compiler failure. It found six
+Core API incompatibilities: four ZK-prover symbols were gated by Core's
+explicit `prover` feature, one `HashMap::get` call needed a borrowed claim
+name, and `WalletEngine::create_proof_jwt` no longer exists. The mechanical
+ZK feature and borrow corrections are local and are being rechecked. Core's
+replacement `prepare_proof_jwt` returns a public-JWK-bound signing input for
+an opaque external signer; it does not create a JWT. Authenticator has no
+remote-custody completion at that bridge boundary. The current generated Dart
+binding has no non-generated Dart caller, but the Rust export is reachable.
+Replace or remove that export only after designing the remote holder signer
+contract and validating the actual OID4VCI wallet flow; do not silently
+reinterpret a signing input as a complete proof JWT or restore local JWK
+signing.
+
+The Rust bridge export `wallet_create_proof_jwt` has no non-generated Dart
+caller and cannot satisfy its contract after Core removed local signing. It
+has been removed in the isolated Authenticator candidate, rather than left
+as a misleading or silently failing API. Regenerate the Flutter Rust Bridge
+2.13 bindings and confirm the native/web consumer still builds; this does
+not address Android/iOS SDK signers or add the future remote holder proof.
+
+UI run `37882379709` is complete. The Canvas lane passed its packaged public
+selfhost image, KMS fixture probes and isolated database suites; the OpenBao
+plugin restore and Rust service-image lanes also passed. Only Rust Lint and
+Packaging (`duplicate_mod`) and Rust contracts (duplicate executable hash in
+the CI runner) failed, plus their aggregate gate. Both corrections are
+already locally validated and grouped for one push to PR #1192. The next
+exact-head run must turn those two lanes green before UI is ready for review.
