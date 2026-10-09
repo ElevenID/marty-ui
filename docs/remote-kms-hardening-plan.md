@@ -8460,3 +8460,12 @@ removing it restored success. Adding only an `encrypted_jwk_json` column to
 success. This prevents an existing schema with private-key storage from being
 accepted silently. The separate release-image qualifier checks all service
 schemas; full assembled-stack and image qualification remain outstanding.
+
+The aggregate beta acceptance collector now queries the live PostgreSQL
+container for private-key tables and columns after checking the exact Rust
+Issuance migration ledger. It reuses the self-host release qualifier's catalog
+query, so a signed aggregate deployment cannot be accepted if another service
+reintroduces retired key storage. Its negative fixture injects
+`issuer_signing_keys.encrypted_jwk_json` and fails; all 17 focused collector
+tests pass locally. This adds a full-database acceptance gate but is not yet a
+successful run against the combined signed release artifacts.

@@ -20,6 +20,7 @@ try:
     from .prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
     from .prepare_passport_beta_aggregate_handoff import verify_fence
     from .probe_passport_beta_host import beta_psql, ids, run as host_run
+    from .qualify_selfhost_migrations import PRIVATE_KEY_SCHEMA_QUERY
 except ImportError:
     from check_passport_beta_fence_authority import (
         manifest_source, verify_issuance_attestation,
@@ -33,6 +34,7 @@ except ImportError:
     from prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
     from prepare_passport_beta_aggregate_handoff import verify_fence
     from probe_passport_beta_host import beta_psql, ids, run as host_run
+    from qualify_selfhost_migrations import PRIVATE_KEY_SCHEMA_QUERY
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -71,6 +73,9 @@ def _probe_native_marker(plan: dict[str, Any], intent: dict[str, Any]) -> None:
     )
     require(ledger == ",".join(ISSUANCE_MIGRATION_VERSIONS),
             "Aggregate beta Rust issuance migration ledger differs")
+    require(not beta_psql(PRIVATE_KEY_SCHEMA_QUERY, host_run,
+                          plan["postgres_container_id"]),
+            "Aggregate beta database contains private-key storage")
     verify_fence(intent, host_run)
 
 
