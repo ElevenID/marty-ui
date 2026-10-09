@@ -8512,3 +8512,15 @@ several jobs green and no failures at first review. Do not close #1203 or
 assume those newer release-gate changes are in UI PR #1192; reconcile them in
 one later grouped KMS batch after both active heads are qualified, preserving
 the KMS TLS/custody additions and reviewing the final diff for feature loss.
+
+The newer PR #1203 head `8341eca92` merged into the local KMS branch without
+textual conflicts in merge commit `d97f5822f`. The 18-file incoming delta
+removes retired Credentials-image CD/SBOM/CI requirements, rejects that image
+in the Rust-only stack, binds the Kubernetes services reference to the exact
+attested image, and observes Gateway DID-web consumers in the affected-Rust
+planner. No KMS custody/TLS files changed in this merge. The nine directly
+changed test files passed locally: 298 tests, one skip, 316 subtests. The
+staged diff and merged tree were checked for conflict markers and whitespace.
+The local merge remains unpushed while both the current KMS and Rust-only PR
+exact-head CI runs finish; its replacement release gates still require
+assembled/artifact qualification and a rollback-path review.
