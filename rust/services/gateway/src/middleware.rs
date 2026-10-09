@@ -105,6 +105,7 @@ impl MipError {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionIdentity {
     pub user_id: String,
+    pub authentication_time_unix: Option<i64>,
     pub email: Option<String>,
     pub username: Option<String>,
     pub given_name: Option<String>,
@@ -154,6 +155,7 @@ pub enum AuthenticationSource {
 pub struct GatewayIdentity {
     pub source: AuthenticationSource,
     pub user_id: String,
+    pub authentication_time_unix: Option<i64>,
     pub user_email: Option<String>,
     pub user_domain: Option<String>,
     pub session_organization_id: Option<String>,
@@ -262,6 +264,7 @@ fn session_context(identity: SessionIdentity) -> GatewayIdentity {
     GatewayIdentity {
         source: AuthenticationSource::Session,
         user_id: identity.user_id,
+        authentication_time_unix: identity.authentication_time_unix,
         user_email: identity.email,
         user_domain,
         session_organization_id: identity.organization_id,
@@ -280,6 +283,7 @@ fn api_key_context(identity: ApiKeyIdentity) -> GatewayIdentity {
     GatewayIdentity {
         source: AuthenticationSource::ApiKey,
         user_id: format!("api_key:{api_key_id}"),
+        authentication_time_unix: None,
         user_email: None,
         user_domain: None,
         session_organization_id: identity.organization_id,
@@ -415,6 +419,7 @@ mod tests {
             match self.behavior {
                 "session_valid" => Ok(Some(SessionIdentity {
                     user_id: "user-1".into(),
+                    authentication_time_unix: Some(1_700_000_000),
                     email: Some("user@example.com".into()),
                     organization_id: Some("org-1".into()),
                     ..SessionIdentity::default()
@@ -595,6 +600,41 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn oidc_authentication_time_is_bound_to_session_identity_only() {
+        let session = authenticate(
+            &AuthenticationInput {
+                required: true,
+                cookies: BTreeMap::from([("sessionId".into(), "session-1".into())]),
+                ..AuthenticationInput::default()
+            },
+            &ScriptedProvider {
+                behavior: "session_valid",
+            },
+        )
+        .await;
+        let AuthenticationOutcome::Authenticated(session) = session else {
+            panic!("session authentication must succeed");
+        };
+        assert_eq!(session.authentication_time_unix, Some(1_700_000_000));
+
+        let api_key = authenticate(
+            &AuthenticationInput {
+                required: true,
+                headers: BTreeMap::from([("x-api-key".into(), "mk_live_fixture".into())]),
+                ..AuthenticationInput::default()
+            },
+            &ScriptedProvider {
+                behavior: "api_key_valid",
+            },
+        )
+        .await;
+        let AuthenticationOutcome::Authenticated(api_key) = api_key else {
+            panic!("API-key authentication must succeed");
+        };
+        assert_eq!(api_key.authentication_time_unix, None);
     }
 
     #[tokio::test]

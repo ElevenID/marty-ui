@@ -4769,6 +4769,7 @@ mod tests {
             } else {
                 "api_key:key-1".into()
             },
+            authentication_time_unix: None,
             user_email: None,
             user_domain: None,
             session_organization_id: organization.map(str::to_owned),
@@ -7037,6 +7038,7 @@ mod tests {
         let session_identity = GatewayIdentity {
             source: AuthenticationSource::Session,
             user_id: "user-1".into(),
+            authentication_time_unix: None,
             user_email: None,
             user_domain: None,
             session_organization_id: Some("stale-session-org".into()),

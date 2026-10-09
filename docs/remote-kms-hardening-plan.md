@@ -9617,3 +9617,33 @@ pairing ticket. If an independent device ceremony is selected instead, prove
 its user-presence binding and stolen-session resistance before adding public
 routes. The existing ticket store and keyless registration alone do not meet
 that authorization gate.
+
+2026-10-09 local pairing step-up prerequisite: Auth's `ValidateSession`
+contract now includes an optional Unix authentication time sourced only from
+the nonce-validated, signed OIDC ID-token claims stored with the session. It
+omits absent, nonnumeric, nonpositive and implausibly future `auth_time`; it
+does not substitute session creation or activity time. The existing Keycloak
+login request now sends `max_age=0` alongside its existing `prompt=consent
+login` so the provider is explicitly asked for a new authentication event.
+Gateway carries the optional timestamp only on session identities; API-key
+identities never receive one. Auth's focused gRPC and OIDC suites passed
+(four and five tests), and targeted formatting passed. Gateway's focused
+test passed. Self-review found that credential-login callbacks could copy
+validated claims from an account token exchange into a new session. That
+exchange does not prove a fresh interactive login, so the callback now strips
+`auth_time` while preserving other linked-account claims; its dedicated
+regression test and the four-test credential callback suite passed. Both
+Auth and Gateway all-target Clippy checks passed with warnings denied, and
+their targeted formatting checks passed. This is a prerequisite, not a public
+pairing
+authorization: ticket issuance must still require a recent claim, correct
+user/tenant membership and explicit step-up policy, with a wallet flow and
+replay/expiry acceptance before exposing the route. Neither the Auth change
+nor the previously local K10 schema-qualifier changes are in published UI
+head `6cc8159a5` or its hosted CI run `37960926646`.
+
+At the 17:03 UTC checkpoint, run `37960926646` had 20 successful jobs and no
+failures; only Rust Service Tests (canvas) was still running. The OpenBao
+plugin-image, Rust service contracts, service images, Rust Lint and Packaging,
+release contracts and UI lanes had passed on the published head. Keep the
+local candidate changes batched until that exact-head run is terminal.

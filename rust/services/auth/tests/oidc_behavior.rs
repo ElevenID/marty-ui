@@ -117,6 +117,7 @@ fn authorization_registration_and_logout_urls_preserve_keycloak_contract() {
         query.get("prompt").map(AsRef::as_ref),
         Some("consent login")
     );
+    assert_eq!(query.get("max_age").map(AsRef::as_ref), Some("0"));
     assert_eq!(
         query.get("code_challenge_method").map(AsRef::as_ref),
         Some("S256")
@@ -137,6 +138,9 @@ fn authorization_registration_and_logout_urls_preserve_keycloak_contract() {
         "/realms/marty/protocol/openid-connect/registrations"
     );
     assert!(!registration.query_pairs().any(|(name, _)| name == "prompt"));
+    assert!(!registration
+        .query_pairs()
+        .any(|(name, _)| name == "max_age"));
 
     let logout = provider
         .logout_url(&OidcLogoutRequest {
