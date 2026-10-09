@@ -8000,3 +8000,20 @@ Grouped UI follow-up `f9317b67a` is pushed to PR #1192, and CI run
 `37891713276` is queued for that exact head. Its result is pending. The prior
 `d2b56df78` run finished with only the release source-assertion lane failed;
 the native, Canvas, OpenBao and image lanes passed on that prior head.
+
+PR #1192's draft description has been refreshed around the current grouped
+native/deployment behavior, exact prior-head hosted evidence, Core/Credentials
+dependencies and remaining release gates. This metadata edit did not change
+the commit head or restart CI. The PR remains draft while run `37891713276`
+and artifact/cutover qualification are pending.
+
+Test-boundary inventory follow-up: active Canvas published-worker Python
+reference oracles still seed a synthetic `INTEGRATION_SECRET_MASTER_KEY` in
+`run_canvas_worker_rest_oracle.py` and
+`run_canvas_worker_startup_oracle.py`. They are isolated historical parity
+fixtures, not native production configuration, but they are still executable
+test code. Do not infer KMS-only test completeness from the production graph.
+After the native published-process parity gate is qualified, replace or retire
+these raw-key reference executions and preserve only non-executable frozen
+evidence needed for review. Keep rejection tests that supply synthetic
+private-material markers to prove fail-closed behavior.
