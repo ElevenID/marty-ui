@@ -53,6 +53,7 @@ def test_exact_signed_rust_release_binds_kubernetes_services_image(tmp_path: Pat
     "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "f" * 64,
     "ghcr.io/elevenid/marty-ui-oss/services:latest",
     "docker.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+    "ghcr.io/other/services@" + SERVICES_DIGEST,
 ])
 def test_unbound_or_mutable_image_is_refused(tmp_path: Path, reference: str) -> None:
     path = release(tmp_path)

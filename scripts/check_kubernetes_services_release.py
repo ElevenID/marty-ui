@@ -70,7 +70,7 @@ def validate(manifest_path: Path, reference: str, expected_source: str, *,
         if sorted(item["uri"] for item in artifacts if item["type"] == "oci") \
                 != sorted(UI_IMAGES.values()):
             raise ValueError(REFUSAL)
-        if reference.rsplit("@", 1)[1] != images["services"]["digest"]:
+        if reference != images["services"]["reference"]:
             raise ValueError(REFUSAL)
         digests = {images[role]["uri"]: images[role]["digest"] for role in UI_IMAGES}
         if attest(manifest_path, digests, source_commit) is not True:
