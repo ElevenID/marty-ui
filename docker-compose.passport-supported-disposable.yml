@@ -322,6 +322,7 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       ISSUANCE_GRPC_ENABLED: "true"
       ISSUANCE_GRPC_PORT: "9005"
+      GRPC_INSECURE_ALLOWED: "true"
       ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       PASSPORT_NATIVE_HTTP_ENABLED: "true"
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: "true"

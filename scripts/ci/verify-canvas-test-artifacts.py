@@ -8,6 +8,7 @@ from pathlib import Path
 TEST_TARGETS = (
     ("marty-canvas-worker-acceptance", "canvas_published_worker_contract", "test"),
     ("marty-canvas-acceptance", "canvas_published_schema_contract", "test"),
+    ("marty-selfhost-acceptance", "selfhost_public_image_contract", "test"),
     ("marty-issuance-service", "canvas_oauth_behavior", "test"),
     ("marty-issuance-service", "issuance-behavior", "test"),
     ("marty-issuance-service", "marty_issuance_service", "lib"),

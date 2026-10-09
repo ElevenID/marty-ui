@@ -583,7 +583,7 @@ async fn worker_dispatch_reference_matches_published_process() {
 #[path = "../../../services/issuance/tests/support/canvas_worker_effect_expiry.rs"]
 mod canvas_worker_effect_expiry;
 
-#[path = "../../../services/issuance/tests/support/canvas_worker_roster_metadata.rs"]
+#[path = "support/canvas_worker_roster_metadata.rs"]
 mod canvas_worker_roster_metadata;
 
 const ROSTER_DATABASE_CASES: &[&str] = &[
@@ -1612,10 +1612,23 @@ async fn worker_validation_repository_matches_frozen_errors() {
         .filter(|case| case["boundary"] != "processor_dispatch")
         .collect::<Vec<_>>();
     assert_eq!(repository_cases.len(), 13);
+    let retained_database_cases = [
+        "binding_platform_mismatch", // real scope JOIN and missing row
+        "platform_archived",         // real inactive lookup and durable disable
+        "stale_configuration",       // real generation lookup and durable disable
+        "application_removed_after_target_read", // application existence after read
+        "candidate_removed_after_target_read", // candidate existence after read
+    ];
+    assert_eq!(retained_database_cases.len(), 5);
+    assert!(retained_database_cases
+        .iter()
+        .all(|name| { repository_cases.iter().any(|case| case["name"] == *name) }));
     // The published migration probe leaves a pristine, disconnected database.
     // Clone it into a separate database for each case, so we keep independent
-    // schemas and frozen observations without starting thirteen PostgreSQL
-    // servers or re-running the same published migrations thirteen times.
+    // schemas and frozen observations without starting five PostgreSQL
+    // servers or re-running the same published migrations five times. The
+    // complete thirteen-case decision table has a fast owner in Issuance;
+    // the separate whole-process and pinned-reference matrices remain full.
     let timing = canvas_published_database::repository_matrix_timer(
         canvas_published_database::RepositoryMatrix::Validation,
     );
@@ -1624,7 +1637,10 @@ async fn worker_validation_repository_matches_frozen_errors() {
             .await
             .unwrap();
     let admin = published_template_admin(&owned).await;
-    for case in repository_cases {
+    for case in repository_cases
+        .into_iter()
+        .filter(|case| retained_database_cases.contains(&case["name"].as_str().unwrap()))
+    {
         let name = case["name"].as_str().unwrap();
         let (database_name, pool) = clone_published_case(&owned, &admin, name).await;
         let fixture =

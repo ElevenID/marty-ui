@@ -29,7 +29,6 @@ marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-release-evidence = { path = "../release-evidence" }
-marty-selfhost-bundle = { path = "../selfhost-bundle" }
 marty-verification = { workspace = true, features = ["csca"] }
 mmf-platform.workspace = true
 mmf-security.workspace = true
@@ -41,7 +40,6 @@ reqwest.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
@@ -54,7 +52,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
-zip.workspace = true
 
 [[test]]
 name = "canvas_published_schema_contract"

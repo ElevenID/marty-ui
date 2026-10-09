@@ -751,12 +751,13 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 4
+    assert verified[-1] == b"" and len(verified) == 5
     worker_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert worker_tests == [
         "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
         "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
+        "rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs",
     ]
     expected = {
         "all": "false",
@@ -772,7 +773,7 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
     }
     assert (
         _classify_changed_paths(worker_tests, tmp_path, include_rust_plan=True)
-        == [expected] * 3
+        == [expected] * 4
     )
     assert _classify_changed_paths(
         worker_tests, tmp_path, combined=True, include_rust_plan=True
@@ -780,6 +781,7 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
     for paths in (
         [worker_tests[0], "docs/architecture-feedback-improvement-plan.md"],
         [worker_tests[1], "rust/crates/canvas-worker-acceptance/src/lib.rs"],
+        [worker_tests[-1], "rust/services/issuance/tests/support/canvas_published_database.rs"],
         ["rust/crates/canvas-worker-acceptance/tests/support/unreviewed.rs"],
         [worker_tests[2] + "\nother"],
     ):
@@ -793,6 +795,11 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
     )[0]
     assert without_proof["rust_runtime"] == "true"
     assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    roster_without_proof = _classify_changed_paths(
+        [worker_tests[-1]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert roster_without_proof["rust_runtime"] == "true"
+    assert roster_without_proof["rust_matrix"] == '["canvas","contracts"]'
     queued = _classify_changed_paths(
         [worker_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
@@ -2763,10 +2770,13 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
 
 
 def _assert_required_canvas_target_completion(published: str) -> None:
-    assert "(( composition_status == 0 && worker_status == 0 ))" in published
-    assert published.index(
-        "(( composition_status == 0 && worker_status == 0 ))"
-    ) < published.index("if (( expected_skipped_config_tests == 0 )); then")
+    target_success = (
+        "(( composition_status == 0 && worker_status == 0 && selfhost_status == 0 ))"
+    )
+    assert target_success in published
+    assert published.index(target_success) < published.index(
+        "if (( expected_skipped_config_tests == 0 )); then"
+    )
     assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
     assert (
         published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2

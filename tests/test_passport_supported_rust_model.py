@@ -65,6 +65,7 @@ def safe_model(root: Path) -> dict:
             "/run/secrets/passport_beta_reconciliation_operator_token",
         "ISSUER_BASE_URL": "https://localhost:29876",
         "ISSUANCE_GRPC_ENABLED": "true", "ISSUANCE_GRPC_PORT": "9005",
+        "GRPC_INSECURE_ALLOWED": "true",
         "CT_GRPC_TARGET": "credential-template:9003",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
         "PERSONALIZATION_BUREAU_URL": "http://passport-beta-bureau:8020",
@@ -687,6 +688,8 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED="true"), "external provider"),
     (lambda model, root: model["services"]["issuance-native"]["environment"].update(
         PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="unbound-provider"), "external provider"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].pop(
+        "GRPC_INSECURE_ALLOWED"), "surface environment selectors"),
     (lambda model, root: model["services"]["passport-callback-signer"]["environment"].update(
         BAO_TOKEN="raw-secret"), "isolated beta KMS"),
     (lambda model, root: model["services"]["passport-beta-bureau"]["environment"].update(

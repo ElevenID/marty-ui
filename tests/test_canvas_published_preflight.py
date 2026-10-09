@@ -43,6 +43,20 @@ FAST_MODE_SKIPS = [
     "reference_matches_published",
 ]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
+SELFHOST_CASES = (
+    "packaged_remote_secret_fixture_requires_verified_https",
+    "selfhost_public_image_loader_isolated",
+    "selfhost_public_image_loader_child",
+    "selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values",
+    "selfhost_packaged_runtime::tests::database_authentication_failure_never_qualifies_as_healthy",
+    "selfhost_packaged_runtime::tests::process_control_child",
+    "selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery",
+    "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure",
+    "selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch",
+    "selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts",
+    "selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed",
+    "selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts",
+)
 PINS = [
     f"registry.invalid/{name}@sha256:{letter * 64}"
     for name, letter in (("postgres", "a"), ("issuance", "b"))
@@ -177,6 +191,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert 'tail --pid="$pid"' in script
     assert script.count(': > "$composition_log"') == 1
     assert script.count(': > "$worker_log"') == 1
+    assert script.count(': > "$selfhost_log"') == 1
     assert script.index("trap cleanup_target_logs EXIT") < script.index(
         ': > "$composition_log"'
     )
@@ -187,6 +202,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         in script
     )
     assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in script
+    assert (
+        'relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" &'
+        in script
+    )
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
@@ -407,9 +426,11 @@ elif [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target ]]; then
 else
   [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
-  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
+  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract || "$4" == selfhost_public_image_contract ]] || exit 90
   if [[ "$4" == canvas_published_worker_contract ]]; then
     [[ "$7" == marty-canvas-worker-acceptance ]] || exit 90
+  elif [[ "$4" == selfhost_public_image_contract ]]; then
+    [[ "$7" == marty-selfhost-acceptance ]] || exit 90
   else
     [[ "$7" == marty-canvas-acceptance ]] || exit 90
   fi
@@ -420,6 +441,8 @@ else
     printf './contract\n./different-contract\n'
   elif [[ "$4" == canvas_published_worker_contract ]]; then
     printf './worker-contract\n'
+  elif [[ "$4" == selfhost_public_image_contract ]]; then
+    printf './selfhost-contract\n'
   else
     printf './contract\n'
   fi
@@ -544,6 +567,11 @@ fi
         contract.read_bytes() + b"\n# distinct worker executable\n"
     )
     worker_contract.chmod(0o755)
+    selfhost_contract = tmp_path / "selfhost-contract"
+    selfhost_contract.write_bytes(
+        contract.read_bytes() + b"\n# distinct selfhost executable\n"
+    )
+    selfhost_contract.chmod(0o755)
     worker_binary = tmp_path / "worker-binary"
     worker_binary.write_bytes(worker_contract.read_bytes())
     worker_binary.chmod(0o755)
@@ -575,7 +603,11 @@ fi
             if registrations is not None
             else [
                 f"{name}: test"
-                for name in sorted(set(required_registrations()) | set(MIGRATED_CASES))
+                for name in sorted(
+                    set(required_registrations())
+                    | set(MIGRATED_CASES)
+                    | set(SELFHOST_CASES)
+                )
             ]
         )
         composition = [
@@ -592,10 +624,20 @@ fi
                 )
             )
         ]
-        worker = [line for line in lines if line not in composition]
+        selfhost = [
+            line for line in lines if line.partition(": test")[0] in SELFHOST_CASES
+        ]
+        composition = [line for line in composition if line not in selfhost]
+        worker = [
+            line for line in lines if line not in composition and line not in selfhost
+        ]
         if duplicate_across_targets:
             composition.append(f"{TARGET}: test")
-        for name, subset in (("contract", composition), ("worker-contract", worker)):
+        for name, subset in (
+            ("contract", composition),
+            ("worker-contract", worker),
+            ("selfhost-contract", selfhost),
+        ):
             (tmp_path / f"registrations-{name}").write_text(
                 "\n".join(subset) + "\n", encoding="utf-8"
             )
@@ -1050,6 +1092,23 @@ def test_opt_in_worker_same_count_substitution_fails_before_image_pull(shell_cas
     assert not any(call[0] == "docker" for call in calls)
 
 
+@pytest.mark.parametrize("substitution", [False, True])
+def test_selfhost_case_inventory_fails_closed_before_image_pull(
+    shell_case, substitution
+):
+    names = sorted(
+        set(required_registrations()) | set(MIGRATED_CASES) | set(SELFHOST_CASES)
+    )
+    removed = "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure"
+    cases = [f"{name}: test" for name in names if name != removed]
+    if substitution:
+        cases.append("substituted_selfhost_cleanup_case: test")
+    result, calls = shell_case(registrations=cases)
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+    assert not any("--test-threads=4" in call for call in calls)
+
+
 @pytest.mark.parametrize("arguments", [[], ["full"]])
 def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     shell_case, arguments
@@ -1065,9 +1124,10 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         "issuance_named_peers::kms_tests::scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:8] == [
+    assert children[:9] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
+        ["child", "selfhost-contract", "1", "--list"],
         ["child", "contract", "1", "--list", "--skip", json_serial],
         ["child", "worker-contract", "1", "--list", "--skip", serial],
         [
@@ -1100,7 +1160,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[8:]) == sorted(
+    assert sorted(children[9:]) == sorted(
         [
             [
                 "child",
@@ -1117,6 +1177,13 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
                 "1",
                 "--skip",
                 serial,
+                "--nocapture",
+                "--test-threads=4",
+            ],
+            [
+                "child",
+                "selfhost-contract",
+                "1",
                 "--nocapture",
                 "--test-threads=4",
             ],
@@ -1201,11 +1268,17 @@ def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
     result, calls = shell_case(failure="barrier")
     assert result.returncode == 0, result.stderr
     full = [call for call in calls if "--test-threads=4" in call]
-    assert {call[1] for call in full} == {"contract", "worker-contract"}
+    assert {call[1] for call in full} == {
+        "contract",
+        "worker-contract",
+        "selfhost-contract",
+    }
     assert "Canvas composition target exit: 0" in result.stdout
     assert "Canvas worker target exit: 0" in result.stdout
+    assert "Selfhost target exit: 0" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target selfhost-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
 
 
@@ -1232,14 +1305,18 @@ def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
     assert {call[1] for call in calls if "--test-threads=4" in call} == {
         "contract",
         "worker-contract",
+        "selfhost-contract",
     }
     assert "Canvas composition target exit:" in result.stdout
     assert "Canvas worker target exit:" in result.stdout
+    assert "Selfhost target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target selfhost-contract" in result.stdout
     assert {call[1] for call in calls if call[0] == "stopped"} == {
         "contract",
         "worker-contract",
+        "selfhost-contract",
     }
     assert not list(tmp_path.glob("canvas-targets.*"))
 
@@ -1252,6 +1329,7 @@ def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
     live = result.stdout.split("Canvas composition target exit:", 1)[0]
     assert live.count('"name":"contract"') == 1
     assert live.count('"name":"worker-contract"') == 1
+    assert live.count('"name":"selfhost-contract"') == 1
     assert (
         result.stdout.count('MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"')
         == 2
@@ -1274,6 +1352,12 @@ def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
         )
         == 1
     )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"selfhost-contract"'
+        )
+        == 1
+    )
 
 
 def test_explicit_database_close_cannot_emit_second_cleanup_timing():
@@ -1290,18 +1374,24 @@ def test_explicit_database_close_cannot_emit_second_cleanup_timing():
     assert "self.cleanup()" in source.split("impl Drop for PublishedDatabase {", 1)[1]
 
 
-@pytest.mark.parametrize("failed", ["contract", "worker-contract"])
+@pytest.mark.parametrize("failed", ["contract", "worker-contract", "selfhost-contract"])
 def test_full_target_failure_is_not_masked_by_other_target(
     shell_case, tmp_path, failed
 ):
     result, calls = shell_case(failure=f"{failed}-full")
     assert result.returncode != 0
     full = [call for call in calls if "--test-threads=4" in call]
-    assert {call[1] for call in full} == {"contract", "worker-contract"}
+    assert {call[1] for call in full} == {
+        "contract",
+        "worker-contract",
+        "selfhost-contract",
+    }
     assert "Canvas composition target exit:" in result.stdout
     assert "Canvas worker target exit:" in result.stdout
+    assert "Selfhost target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target selfhost-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
 
 
@@ -1381,7 +1471,12 @@ def test_real_jq_selects_only_the_owned_non_test_worker_binary(shell_case):
 
 
 def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
-    registrations = [f"{name}: test" for name in required_registrations()]
+    registrations = [
+        f"{name}: test"
+        for name in sorted(
+            set(required_registrations()) | set(MIGRATED_CASES) | set(SELFHOST_CASES)
+        )
+    ]
     registrations.append(
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings_extra: test"
     )
@@ -1550,7 +1645,11 @@ def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, mis
     names = required_registrations()
     assert missing in names
     result, calls = shell_case(
-        registrations=[f"{name}: test" for name in names if name != missing]
+        registrations=[
+            f"{name}: test"
+            for name in sorted(set(names) | set(MIGRATED_CASES) | set(SELFHOST_CASES))
+            if name != missing
+        ]
     )
     assert result.returncode != 0
     assert all(call[3:] == ["--list"] for call in calls if call[0] == "child")

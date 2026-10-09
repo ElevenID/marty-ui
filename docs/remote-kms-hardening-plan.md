@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests removed, native HTTP owner required and Python gRPC runtime disabled. Grouped draft Credentials PR #313 removes unverified JWT parser exports; its prior head `5eaedab` passed 11 CI jobs. Current head `7b065b0` pins final Core `6855721`, passes the local KMS graph guard and awaits new exact-head CI. Publishable Credentials wheel, browser verification, replacement vectors and release artifact qualification remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 prior head `f9317b67a` passed 23 CI jobs; current `5d26b11e3` pins final Core and awaits exact-head CI. Credentials draft PR #313 prior head `5eaedab` passed 11 CI jobs; current `7b065b0` awaits checks. Core PR #355 current `6855721` includes public-vector test and quality-date correction, with hosted checks queued/running. Verifier PR #154 prior `4e40ba0` passed all workflows; current `19431ec` awaits checks. Authenticator draft PR #57 current `77dda21` batches quality, graph and generated-hash corrections; its hosted checks await results. None is release qualified or merged; cutover/recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 is merged. UI draft PR #1192 prior head `f9317b67a` passed 23 CI jobs; the Core-pinned `5d26b11e3` became conflicting with main, so a locally validated merge is being prepared for new exact-head CI. Credentials draft PR #313 prior head `5eaedab` passed 11 CI jobs; current `7b065b0` awaits checks. Core PR #355 current `6855721` passed organization quality and release wheel preflight while main CI runs. Verifier PR #154 current `19431ec` passed all exact-head workflows. Authenticator draft PR #57 head `1a3bb73` includes quality, graph and generated-hash corrections; its prior head `77dda21` passed Rust Bridge Codegen, and the final Dart formatting check passes locally. None is release qualified or merged; cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses one shared private-material policy across signing-key documents and the named service JSON stores. A disposable PostgreSQL 16 run of the candidate Rust Issuance migration created 31 tables without `issuer_signing_keys`; earlier focused storage checks pass. A read-only local-stack audit found an empty historical `issuer_signing_keys.encrypted_jwk_json` table still present in self-host PostgreSQL; beta has no private-key-named table or column. Full assembled-schema, runtime-write, self-host rebuild/cutover and release-artifact proof remain. |
 
 ### First execution steps
@@ -8318,3 +8318,35 @@ locked metadata resolves one Core source; mobile custody and public WASM
 source audits pass. New Flutter Test `37897669658`, Flutter Build
 `37897669670`, and Rust Bridge Codegen `37897669694` are queued. All those
 new-head hosted outcomes remain unqualified until terminal.
+
+Main advanced while UI PR #1192 was in review and GitHub reported its head
+conflicting, suppressing the new PR check run. A local merge reconciles four
+conflicts: the Rust workspace member list retains KMS key-material policy and
+deployment-profile crates while adopting the new selfhost-acceptance crate;
+the KMS remote-secret HTTPS fixture and synthetic secret mount test now live
+with the extracted selfhost target; the Canvas runner retains disposable
+OpenBao cleanup and all three parallel target logs; and its Python fake-shell
+expectation covers the extra KMS signer calls plus the third target. The
+untracked generated `%SystemDrive%` directory remains untouched.
+
+After that merge, Rust 1.95 compiled both `marty-selfhost-acceptance` and
+`marty-canvas-acceptance` test executables. The selfhost target lists twelve
+tests, and its real disposable HTTPS remote-secret fixture passed locally.
+The full Canvas preflight fake-shell suite passed **222 tests** in a local
+Linux container with GNU `tail` and `jq`; Git Bash on Windows timed out in
+the phase-log relay, so that Windows result is not acceptance evidence.
+Additional Windows structural suites passed 134 tests, one skipped and 298
+subtests, and the selfhost runtime model/registration suites passed 30 tests.
+The final Core `6855721` locked graph guard still passes after the merge.
+Hosted exact-head CI and full packaged/native acceptance are pending once the
+merge commit is pushed.
+
+Authenticator Rust Bridge Codegen run `37897669694` passed at `77dda21`,
+confirming the generated hash and native bridge behavior on hosted Linux.
+The quality lane still found a Dart formatting difference. Dart SDK 3.12.2,
+the version bundled by CI's Flutter 3.44.6, formatted the web file; a
+project-wide `dart format --output=none --set-exit-if-changed` then reported
+zero changes. That correction is pushed in Authenticator PR #57 head
+`1a3bb7389615e0e10b4b5c8c5f25b17be2998b4c`; require its new CI result.
+Core `6855721` organization quality and release wheel preflight passed,
+while its main CI remains active. Verifier `19431ec` has green exact-head CI.

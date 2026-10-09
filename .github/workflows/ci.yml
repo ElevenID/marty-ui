@@ -184,7 +184,7 @@ jobs:
                 done
               fi
             fi
-            # Only the three tracked worker acceptance test sources may use
+            # Only the four tracked worker acceptance test sources may use
             # the published worker lane alone. The proof checks all six
             # Rust-copying Docker contexts before this PR-only narrowing.
             worker_test_only=false
@@ -195,7 +195,7 @@ jobs:
             fi
             for path in "${changed_files[@]}"; do
               case "$path" in
-                rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs) ;;
+                rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs|rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs) ;;
                 *) worker_candidate=false; break ;;
               esac
             done
@@ -204,7 +204,7 @@ jobs:
               if python3 tests/test_rust_test_only_docker_context.py \
                 --emit-verified-worker-tests > "$verified_worker_file"; then
                 mapfile -d '' -t owned_worker_tests < "$verified_worker_file"
-                if [[ ${#owned_worker_tests[@]} -eq 3 ]]; then
+                if [[ ${#owned_worker_tests[@]} -eq 4 ]]; then
                   worker_test_only=true
                   for path in "${changed_files[@]}"; do
                     owned=false
@@ -1028,10 +1028,11 @@ jobs:
                  }
                 # Resolve shared test features once; the Canvas library is an
                 # empty ownership marker guarded separately from real targets.
-                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-issuance-service \
+                 run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-selfhost-acceptance -p marty-issuance-service \
                   --lib \
                   --test canvas_published_worker_contract \
                   --test canvas_published_schema_contract \
+                  --test selfhost_public_image_contract \
                   --test canvas_oauth_behavior --test issuance-behavior \
                   --no-run --timings --message-format=json
                 # Retain package-specific feature resolution for each binary.
@@ -1520,7 +1521,7 @@ jobs:
             set +e
             ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
             PASSPORT_BUREAU_TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_bureau_test \
-              cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
+              cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance >"$RUNNER_TEMP/rust-workspace.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-workspace.status"
           ) &
           pids+=("$!")

@@ -3734,7 +3734,6 @@ dependencies = [
  "marty-issuance-service",
  "marty-oid4vci",
  "marty-release-evidence",
- "marty-selfhost-bundle",
  "marty-verification",
  "mmf-platform",
  "mmf-security",
@@ -3746,7 +3745,6 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
- "serde_yaml",
  "sha2 0.10.9",
  "sqlx",
  "tempfile",
@@ -3759,7 +3757,6 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "zip",
 ]
 
 [[package]]
@@ -4465,6 +4462,29 @@ dependencies = [
 [[package]]
 name = "marty-schema-startup"
 version = "0.1.0"
+
+[[package]]
+name = "marty-selfhost-acceptance"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "futures-util",
+ "marty-issuance-service",
+ "marty-selfhost-bundle",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2 0.10.9",
+ "sqlx",
+ "tempfile",
+ "tokio",
+ "url",
+ "uuid",
+ "zip",
+]
 
 [[package]]
 name = "marty-selfhost-bundle"

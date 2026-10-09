@@ -79,7 +79,7 @@ Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, 
 | A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Pure Python-value extraction [UI #1060](https://github.com/ElevenID/marty-ui/pull/1060), mixed-roster/body-reader unit coverage [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) merged. [#1112](https://github.com/ElevenID/marty-ui/pull/1112) moved pure self-host fixture controls and an Envoy scalar-value matrix to fast owners; [#1124](https://github.com/ElevenID/marty-ui/pull/1124), [#1126](https://github.com/ElevenID/marty-ui/pull/1126), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added layered worker/configuration and typed-transport owners. Real CLI, ZIP, Compose, Envoy-image/process, database, and published-process guarantees retain their acceptance owners. |
 | A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Provenance, producer, scenario, and input safeguards [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050), [#1055](https://github.com/ElevenID/marty-ui/pull/1055), [#1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1076](https://github.com/ElevenID/marty-ui/pull/1076)–[#1079](https://github.com/ElevenID/marty-ui/pull/1079), and [#1082](https://github.com/ElevenID/marty-ui/pull/1082) merged. [#1102](https://github.com/ElevenID/marty-ui/pull/1102) moved 33 pinned historical replays to weekly/manual full qualification while retaining native regression; [#1106](https://github.com/ElevenID/marty-ui/pull/1106) requires exact-main full qualification before stable tagging. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) guards preparer dispatch; [#1112](https://github.com/ElevenID/marty-ui/pull/1112) guards Canvas helper mount inputs. Neither establishes complete historical reference closure or authorizes additional qualification skips. |
 | A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | [UI #1064](https://github.com/ElevenID/marty-ui/pull/1064) retained fail-closed planned-skip and all-success merge-group gates; [#1080](https://github.com/ElevenID/marty-ui/pull/1080), [#1082](https://github.com/ElevenID/marty-ui/pull/1082), and [#1107](https://github.com/ElevenID/marty-ui/pull/1107) proved initial exact-input selection. [#1110](https://github.com/ElevenID/marty-ui/pull/1110), [#1112](https://github.com/ElevenID/marty-ui/pull/1112), [#1119](https://github.com/ElevenID/marty-ui/pull/1119), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added bounded test-only paths; [#1114](https://github.com/ElevenID/marty-ui/pull/1114) preserves failed timing-artifact upload as a failing job after one same-job retry. [#1129](https://github.com/ElevenID/marty-ui/pull/1129) moved two required Canvas configuration proofs earlier while retaining late checks. [#1131](https://github.com/ElevenID/marty-ui/pull/1131) measured a 12m20s compile-stage saving by removing duplicate compatible compilation. [#1134](https://github.com/ElevenID/marty-ui/pull/1134) routed exact shadow-planner-only PR inputs to their release owner, and [#1135](https://github.com/ElevenID/marty-ui/pull/1135) measured a 10m56s scoped PR run versus 39m50s for #1134's full-matrix PR; protected #1135 still ran all 23 jobs. This is observed scoped feedback, not a whole-repository average or faster Canvas execution. Unknown/mixed implementation inputs remain broad. |
-| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | deferred | Four newer Core PR/protected runs for #352/#353 kept preflight below the affected-test or Windows critical path (10m52s–15m02s versus 13m41s–18m30s). A separate runner would add setup/compiler work without demonstrated turnaround benefit. [Core #350](https://github.com/ElevenID/marty-core/pull/350) removed a duplicate EUDI invocation after protected validation, but no whole-pipeline saving is claimed. Keep the feature/security matrix and revisit only if the critical path changes; exact run links appear in the A7 refresh below. |
+| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | deferred | Core #355 now puts preflight on the normal PR critical path, but three observations are revisions of one draft security PR, not independent workloads. No independently cacheable, no-extra-runner-cost split or measured turnaround saving is established. Keep the feature/security matrix; exact run links and step timings appear in the A7 refresh below. [Core #350](https://github.com/ElevenID/marty-core/pull/350) removed a duplicate EUDI invocation without a claimed whole-pipeline saving. |
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Separate immutable nightly prerelease tag selected by the user. [#1106](https://github.com/ElevenID/marty-ui/pull/1106) merged the release-owner inventory, fail-closed tag grammar, and exact-main stable qualification gate. [#1113](https://github.com/ElevenID/marty-ui/pull/1113) merged a read-only nightly-claim preparation step; [#1127](https://github.com/ElevenID/marty-ui/pull/1127) merged typed OID4VP/verification transport, not signed-presentation trust or nightly E2E qualification. Neither creates qualified nightly deployment nor relaxes official E2E/YouTube gates. |
 
 Batch related, independently reviewed changes into one coherent PR when they share an owner and validation path, so the full PR and protected-queue runs are paid once per batch. Keep targeted local checks and explicit test-ownership evidence for each slice. Avoid a PR that simultaneously moves tests, changes their assertions, and reduces their triggers; such changes need separate proof even when bundled. Do not push documentation-only follow-ups that restart a running PR unless they correct a release-blocking defect.
@@ -376,6 +376,8 @@ Current Core evidence supports deferring a preflight split. In protected #348, p
 A7 refresh (2026-10-05, pre-incident runs): Core PR [37098640425](https://github.com/ElevenID/marty-core/actions/runs/37098640425) ran preflight in 11m43s versus affected Rust tests in 13m56s; PR [37101783100](https://github.com/ElevenID/marty-core/actions/runs/37101783100) took 16m53s versus 18m29s. Protected [37099476951](https://github.com/ElevenID/marty-core/actions/runs/37099476951) ran preflight in 14m29s versus the Windows platform lane in 19m10s. These parallel-lane samples do not put preflight on the critical path; its expensive steps compile Rust and offer no independently cacheable setup proven by this audit. Keep A7 deferred, without counting the 2026-10-05 hosted-runner assignment incident as execution time.
 
 A7 refresh (2026-10-07): Core PR [#352 run 37419154761](https://github.com/ElevenID/marty-core/actions/runs/37419154761) ran preflight in 10m52s versus affected Rust tests in 13m41s; [#353 run 37460823351](https://github.com/ElevenID/marty-core/actions/runs/37460823351) took 12m30s versus 18m30s. Protected [#352 run 37420390043](https://github.com/ElevenID/marty-core/actions/runs/37420390043) ran preflight in 15m02s versus Windows in 16m49s; [#353 run 37463564302](https://github.com/ElevenID/marty-core/actions/runs/37463564302) took 12m43s versus Windows in 18m26s. Across these four completed runs preflight is not the critical path. A new runner split would add setup and compiler work without a measured turnaround benefit, so the full feature/security matrix stays intact and A7 remains deferred.
+
+A7 refresh (2026-10-08): The latest normal CI for draft Core #355, [run 37844023348](https://github.com/ElevenID/marty-core/actions/runs/37844023348) at `d41d87c`, ran preflight for 14m07s (21:06:33–21:20:40 UTC), versus affected Rust tests 9m08s and Native ZKP security 8m23s; the CI gate started three seconds after preflight ended. Earlier successful #355 revisions [37841791644](https://github.com/ElevenID/marty-core/actions/runs/37841791644) and [37839304785](https://github.com/ElevenID/marty-core/actions/runs/37839304785) also ended on preflight: 12m37s versus 9m59s affected tests / 10m39s ZKP, and 18m16s versus 10m08s / 10m32s, respectively. These are three revisions of **one** security PR, not independent workload samples. In contrast, #354's [normal run 37826531572](https://github.com/ElevenID/marty-core/actions/runs/37826531572) ended on affected tests (18m06s versus 12m54s preflight); its [protected run 37828982922](https://github.com/ElevenID/marty-core/actions/runs/37828982922) ended on the protocols feature lane (17m04s versus 16m52s preflight). In #355's latest preflight, KMS graphs took 7m03s, its new OpenBao issuer proof 2m39s, workspace Clippy 1m47s, WASM fallback 1m03s, and EUDI client 1m02s. Cheap policy/format/setup checks already lead the job; the expensive steps share Cargo inputs and compiler cache on its runner. Splitting them into another job would add runner/toolchain/cache startup and potentially repeated compilation, while a same-runner split cannot shorten the gate. No independently cacheable or no-extra-cost split is demonstrated, and no speedup is claimed. Keep A7 deferred and all feature/security gates intact; remeasure across independent normal PR workloads before authorizing a split.
 
 ### A8: release-tier E2E and demo strategy
 
@@ -1647,6 +1649,38 @@ protected combined-head CI passed, including the Canvas database lane.
 This change does not shorten real leases or establish an attributable CI
 speedup; collect comparable case timing before claiming one.
 
+## A4 validation-decision fast owner (2026-10-09, merged)
+
+The protected #1155 timing artifact measured the 13-case published
+`repository_validation` matrix at 13.499s. The merged change extracts
+its existing field, scope, and reference decisions from the PostgreSQL adapter
+without changing SQL reads, error precedence, target-disable calls, or job
+failure handling. A typed, literal fast table owns all 13 frozen repository
+case IDs, error codes and summaries, terminal/no-retry policy, and disable
+decisions; it checks the frozen oracle without deriving expected values from
+the production classifier. Five PostgreSQL cases remain for the distinct real
+scope JOIN, archived/stale durable disable, and application/candidate
+post-read existence races. Their lease, dead-letter, target/OAuth/facts,
+preservation, and cleanup assertions remain. The separate native and pinned
+historical 20-case qualifications remain selected in full.
+
+The tier-obligation inventory and run-bound contracts/Canvas guards now name
+the fast and database owners explicitly; otherwise ten routine-excluded cases
+would have retained a stale database-owner claim. On one local Windows/Docker
+host the five-case pinned-schema boundary passed in 9.650s, while the earlier
+13-case hosted sample was 13.499s. These are not comparable conditions, so no
+CI speedup is claimed. Rust 1.95 package check and the fast unit test passed;
+293 focused policy/preflight tests passed with one existing skip. Independent
+review found no P1-P3 issue. [UI #1198](https://github.com/ElevenID/marty-ui/pull/1198)
+passed full [PR run 37877894198](https://github.com/ElevenID/marty-ui/actions/runs/37877894198)
+and protected [merge-group run 37880523315](https://github.com/ElevenID/marty-ui/actions/runs/37880523315),
+then merged as `cdc184dba`. The fast Rust owner test and retained published
+database/worker suites executed successfully. The `repository_validation`
+scenario measured 22.928s in PR CI and 4.692s in protected CI, versus 13.499s
+in the earlier #1155 protected run. This spread does not establish an
+attributable wall-time improvement from the split. One required approval was
+restored after merge.
+
 ## Product packaging and integration workstream (added 2026-10-07)
 
 The local product plan (`artifacts/consumer-audit-2026-10-07/marty-product-packaging-and-integration-plan.md` in the coordinating workspace) defines PKG01-09, INT01-06, TST01-05, CICD01-04, BUS01-02, MKT01-02, and QA01-02. Those IDs are retained here so progress and acceptance evidence can be reconciled without duplicating the plan's full text. This tracker remains the active engineering queue; the product plan retains the detailed product and commercial acceptance criteria.
@@ -2138,6 +2172,29 @@ versus 693 for the old combined acceptance package; the full CI job still
 builds both packages, so this is not a measured whole-job saving. Full hosted
 Canvas execution and protected validation remain required before merge.
 
+Next bounded A1 self-host owner candidate (2026-10-09 reviewed local draft,
+not yet hosted): the public-image loader's two root cases and eight
+embedded support cases have one deployment/packaging obligation. The draft
+moves their unchanged assertions and exact ten libtest IDs into
+`marty-selfhost-acceptance`, while composition retains its 136 other discovered
+cases. It moves the two self-host support files together, reuses the original
+single-source bundle, renewal, database, and bounded-command fixtures, and
+shares only the generic cleanup-result combiner with composition. The
+composition manifest can then drop three direct development edges:
+`marty-selfhost-bundle`, `serde_yaml`, and `zip` (41 to 38); this is a declared
+edge change, not an independently timed compile saving. The Canvas CI job
+still builds the public image and packager exactly once, then executes the
+dedicated self-host target alongside composition and worker. An exact ten-ID
+runner guard, artifact verifier, timing allowlist, target status/log cleanup,
+and contracts-lane exclusion retain the mandatory owner. Local locked Rust
+1.95 compilation and discovered-ID checks passed for both self-host and
+composition; strict package Clippy passed. The full synthetic runner policy
+suite passed 221 cases with one skip after a caught preflight-closure defect
+was corrected; focused selector and ownership policy tests passed.
+Independent review found no P1-P3 regression. Full hosted Linux
+image/PostgreSQL/cleanup execution and protected CI remain required; this
+split changes no skip or release qualification.
+
 ## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
 
 The shadow planner already records Gateway's public Auth HTTP proxy, but
@@ -2323,10 +2380,10 @@ worker lane under those conditions, not a whole-PR speedup: both lanes still
 ran. The protected [merge-group run 37865923534](https://github.com/ElevenID/marty-ui/actions/runs/37865923534)
 passed the original full Canvas/contracts plan with no diagnostic worker lane,
 and #1194 merged as `16d0072c7`. The temporary self-merge approval exception
-was restored to one required approval immediately after merge. The separate
-exact-test-source selector and its one-file hosted pilot remain unmerged.
+was restored to one required approval immediately after merge. At that point,
+the separate exact-test-source selector and its one-file pilot were unmerged.
 
-## A6 exact worker-test-source PR selector (2026-10-08 local draft)
+## A6 exact worker-test-source PR selector (2026-10-09, merged)
 
 The next bounded draft considers only the three tracked Rust files owned by
 `canvas_published_worker_contract`: its target and two explicit support
@@ -2341,9 +2398,48 @@ pinned-process preflights, worker suite, Rust lint and supply-chain checks,
 root release-policy pytest, public-protocol checks, and the aggregate gate;
 only unrelated runtime/image qualification is bypassed for these test-only
 sources. The gate accepts the exact worker tuple only on pull requests and
-rejects a skipped selected job. This is local code, not hosted evidence or a
-measured speedup. Do not activate it until the #1194 diagnostic is green and
-the selector receives independent review and a test-source-only hosted pilot.
+rejects a skipped selected job. [UI #1195](https://github.com/ElevenID/marty-ui/pull/1195)
+merged the independently reviewed selector as `f4926bb4d` after full PR and
+protected merge-group validation; the selector PR itself retained the full
+Canvas/contracts matrix because it changed workflow and planner code.
+
+The distinct one-file [pilot #1196](https://github.com/ElevenID/marty-ui/pull/1196)
+changed only `canvas_startup_attestation.rs` to test rejection of a nested
+checkout root before evidence or artifact creation. Its
+[PR run 37874366360](https://github.com/ElevenID/marty-ui/actions/runs/37874366360)
+selected only the worker Rust lane, kept release/lint/security/public-protocol
+and aggregate checks, and finished green in 13m41s from run creation to gate.
+The worker job took 13m21s: 5m49s compile, 6m47s real database/process step,
+111 passes, two intentional capture-only ignores, both pinned preflights, and
+261 timing rows all `ok`. The preceding #1195 full-PR run took 36m, an
+observed 22m19s difference that includes different diffs and runner queueing,
+not an attributable end-to-end percentage. The same-run #1194 lane comparison
+above is the cleaner 12m21s worker-versus-full-Canvas evidence. #1196 passed
+the original full Canvas/contracts protected merge-group plan and merged as
+`fb93db737`; one required approval was restored immediately after merge.
+This establishes faster feedback for the exact three-file class, not for
+mixed/shared/runtime edits or final merge qualification.
+
+## A6 worker roster support source ownership (2026-10-09, merged)
+
+The reviewed change moves only
+`canvas_worker_roster_metadata.rs` byte-for-byte from issuance's shared test
+support into the worker acceptance package, which is its sole Rust source
+consumer. It updates that target's explicit path and admits this one fourth
+source file to the exact worker-only PR selector. The source-consumer and six
+Docker-context proof remain fail-closed; neighboring shared support files
+still select the full Rust matrix. The move preserves the six fast database
+roster and two real expiry cases, all 147 migration-ledger worker IDs, and two
+ignored historical captures. Local Rust 1.95 locked compilation and 237
+focused policy tests passed; independent review found no P1-P3 issue.
+[UI #1199](https://github.com/ElevenID/marty-ui/pull/1199) passed full
+[PR run 37882465625](https://github.com/ElevenID/marty-ui/actions/runs/37882465625)
+and protected [merge-group run 37884784355](https://github.com/ElevenID/marty-ui/actions/runs/37884784355),
+then merged as `df93dc3f2`. The fourth file's worker-only eligibility is not
+yet a measured feedback speedup; the separate one-file
+[pilot #1201](https://github.com/ElevenID/marty-ui/pull/1201) must prove it on
+hosted CI. Protected merge groups retain full Canvas/contracts validation,
+and one required approval was restored after #1199 merged.
 
 ## Design references
 

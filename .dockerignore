@@ -102,8 +102,13 @@ rust/services/issuance/src/token_rate_limit_http_tests.rs
 # Production Docker COPY rust does not compile or execute them.
 rust/crates/oid4vp-contract/tests/contract_vectors.rs
 rust/crates/oid4vp-contract/tests/transport_metadata.rs
-# The worker acceptance target and its two #[path] support modules are test-only.
+# The worker acceptance target and its three #[path] support modules are test-only.
 # Root-context release builders copy Rust but compile production binaries only.
 rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs
 rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs
 rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs
+rust/crates/canvas-worker-acceptance/tests/support/canvas_worker_roster_metadata.rs
+# The self-host acceptance executable and fixture support are also test-only.
+rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
+rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
+rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
