@@ -7834,8 +7834,10 @@ Canvas image and Rust image lanes should finish before the batch is pushed.
 Further Authenticator production-surface inventory found a web custody violation in
 `lib/services/spruce_platform_service_web.dart`: `generateKeyPair` calls the
 local WASM P-256 generator and returns its JWK under both `publicKey` and
-`privateKey`. Verify whether that JWK contains private parameters before
-claiming actual key disclosure. The conditional web WASM wrapper also exposes Ed25519 generation,
+`privateKey`. A direct isolated call to the bundled WASM confirms both its
+P-256 and Ed25519 generated JWKs contain the private `d` parameter (only
+parameter names were printed). Thus the web DID creation and key-generation
+returns exposed private material. The conditional web WASM wrapper also exposes Ed25519 generation,
 raw-JWK credential issuance and raw-JWK presentation signing. Native Android
 `PresentationSignerAdapter.kt` signs through device `KeyManager`; iOS
 `SignerAdapter.swift` similarly operates on device keys. These paths are not
@@ -7844,6 +7846,14 @@ as part of the Authenticator consumer cutover, and prove web/native wallet
 capabilities against authenticated remote holder custody before qualifying
 that consumer. Do not treat the Rust bridge pin or mock ZK pass as this proof.
 
+An Authenticator candidate follow-up now makes web `createDid` and
+`generateKeyPair` fail closed with a remote-KMS-required error, removing those
+direct application return paths. The bundled WASM still exports local
+generation and raw-JWK signing functions, and the remote holder flow is not
+implemented. Do not qualify or ship the Authenticator consumer from this
+intermediate fail-closed change; rebuild or remove the raw-key WASM surface
+and restore DID/key workflows through authenticated remote custody first.
+
 UI run `37885206206` subsequently completed `Test OpenBao DIDComm plugin
 image` successfully, including the coordinated PostgreSQL/Raft restore lane,
 and `Rust Service Images` successfully at pushed head `cf2f701fe`. Canvas
@@ -7851,3 +7861,11 @@ public selfhost image qualification remains live. The Release Contract Tests
 and Rust contracts failures on this head are addressed by local commits
 `f90161397` and `0c7370c7a` respectively; neither is a hosted pass until the
 next exact-head run completes.
+
+Before that hosted retry, the ignored Rust `document_storage_contract` binary
+was exercised locally against a fresh disposable Redis 7 container on a
+random loopback port, database 14, with a freshly seeded matching nonce guard.
+Its real certificate/JWKS/DID/slug round-trip passed (1 passed, 0 failed);
+the container was removed. The full 12-test release-contract source file also
+passes locally. This validates the fixture choice and contract behavior, not
+the workflow wiring on a hosted runner.
