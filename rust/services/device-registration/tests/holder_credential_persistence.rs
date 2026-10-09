@@ -1,3 +1,9 @@
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    routing::post,
+    Json, Router,
+};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, Utc};
 use marty_device_registration::{
@@ -6,13 +12,41 @@ use marty_device_registration::{
         authorize_bearer, HolderCredentialRepository, PostgresHolderCredentialRepository,
     },
     holder_key::{new_reference, HolderKeyRecord},
+    holder_key_cleanup::HolderKeyCleanup,
     holder_key_repository::PostgresHolderKeyRepository,
     migration,
     postgres::PostgresDeviceRepository,
     CreateRegistration, DeviceRegistration, DeviceRepository, Platform,
 };
 use sqlx::{postgres::PgPoolOptions, Row};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use uuid::Uuid;
+
+async fn disposable_revoke(
+    State(fail_once): State<Arc<AtomicBool>>,
+    headers: HeaderMap,
+    Json(scope): Json<serde_json::Value>,
+) -> StatusCode {
+    if headers
+        .get("x-device-registration-key")
+        .and_then(|value| value.to_str().ok())
+        != Some("disposable-device-signing-key-32-chars")
+        || scope["purpose"] != "holder_binding"
+        || scope["organization_id"].as_str().is_none()
+        || scope["registration_id"].as_str().is_none()
+        || scope["provider_reference"].as_str().is_none()
+    {
+        return StatusCode::UNAUTHORIZED;
+    }
+    if fail_once.swap(false, Ordering::SeqCst) {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    }
+}
 
 #[tokio::test]
 async fn durable_holder_digest_rotates_and_deactivation_revokes() {
@@ -30,7 +64,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
     let devices = PostgresDeviceRepository::new(pool.clone());
     let holders = PostgresHolderCredentialRepository::new(pool.clone());
     let holder_keys = PostgresHolderKeyRepository::new(pool.clone());
-    let now = Utc::now();
+    let now = Utc::now() - Duration::seconds(10);
     let registration = devices
         .save(DeviceRegistration::new(
             format!("user-{}", Uuid::new_v4()),
@@ -270,6 +304,12 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
             .provider_reference,
         second_reference
     );
+    let pending: Vec<String> = sqlx::query_scalar("SELECT d.provider_reference FROM device_registration_service.device_holder_key_deletions d JOIN device_registration_service.device_holder_keys k USING (provider_reference) WHERE k.registration_id=$1 AND d.deleted_at IS NULL ORDER BY d.provider_reference")
+        .bind(&registration.id)
+        .fetch_all(&pool)
+        .await
+        .expect("rotation deletion queue");
+    assert_eq!(pending, vec![first_reference.clone()]);
     let wrong_reference = HolderKeyRecord::from_provider(
         &registration,
         "holder_binding",
@@ -306,6 +346,12 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
             .provider_reference,
         second_reference
     );
+    let pending: Vec<String> = sqlx::query_scalar("SELECT d.provider_reference FROM device_registration_service.device_holder_key_deletions d JOIN device_registration_service.device_holder_keys k USING (provider_reference) WHERE k.registration_id=$1 AND d.deleted_at IS NULL ORDER BY d.provider_reference")
+        .bind(&registration.id)
+        .fetch_all(&pool)
+        .await
+        .expect("rollback did not queue current key");
+    assert_eq!(pending, vec![first_reference.clone()]);
 
     devices
         .deactivate(&registration.id)
@@ -323,6 +369,95 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
         .await
         .expect("deactivated key lookup")
         .is_none());
+    let pending: Vec<String> = sqlx::query_scalar("SELECT d.provider_reference FROM device_registration_service.device_holder_key_deletions d JOIN device_registration_service.device_holder_keys k USING (provider_reference) WHERE k.registration_id=$1 AND d.deleted_at IS NULL ORDER BY d.provider_reference")
+        .bind(&registration.id)
+        .fetch_all(&pool)
+        .await
+        .expect("deactivation deletion queue");
+    let mut expected = vec![first_reference, second_reference];
+    expected.sort();
+    assert_eq!(pending, expected);
+    let pending = holder_keys
+        .pending_deletions(100)
+        .await
+        .expect("remote cleanup work")
+        .into_iter()
+        .filter(|entry| entry.registration_id == registration.id)
+        .collect::<Vec<_>>();
+    assert_eq!(pending.len(), 2);
+    for entry in &pending {
+        assert_eq!(
+            entry.organization_id,
+            registration.organization_id.as_deref().unwrap()
+        );
+        assert_eq!(entry.purpose, "holder_binding");
+    }
+    holder_keys
+        .mark_deleted(&pending[0].provider_reference, Utc::now())
+        .await
+        .expect("mark confirmed remote deletion");
+    assert!(
+        holder_keys
+            .pending_deletions(100)
+            .await
+            .expect("remaining cleanup work")
+            .iter()
+            .filter(|entry| entry.registration_id == registration.id)
+            .count()
+            == 1
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("disposable holder revoke listener");
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route(
+                    "/internal/device-registration/holder-keys/revoke",
+                    post(disposable_revoke),
+                )
+                .with_state(Arc::new(AtomicBool::new(true))),
+        )
+        .await
+    });
+    let cleanup = HolderKeyCleanup::new(
+        holder_keys.clone(),
+        &origin,
+        "disposable-device-signing-key-32-chars".into(),
+    )
+    .expect("cleanup client");
+    assert_eq!(
+        cleanup.run_once().await.expect("failed remote attempt"),
+        (0, 1)
+    );
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM device_registration_service.device_holder_key_deletions d JOIN device_registration_service.device_holder_keys k USING (provider_reference) WHERE k.registration_id=$1 AND d.deleted_at IS NULL")
+        .bind(&registration.id)
+        .fetch_one(&pool)
+        .await
+        .expect("remote failure leaves durable work");
+    assert_eq!(remaining, 1);
+    sqlx::query("UPDATE device_registration_service.device_holder_key_deletions SET retry_after=now() WHERE provider_reference=$1")
+        .bind(&pending[1].provider_reference)
+        .execute(&pool)
+        .await
+        .expect("advance disposable retry");
+    assert_eq!(
+        cleanup.run_once().await.expect("successful remote retry"),
+        (1, 0)
+    );
+    holder_keys
+        .mark_deleted(&pending[1].provider_reference, Utc::now())
+        .await
+        .expect("completion is idempotent across workers");
+    assert!(holder_keys
+        .pending_deletions(100)
+        .await
+        .expect("completed cleanup queue")
+        .iter()
+        .all(|entry| entry.registration_id != registration.id));
+    server.abort();
     assert!(holders
         .replace(
             issue(

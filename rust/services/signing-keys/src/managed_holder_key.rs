@@ -159,11 +159,25 @@ impl OpenBaoManagedHolderKeys {
 
     pub async fn revoke(&self, scope: HolderKeyScope) -> Result<(), HolderKeyError> {
         Self::validate_scope(&scope)?;
-        kms::delete_managed_openbao(ProviderRequest {
-            service_config: self.config(&scope, "EdDSA", None),
+        let config = self.config(&scope, "EdDSA", None);
+        let _deletion = kms::delete_managed_openbao(ProviderRequest {
+            service_config: config.clone(),
+        })
+        .await;
+        match kms::read_managed_openbao(ProviderRequest {
+            service_config: config.clone(),
         })
         .await
-        .map_err(|_| HolderKeyError::Provider)
+        {
+            Err(error)
+                if kms::missing_managed_openbao_key(&config, &error)
+                    .await
+                    .unwrap_or(false) =>
+            {
+                Ok(())
+            }
+            _ => Err(HolderKeyError::Provider),
+        }
     }
 }
 

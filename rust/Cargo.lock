@@ -3940,6 +3940,7 @@ dependencies = [
  "rand 0.8.7",
  "rand 0.9.5",
  "redis",
+ "reqwest",
  "rsa",
  "serde",
  "serde_json",

@@ -34,6 +34,7 @@ async fn verify(
         "device_key_transitions",
         "device_holder_credentials",
         "device_holder_keys",
+        "device_holder_key_deletions",
         "alembic_version",
     ] {
         if !tables.contains(required) {

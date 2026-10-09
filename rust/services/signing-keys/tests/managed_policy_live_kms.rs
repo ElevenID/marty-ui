@@ -145,6 +145,10 @@ async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
         .revoke(scope())
         .await
         .expect("remote holder revocation");
+    holder
+        .revoke(scope())
+        .await
+        .expect("idempotent remote revocation");
     assert!(read_managed_openbao(ProviderRequest {
         service_config: json!({
             "id":"managed-openbao-transit", "service_type":"openbao-transit",

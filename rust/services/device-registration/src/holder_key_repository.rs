@@ -1,7 +1,7 @@
 //! Transactional reference-only holder key ledger.
 
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 
 use crate::{
     holder_key::HolderKeyRecord,
@@ -12,6 +12,30 @@ use crate::{
 #[derive(Clone)]
 pub struct PostgresHolderKeyRepository {
     pool: PgPool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingHolderKeyDeletion {
+    pub provider_reference: String,
+    pub registration_id: String,
+    pub organization_id: String,
+    pub purpose: String,
+}
+
+pub(crate) async fn revoke_and_queue(
+    transaction: &mut Transaction<'_, Postgres>,
+    registration_id: &str,
+    purpose: Option<&str>,
+    now: DateTime<Utc>,
+) -> Result<(), DeviceError> {
+    sqlx::query("WITH retired AS (UPDATE device_registration_service.device_holder_keys SET revoked_at=GREATEST($2, created_at) WHERE registration_id=$1 AND ($3::text IS NULL OR purpose=$3) AND revoked_at IS NULL RETURNING provider_reference) INSERT INTO device_registration_service.device_holder_key_deletions (provider_reference,queued_at,retry_after) SELECT provider_reference,$2,$2 FROM retired WHERE true ON CONFLICT DO NOTHING")
+        .bind(registration_id)
+        .bind(now)
+        .bind(purpose)
+        .execute(&mut **transaction)
+        .await
+        .map_err(persistence)?;
+    Ok(())
 }
 
 impl PostgresHolderKeyRepository {
@@ -39,13 +63,13 @@ impl PostgresHolderKeyRepository {
                 "managed holder key scope is invalid".into(),
             ));
         }
-        sqlx::query("UPDATE device_registration_service.device_holder_keys SET revoked_at=GREATEST($3, created_at) WHERE registration_id=$1 AND purpose=$2 AND revoked_at IS NULL")
-            .bind(&key.registration_id)
-            .bind(&key.purpose)
-            .bind(now)
-            .execute(&mut *transaction)
-            .await
-            .map_err(persistence)?;
+        revoke_and_queue(
+            &mut transaction,
+            &key.registration_id,
+            Some(&key.purpose),
+            now,
+        )
+        .await?;
         sqlx::query("INSERT INTO device_registration_service.device_holder_keys (id,registration_id,user_id,organization_id,purpose,algorithm,provider_reference,remote_version,public_x,public_y,created_at,revoked_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL)")
             .bind(&key.id)
             .bind(&key.registration_id)
@@ -111,13 +135,75 @@ impl PostgresHolderKeyRepository {
             .fetch_optional(&mut *transaction)
             .await
             .map_err(persistence)?;
-        sqlx::query("UPDATE device_registration_service.device_holder_keys SET revoked_at=GREATEST($2, created_at) WHERE registration_id=$1 AND revoked_at IS NULL")
-            .bind(registration_id)
-            .bind(now)
-            .execute(&mut *transaction)
+        revoke_and_queue(&mut transaction, registration_id, None, now).await?;
+        transaction.commit().await.map_err(persistence)
+    }
+
+    /// Retired keys stay queued until the remote KMS confirms deletion.
+    pub async fn pending_deletions(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<PendingHolderKeyDeletion>, DeviceError> {
+        if !(1..=100).contains(&limit) {
+            return Err(DeviceError::BadRequest(
+                "invalid holder deletion batch size".into(),
+            ));
+        }
+        let rows = sqlx::query("SELECT k.provider_reference,k.registration_id,k.organization_id,k.purpose FROM device_registration_service.device_holder_key_deletions d JOIN device_registration_service.device_holder_keys k USING (provider_reference) WHERE d.deleted_at IS NULL AND d.retry_after <= now() AND k.revoked_at IS NOT NULL ORDER BY d.retry_after,d.provider_reference LIMIT $1")
+            .bind(limit)
+            .fetch_all(&self.pool)
             .await
             .map_err(persistence)?;
-        transaction.commit().await.map_err(persistence)
+        rows.into_iter()
+            .map(|row| {
+                Ok(PendingHolderKeyDeletion {
+                    provider_reference: row.try_get("provider_reference").map_err(persistence)?,
+                    registration_id: row.try_get("registration_id").map_err(persistence)?,
+                    organization_id: row.try_get("organization_id").map_err(persistence)?,
+                    purpose: row.try_get("purpose").map_err(persistence)?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn mark_deleted(
+        &self,
+        provider_reference: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), DeviceError> {
+        let result = sqlx::query("UPDATE device_registration_service.device_holder_key_deletions SET deleted_at=GREATEST($2, queued_at) WHERE provider_reference=$1 AND deleted_at IS NULL")
+            .bind(provider_reference)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(persistence)?;
+        if result.rows_affected() != 1 {
+            let already_deleted: Option<bool> = sqlx::query_scalar("SELECT deleted_at IS NOT NULL FROM device_registration_service.device_holder_key_deletions WHERE provider_reference=$1")
+                .bind(provider_reference)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(persistence)?;
+            if already_deleted != Some(true) {
+                return Err(DeviceError::Conflict(
+                    "holder deletion is not pending".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn postpone_deletion(
+        &self,
+        provider_reference: &str,
+        now: DateTime<Utc>,
+    ) -> Result<(), DeviceError> {
+        sqlx::query("UPDATE device_registration_service.device_holder_key_deletions SET attempts=attempts+1,retry_after=GREATEST($2, queued_at)+interval '30 seconds' WHERE provider_reference=$1 AND deleted_at IS NULL")
+            .bind(provider_reference)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(persistence)?;
+        Ok(())
     }
 }
 

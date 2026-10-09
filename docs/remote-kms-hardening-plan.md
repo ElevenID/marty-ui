@@ -9198,3 +9198,21 @@ revocation under scoped policy. The Device Registration client, durable
 provisioning compensation and deactivation cleanup, enrollment authorization,
 Gateway session binding, public signing route and wallet acceptance remain
 open. Do not present this as end-to-end holder custody yet.
+
+2026-10-09 local remote holder-deletion follow-up: fresh Device Registration
+schema now includes a reference-only deletion queue. Replacing a holder key or
+deactivating a device commits local revocation and queue insertion in the same
+PostgreSQL transaction; a failed replacement rolls both back. A Rust worker
+uses the dedicated Device Registration-to-Signing Keys credential, retries
+failed revocations after a bounded delay, and marks completion only after the
+remote service confirms key absence. The Signing Keys revoke operation is
+idempotent after OpenBao deletion and verifies absence through the managed
+key lookup and scoped inventory before reporting success. A fresh disposable
+PostgreSQL plus HTTP test passed rollback, deactivation, failed-call retry and
+completion behavior; the disposable OpenBao probe passed repeated revocation.
+The worker is enabled only with its paired origin and credential, which are
+not yet provisioned in supported deployment profiles. Remote creation and
+signing are also not yet called by Device Registration, and provisioning
+compensation remains open. The HTTP retry test proves scheduling behavior;
+the separate OpenBao probe proves actual remote deletion. Neither is an
+end-to-end wallet acceptance test.

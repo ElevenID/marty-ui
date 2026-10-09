@@ -1,6 +1,8 @@
 use marty_device_registration::{
     challenge::{ChallengeRepository, MemoryChallengeRepository, RedisChallengeRepository},
     control_plane::{MembershipAuthorizer, OrganizationMembershipClient},
+    holder_key_cleanup::HolderKeyCleanup,
+    holder_key_repository::PostgresHolderKeyRepository,
     http::{router, HttpState},
     migration::migrate,
     postgres::PostgresDeviceRepository,
@@ -37,7 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
     migrate(&pool).await?;
-    let repository: Arc<dyn DeviceRepository> = Arc::new(PostgresDeviceRepository::new(pool));
+    let repository: Arc<dyn DeviceRepository> =
+        Arc::new(PostgresDeviceRepository::new(pool.clone()));
     let challenge_ttl: u64 = env_value("DEVICE_CHALLENGE_TTL", "300").parse()?;
     if challenge_ttl == 0 || challenge_ttl > 3600 {
         return Err("DEVICE_CHALLENGE_TTL must be between 1 and 3600".into());
@@ -69,6 +72,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if token.as_deref() == Some(gateway_key.as_str()) {
         return Err("DEVICE_REGISTRATION_GATEWAY_KEY must differ from GRPC_SERVICE_TOKEN".into());
+    }
+    let holder_service_key = optional_secret("DEVICE_REGISTRATION_SIGNING_KEYS_KEY")?;
+    let holder_origin = env::var("SIGNING_KEYS_HOLDER_ORIGIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if holder_service_key.is_some() != holder_origin.is_some() {
+        return Err(
+            "holder Signing Keys origin and service credential must be configured together".into(),
+        );
+    }
+    if let (Some(origin), Some(key)) = (holder_origin, holder_service_key) {
+        if key == gateway_key || token.as_deref() == Some(key.as_str()) {
+            return Err("holder Signing Keys credential must be dedicated".into());
+        }
+        let cleanup = HolderKeyCleanup::new(PostgresHolderKeyRepository::new(pool), &origin, key)?;
+        tokio::spawn(cleanup.run_forever());
     }
     let target = env_value("ORG_GRPC_TARGET", "organization:9002");
     let target = if target.contains("://") {

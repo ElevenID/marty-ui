@@ -113,6 +113,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_key_one_current
 CREATE INDEX IF NOT EXISTS ix_device_holder_key_scope
     ON device_registration_service.device_holder_keys(user_id, organization_id, registration_id);
 
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_key_deletions (
+    provider_reference varchar(128) PRIMARY KEY REFERENCES device_registration_service.device_holder_keys(provider_reference) ON DELETE RESTRICT,
+    queued_at timestamptz NOT NULL,
+    retry_after timestamptz NOT NULL,
+    attempts integer NOT NULL DEFAULT 0 CONSTRAINT ck_device_holder_key_deletion_attempts CHECK (attempts >= 0),
+    deleted_at timestamptz,
+    CONSTRAINT ck_device_holder_key_deletion_time CHECK (retry_after >= queued_at AND (deleted_at IS NULL OR deleted_at >= queued_at))
+);
+CREATE INDEX IF NOT EXISTS ix_device_holder_key_deletions_pending
+    ON device_registration_service.device_holder_key_deletions(retry_after, queued_at)
+    WHERE deleted_at IS NULL;
+
 INSERT INTO device_registration_service.device_registration_keys
     (id, registration_id, key_version, public_key_der, public_key_kid, state, valid_from, valid_until, revoked_at, created_at)
 SELECT r.id, r.id, 1, r.public_key_der, r.public_key_kid,
