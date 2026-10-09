@@ -128,6 +128,14 @@ pub async fn assert_reconciliation(pool: &PgPool, name: &str) {
     let touched = rows(pool).await;
     assert_eq!(touched["target"]["metadata"]["worker_id"], OWNER);
     assert!(touched["target"]["metadata"]["worker_heartbeat_at"].is_string());
+    let mut expected_touched_metadata = initial.clone();
+    expected_touched_metadata["worker_id"] = json!(OWNER);
+    expected_touched_metadata["worker_heartbeat_at"] =
+        touched["target"]["metadata"]["worker_heartbeat_at"].clone();
+    assert_eq!(
+        touched["target"]["metadata"], expected_touched_metadata,
+        "heartbeat must preserve all other target metadata: {name}"
+    );
 
     let mut captured_job = jobs[0].clone();
     if name == "wrong_owner" {
