@@ -2529,6 +2529,21 @@ speedup. The same PR's Release Contract job exposed stale policy guards,
 which were corrected separately. Protected Linux validation and comparable
 repeat timings remain pending; no end-to-end CI speedup is claimed.
 
+## A6 exact Flow-test-source PR selector (2026-10-09, candidate)
+
+The next bounded selector accepts only a nonempty subset of the eight tracked
+`marty-flow-acceptance` test-owned files. It requires the existing regular-Git-
+mode, sole-consumer, and six-Docker-context proof; mixed or uncertain changes
+retain the full Canvas/contracts matrix. The Flow-only pull-request lane
+compiles the exact Flow test target and real Issuance/Flow binaries in the
+pinned Bookworm builder, verifies those artifacts, and requires the same nine
+case IDs and owned database/Redis fixtures as the full Canvas lane. Rust lint,
+supply-chain, release-policy, public-protocol, and aggregate checks remain;
+merge groups still run the full matrix. Independent review found no P1-P3
+issue and 195 focused local tests passed. This is a candidate, not a speedup:
+hosted Linux execution and timing, followed by a test-source-only pilot, are
+required before claiming faster feedback.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

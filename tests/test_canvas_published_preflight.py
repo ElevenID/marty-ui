@@ -1733,6 +1733,8 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         'if [[ "${{ matrix.lane }}" == worker ]]; then\n'
         "  python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
         "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas\n"
+        'elif [[ "${{ matrix.lane }}" == flow ]]; then\n'
+        "  bash ../scripts/ci/run-flow-acceptance-contracts.sh\n"
         "else\n"
         "  python3 ../scripts/ci/run-db-contract-groups.py "
         "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}\n"

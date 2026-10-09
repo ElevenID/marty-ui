@@ -27,18 +27,27 @@ def test_flow_cases_have_one_required_source_and_runner_owner():
     canvas_source = (CANVAS / "tests/canvas_published_schema_contract.rs").read_text()
     nested_source = (FLOW / "tests/support/flow_public_startup.rs").read_text()
     runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
     assert len(FLOW_OUTER) + len(FLOW_NESTED) == 9
     for name in FLOW_OUTER:
         assert len(re.findall(rf"async fn {name}\(\)", flow_source)) == 1
         assert f"async fn {name}()" not in canvas_source
         assert runner.count(f"'{name}: test'") == 1
+        assert flow_inventory.count(f"'{name}: test'") == 1
     for name in FLOW_NESTED:
         assert len(re.findall(rf"(?:async )?fn {name}\(\)", nested_source)) == 1
         assert runner.count(f"public_startup::{name}: test'") == 1
+        assert flow_inventory.count(f"public_startup::{name}: test'") == 1
     assert 'flow_tests=$("$flow_executable" --list)' in runner
     assert '"$flow_executable" --nocapture --test-threads=4' in runner
     assert "Flow executable changed its exact nine-case owner inventory" in runner
     assert "flow_status == 0" in runner
+    flow_only = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
+    assert "list-flow-acceptance-cases.sh" in flow_only
+    assert "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1" in flow_only
+    assert "MARTY_ISSUANCE_TEST_BINARY=" in flow_only
+    assert "--nocapture --test-threads=4" in flow_only
+    assert "9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out" in flow_only
 
 
 def test_shared_fixtures_keep_canvas_unit_tests_once_and_release_scope():
