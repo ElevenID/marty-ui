@@ -44,7 +44,6 @@ const API_KEY: &str = "synthetic-admission-management-key";
 
 #[path = "didcomm_flow_grpc_admission.rs"]
 mod flow_grpc;
-
 #[path = "flow_native_consumer.rs"]
 mod flow_consumer;
 
@@ -59,6 +58,7 @@ pub(super) async fn run_flow_public_startup(database_url: &str, redis_url: &str)
 pub(super) async fn run_flow_rendered(database_url: &str) {
     flow_consumer::run_rendered(database_url).await;
 }
+
 pub(super) async fn flow_rendered_child() {
     flow_consumer::rendered_child().await;
 }

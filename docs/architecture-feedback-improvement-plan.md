@@ -2209,18 +2209,20 @@ took 386.7s concurrently. #1202 merged as `a9845070e`; one required review
 was restored immediately. The split changes no skip or release qualification,
 and these runs do not establish an overall CI wall-time saving.
 
-## A0/A3 Gateway DID-web runtime consumers (2026-10-09 local candidate)
+## A0/A3 Gateway DID-web runtime consumers (2026-10-09 merged)
 
 Gateway's root and organization-slug DID-web routes are consumed by two Rust
 services without Cargo dependencies on Gateway. Trust Profile defaults its
 issuer-key resolver to `http://gateway:8000` and the base Compose profile
 binds that URL. Issuance's DIDComm recipient resolver uses the same Gateway
 URL when its optional internal DID-web setting is configured; base Compose
-provides that default. The candidate records both source-, route-contract-,
+provides that default. The change records both source-, route-contract-,
 and scoped-Compose-backed shadow edges. Mutation-checked tests require the
 consumer binding and call, Gateway route dispatch, published paths, and
-deployment wiring. Gateway source changes still select the full Rust
-workspace, including both consumers; this does not establish complete
+deployment wiring. [UI #1204](https://github.com/ElevenID/marty-ui/pull/1204)
+passed protected run `37898462662` and merged as `78039a29d`; the normal
+review protection was restored. Gateway source changes still select the full
+Rust workspace, including both consumers; this does not establish complete
 non-Cargo input closure, alter any check, or claim a speedup.
 
 ## A0/A3 Auth-to-Gateway session gRPC edge (2026-10-08 local candidate)
@@ -2491,6 +2493,30 @@ cleanup, and retain timing/evidence. Only after hosted coverage and wall-time
 comparison should an exact-file PR selector be considered; protected merge
 groups must retain full Canvas/contracts qualification. No speedup is claimed
 from this unimplemented option.
+
+## A1 Flow admission/consumer acceptance owner (2026-10-09, candidate)
+
+A dedicated `marty-flow-acceptance` target now owns the six outer Flow/DIDComm
+admission cases and three nested public-startup cases formerly discovered by
+the Canvas composition target. The Bookworm compile phase, artifact verifier,
+and protected Canvas runner include both executables; the contracts lane
+excludes both. The runner checks the exact nine Flow IDs, duplicate IDs across
+targets, and all four target statuses before the gate can pass. Shared Redis,
+Gateway, and published-database fixtures retain one implementation and owned
+cleanup, while their five fixture unit tests stay Canvas-owned.
+
+One local Rust 1.95 locked invocation linked both targets. On Windows the
+Canvas list is 127 and Flow list nine, with no duplicate IDs; the three
+unchanged Unix/Linux-only Canvas cases make the expected protected Linux
+inventory 130 + 9 = the original 139. The local Flow harness ran all nine
+cases successfully, with six opt-in database cases returning early outside
+the Linux gate. The detailed source and platform-count mapping is in
+`docs/rust-migrations/flow-acceptance-test-owner.md`. Canvas no longer has a
+direct `marty-flow` dev dependency, but `cargo tree` still reaches Flow via
+Gateway and deployment-profile, so this does **not** establish a compile
+surface reduction. Independent review found no P1-P3 issue after fixes; a
+protected Linux run and comparable timings remain pending. No end-to-end CI
+speedup is claimed.
 
 ## Design references
 

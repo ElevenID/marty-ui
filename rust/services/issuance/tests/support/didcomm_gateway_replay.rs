@@ -1,7 +1,7 @@
-//! Direct and initiation selected-route qualification share one gateway
-//! fixture. Gateway middleware/proxy and issuance upstream HTTP are real; identity
-//! and initiation control-plane preflights are controlled. Only the exact consumer
-//! legacy-control owner may differ; native routing is selected in the contract.
+// Direct and initiation selected-route qualification share one gateway
+// fixture. Gateway middleware/proxy and issuance upstream HTTP are real; identity
+// and initiation control-plane preflights are controlled. Only the exact consumer
+// legacy-control owner may differ; native routing is selected in the contract.
 use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
@@ -715,30 +715,4 @@ async fn request_at(
     let body =
         serde_json::from_slice(&to_bytes(response.into_body(), LIMIT).await.unwrap()).unwrap();
     (status, body)
-}
-
-#[test]
-fn native_selection_is_unchanged_and_legacy_control_changes_only_direct_owner() {
-    let contract = GatewayContract::load().unwrap();
-    for candidate in [true, false] {
-        select_direct(contract.runtime_route_table().unwrap(), candidate);
-        select_direct(contract.proxy_route_table().unwrap(), candidate);
-    }
-}
-
-#[test]
-fn initiation_native_selection_is_unchanged_and_legacy_control_changes_only_rewritten_post_owner() {
-    let contract = GatewayContract::load().unwrap();
-    for candidate in [true, false] {
-        select_consumer(
-            contract.runtime_route_table().unwrap(),
-            candidate,
-            Consumer::Initiation,
-        );
-        select_consumer(
-            contract.proxy_route_table().unwrap(),
-            candidate,
-            Consumer::Initiation,
-        );
-    }
 }

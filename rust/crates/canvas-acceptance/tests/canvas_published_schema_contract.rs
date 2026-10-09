@@ -51,7 +51,11 @@ mod runtime_failure_diagnostics;
 fn composition_source_root_matches_acceptance_package_root() {
     let root = canvas_published_database::repository_root();
     assert_eq!(base_runtime_container::lexical_source_root().unwrap(), root);
-    for package in ["rust/services/issuance", "rust/crates/canvas-acceptance"] {
+    for package in [
+        "rust/services/issuance",
+        "rust/crates/canvas-acceptance",
+        "rust/crates/flow-acceptance",
+    ] {
         assert_eq!(
             canvas_published_database::repository_root_from(&root.join(package)),
             Some(root.as_path()),
@@ -385,84 +389,6 @@ async fn didcomm_unkeyed_grpc_initiation_composes_real_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "support/didcomm_admission_recovery.rs"]
-mod didcomm_admission_recovery;
-
-#[tokio::test]
-async fn didcomm_flow_grpc_provider_preserves_keyed_admission() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Flow gRPC admission requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run_flow_grpc(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Flow consumer composition requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run_flow_consumer(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn flow_rendered_provider_child() {
-    if std::env::var("MARTY_FLOW_RENDERED_CHILD").as_deref() != Ok("1") {
-        return;
-    }
-    didcomm_admission_recovery::flow_rendered_child().await;
-}
-
-#[tokio::test]
-async fn flow_actual_main_boots_rendered_base_and_preserves_public_admission() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Actual Flow startup requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    let redis = base_runtime_redis::OwnedRedis::start().await.unwrap();
-    didcomm_admission_recovery::run_flow_public_startup(&owned.url, redis.url()).await;
-    redis.close_verified().unwrap();
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn flow_rendered_settings_select_native_rpc_and_preserve_legacy_http() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Rendered Flow selection requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run_flow_rendered(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
-#[tokio::test]
-async fn didcomm_http_admission_recovers_real_keyed_reservation() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        eprintln!("Admission recovery requires the exact-owned published schema gate");
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start()
-        .await
-        .unwrap();
-    didcomm_admission_recovery::run(&owned.url).await;
-    owned.close_verified().unwrap();
-}
-
 #[path = "../../../services/issuance/tests/support/didcomm_wallet_fixture.rs"]
 mod didcomm_wallet_fixture;
 
@@ -511,7 +437,7 @@ async fn didcomm_fresh_http_admission_composes_reservation_and_delivery() {
     owned.close_verified().unwrap();
 }
 
-#[path = "../../../services/issuance/tests/support/didcomm_gateway_replay.rs"]
+#[path = "support/didcomm_gateway_replay.rs"]
 mod didcomm_gateway_replay;
 
 #[path = "../../../services/issuance/tests/support/didcomm_tls_transport_contract.rs"]
