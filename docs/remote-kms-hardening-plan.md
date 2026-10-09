@@ -7889,3 +7889,46 @@ the known assertions/Redis fixture corrected in the local grouped batch.
 The aggregate CI Gate was still queued at this checkpoint. Push the grouped
 batch once, then require a new exact-head rollup before claiming UI PR #1192
 qualified.
+
+Grouped UI correction head `d2b56df78` has been pushed to PR #1192. CI run
+`37888791629` was queued for that exact head. The previous run
+`37885206206` was superseded/cancelled while its aggregate CI Gate was queued;
+its substantive lane results and two failure logs remain preserved. Do not
+interpret the cancelled rollup as qualification or as a new Canvas failure.
+
+Authenticator web artifact replacement candidate: rebuilt the
+`marty-credentials` `marty-rs` WASM crate at exact PR #313 head `fef8da1`
+with hardened Core `d41d87c`, `--locked --release --target
+wasm32-unknown-unknown --no-default-features --features wasm`, then generated
+web bindings with `wasm-bindgen 0.2.127`. The generated module has public
+protocol/verification exports only; direct Node loading, health check,
+credential-offer wire check and JS/raw-WASM forbidden-export audit passed.
+The Authenticator candidate replaces its tracked raw-key `marty_rs` module
+with those generated artifacts under `web/marty_rs`, changes the loader to a
+relative URL, and adds a web-build artifact audit to the existing Flutter test
+job. A simulated copied web directory passes the audit. Actual Flutter web
+build/packaging and the native Android/iOS KMS-only holder flows remain due;
+the Authenticator candidate is not release-qualified or pushed.
+
+Authenticator local commit `1307612` records that replacement. Its generated
+WASM artifact SHA-256 is
+`c7cf660e4fa82824938b69cd0b4b6e5e17d6fa52ef37a34718b075ca9d91db39`;
+the generated JS SHA-256 is
+`618b641e96fe338ee7e5971e0c50aab0744291ce9f6a53241ebcc2e7390bff35`.
+The checked-in copies match the exact generated files. The Node audit passes
+against both `web` and a simulated copied web root, checks the public export
+allowlist, rejects raw key operation names in JS and WASM exports, and exercises
+health and credential-offer behavior. The Flutter test workflow now builds
+`lib/main_document.dart` for web and runs that audit on `build/web`; this
+hosted job has not run for the isolated Authenticator branch.
+
+Web verification self-review found `SpruceIdPlatformServiceWeb.verifyJWT`
+called `verify_jwt_claims`, whose new Credentials WASM source explicitly
+validates structure and claims without checking the cryptographic signature.
+The Authenticator candidate now fails closed for web JWT and SD-JWT
+verification, removes the Dart wrapper call and excludes that helper from the
+loader's global allowlist. The binary still contains the claims-only helper,
+and web cryptographic verification is unavailable. Restore it through a
+public-key/trust-aware verification route with forged-signature negatives
+before shipping the web consumer; do not treat the public-only WASM swap as
+complete wallet feature preservation.
