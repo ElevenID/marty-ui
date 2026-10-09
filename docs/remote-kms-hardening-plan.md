@@ -7556,3 +7556,13 @@ The normal app and `marty-sync` checks, 25 Open Badge conformance cases, and
 the governed-CSCA unit case passed locally. Full Verifier test compilation is
 still blocked by its eMRTD suite's removed local certificate/SOD builders;
 there is no Verifier PR or authenticator qualification yet.
+Verifier all-features consumer check at `981a2de`: `cargo +1.97.1 check
+--locked --offline -p marty-sync --all-features -q` fails because the optional
+`demo-fixtures` modules still import removed
+`marty_verification::dtc::sign_dtc_json` and Core-local certificate/key/SOD
+builders. The default production `marty-sync` and Tauri app checks do not
+select this optional path. Do not call the Verifier feature graph qualified
+or silently discard the existing demo behavior; replace those generators
+with public signed vectors or authorized remote-custody fixture generation
+and then re-run the complete feature/test graph. No local private-key
+fallback should be restored.
