@@ -7548,3 +7548,11 @@ The grouped correction batch was pushed to UI PR #1192 at exact head
 packaged Canvas CA fixture corrections. New hosted CI run `37879061558`
 started for that head. The previous failed run `37875662633` and its logs
 remain immutable evidence; no new-head gate is claimed yet.
+The isolated Verifier consumer candidate is now committed on its separate
+branch at `981a2de`. It pins hardened Core and the reviewed SSI/isomdl graph,
+removes unavailable local-key feature requests from dev/optional manifests,
+and replaces Open Badge and one governed-CSCA test with public-only vectors.
+The normal app and `marty-sync` checks, 25 Open Badge conformance cases, and
+the governed-CSCA unit case passed locally. Full Verifier test compilation is
+still blocked by its eMRTD suite's removed local certificate/SOD builders;
+there is no Verifier PR or authenticator qualification yet.
