@@ -9661,3 +9661,31 @@ credential. Current `ui/src/components/WalletSetup.jsx` still calls the
 simulated pairing-code application helper, so no wallet cutover is claimed.
 Keep this as one local batch in draft UI PR #1192 until the running head's
 Canvas lane finishes and the complete routing and release checks are ready.
+
+2026-10-09 published UI qualification: run `37960926646` completed
+successfully for exact PR #1192 head
+`6cc8159a5a2e289dc0b51820b43a3fa35aded7a8`, with 22 successful jobs
+and no failed or skipped jobs. The Canvas lane passed its public image build,
+isolated database contracts and native operation parity. This proves the
+prior beta packaging correction and published head; it does not qualify the
+locally committed Device Registration schema inventory or pairing changes.
+
+2026-10-09 local pairing ticket issuance candidate: Device Registration now
+offers `POST /v1/devices/pairing-tickets` behind its dedicated Gateway key,
+requires an active user/organization membership and stores only the digest
+of a five-minute single-use ticket in Redis. The response is `no-store`.
+Gateway adds the route to its fixed manifest and, before forwarding, requires
+a recently authenticated session, rejects API keys and stale/future claims,
+checks the selected organization against live active membership and builds a
+fresh trusted upstream context. Its full-router test proves missing/stale/API
+key/wrong-tenant requests never reach the Device Registration upstream and a
+forged `x-user-id` or service token is replaced. The Device Registration
+behavior suite passed five tests, including token rejection, membership,
+scope, one-time redemption and no-store; its binary compiled and its six
+library tests passed. The Gateway focused full-router test and full library
+suite passed (154 passed, one existing ignored). Gateway and Device
+Registration all-target Clippy passed with warnings denied, as did targeted
+formatting. This is issue-only; do not present the
+QR to users or claim wallet completion until ticket redemption provisions
+the remote holder key and credential under the registration and revocation
+locks, with disposable OpenBao, PostgreSQL and Redis acceptance.

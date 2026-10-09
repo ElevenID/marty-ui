@@ -13,14 +13,15 @@ use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    control_plane::MembershipAuthorizer, CreateRegistration, DeviceError, DeviceRegistration,
-    DeviceService, UpdateRegistration,
+    control_plane::MembershipAuthorizer, pairing_ticket::PairingTicketRepository,
+    CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
 };
 
 #[derive(Clone)]
 pub struct HttpState {
     pub service: Arc<DeviceService>,
     pub memberships: Arc<dyn MembershipAuthorizer>,
+    pub pairing_tickets: Arc<dyn PairingTicketRepository>,
     pub release_version: String,
     pub build_revision: String,
     pub gateway_key: String,
@@ -29,6 +30,10 @@ pub struct HttpState {
 pub fn router(state: HttpState) -> Router {
     Router::new()
         .route("/v1/devices", get(list_devices).post(register_device))
+        .route(
+            "/v1/devices/pairing-tickets",
+            axum::routing::post(issue_pairing_ticket),
+        )
         .route(
             "/v1/devices/{registration_id}",
             get(get_device).patch(update_device).delete(delete_device),
@@ -96,6 +101,42 @@ struct ListQuery {
     limit: usize,
     #[serde(default)]
     offset: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingTicketRequest {
+    organization_id: String,
+}
+
+async fn issue_pairing_ticket(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<PairingTicketRequest>,
+) -> Result<Response, ApiError> {
+    let user_id = identity(&headers)?;
+    let organization_id = body.organization_id.trim();
+    if organization_id.is_empty() {
+        return Err(DeviceError::BadRequest("organization_id is required".into()).into());
+    }
+    state
+        .memberships
+        .require_active(&user_id, organization_id)
+        .await?;
+    let ticket = state
+        .pairing_tickets
+        .issue(&user_id, organization_id)
+        .await?;
+    let mut response = Json(json!({
+        "pairing_code": ticket.token,
+        "expires_at": ticket.scope.expires_at,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
 }
 
 const fn default_limit() -> usize {

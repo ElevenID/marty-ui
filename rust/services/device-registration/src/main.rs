@@ -5,6 +5,7 @@ use marty_device_registration::{
     holder_key_repository::PostgresHolderKeyRepository,
     http::{router, HttpState},
     migration::{migrate, validate},
+    pairing_ticket::RedisPairingTickets,
     postgres::PostgresDeviceRepository,
     DeviceRepository, DeviceService,
 };
@@ -105,6 +106,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             token.as_deref(),
             Duration::from_secs(env_value("ORG_GRPC_TIMEOUT_SECONDS", "5").parse()?),
         )?);
+    let pairing_tickets =
+        Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
     let port = env_value("DEVICE_REGISTRATION_SERVICE_PORT", "8014").parse()?;
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let listener = TcpListener::bind(address).await?;
@@ -116,6 +119,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         router(HttpState {
             service,
             memberships,
+            pairing_tickets,
             release_version,
             build_revision,
             gateway_key,

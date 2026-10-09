@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 444,
+  "route_count": 445,
   "routes": [
     {
       "include_in_schema": true,
@@ -705,6 +705,12 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/devices",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/pairing-tickets",
       "status_code": 200
     },
     {

@@ -3,6 +3,7 @@
   "service": "device-registration",
   "routes": [
     {"method": "POST", "path": "/v1/devices", "success": 200},
+    {"method": "POST", "path": "/v1/devices/pairing-tickets", "success": 200},
     {"method": "GET", "path": "/v1/devices", "success": 200},
     {"method": "GET", "path": "/v1/devices/{registration_id}", "success": 200},
     {"method": "PATCH", "path": "/v1/devices/{registration_id}", "success": 200},

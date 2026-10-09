@@ -1,10 +1,12 @@
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
 use marty_device_registration::{
-    control_plane::AllowMembership,
+    control_plane::{AllowMembership, MembershipAuthorizer},
     http::{router, HttpState},
+    pairing_ticket::{MemoryPairingTickets, PairingTicketRepository},
     CreateRegistration, DeviceError, DeviceService, MemoryDeviceRepository, Platform,
     UpdateRegistration,
 };
@@ -31,13 +33,24 @@ fn registration() -> CreateRegistration {
     }
 }
 
+struct RejectMembership;
+
+#[async_trait]
+impl MembershipAuthorizer for RejectMembership {
+    async fn require_active(&self, _: &str, _: &str) -> Result<(), DeviceError> {
+        Err(DeviceError::Forbidden(
+            "Not a member of this organization".into(),
+        ))
+    }
+}
+
 #[test]
 fn contract_retires_device_private_key_challenge() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/device-registration-service-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract["routes"].as_array().unwrap().len(), 5);
+    assert_eq!(contract["routes"].as_array().unwrap().len(), 6);
     assert!(contract["challenge"].is_null());
     assert!(contract["invariants"]
         .as_array()
@@ -123,6 +136,7 @@ async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
     let app = router(HttpState {
         service: Arc::new(service()),
         memberships: Arc::new(AllowMembership),
+        pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
         release_version: "test".into(),
         build_revision: "fixture".into(),
         gateway_key: gateway_key.clone(),
@@ -184,4 +198,61 @@ async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
+    let gateway_key = "g".repeat(32);
+    let tickets = Arc::new(MemoryPairingTickets::new(300));
+    let app = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(AllowMembership),
+        pairing_tickets: tickets.clone(),
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    });
+    let request = |token: Option<&str>, organization_id: &str| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/devices/pairing-tickets")
+            .header("content-type", "application/json")
+            .header("x-user-id", "user-1");
+        if let Some(token) = token {
+            builder = builder.header("x-service-token", token);
+        }
+        builder
+            .body(Body::from(
+                json!({"organization_id": organization_id}).to_string(),
+            ))
+            .unwrap()
+    };
+    let unauthenticated = app.clone().oneshot(request(None, "org-1")).await.unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .oneshot(request(Some(&gateway_key), "org-1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    let code = body["pairing_code"].as_str().unwrap();
+    let scope = tickets.take(code).await.unwrap().unwrap();
+    assert_eq!(scope.user_id, "user-1");
+    assert_eq!(scope.organization_id, "org-1");
+    assert!(tickets.take(code).await.unwrap().is_none());
+
+    let denied = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(RejectMembership),
+        pairing_tickets: tickets,
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    })
+    .oneshot(request(Some(&gateway_key), "org-1"))
+    .await
+    .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 }

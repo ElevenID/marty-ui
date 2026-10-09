@@ -59,9 +59,9 @@ use crate::{
     issuance_create::IssuanceCreate,
     issuance_lifecycle_contract, issuance_native,
     middleware::{
-        authenticate, AuthenticationInput, AuthenticationOutcome, AuthenticationSource,
-        GatewayHttpPolicies, GatewayIdentity, GatewayIdentityProvider, GatewayRateLimiter,
-        MipError, MIP_VERSION,
+        authenticate, permits_pairing_ticket, AuthenticationInput, AuthenticationOutcome,
+        AuthenticationSource, GatewayHttpPolicies, GatewayIdentity, GatewayIdentityProvider,
+        GatewayRateLimiter, MipError, MIP_VERSION,
     },
     organization_composition, organization_contract,
     passport_gateway::{passport_upstream_auth, PassportUpstreamAuth},
@@ -949,6 +949,9 @@ async fn proxy_handler(
     if request.method() == "POST" && request.uri().path() == "/v1/credential-templates" {
         return credential_template_create_handler(state, request).await;
     }
+    if request.method() == "POST" && request.uri().path() == "/v1/devices/pairing-tickets" {
+        return pairing_ticket_issue_handler(state, request).await;
+    }
     if request.method() == "POST" && request.uri().path() == "/v1/deployment-profiles" {
         return deployment_profile_create_handler(state, request).await;
     }
@@ -1386,6 +1389,68 @@ async fn proxy_handler(
             response
         }
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingTicketIssueRequest {
+    organization_id: String,
+}
+
+async fn pairing_ticket_issue_handler(
+    state: Arc<GatewayRuntimeState>,
+    request: Request,
+) -> Response {
+    let Some(actor) = request.extensions().get::<GatewayIdentity>().cloned() else {
+        return detail_response(401, "Authentication is required");
+    };
+    if !permits_pairing_ticket(&actor, Utc::now().timestamp()) {
+        return detail_response(403, "Recent user authentication is required");
+    }
+    let user_id = actor.user_id.clone();
+    let body = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
+        Ok(body) => body,
+        Err(_) => return detail_response(413, "Request body too large"),
+    };
+    let Ok(input) = serde_json::from_slice::<PairingTicketIssueRequest>(&body) else {
+        return detail_response(422, "Pairing ticket request is invalid");
+    };
+    let organization_id = input.organization_id.trim();
+    if organization_id.is_empty() {
+        return detail_response(422, "organization_id is required");
+    }
+    let membership = match state
+        .memberships
+        .get_membership(&user_id, organization_id)
+        .await
+    {
+        Ok(Some(value))
+            if value.user_id == user_id
+                && value.organization_id == organization_id
+                && value.is_active() =>
+        {
+            value
+        }
+        Ok(_) => return detail_response(403, "Active organization membership is required"),
+        Err(_) => return detail_response(503, "Organization authorization is unavailable"),
+    };
+    let mut trusted = base_trusted_identity(&actor);
+    trusted.organization_id = Some(membership.organization_id);
+    let response = execute_json_proxy(
+        &state,
+        &trusted,
+        HttpMethod::Post,
+        "/v1/devices/pairing-tickets",
+        json!({"organization_id": organization_id}),
+        BTreeMap::new(),
+    )
+    .await;
+    let mut response = match response {
+        Ok(response) => upstream_response(response),
+        Err(response) => response,
+    };
+    insert_header(&mut response, "cache-control", "no-store");
+    response
 }
 
 fn api_documentation_handler() -> Response {
@@ -6099,6 +6164,10 @@ mod tests {
             .expect("proxy routes");
         let registry = StaticServiceRegistry::from_urls(&BTreeMap::from([
             ("auth".into(), "http://auth:8001".into()),
+            (
+                "device-registration".into(),
+                "http://device-registration:8014".into(),
+            ),
             ("applicant".into(), "http://applicant:8000".into()),
             (
                 "compliance-profiles".into(),
@@ -6239,14 +6308,20 @@ mod tests {
             session: &str,
         ) -> Result<Option<SessionIdentity>, SecurityError> {
             Ok(match session {
-                "actor-session" | "actor-denied" | "actor-no-organization" => {
-                    Some(SessionIdentity {
-                        user_id: session.into(),
-                        organization_id: (session != "actor-no-organization")
-                            .then(|| "org-1".into()),
-                        ..SessionIdentity::default()
-                    })
-                }
+                "actor-session"
+                | "actor-denied"
+                | "actor-no-organization"
+                | "pairing-session"
+                | "pairing-stale" => Some(SessionIdentity {
+                    user_id: session.into(),
+                    authentication_time_unix: match session {
+                        "pairing-session" => Some(Utc::now().timestamp()),
+                        "pairing-stale" => Some(Utc::now().timestamp() - 301),
+                        _ => None,
+                    },
+                    organization_id: (session != "actor-no-organization").then(|| "org-1".into()),
+                    ..SessionIdentity::default()
+                }),
                 _ => None,
             })
         }
@@ -6287,21 +6362,21 @@ mod tests {
             user_id: &str,
             organization_id: &str,
         ) -> Result<Option<OrganizationMembership>, SecurityError> {
-            Ok(
-                (user_id == "actor-session" && organization_id == "org-1").then(|| {
-                    OrganizationMembership {
-                        user_id: user_id.into(),
-                        organization_id: organization_id.into(),
-                        status: "active".into(),
-                        role_names: BTreeSet::new(),
-                        permissions: BTreeSet::from([
-                            "integration-connector:edit".into(),
-                            "issuance:revoke".into(),
-                        ]),
-                        is_owner: false,
-                    }
-                }),
-            )
+            Ok((matches!(
+                user_id,
+                "actor-session" | "pairing-session" | "pairing-stale"
+            ) && organization_id == "org-1")
+                .then(|| OrganizationMembership {
+                    user_id: user_id.into(),
+                    organization_id: organization_id.into(),
+                    status: "active".into(),
+                    role_names: BTreeSet::new(),
+                    permissions: BTreeSet::from([
+                        "integration-connector:edit".into(),
+                        "issuance:revoke".into(),
+                    ]),
+                    is_owner: false,
+                }))
         }
     }
 
@@ -6311,7 +6386,86 @@ mod tests {
         let state_mut = Arc::get_mut(&mut state).expect("owned test state");
         state_mut.identities = Arc::new(ActorIdentityProvider);
         state_mut.memberships = Arc::new(ActorIdentityProvider);
+        state_mut.device_registration_gateway_key = Some("d".repeat(32));
         (gateway_router(state), recorder)
+    }
+
+    #[tokio::test]
+    async fn pairing_ticket_route_requires_fresh_session_and_active_tenant() {
+        let (router, recorder) = actor_test_router();
+        for (authentication, organization, expected) in [
+            (None, "org-1", StatusCode::UNAUTHORIZED),
+            (
+                Some(("cookie", "sessionId=pairing-stale")),
+                "org-1",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("x-api-key", "actor-key")),
+                "org-1",
+                StatusCode::FORBIDDEN,
+            ),
+            (
+                Some(("cookie", "sessionId=pairing-session")),
+                "org-other",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/v1/devices/pairing-tickets")
+                .header("content-type", "application/json")
+                .header("x-user-id", "forged-user")
+                .header("x-service-token", "forged-service-token");
+            if let Some((name, value)) = authentication {
+                builder = builder.header(name, value);
+            }
+            let response = router
+                .clone()
+                .oneshot(
+                    builder
+                        .body(Body::from(
+                            json!({"organization_id":organization}).to_string(),
+                        ))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        assert!(recorder.0.lock().unwrap().is_empty());
+
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/devices/pairing-tickets")
+                    .header("content-type", "application/json")
+                    .header("cookie", "sessionId=pairing-session")
+                    .header("x-user-id", "forged-user")
+                    .header("x-service-token", "forged-service-token")
+                    .body(Body::from(r#"{"organization_id":"org-1"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (service, request) = &calls[0];
+        assert_eq!(service, "device-registration");
+        assert_eq!(request.path, "/v1/devices/pairing-tickets");
+        assert_eq!(request.header("x-user-id"), Some("pairing-session"));
+        assert_eq!(request.header("x-organization-id"), Some("org-1"));
+        assert_eq!(
+            request.header("x-service-token"),
+            Some("d".repeat(32).as_str())
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(request.body.as_deref().unwrap()).unwrap(),
+            json!({"organization_id":"org-1"})
+        );
     }
 
     #[tokio::test]
