@@ -24,7 +24,7 @@ fn registration() -> CreateRegistration {
         organization_id: Some("org-1".into()),
         device_id: "device-1".into(),
         platform: Platform::Web,
-        fcm_token: "push-token".into(),
+        fcm_token: Some("push-token".into()),
         app_version: Some("1.0".into()),
         os_version: None,
         device_model: None,
@@ -80,7 +80,7 @@ async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
         .await
         .unwrap();
     assert_eq!(changed.id, first.id);
-    assert_eq!(changed.fcm_token, "next-push-token");
+    assert_eq!(changed.fcm_token.as_deref(), Some("next-push-token"));
     service.delete("user-1", &first.id).await.unwrap();
     service.delete("user-1", &first.id).await.unwrap();
     assert!(!service.get("user-1", &first.id).await.unwrap().is_active);
@@ -103,6 +103,16 @@ async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
         service.get("other-user", &second.id).await,
         Err(DeviceError::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn keyless_mobile_registration_does_not_require_push_delivery() {
+    let service = service();
+    let mut input = registration();
+    input.platform = Platform::Android;
+    input.fcm_token = None;
+    let registered = service.register("user-1", input).await.unwrap();
+    assert_eq!(registered.fcm_token, None);
 }
 
 #[tokio::test]

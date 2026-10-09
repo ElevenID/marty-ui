@@ -224,7 +224,7 @@ mod custody_tests {
             organization_id: None,
             device_id: "synthetic-device".into(),
             platform: Platform::Web,
-            fcm_token: "synthetic-push-token".into(),
+            fcm_token: Some("synthetic-push-token".into()),
             app_version: None,
             os_version: None,
             device_model: None,

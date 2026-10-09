@@ -180,7 +180,7 @@ mod tests {
                 organization_id: Some("org-a".into()),
                 device_id: "device-a".into(),
                 platform: Platform::Android,
-                fcm_token: "push-a".into(),
+                fcm_token: Some("push-a".into()),
                 app_version: None,
                 os_version: None,
                 device_model: None,

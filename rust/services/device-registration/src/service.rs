@@ -44,7 +44,9 @@ impl DeviceService {
             ));
         }
         nonempty_max("device_id", &body.device_id, 255)?;
-        nonempty_max("fcm_token", &body.fcm_token, 4096)?;
+        if let Some(token) = body.fcm_token.as_deref() {
+            nonempty_max("fcm_token", token, 4096)?;
+        }
         self.repository
             .save(DeviceRegistration::new(user_id.into(), body, Utc::now()))
             .await
@@ -101,7 +103,7 @@ impl DeviceService {
         }
         if let Some(value) = body.fcm_token {
             nonempty_max("fcm_token", &value, 4096)?;
-            registration.fcm_token = value;
+            registration.fcm_token = Some(value);
         }
         if let Some(value) = body.app_version {
             registration.app_version = Some(value);

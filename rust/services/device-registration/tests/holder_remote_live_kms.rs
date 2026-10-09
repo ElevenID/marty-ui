@@ -139,7 +139,6 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let pairing_body = json!({
         "pairing_code": ticket.token,
         "platform": "android",
-        "fcm_token": "synthetic-push-token",
     });
     let http = reqwest::Client::new();
     let paired = http
@@ -165,6 +164,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(registration.fcm_token, None);
     let key = keys
         .current(&registration.id, "holder_binding")
         .await

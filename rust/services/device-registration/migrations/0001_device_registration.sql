@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS device_registration_service.device_registrations (
     organization_id varchar(36),
     device_id varchar(255) NOT NULL,
     platform varchar(32) NOT NULL,
-    fcm_token text NOT NULL,
+    fcm_token text,
     app_version varchar(64),
     os_version varchar(128),
     device_model varchar(255),

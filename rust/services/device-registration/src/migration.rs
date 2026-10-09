@@ -74,6 +74,17 @@ async fn verify(
                 .into(),
         ));
     }
+    let push_nullable: Option<String> = sqlx::query_scalar(
+        "SELECT is_nullable FROM information_schema.columns WHERE table_schema='device_registration_service' AND table_name='device_registrations' AND column_name='fcm_token'",
+    )
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(persistence)?;
+    if push_nullable.as_deref() != Some("YES") {
+        return Err(DeviceError::Persistence(
+            "fresh Device Registration schema must allow pairing without push delivery".into(),
+        ));
+    }
     let version: Option<String> = sqlx::query_scalar(
         "SELECT version_num FROM device_registration_service.alembic_version WHERE version_num=$1",
     )

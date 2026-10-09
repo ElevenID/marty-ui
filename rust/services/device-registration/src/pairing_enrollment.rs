@@ -21,7 +21,8 @@ const INVALID_TICKET: &str = "pairing ticket is invalid or expired";
 pub struct PairingRedeemRequest {
     pub pairing_code: String,
     pub platform: Platform,
-    pub fcm_token: String,
+    #[serde(default)]
+    pub fcm_token: Option<String>,
     pub app_version: Option<String>,
     pub os_version: Option<String>,
     pub device_model: Option<String>,
@@ -70,8 +71,10 @@ impl PairingEnrollment {
         input: PairingRedeemRequest,
     ) -> Result<PairingRedeemResult, DeviceError> {
         if !matches!(input.platform, Platform::Ios | Platform::Android)
-            || input.fcm_token.is_empty()
-            || input.fcm_token.len() > 4096
+            || input
+                .fcm_token
+                .as_deref()
+                .is_some_and(|token| token.is_empty() || token.len() > 4096)
         {
             return Err(DeviceError::BadRequest(
                 "mobile pairing metadata is invalid".into(),

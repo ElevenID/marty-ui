@@ -51,7 +51,8 @@ pub struct DeviceRegistration {
     pub organization_id: Option<String>,
     pub device_id: String,
     pub platform: Platform,
-    pub fcm_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fcm_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +98,8 @@ pub struct CreateRegistration {
     pub organization_id: Option<String>,
     pub device_id: String,
     pub platform: Platform,
-    pub fcm_token: String,
+    #[serde(default)]
+    pub fcm_token: Option<String>,
     #[serde(default)]
     pub app_version: Option<String>,
     #[serde(default)]

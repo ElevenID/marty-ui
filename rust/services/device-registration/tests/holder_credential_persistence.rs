@@ -36,7 +36,7 @@ fn keyless_registration(now: DateTime<Utc>) -> DeviceRegistration {
             organization_id: Some(Uuid::new_v4().to_string()),
             device_id: Uuid::new_v4().to_string(),
             platform: Platform::Web,
-            fcm_token: "synthetic-push-token".into(),
+            fcm_token: Some("synthetic-push-token".into()),
             app_version: None,
             os_version: None,
             device_model: None,

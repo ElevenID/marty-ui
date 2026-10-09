@@ -9730,3 +9730,15 @@ Authenticator still uses local holder signing, the browser still simulates
 pairing, and the final mobile credential renewal, bearer handling, user
 presence, actual wallet-to-Gateway network path and signed release need review
 and qualification before calling the wallet KMS-only.
+
+2026-10-09 push-independent mobile enrollment correction: the Authenticator
+has no FCM token acquisition path. Requiring one during KMS pairing would
+block a wallet before notification consent. Device Registration now accepts a
+mobile pairing request without `fcm_token`, stores SQL NULL in the fresh-only
+schema, rejects malformed nonempty supplied tokens, and verifies the nullable
+column at startup/read-only schema qualification. The disposable OpenBao and
+PostgreSQL probe paired, signed, rotated and deleted a device with no push
+token. Device Registration library and eight focused behavior tests passed,
+and all-target Clippy passed with warnings denied. This local correction is
+not in published UI PR #1192; mobile push enrollment and delivery still need
+an independently consented integration.
