@@ -93,6 +93,8 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "-p",
             "marty-canvas-worker-acceptance",
             "-p",
+            "marty-flow-acceptance",
+            "-p",
             "marty-selfhost-acceptance",
             "-p",
             "marty-issuance-service",
@@ -101,6 +103,8 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "canvas_published_worker_contract",
             "--test",
             "canvas_published_schema_contract",
+            "--test",
+            "flow_published_schema_contract",
             "--test",
             "selfhost_public_image_contract",
             "--test",
@@ -192,10 +196,13 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     execution = steps["Run safe Rust contract groups concurrently"]
     assert execution["if"] == "matrix.lane == 'contracts'"
     assert (
-        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance "
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance "
+        "--exclude marty-canvas-worker-acceptance "
+        "--exclude marty-selfhost-acceptance "
+        "--exclude marty-flow-acceptance >"
         in execution["run"]
     )
-    assert execution["run"].count("--exclude") == 3
+    assert execution["run"].count("--exclude") == 4
 
     gate = workflow["jobs"]["ci-gate"]
     assert "test-rust-services" in gate["needs"]
@@ -222,6 +229,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
             "canvas_published_worker_contract",
             "//! Ownership boundary for published Canvas worker acceptance.",
         ),
+        "flow-acceptance": (
+            "flow_published_schema_contract",
+            "//! Ownership marker for published-schema Flow acceptance.",
+        ),
         "selfhost-acceptance": (
             "selfhost_public_image_contract",
             "//! Ownership boundary for published self-host image acceptance.",
@@ -246,6 +257,7 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     for target in (target for target, _ in packages.values()):
         assert target in runner
     assert '"$composition_executable" --skip' in runner
+    assert '"$flow_executable" --nocapture --test-threads=4' in runner
     assert '"$worker_executable" --skip' in runner
     assert '"$selfhost_executable" --nocapture' in runner
 

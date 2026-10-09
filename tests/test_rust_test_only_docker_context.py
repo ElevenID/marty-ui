@@ -47,6 +47,26 @@ WORKER_TEST_FILES = (
     "support/canvas_startup_attestation.rs",
     "support/canvas_worker_roster_metadata.rs",
 )
+FLOW_TEST_ROOT = "rust/crates/flow-acceptance/tests/"
+FLOW_TEST_FILES = (
+    "flow_published_schema_contract.rs",
+    "support/didcomm_flow_grpc_admission.rs",
+    "support/flow_admission.rs",
+    "support/flow_legacy_physical_http.rs",
+    "support/flow_native_consumer.rs",
+    "support/flow_public_startup.rs",
+    "support/flow_public_startup_peers.rs",
+    "support/flow_rendered_selection.rs",
+)
+FLOW_SUPPORT_OWNERS = {
+    "didcomm_flow_grpc_admission.rs": "support/flow_admission.rs",
+    "flow_admission.rs": "flow_published_schema_contract.rs",
+    "flow_legacy_physical_http.rs": "support/flow_native_consumer.rs",
+    "flow_native_consumer.rs": "support/flow_admission.rs",
+    "flow_public_startup.rs": "support/flow_native_consumer.rs",
+    "flow_public_startup_peers.rs": "support/flow_public_startup.rs",
+    "flow_rendered_selection.rs": "support/flow_native_consumer.rs",
+}
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -394,6 +414,100 @@ def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() ->
         )
     root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert not _is_ignored(WORKER_TEST_ROOT + "support/unreviewed.rs", root_lines)
+
+
+def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
+    assert _tracked_paths(ROOT, FLOW_TEST_ROOT) == [
+        FLOW_TEST_ROOT + name for name in FLOW_TEST_FILES
+    ]
+    for name in FLOW_TEST_FILES:
+        path = FLOW_TEST_ROOT + name
+        source = ROOT / path
+        assert source.is_file() and not source.is_symlink(), (
+            f"Flow test must be a regular checkout file: {path}"
+        )
+        assert _tracked_regular_mode(ROOT, path), (
+            f"Flow test must have a regular Git index mode: {path}"
+        )
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/flow-acceptance/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["package"]["autotests"] is False
+    assert "build" not in manifest["package"]
+    assert manifest["test"] == [
+        {
+            "name": "flow_published_schema_contract",
+            "path": "tests/flow_published_schema_contract.rs",
+        }
+    ]
+    for name, owner in FLOW_SUPPORT_OWNERS.items():
+        references = subprocess.run(
+            ["git", "grep", "-l", "-F", name, "--", "*.rs"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        assert references == [FLOW_TEST_ROOT + owner], (
+            f"Flow support gained another Rust consumer: {name}: {references}"
+        )
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for name in FLOW_TEST_FILES:
+            path = FLOW_TEST_ROOT + name
+            assert _is_ignored(path, lines), (
+                f"Docker COPY includes {ignore_path}: {path}"
+            )
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1
+        for path in PRODUCTION_INPUTS:
+            assert not _is_ignored(path, lines), (
+                f"Docker COPY excludes production input in {ignore_path}: {path}"
+            )
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(FLOW_TEST_ROOT + "support/unreviewed.rs", root_lines)
+
+
+def test_flow_context_proof_rejects_reincluded_test(monkeypatch) -> None:
+    import pytest
+
+    original = Path.read_text
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+
+        def with_reincluded_test(path: Path, *args, **kwargs) -> str:
+            source = original(path, *args, **kwargs)
+            if path == ROOT / ignore_path:
+                return source + "\n!" + FLOW_TEST_ROOT + FLOW_TEST_FILES[0] + "\n"
+            return source
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", with_reincluded_test)
+            with pytest.raises(AssertionError, match="Docker COPY includes"):
+                test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+
+
+def test_flow_context_proof_rejects_non_test_consumer(monkeypatch) -> None:
+    import pytest
+
+    original = subprocess.run
+
+    def with_runtime_consumer(command, *args, **kwargs):
+        result = original(command, *args, **kwargs)
+        if command[:3] == ["git", "grep", "-l"]:
+            return subprocess.CompletedProcess(
+                command,
+                result.returncode,
+                stdout=result.stdout + "rust/services/flow/src/lib.rs\n",
+                stderr=result.stderr,
+            )
+        return result
+
+    monkeypatch.setattr(subprocess, "run", with_runtime_consumer)
+    with pytest.raises(AssertionError, match="another Rust consumer"):
+        test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
 
 
 def test_worker_roster_support_has_one_test_target_consumer() -> None:

@@ -139,7 +139,7 @@ def test_mapping_cannot_hide_missing_or_unowned_bindings(tmp_path, fault):
 
 def test_actual_loader_factory_and_mandatory_gate_are_registered():
     source = (
-        ROOT / "rust/crates/canvas-acceptance/tests/support/flow_rendered_selection.rs"
+        ROOT / "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs"
     ).read_text()
     assert "FlowServiceConfig::from_env()" in source
     assert "FlowGrpcChannelFactories::from_config(&config)" in source
@@ -148,6 +148,6 @@ def test_actual_loader_factory_and_mandatory_gate_are_registered():
     assert "GrpcIssuanceProvider::new" not in source
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
     assert (
-        "grep -Fx 'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
+        "'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
         in script
     )
