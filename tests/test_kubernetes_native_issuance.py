@@ -477,7 +477,7 @@ def ci_prerequisites(workflow):
     assert found[0] < compile_index
     assert "cargo test --locked --workspace --no-run" in steps[compile_index]["run"]
     assert any(
-        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance >"
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance >"
         in step.get("run", "")
         for step in steps
     )
@@ -531,7 +531,7 @@ def test_ci_prerequisites_are_required_before_actual_workspace_gates(fault):
     elif fault == "disconnected":
         for candidate in steps:
             candidate["run"] = candidate.get("run", "").replace(
-                "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance >",
+                "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance >",
                 "echo disconnected >",
             )
     if fault:

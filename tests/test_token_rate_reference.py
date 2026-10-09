@@ -85,7 +85,7 @@ def test_platform_clock_is_in_workspace_ci_and_shared_image_without_service_expa
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "cargo test --locked --workspace --no-run" in workflow
     assert (
-        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance >"
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance >"
         in workflow
     )
     assert "cargo clippy --locked --workspace --all-targets" in workflow
