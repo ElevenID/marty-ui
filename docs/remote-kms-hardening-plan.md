@@ -7171,3 +7171,11 @@ The exact generated Credentials web package also initialized with Node 24 via
 features. This is a package-load check, not the authenticator browser flow.
 UI Rust Service Images completed successfully at `888e7949b`; the live OpenBao
 plugin image job was still active at this checkpoint.
+The live OpenBao plugin image job subsequently completed successfully at
+`888e7949b`, including packaged plugin verification, self-host Raft,
+snapshot export/recovery, and coordinated Rust integration-secret recovery
+after PostgreSQL and Raft restore. The complete hosted run ended with 24
+successes, five failures, and one skip; the fifth failure is the aggregate CI
+gate reflecting the three corrected lane failures, while the separate
+dependency-review advisory is addressed by the local gRPC 1.83.2 patch.
+Push the combined corrections once and re-evaluate the exact new head.
