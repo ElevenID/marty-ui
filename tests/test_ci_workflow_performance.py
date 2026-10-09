@@ -953,7 +953,11 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
     _, document = _workflow(CI_PATH)
     job = document["jobs"]["test-openbao-didcomm-plugin"]
     assert job["if"] == "needs.changes.outputs.openbao == 'true'"
-    assert job["steps"][2]["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    image_build = next(
+        step for step in job["steps"]
+        if step.get("name") == "Test and build the pinned OpenBao plugin image"
+    )
+    assert image_build["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
     storage_gate = next(
         step
         for step in job["steps"]
