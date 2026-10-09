@@ -23,17 +23,20 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     by_name = {step.get("name"): step for step in steps}
     compile_step = by_name["Compile reusable Rust test executables"]
     compile_run = compile_step["run"]
-    worker_branch = compile_run.split(
-        'if [[ "${{ matrix.lane }}" == worker ]]; then', 1
+    owner_branch = compile_run.split(
+        'if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow ]]; then', 1
     )[1].split('elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1)[0]
+    worker_branch = owner_branch.split('worker)\n', 1)[1].split(';;\n', 1)[0]
+    flow_branch = owner_branch.split('flow)\n', 1)[1].split(';;\n', 1)[0]
     assert worker_branch.count("--message-format=json") == 2
     assert "-p marty-canvas-worker-acceptance" in worker_branch
     assert "--test canvas_published_worker_contract" in worker_branch
     assert "-p marty-issuance-service" in worker_branch
     assert "--bin marty-canvas-sync-worker" in worker_branch
-    assert '--worker-only "$artifacts" target' in worker_branch
-    assert "rust:1\\.95-bookworm@sha256:" in worker_branch
-    assert "docker run --rm --network none --read-only" in worker_branch
+    assert '--worker-only "$artifacts" target' in owner_branch
+    assert '--flow-only "$artifacts" target' in owner_branch
+    assert "rust:1\\.95-bookworm@sha256:" in owner_branch
+    assert "docker run --rm --network none --read-only" in owner_branch
     for unrelated in (
         "marty-canvas-acceptance",
         "canvas_published_schema_contract",
@@ -42,8 +45,15 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
         "marty-issuance-service --bin marty-issuance-service",
     ):
         assert unrelated not in worker_branch
-    contracts_branch, canvas_branch = compile_run.split("else\n", 1)
-    assert '[[ "${{ matrix.lane }}" == contracts ]]' in contracts_branch
+    assert flow_branch.count("--message-format=json") == 3
+    assert "-p marty-flow-acceptance" in flow_branch
+    assert "--test flow_published_schema_contract" in flow_branch
+    assert "--bin marty-issuance-service" in flow_branch
+    assert "--bin marty-flow" in flow_branch
+    contracts_branch, canvas_branch = compile_run.split(
+        'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
+    )[1].split("else\n", 1)
+    assert '[[ "${{ matrix.lane }}" == contracts ]]' in compile_run
     assert "cargo test --locked --workspace --no-run" in contracts_branch
     assert "--workspace" not in canvas_branch
     for package, target, kind in (*TEST_TARGETS, *BIN_TARGETS):
@@ -330,6 +340,33 @@ def test_worker_only_artifacts_require_real_worker_without_composition(
         )
         with pytest.raises(ValueError, match="Expected exactly one"):
             VERIFY["verify"](artifacts, target_dir, worker_only=True)
+
+
+def test_flow_only_artifacts_require_real_flow_and_issuance_binaries(
+    tmp_path: Path,
+) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    flow = [records[2], records[len(TEST_TARGETS)], records[-1]]
+    artifacts.write_text(
+        "".join(json.dumps(record) + "\n" for record in flow), encoding="utf-8"
+    )
+    VERIFY["verify"](artifacts, target_dir, flow_only=True)
+    with pytest.raises(ValueError, match="Expected exactly one"):
+        VERIFY["verify"](artifacts, target_dir)
+    for invalid in (
+        flow[:2],
+        flow[1:],
+        [flow[0], {**flow[1], "profile": {"test": True}}, flow[2]],
+        [*flow, {**flow[2], "executable": str(target_dir / "debug/other-flow")}],
+    ):
+        artifacts.write_text(
+            "".join(json.dumps(record) + "\n" for record in invalid),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="Expected exactly one"):
+            VERIFY["verify"](artifacts, target_dir, flow_only=True)
+    with pytest.raises(ValueError, match="one owner"):
+        VERIFY["verify"](artifacts, target_dir, worker_only=True, flow_only=True)
 
 
 @pytest.mark.parametrize("index", [0, 5, 6, 9])
