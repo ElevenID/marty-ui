@@ -9344,3 +9344,8 @@ seeded OpenBadgeLogin ID. Its `--help` and direct profile validation load, the t
 targeted Canvas/self-host preflight tests pass, and Python compilation/Ruff
 pass. This restores the preflight command's importability; it is not evidence
 of a healthy live self-host deployment or of the remaining wallet cutover.
+The same preflight now rejects a holder Signing Keys credential shorter than
+32 UTF-8 bytes or equal to the Device Registration Gateway, gRPC or Issuance
+service credential, without printing secret contents. Its focused synthetic
+secret-file test passed; real operator secret provisioning and live deployment
+qualification remain open.

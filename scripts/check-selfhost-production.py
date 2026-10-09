@@ -153,6 +153,25 @@ def validate_required_secret_files(secret_dir: Path, catalog: DeploymentCatalog,
     return "files=" + ",".join(checked)
 
 
+def validate_holder_service_credential(secret_dir: Path) -> str:
+    holder = read_required_secret(
+        secret_dir / "device_registration_signing_keys_key",
+        "Device Registration-to-Signing Keys credential",
+    )
+    if len(holder.encode("utf-8")) < 32:
+        raise CheckError("Device Registration-to-Signing Keys credential must contain at least 32 bytes.")
+    for name in (
+        "device_registration_gateway_key",
+        "grpc_service_token",
+        "issuance_api_key",
+    ):
+        if holder == read_required_secret(secret_dir / name, name):
+            raise CheckError(
+                "Device Registration-to-Signing Keys credential must be dedicated."
+            )
+    return "dedicated credential length and separation verified"
+
+
 def validate_tunnel_token(secret_dir: Path) -> str:
     token = read_required_secret(secret_dir / "cloudflare_tunnel_token", "Cloudflare tunnel token")
     return f"token_length={len(token)}"
@@ -1212,6 +1231,7 @@ def main() -> int:
     ]
     validation_results = [
         run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, catalog, "selfhost-production")),
+        run_check("holder-service-credential", lambda: validate_holder_service_credential(secret_dir)),
         run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),
