@@ -10632,3 +10632,13 @@ After the Core batch is published, repin all production consumers and replace
 the temporary UI policy call with the Core canonical boundary to avoid
 duplicating the same rule across repositories. The older database JSON guard
 remains a defense and acceptance check, not the only runtime barrier.
+
+2026-10-09 exact-head CI observation after local metadata guard: published UI
+run `37999429439` is still live at `8ee6790ba`; Rust Service Images completed
+successfully, as did separate CodeQL Rust run `37999429628`. Canvas Rust tests
+and the OpenBao DIDComm plugin image job remain in progress. The release and
+Rust contract job failures remain the two previously diagnosed stale checks;
+their correction is local in `89cf4bdd0`. Local Core `f8a8dc0` and UI
+`0acb63f5d` metadata guards have not had hosted checks or artifact proof.
+UI Issuance warnings-denied library Clippy and all three affected probe tests
+passed locally.
