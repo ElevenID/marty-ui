@@ -9742,3 +9742,31 @@ token. Device Registration library and eight focused behavior tests passed,
 and all-target Clippy passed with warnings denied. This local correction is
 not in published UI PR #1192; mobile push enrollment and delivery still need
 an independently consented integration.
+
+2026-10-09 Authenticator local mobile pairing candidate on branch
+`security/kms-hardened-core-consumer-20261008`: the Rust QR parser recognizes
+only `marty://pair` with one 43-character ticket and a bare HTTPS API origin;
+it rejects duplicate, unknown, insecure or malformed parameters. The Flutter
+scanner asks the user to approve the displayed origin before sending the
+ticket. A bounded, no-redirect HTTP client redeems the ticket without an FCM
+token, accepts only the expected public-JWK response shape, and stores the
+opaque device bearer and public metadata in platform secure storage. This is
+not a KMS-only wallet cutover: the current SDK presentation path still signs
+locally, bearer renewal and exact browser status are absent, and neither an
+Android/iOS build nor a physical-device end-to-end run has passed. The local
+Rust parser test is compiling; Flutter/Dart is not installed on this host, so
+the mobile service tests and analyzer remain required CI/host gates.
+The first local Windows Rust bridge test could not reach this QR assertion:
+Longfellow ZK's native compile lacks `openssl/sha.h` on this host. A second
+parser-only run uses the repository's debug-only `USE_ZK_MOCK=1` setting to
+isolate the QR logic; no ZK custody or release claim may be drawn from it.
+Browser pairing completion must be tied to this exact ticket. Listing an
+arbitrary new or existing device is not proof that the scanned mobile app
+received and stored its bearer. The next grouped UI work should issue a
+separate browser-only status capability with the ticket, record a pending
+registration after remote enrollment, and mark it complete only after the
+mobile app acknowledges secure storage using its newly issued bearer. The
+browser should poll that scoped status under its authenticated session, then
+replace the local code generator and simulated completion. Review QR
+shoulder-surfing/race behavior and require the user to approve the displayed
+API origin on mobile; do not expose the bearer or status capability in logs.
