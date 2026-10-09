@@ -8575,3 +8575,17 @@ CodeQL and organization quality runs were queued or active at first check.
 Do not transfer the earlier head's green result to this combined head. The
 local tracker follow-up is held for a later grouped push to avoid restarting
 CI for a documentation-only correction.
+
+2026-10-09 Authenticator legacy-plugin retirement: the root Flutter
+`pubspec.yaml`/lock and active `lib`, Android, iOS, macOS and CI source graph
+had no reference to `local_plugins/pi-authenticator-legacy`; only a README
+cleanup note referenced it. That unused plugin nevertheless retained Java
+`SecretKeyWrapper` private-key loading/signing and Swift private-key import
+code. With no public deployment or migration requirement, the Authenticator
+candidate removes its 89 tracked files and the stale README note. A complete
+repository text search finds no remaining plugin identifier, `git diff --check`
+passes, and the mobile/desktop custody source guard passes. Flutter is not
+installed locally, so hosted source/build checks are still needed after a
+grouped Authenticator push. This removal does not implement remote holder
+signing, trusted verification, wallet persistence or mDoc sessions; PR #57
+remains draft and must not be released as feature complete.
