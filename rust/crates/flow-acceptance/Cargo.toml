@@ -1,7 +1,7 @@
 [package]
-name = "marty-canvas-acceptance"
+name = "marty-flow-acceptance"
 version = "0.1.0"
-description = "Published Canvas composition acceptance tests"
+description = "Published-schema Flow admission and consumer acceptance tests"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,6 +22,7 @@ hmac.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
 marty-didcomm = { workspace = true, features = ["did_web"] }
+marty-flow = { path = "../../services/flow" }
 marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }
 marty-oid4vci = { workspace = true, features = ["lti"] }
@@ -49,8 +50,8 @@ url.workspace = true
 uuid.workspace = true
 
 [[test]]
-name = "canvas_published_schema_contract"
-path = "tests/canvas_published_schema_contract.rs"
+name = "flow_published_schema_contract"
+path = "tests/flow_published_schema_contract.rs"
 
 [lints.rust]
 unsafe_code = "forbid"

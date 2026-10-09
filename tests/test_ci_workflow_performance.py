@@ -2689,13 +2689,16 @@ def test_classifier_diff_reports_both_rename_endpoints(tmp_path: Path) -> None:
 
 def _assert_required_canvas_target_completion(published: str) -> None:
     target_success = (
-        "(( composition_status == 0 && worker_status == 0 && selfhost_status == 0 ))"
+        "(( composition_status == 0 && flow_status == 0 && worker_status == 0 && selfhost_status == 0 ))"
     )
     assert target_success in published
     assert published.index(target_success) < published.index(
         "if (( expected_skipped_config_tests == 0 )); then"
     )
     assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
+    assert 'flow_tests=$("$flow_executable" --list)' in published
+    assert "Flow executable changed its exact nine-case owner inventory" in published
+    assert 'report_target_timing flow "$flow_started" "$flow_status" "$flow_end"' in published
     assert (
         published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2
     )
@@ -2986,7 +2989,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'didcomm_http_admission_recovers_real_keyed_reservation: test'"
+        "'didcomm_http_admission_recovers_real_keyed_reservation: test'"
         in published
     )
     assert (
@@ -2998,15 +3001,15 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'didcomm_flow_grpc_provider_preserves_keyed_admission: test'"
+        "'didcomm_flow_grpc_provider_preserves_keyed_admission: test'"
         in published
     )
     assert (
-        "grep -Fx 'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'"
+        "'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'"
         in published
     )
     assert (
-        "grep -Fx 'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
+        "'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
         in published
     )
     assert (
@@ -3046,7 +3049,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         )
         == 1
     )
-    assert 'kill "$composition_pid" "$worker_pid"' in published
+    assert 'kill "$composition_pid" "$flow_pid" "$worker_pid" "$selfhost_pid"' in published
     assert 'tail --pid="$pid"' in published
     assert (
         'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
@@ -3055,7 +3058,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert (
         'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in published
     )
+    assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
+    assert 'wait "$flow_pid" || flow_status=$?' in published
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (
         '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
@@ -4171,6 +4176,7 @@ def test_image_context_excludes_integration_tests_but_keeps_build_inputs() -> No
         "crates/service-acceptance",
         "crates/canvas-acceptance",
         "crates/canvas-worker-acceptance",
+        "crates/flow-acceptance",
     ],
 )
 def test_every_issuance_and_acceptance_integration_test_remains_registered(
