@@ -325,6 +325,11 @@ pub(super) async fn run(database_url: &str) {
     for (index, name) in ["base", "selfhost"].into_iter().enumerate() {
         let environment: BTreeMap<String, String> =
             serde_json::from_value(profiles[name]["environment"].clone()).unwrap();
+        assert_eq!(
+            environment["ISSUANCE_GRPC_TARGET"],
+            native.origin(),
+            "{name} must render the native Issuance RPC target"
+        );
         let deployed = name == "selfhost";
         let before_config = snapshot(&pool).await;
         let before_config_attempts = native.attempts();
