@@ -8920,3 +8920,14 @@ parses as YAML. This source-level result does not yet prove that a newly built
 pair passes the gate. The historical fenced beta installer and protected
 receipt path still assume a pre-existing Issuance schema; retirement of that
 path remains necessary before the fresh-only source batch is publishable.
+The direct stale path is `run-passport-beta-native-db-gates.ps1` invoking
+`prepare_passport_beta_native_migrations.py` to emit post-baseline SQL and a
+synthetic Rust ledger. `prepare_passport_beta_aggregate_handoff.py` imports
+that same preparer, and `run-passport-beta-aggregate-deploy.ps1` consumes its
+receipt and executes `passport-beta-rust-owner-transition.sql`. These are
+manual protected beta operator paths rather than steps in the stack `cd.yml`
+release workflow, but they remain executable and their acceptance scripts
+still trust their receipts. Retire this whole old-schema path and its claims
+together; deleting only the SQL bridge would leave a misleading operator
+entrypoint. The supported fresh self-host and disposable passport routes must
+retain their native Rust migration and passport behavior.
