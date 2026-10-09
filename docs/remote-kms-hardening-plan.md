@@ -10312,3 +10312,9 @@ image pull exit status 1. Release contract and Rust CodeQL jobs remain in
 progress at this checkpoint. Keep the UI correction local until the remaining
 checks are triaged, then publish it in one batch; do not mark PR #1192 or the
 goal qualified on partial checks.
+
+2026-10-09 full Canvas preflight regression result: the local merged-head
+`tests/test_canvas_published_preflight.py` suite completed with 226 passed,
+one skipped in 11m38s. This covers the combined historical serial workers
+and scoped OpenBao signer probe after the merge conflict resolution; it does
+not replace the pending hosted Canvas/image or live KMS acceptance gates.
