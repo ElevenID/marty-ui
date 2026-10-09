@@ -220,6 +220,44 @@ jobs:
                 fi
               fi
             fi
+            # Flow acceptance test-source edits have no runtime/image input.
+            # Require the complete tracked-source and Docker-context proof;
+            # unknown siblings or any second kind of change retain full CI.
+            flow_test_only=false
+            flow_candidate=true
+            if [[ "${{ github.event_name }}" != pull_request ||
+                  ${#changed_files[@]} -eq 0 ]]; then
+              flow_candidate=false
+            fi
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs|rust/crates/flow-acceptance/tests/support/didcomm_flow_grpc_admission.rs|rust/crates/flow-acceptance/tests/support/flow_admission.rs|rust/crates/flow-acceptance/tests/support/flow_legacy_physical_http.rs|rust/crates/flow-acceptance/tests/support/flow_native_consumer.rs|rust/crates/flow-acceptance/tests/support/flow_public_startup.rs|rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs|rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs) ;;
+                *) flow_candidate=false; break ;;
+              esac
+            done
+            if [[ "$flow_candidate" == true ]]; then
+              verified_flow_file="$RUNNER_TEMP/ci-verified-flow-tests"
+              if python3 tests/test_rust_test_only_docker_context.py \
+                --emit-verified-flow-tests > "$verified_flow_file"; then
+                mapfile -d '' -t owned_flow_tests < "$verified_flow_file"
+                if [[ ${#owned_flow_tests[@]} -eq 8 ]]; then
+                  flow_test_only=true
+                  for path in "${changed_files[@]}"; do
+                    owned=false
+                    for flow_test in "${owned_flow_tests[@]}"; do
+                      if [[ "$path" == "$flow_test" ]]; then
+                        owned=true
+                        break
+                      fi
+                    done
+                    if [[ "$owned" != true ]]; then
+                      flow_test_only=false
+                      break
+                    fi
+                  done
+                fi
+              fi
+            fi
             for path in "${changed_files[@]}"; do
               case "$path" in
                 rust/services/issuance/src/canvas_sync_processor_contract.md)
@@ -358,6 +396,10 @@ jobs:
                   "${{ github.event_name }}" == pull_request ]]; then
               rust_runtime=false
               rust_matrix='["worker"]'
+            elif [[ "${flow_test_only:-false}" == true && "$all" == false &&
+                    "${{ github.event_name }}" == pull_request ]]; then
+              rust_runtime=false
+              rust_matrix='["flow"]'
             elif [[ "${leaf_only:-false}" == true && "$all" == false &&
                   "${{ github.event_name }}" == pull_request ]]; then
               rust_runtime=false
@@ -889,6 +931,17 @@ jobs:
           # Rust invokes python3 by name in preflights AND the full suite.
           # Publish this interpreter only after both installation and smoke pass.
           printf '%s\n' "$RUNNER_TEMP/canvas-worker-harness/bin" >> "$GITHUB_PATH"
+      - name: Prepare isolated Flow renderer dependency
+        if: matrix.lane == 'flow'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/flow-renderer"
+          "$RUNNER_TEMP/flow-renderer/bin/python" -m pip install \
+            --disable-pip-version-check --only-binary=:all: --no-deps PyYAML==6.0.3
+          "$RUNNER_TEMP/flow-renderer/bin/python" -c \
+            'import yaml; assert yaml.__version__ == "6.0.3"'
+          printf '%s\n' "$RUNNER_TEMP/flow-renderer/bin" >> "$GITHUB_PATH"
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
@@ -916,9 +969,9 @@ jobs:
         run: |
           set -euo pipefail
           artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
-          if [[ "${{ matrix.lane }}" == worker ]]; then
-            # Diagnostic-only package closure. The full Canvas and contracts
-            # lanes still run in this PR; this branch grants no skip authority.
+          if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow ]]; then
+            # Exact test-source owners compile in the same pinned Bookworm
+            # environment as the full Canvas lane. The merge group stays full.
             cargo fetch --locked
             mapfile -t builder_images < <(awk '$1 == "FROM" && $3 == "AS" && $4 == "rust-service-base" { print $2 }' ../services/Dockerfile)
             [[ ${#builder_images[@]} == 1 ]]
@@ -937,6 +990,7 @@ jobs:
               --env "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/target" \
               --env CARGO_INCREMENTAL=0 \
               --env CARGO_PROFILE_TEST_DEBUG=0 \
+              --env "MARTY_RUST_ACCEPTANCE_SCOPE=${{ matrix.lane }}" \
               --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
               --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
               --volume "$host_cargo_home:$host_cargo_home" \
@@ -944,14 +998,33 @@ jobs:
               --workdir "$GITHUB_WORKSPACE/rust" \
               "$bookworm_builder" \
               sh -ceu '
-                cargo test --locked --offline -p marty-canvas-worker-acceptance \
-                  --test canvas_published_worker_contract --no-run \
-                  --timings --message-format=json
-                cargo build --locked --offline -p marty-issuance-service \
-                  --bin marty-canvas-sync-worker --message-format=json
+                case "$MARTY_RUST_ACCEPTANCE_SCOPE" in
+                  worker)
+                    cargo test --locked --offline -p marty-canvas-worker-acceptance \
+                      --test canvas_published_worker_contract --no-run \
+                      --timings --message-format=json
+                    cargo build --locked --offline -p marty-issuance-service \
+                      --bin marty-canvas-sync-worker --message-format=json
+                    ;;
+                  flow)
+                    cargo test --locked --offline -p marty-flow-acceptance \
+                      --test flow_published_schema_contract --no-run \
+                      --timings --message-format=json
+                    cargo build --locked --offline -p marty-issuance-service \
+                      --bin marty-issuance-service --message-format=json
+                    cargo build --locked --offline -p marty-flow \
+                      --bin marty-flow --message-format=json
+                    ;;
+                  *) exit 2 ;;
+                esac
               ' > "$artifacts"
-            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
-              --worker-only "$artifacts" target
+            if [[ "${{ matrix.lane }}" == flow ]]; then
+              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+                --flow-only "$artifacts" target
+            else
+              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+                --worker-only "$artifacts" target
+            fi
           elif [[ "${{ matrix.lane }}" == contracts ]]; then
             cargo test --locked --workspace --no-run --timings --message-format=json > "$artifacts"
           else
@@ -1068,13 +1141,16 @@ jobs:
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
       - name: Prepare pinned standalone Compose renderer for Rust contracts
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts' || matrix.lane == 'flow'
         shell: bash
         run: |
           set -euo pipefail
           bash scripts/ci/install-compose-renderer.sh
           printf 'MARTY_BASE_COMPOSE_BINARY=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_BUNDLE_TEST_COMPOSE=%s\n' "$RUNNER_TEMP/compose-render-v5.4.0" >> "$GITHUB_ENV"
+          if [[ "${{ matrix.lane }}" == flow ]]; then
+            printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$(command -v python3)" >> "$GITHUB_ENV"
+          fi
       - name: Fail fast on image-free Canvas renewal configuration
         if: matrix.lane == 'canvas'
         shell: bash
@@ -1692,6 +1768,8 @@ jobs:
           if [[ "${{ matrix.lane }}" == worker ]]; then
             python3 ../scripts/ci/run-db-contract-groups.py worker-preflights
             python3 ../scripts/ci/run-db-contract-groups.py worker-canvas
+          elif [[ "${{ matrix.lane }}" == flow ]]; then
+            bash ../scripts/ci/run-flow-acceptance-contracts.sh
           else
             python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
           fi
@@ -2846,7 +2924,7 @@ jobs:
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
             'true:true:["canvas","contracts"]'|'true:false:["contracts"]'|'false:false:["canvas","contracts"]') ;;
-            'true:false:["worker"]')
+            'true:false:["worker"]'|'true:false:["flow"]')
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
           esac

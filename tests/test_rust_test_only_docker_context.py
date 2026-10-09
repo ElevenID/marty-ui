@@ -748,7 +748,13 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv == [sys.argv[0], "--emit-verified-worker-tests"]:
+    if sys.argv == [sys.argv[0], "--emit-verified-flow-tests"]:
+        # An exact-file PR may omit runtime/image work only after this whole
+        # source, sole-consumer, and Docker-context proof succeeds.
+        test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+        for name in FLOW_TEST_FILES:
+            sys.stdout.buffer.write((FLOW_TEST_ROOT + name).encode("utf-8") + b"\0")
+    elif sys.argv == [sys.argv[0], "--emit-verified-worker-tests"]:
         # The classifier consumes this only after proving exact tracked test
         # ownership and exclusions in every Rust-copying Docker context.
         test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
@@ -767,5 +773,6 @@ if __name__ == "__main__":
     else:
         raise SystemExit(
             "Usage: test_rust_test_only_docker_context.py "
-            "--emit-verified-leaves|--emit-verified-worker-tests"
+            "--emit-verified-leaves|--emit-verified-worker-tests|"
+            "--emit-verified-flow-tests"
         )
