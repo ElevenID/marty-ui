@@ -86,7 +86,7 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 10
+    assert len(entries) == len({v["name"] for v in entries}) == 11
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
@@ -112,6 +112,15 @@ def signing_inventory(values):
             "name": name,
             "valueFrom": {"secretKeyRef": {"name": "marty-secrets", "key": name}},
         }
+    expected["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"] = {
+        "name": "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "marty-secrets",
+                "key": "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+            }
+        },
+    }
     expected["OPENBAO_SERVICE_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] = (
         "SIGNING_KEYS_OPENBAO_TOKEN"
     )

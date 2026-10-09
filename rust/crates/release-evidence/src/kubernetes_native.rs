@@ -636,6 +636,12 @@ fn signing_template(resources: &[Value]) -> Result<()> {
         "SIGNING_KEYS_INTERNAL_API_KEY",
         secret_ref("SIGNING_KEYS_INTERNAL_API_KEY"),
     );
+    // Dedicated Device Registration -> Signing Keys service authorization for
+    // holder-key cleanup; this is not private signing material.
+    expected.insert(
+        "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+        secret_ref("DEVICE_REGISTRATION_SIGNING_KEYS_KEY"),
+    );
     expected.insert("OPENBAO_SERVICE_TOKEN", json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}}));
     for name in ["BAO_ADDR", "PUBLIC_DOMAIN"] {
         expected.insert(name, config_ref(name, name));

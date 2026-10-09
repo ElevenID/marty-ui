@@ -9440,7 +9440,53 @@ excluded because it would restore an Alembic upgrade path that the fresh-only
 runtime rejects. The merged Rust workspace check, Issuance all-target Clippy,
 394 affected Python tests, 47 physical-provider tests, two Canvas published
 runner cases, three complete Compose model scripts, 55 migration/fence tests
-and Bash syntax checks passed locally. The merged head has not yet been
-published or qualified by hosted CI. Historical published-schema Canvas
-fixtures still assert the old Alembic revision; retire or replace that test
+and Bash syntax checks passed locally. The merged head was published as
+`c31ad24b3` but is not yet qualified by hosted CI. Historical published-schema
+Canvas fixtures still assert the old Alembic revision; retire or replace that test
 producer with fresh Rust schema evidence before final release qualification.
+
+2026-10-09 UI merged-head CI checkpoint: PR #1192 head `c31ad24b3`
+started hosted CI `37952848950`. Its Rust Feature Regression Probe and Rust
+Lint and Packaging jobs failed before compilation because the standalone
+frozen probe lockfile still named Core `6855721` after the production graph
+moved to `7c50d31`. Regenerating
+that probe lockfile changed only the six Core source entries; local Cargo
+metadata and `cargo fetch --locked --offline` pass with Rust 1.95.0. A local
+frozen/offline build of the standalone probe then produced deterministic
+canonical output accepted by `test_feature_regression_rust_probe.py`. This
+correction was held locally until the other jobs finished so their findings
+could be batched into one follow-up push. The failed jobs remain
+immutable evidence, and this checkpoint is not a green hosted claim.
+
+The same merged-head run's Release Contract Tests completed with 6,131
+passing and five failing cases, all variants of one stale Kubernetes signing
+environment inventory assertion. The 11th binding,
+`DEVICE_REGISTRATION_SIGNING_KEYS_KEY`, is a dedicated service credential for
+holder-key cleanup between Device Registration and Signing Keys, not private
+signing material, and must remain for supported device behavior. The test now
+requires that exact secret reference and all 31 tests in its file pass
+locally. This correction is part of the batched CI follow-up.
+
+The Rust Service Tests (contracts) lane also failed 10 cases because its
+`kubernetes_native` exact signing template guard omitted that same live
+service credential. The Rust guard now requires the same named Secret
+reference. Local Windows execution passed 14 of its 15 tests; the remaining
+shell/`envsubst` fixture cannot start because that program is absent locally.
+Hosted Linux must still prove the full lane after the batched correction.
+
+The Canvas Rust lane's resolved Kubernetes configuration proof failed at
+`native::compose` for the same signing-template mismatch. The shared Rust
+guard correction is the path to that model; hosted rerun remains required to
+prove the full Canvas case. No private-key material was restored to make the
+fixture pass.
+
+The same exact-head OpenBao DIDComm plugin image job completed successfully,
+including packaged plugin, storage, Raft HA/failover, snapshot and coordinated
+Rust/PostgreSQL/integration-secret recovery probes. This is hosted backend
+evidence at `c31ad24b3`, not yet whole-release qualification.
+
+The Rust Service Images job also passed at `c31ad24b3`, including its
+packaged Canvas worker startup gate. The first merged-head run finished with
+22 successful checks, one skipped check, five substantive failures described
+above, and the dependent CI Gate failure. The next grouped push will qualify
+the standalone lockfile and both exact signing-template inventories together.
