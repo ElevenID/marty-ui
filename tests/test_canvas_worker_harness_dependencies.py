@@ -41,7 +41,7 @@ def assert_dependency_setup(steps):
     names = [step.get("name") for step in steps]
     assert names.count(STEP) == 1
     setup = names.index(STEP)
-    assert steps[setup]["if"] == "matrix.lane == 'canvas'"
+    assert steps[setup]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     assert "continue-on-error" not in steps[setup]
     assert setup < names.index("Compile reusable Rust test executables")
     early = names.index("Fail fast on image-free Canvas renewal configuration")
@@ -89,6 +89,14 @@ def assert_dependency_setup(steps):
     assert steps[preflight]["shell"] == "bash"
     assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert not steps[preflight].get("continue-on-error", False)
+    full = names.index("Run isolated database contract suites concurrently")
+    assert "if" not in steps[full]
+    assert not steps[full].get("continue-on-error", False)
+    assert 'if [[ "${{ matrix.lane }}" == worker ]]; then' in steps[full]["run"]
+    assert (
+        "python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
+        "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas"
+    ) in steps[full]["run"]
     interpreter = [
         step
         for step in steps[:setup]
@@ -110,6 +118,8 @@ def test_dependency_setup_precedes_compile_and_all_native_preflights():
         "late",
         "optional",
         "conditional",
+        "canvas_only",
+        "worker_only",
         "duplicate",
         "pin",
         "interpreter",
@@ -130,6 +140,10 @@ def test_renderer_dependency_guard_rejects_missing_or_ineffective_setup(mutation
         setup["continue-on-error"] = True
     elif mutation == "conditional":
         setup["if"] = "false"
+    elif mutation == "canvas_only":
+        setup["if"] = "matrix.lane == 'canvas'"
+    elif mutation == "worker_only":
+        setup["if"] = "matrix.lane == 'worker'"
     elif mutation == "duplicate":
         steps.append(copy.deepcopy(setup))
     elif mutation == "pin":

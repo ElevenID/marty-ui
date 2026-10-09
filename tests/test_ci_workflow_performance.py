@@ -194,11 +194,16 @@ def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
         "json": json,
         "os": SimpleNamespace(environ={}),
         "subprocess": SimpleNamespace(run=child),
-        "loopback_tls": lambda: nullcontext(("https://127.0.0.1:1", None, Path("synthetic.pem"))),
+        "loopback_tls": lambda: nullcontext(
+            ("https://127.0.0.1:1", None, Path("synthetic.pem"))
+        ),
         "ROUTINE_NATIVE_CASES": routine_names,
         "FROZEN_NATIVE_CASE_COUNT": 104,
     }
-    exec(compile(ast.Module(body=[native], type_ignores=[]), "<native-tier>", "exec"), namespace)
+    exec(
+        compile(ast.Module(body=[native], type_ignores=[]), "<native-tier>", "exec"),
+        namespace,
+    )
     namespace["run_native"](Path("unused"), qualification)
     assert len(seen) == expected_count
     assert seen == (
@@ -465,7 +470,9 @@ done < "$SYNTHETIC_PATHS_FILE"
     if fetch_failure:
         prelude = prelude.replace("fetch) return 0 ;;", "fetch) return 44 ;;")
     if missing_base:
-        prelude = prelude.replace("export BASE_SHA=synthetic-base", "export BASE_SHA=''")
+        prelude = prelude.replace(
+            "export BASE_SHA=synthetic-base", "export BASE_SHA=''"
+        )
     paths_to_run = changed_paths
     if combined:
         # One git diff containing multiple paths must preserve every selected
@@ -1133,13 +1140,14 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     _, document = _workflow(CI_PATH)
     job = document["jobs"]["test-rust-services"]
-    assert job["strategy"] == {
-        "fail-fast": False,
-        "matrix": {"lane": "${{ fromJSON(needs.changes.outputs.rust_matrix) }}"},
-    }
+    assert job["strategy"]["fail-fast"] is False
+    matrix = job["strategy"]["matrix"]["lane"]
+    assert "github.event_name == 'pull_request'" in matrix
+    assert "ci-worker-diagnostic" in matrix
+    assert '\'["canvas","contracts","worker"]\'' in matrix
+    assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
     canvas = {
-        "Prepare isolated Canvas worker harness dependencies",
         "Require Kubernetes deployment contract executables",
         "Fail fast on image-free Canvas renewal configuration",
         "Compile Bookworm-compatible base runtime acceptance",
@@ -1171,6 +1179,9 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
+    assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
+        "matrix.lane == 'canvas' || matrix.lane == 'worker'"
+    )
     for name in contracts:
         assert steps[name]["if"] == "matrix.lane == 'contracts'"
         assert not steps[name].get("continue-on-error", False)
@@ -1608,14 +1619,19 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
     ):
         source = (ROOT / dockerfile).read_text(encoding="utf-8")
         assert helper not in source
-        assert not re.search(r"(?m)^(?:COPY|ADD)\s+(?:--\S+\s+)*(?:\.|scripts/?|scripts/ci/?)\s", source)
+        assert not re.search(
+            r"(?m)^(?:COPY|ADD)\s+(?:--\S+\s+)*(?:\.|scripts/?|scripts/ci/?)\s", source
+        )
         included = [
             line
             for line in (ROOT / ignore).read_text(encoding="utf-8").splitlines()
             if line.startswith("!scripts/ci/") and line != "!scripts/ci/"
         ]
         assert included == (
-            ["!scripts/ci/run-public-rust-build.sh", "!scripts/ci/public-sccache-stats.awk"]
+            [
+                "!scripts/ci/run-public-rust-build.sh",
+                "!scripts/ci/public-sccache-stats.awk",
+            ]
             if dockerfile == "services/Dockerfile"
             else ["!scripts/ci/verify-release-cache.sh"]
         )
@@ -1860,7 +1876,6 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         == "true"
     )
 
-
     assert (
         _classify_changed_path(
             "scripts/ci/run-published-canvas-contracts.sh", tmp_path
@@ -2003,16 +2018,21 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "security": "false",
     }
     assert _classify_changed_paths(candidates, tmp_path) == [expected] * len(candidates)
-    assert _classify_changed_path(
-        "tests/test_gateway_rust_cutover_helpers.py", tmp_path
-    )["all"] == "true"
+    assert (
+        _classify_changed_path("tests/test_gateway_rust_cutover_helpers.py", tmp_path)[
+            "all"
+        ]
+        == "true"
+    )
     mixed = _classify_changed_paths(
         [candidates[0], "services/Dockerfile"], tmp_path, combined=True
     )[0]
-    assert all(mixed[name] == "true" for name in ("release", "rust", "python", "security"))
-    protected = _classify_changed_paths(
-        [candidates[0]], tmp_path, event="merge_group"
-    )[0]
+    assert all(
+        mixed[name] == "true" for name in ("release", "rust", "python", "security")
+    )
+    protected = _classify_changed_paths([candidates[0]], tmp_path, event="merge_group")[
+        0
+    ]
     assert protected["all"] == protected["rust"] == "true"
 
 
@@ -2401,9 +2421,13 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
         # Official-only UI and tunnel-wrapper roles do not compile Rust
         # service binaries; their separate release ownership is asserted by
         # test_selfhost_release_preparation.py.
-        (ROOT / ".github/workflows/cd.yml", {
-            "docker/ui.Dockerfile", "docker/cloudflared-wrapper.Dockerfile",
-        }),
+        (
+            ROOT / ".github/workflows/cd.yml",
+            {
+                "docker/ui.Dockerfile",
+                "docker/cloudflared-wrapper.Dockerfile",
+            },
+        ),
     ):
         image_inputs = set(
             re.findall(
@@ -2577,7 +2601,10 @@ def _assert_required_canvas_target_completion(published: str) -> None:
         "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in published
     )
-    assert '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4' in published
+    assert (
+        '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
+        in published
+    )
     assert published.rstrip().endswith(
         'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
         '--require-execution canvas "$worker_log"'
@@ -2594,10 +2621,12 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert "if" not in gate
     assert not gate.get("continue-on-error", False)
-    assert gate["run"] == (
-        "python3 ../scripts/ci/run-db-contract-groups.py "
+    assert "run-db-contract-groups.py worker-preflights" in gate["run"]
+    assert "run-db-contract-groups.py worker-canvas" in gate["run"]
+    assert (
+        "run-db-contract-groups.py "
         "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
-    )
+    ) in gate["run"]
     published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
     )
@@ -3831,8 +3860,7 @@ def test_required_rust_lanes_use_uncached_compiler_only_when_optional_cache_fail
 def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     _, ci = _workflow(CI_PATH)
     steps = {
-        step.get("name"): step
-        for step in ci["jobs"]["test-rust-services"]["steps"]
+        step.get("name"): step for step in ci["jobs"]["test-rust-services"]["steps"]
     }
     compile_step = steps["Compile reusable Rust test executables"]["run"]
     capture_step = steps["Capture host compiler cache counters after compile"]
@@ -3846,7 +3874,9 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
         ("verify_artifacts", "python3 ../scripts/ci/verify-canvas-test-artifacts.py"),
     ):
         assert f"run_host_phase {phase} {command}" in compile_step
-    assert 'printf "phase\\telapsed_seconds\\ttarget_bytes\\texit_code\\n"' in compile_step
+    assert (
+        'printf "phase\\telapsed_seconds\\ttarget_bytes\\texit_code\\n"' in compile_step
+    )
     assert 'return "$exit_code"' in compile_step
     for phase, command in (
         ("tests", "cargo test"),
@@ -4106,7 +4136,9 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
     workspace = tomllib.loads((ROOT / "rust/Cargo.toml").read_text(encoding="utf-8"))
     assert "crates/canvas-acceptance" in workspace["workspace"]["members"]
     worker = tomllib.loads(
-        (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(encoding="utf-8")
+        (ROOT / "rust/crates/canvas-worker-acceptance/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
     )
     assert "crates/canvas-worker-acceptance" in workspace["workspace"]["members"]
     assert {target["name"] for target in canvas["test"]} == {
