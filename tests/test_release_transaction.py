@@ -33,6 +33,10 @@ GATES = {
         "run_id": "102",
         "evidence_sha256": "sha256:" + "5" * 64,
     },
+    "native_schema": {
+        "run_id": "103",
+        "evidence_sha256": "sha256:" + "6" * 64,
+    },
 }
 
 
@@ -69,6 +73,13 @@ def digests_recorded(tmp_path: Path) -> dict[str, object]:
 
 def qualified(tmp_path: Path) -> dict[str, object]:
     return transaction.qualify(digests_recorded(tmp_path), GATES)
+
+
+def test_fresh_native_schema_evidence_is_required_for_release(tmp_path: Path) -> None:
+    without_native = {role: value for role, value in GATES.items()
+                      if role != "native_schema"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="native_schema"):
+        transaction.qualify(digests_recorded(tmp_path), without_native)
 
 
 def promoted(tmp_path: Path) -> dict[str, object]:

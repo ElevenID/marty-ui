@@ -21,7 +21,7 @@ SCHEMA = "elevenid.stack-release-transaction/v1"
 STACK_LOCK_SCHEMA = "marty.stack-lock/v1"
 RELEASE_ELIGIBLE_STATE = "eligible"
 REQUIRED_IMAGE_ROLES = ("ui", "services", "migrations")
-REQUIRED_GATE_ROLES = ("public_stack", "verifier_differential")
+REQUIRED_GATE_ROLES = ("public_stack", "verifier_differential", "native_schema")
 IMAGE_URIS = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
@@ -426,7 +426,7 @@ def qualify(value: object, gates: dict[str, dict[str, str]]) -> dict[str, object
     _require(claim["state"] != "tombstoned", "tombstoned transaction cannot be reused")
     _require(
         tuple(sorted(gates)) == tuple(sorted(REQUIRED_GATE_ROLES)),
-        "qualification gates must be exactly public_stack and verifier_differential",
+        "qualification gates must be exactly public_stack, verifier_differential and native_schema",
     )
     normalized: dict[str, dict[str, str]] = {}
     for role in REQUIRED_GATE_ROLES:

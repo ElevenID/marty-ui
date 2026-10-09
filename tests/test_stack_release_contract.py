@@ -732,6 +732,41 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
+def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    native = jobs["native-schema-image-qualification"]
+    release = jobs["qualify-release"]
+    assert native["needs"] == [
+        "resolve-transaction", "build-services", "record-digests",
+    ]
+    assert "native-schema-image-qualification" in release["needs"]
+    step = next(item for item in native["steps"]
+                if item.get("name") == "Verify and qualify exact released Rust schema images")
+    assert step["env"]["SERVICES_DIGEST"] == (
+        "${{ needs.build-services.outputs.services_digest }}")
+    assert step["env"]["MIGRATIONS_DIGEST"] == (
+        "${{ needs.build-services.outputs.migrations_digest }}")
+    assert step["env"]["SOURCE_SHA"] == (
+        "${{ needs.resolve-transaction.outputs.source_sha }}")
+    script = step["run"]
+    assert "gh attestation verify" in script
+    assert "--source-ref refs/heads/main --deny-self-hosted-runners" in script
+    assert "python scripts/qualify_selfhost_migrations.py" in script
+    assert "deploy-config/passport-supported-disposable-infra-images.json" in script
+    assert "--services-image \"$services_image\"" in script
+    assert "--migrations-image \"$migrations_image\"" in script
+    assert any(item.get("with", {}).get("name") ==
+               "stack-release-native-schema-gate-${{ github.run_id }}"
+               for item in native["steps"])
+    assert any(item.get("with", {}).get("name") ==
+               "stack-release-native-schema-gate-${{ github.run_id }}"
+               for item in release["steps"])
+    persist = next(item["run"] for item in release["steps"]
+                   if item.get("name") == "Persist exact gate evidence")
+    assert "sha256sum gates/native/native-schema.json" in persist
+    assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
+
+
 def test_release_approval_notice_cannot_replace_the_protected_gate() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     notice = jobs["notify-release-approval"]
