@@ -29,6 +29,7 @@ TARGET = "worker_mixed_roster_matches_frozen_published_process"
 TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
 BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
 LEASE_EXPIRY_TARGET = "worker_lease_expiry_matches_frozen_published_process"
+DEADLINE_TARGET = "worker_deadline_matches_frozen_published_process"
 PREFLIGHTS = [
     ("mixed-roster-preflight", TARGET),
     ("timeout-preflight", TIMEOUT_TARGET),
@@ -1087,6 +1088,7 @@ def test_opt_in_worker_reuse_requires_exact_run_bound_proof_before_image_pull(
         if item == "--skip"
     ] == [
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        DEADLINE_TARGET,
         *FAST_MODE_SKIPS,
     ]
     assert not any(call[:2] == ["child", "contract"] for call in calls)
@@ -1158,21 +1160,31 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         if name not in FLOW_HISTORICAL_ROSTER
     ] + [
         f"{serial}: test",
+        f"{DEADLINE_TARGET}: test",
         f"{json_serial}: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:8] == [
+    assert children[:9] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "selfhost-contract", "1", "--list"],
         ["child", "flow-contract", "1", "--list"],
         ["child", "contract", "1", "--list", "--skip", json_serial],
-        ["child", "worker-contract", "1", "--list", "--skip", serial],
+        ["child", "worker-contract", "1", "--list", "--skip", serial, "--skip", DEADLINE_TARGET],
         [
             "child",
             "worker-contract",
             "1",
             serial,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            DEADLINE_TARGET,
             "--exact",
             "--nocapture",
             "--test-threads=1",
@@ -1187,7 +1199,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[8:]) == sorted(
+    assert sorted(children[9:]) == sorted(
         [
             [
                 "child",
@@ -1204,6 +1216,8 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
                 "1",
                 "--skip",
                 serial,
+                "--skip",
+                DEADLINE_TARGET,
                 "--nocapture",
                 "--test-threads=4",
             ],
@@ -1247,6 +1261,8 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
         "1",
         "--skip",
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        "--skip",
+        DEADLINE_TARGET,
         *[item for target in skipped for item in ("--skip", target)],
         "--nocapture",
         "--test-threads=4",
@@ -1274,6 +1290,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
         if item == "--skip"
     ] == [
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        DEADLINE_TARGET,
         TARGET,
         BODY_TIMEOUT_TARGET,
         TIMEOUT_TARGET,
@@ -1286,7 +1303,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert any(
         call[:2] == ["child", "worker-contract"]
         and "--test-threads=4" in call
-        and call.count("--skip") == 1
+        and call.count("--skip") == 2
         for call in calls
     )
 
