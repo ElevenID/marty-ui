@@ -13371,3 +13371,11 @@ test transport setup, preserving the distinct production signer credential.
 The other long-running CI leaves and exact-head CodeQL were still active at
 this checkpoint. Preserve the published failure as immutable evidence and
 batch this correction with any further hosted findings before the next push.
+
+The same `95284232a` run subsequently passed Rust Contracts, service images,
+Rust Lint, the packaged OpenBao DIDComm plugin/recovery lane, UI, browser,
+security and other completed leaves; [exact-head Rust
+CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38089378068)
+completed successfully. Canvas remained active at the public self-host image
+build when checked. These successes are evidence for this exact failed head,
+not a substitute for requalification after the held fixture correction.
