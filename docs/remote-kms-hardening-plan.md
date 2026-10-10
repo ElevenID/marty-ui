@@ -13434,3 +13434,19 @@ and reviewed public expectations, then preserve the eight real-process/
 database assertions and the full-main evidence gate. Merely removing the
 Python invocation from the Rust test would break that evidence contract and
 leave other local-master-key oracle paths active.
+
+OpenBao workload-token lifecycle review (2026-10-10):
+`scripts/bootstrap-selfhost-vault.sh` and `docker/openbao-selfhost-init.sh`
+create orphan service, Signing Keys and DIDComm Issuance tokens without an
+explicit period or TTL. The latter validates an existing DIDComm token's
+policy and rejects an unusable one, while
+`scripts/probe_didcomm_issuance_token.py` confirms a newly provisioned token
+has positive TTL and is renewable. A source search found no workload
+`renew-self` client or renewal agent in the production Rust, Compose and
+Kubernetes paths. Renewable at creation therefore is not proof that a
+long-running service keeps its KMS authority through expiry. KMS-only release
+qualification needs a scoped token lifecycle: renew or rotate before expiry,
+propagate the replacement without leaking it, reject wrong-policy/wrong-tenant
+tokens, and prove signing and DIDComm authcrypt continue across expiry,
+restart and OpenBao failover. Keep this as an availability and custody gate;
+do not paper over expiry with a local-key fallback.
