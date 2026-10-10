@@ -271,7 +271,6 @@ pub struct Biometric {
     pub template_data_base64: String,
     #[serde(default)]
     pub image_data_base64: Option<String>,
-    pub is_live_capture: bool,
     #[serde(default)]
     pub capture_device_id: Option<String>,
     pub created_at: DateTime<Utc>,
