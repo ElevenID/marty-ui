@@ -77,6 +77,7 @@ def test_retained_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
         ("canvas", "published-canvas"),
         ("rust-db", "rust-db"),
         ("worker-canvas", "published-worker"),
+        ("selfhost-canvas", "published-selfhost"),
     ],
 )
 def test_split_lanes_run_exactly_their_owned_database_group(
@@ -98,6 +99,9 @@ def test_split_lanes_run_exactly_their_owned_database_group(
         assert observed[expected][-1] == "full-after-preflights"
     elif mode == "worker-canvas":
         assert observed[expected][-1] == "worker-full-after-preflights"
+    elif mode == "selfhost-canvas":
+        assert observed[expected][-1] == "selfhost-only"
+        assert "run-published-canvas-contracts.sh" in observed[expected][-2]
     else:
         assert "run-rust-db-contracts.sh" in observed[expected][-1]
 

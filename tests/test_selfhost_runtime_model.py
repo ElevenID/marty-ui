@@ -156,7 +156,7 @@ def assert_public_image_loader_connected(reader):
     assert len(matches) == 1
     index, step = matches[0]
     assert set(step) == {"name", "if", "shell", "run"}
-    assert step["if"] == "matrix.lane == 'canvas'"
+    assert step["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
     assert step["shell"] == "bash"
     body = step["run"]
     build = steps[index - 1]

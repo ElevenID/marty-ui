@@ -882,14 +882,23 @@ jobs:
       fail-fast: false
       matrix:
         # A maintainer may label a PR before its next synchronize event for an
-        # additive hosted worker rehearsal. Label changes alone do not trigger
+        # additive hosted worker or self-host rehearsal. Label changes do not trigger
         # this full workflow, avoiding extra runs for unrelated labels.
         # Its normal Canvas/contracts lanes and every merge-group gate remain.
         lane: >-
           ${{ fromJSON(github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
+          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker"]' || needs.changes.outputs.rust_matrix) }}
+          '["canvas","contracts","worker","selfhost"]' ||
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
+          needs.changes.outputs.rust_runtime == 'true' &&
+          '["canvas","contracts","worker"]' ||
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
+          needs.changes.outputs.rust_runtime == 'true' &&
+          '["canvas","contracts","selfhost"]' || needs.changes.outputs.rust_matrix) }}
     permissions:
       actions: read
       contents: read
@@ -914,6 +923,9 @@ jobs:
           image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh "$MARTY_CI_BUILDKIT_PIN")
           echo "MARTY_CI_BUILDKIT_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Start digest-pinned Rust test services after registry setup
+        # Self-host acceptance creates its own isolated PostgreSQL container;
+        # it never uses the shared PostgreSQL/Redis/OpenBao fixture services.
+        if: matrix.lane != 'selfhost'
         shell: bash
         run: |
           set -euo pipefail
@@ -1011,7 +1023,7 @@ jobs:
         run: |
           set -euo pipefail
           artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
-          if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow ]]; then
+          if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
             # Exact test-source owners compile in the same pinned Bookworm
             # environment as the full Canvas lane. The merge group stays full.
             cargo fetch --locked
@@ -1057,12 +1069,20 @@ jobs:
                     cargo build --locked --offline -p marty-flow \
                       --bin marty-flow --message-format=json
                     ;;
+                  selfhost)
+                    cargo test --locked --offline -p marty-selfhost-acceptance \
+                      --test selfhost_public_image_contract --no-run \
+                      --timings --message-format=json
+                    ;;
                   *) exit 2 ;;
                 esac
               ' > "$artifacts"
             if [[ "${{ matrix.lane }}" == flow ]]; then
               python3 ../scripts/ci/verify-canvas-test-artifacts.py \
                 --flow-only "$artifacts" target
+            elif [[ "${{ matrix.lane }}" == selfhost ]]; then
+              python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+                --selfhost-only "$artifacts" target
             else
               python3 ../scripts/ci/verify-canvas-test-artifacts.py \
                 --worker-only "$artifacts" target
@@ -1186,7 +1206,7 @@ jobs:
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
       - name: Prepare pinned standalone Compose renderer for Rust contracts
-        if: matrix.lane == 'contracts' || matrix.lane == 'flow'
+        if: matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
         shell: bash
         run: |
           set -euo pipefail
@@ -1315,7 +1335,7 @@ jobs:
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py preflights
       - name: Expose public image compiler cache credentials
-        if: matrix.lane == 'canvas'
+        if: matrix.lane == 'canvas' || matrix.lane == 'selfhost'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -1327,7 +1347,7 @@ jobs:
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build public selfhost image
-        if: matrix.lane == 'canvas'
+        if: matrix.lane == 'canvas' || matrix.lane == 'selfhost'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -1346,7 +1366,7 @@ jobs:
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Prepare public selfhost image loader acceptance
-        if: matrix.lane == 'canvas'
+        if: matrix.lane == 'canvas' || matrix.lane == 'selfhost'
         shell: bash
         run: |
           set -euo pipefail
@@ -1910,6 +1930,8 @@ jobs:
             python3 ../scripts/ci/run-db-contract-groups.py worker-canvas
           elif [[ "${{ matrix.lane }}" == flow ]]; then
             bash ../scripts/ci/run-flow-acceptance-contracts.sh
+          elif [[ "${{ matrix.lane }}" == selfhost ]]; then
+            python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas
           else
             python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
           fi
@@ -2001,7 +2023,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Remove owned Rust test services and volumes
-        if: always()
+        if: always() && matrix.lane != 'selfhost'
         shell: bash
         run: |
           set -euo pipefail

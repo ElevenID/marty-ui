@@ -541,8 +541,17 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         "        lane: >-\n"
         "          ${{ fromJSON(github.event_name == 'pull_request' &&\n"
         "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&\n"
         "          needs.changes.outputs.rust_runtime == 'true' &&\n"
-        '          \'["canvas","contracts","worker"]\' || needs.changes.outputs.rust_matrix) }}'
+        '          \'["canvas","contracts","worker","selfhost"]\' ||\n'
+        "          github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","worker"]\' ||\n'
+        "          github.event_name == 'pull_request' &&\n"
+        "          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&\n"
+        "          needs.changes.outputs.rust_runtime == 'true' &&\n"
+        '          \'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}'
     )
     required = (
         'rust_matrix=\'["canvas","contracts"]\'' in changes

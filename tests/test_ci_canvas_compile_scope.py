@@ -24,10 +24,11 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     compile_step = by_name["Compile reusable Rust test executables"]
     compile_run = compile_step["run"]
     owner_branch = compile_run.split(
-        'if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow ]]; then', 1
+        'if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then', 1
     )[1].split('elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1)[0]
     worker_branch = owner_branch.split('worker)\n', 1)[1].split(';;\n', 1)[0]
     flow_branch = owner_branch.split('flow)\n', 1)[1].split(';;\n', 1)[0]
+    selfhost_branch = owner_branch.split('selfhost)\n', 1)[1].split(';;\n', 1)[0]
     assert worker_branch.count("--message-format=json") == 2
     assert "-p marty-canvas-worker-acceptance" in worker_branch
     assert "--test canvas_published_worker_contract" in worker_branch
@@ -35,6 +36,7 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     assert "--bin marty-canvas-sync-worker" in worker_branch
     assert '--worker-only "$artifacts" target' in owner_branch
     assert '--flow-only "$artifacts" target' in owner_branch
+    assert '--selfhost-only "$artifacts" target' in owner_branch
     assert "rust:1\\.95-bookworm@sha256:" in owner_branch
     assert "docker run --rm --network none --read-only" in owner_branch
     for unrelated in (
@@ -50,6 +52,12 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     assert "--test flow_published_schema_contract" in flow_branch
     assert "--bin marty-issuance-service" in flow_branch
     assert "--bin marty-flow" in flow_branch
+    assert selfhost_branch.count("--message-format=json") == 1
+    assert "-p marty-selfhost-acceptance" in selfhost_branch
+    assert "--test selfhost_public_image_contract" in selfhost_branch
+    assert "--no-run" in selfhost_branch
+    for unrelated in ("marty-canvas-acceptance", "marty-gateway", "marty-flow", "--bin"):
+        assert unrelated not in selfhost_branch
     contracts_branch, canvas_branch = compile_run.split(
         'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
     )[1].split("else\n", 1)
@@ -208,6 +216,18 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert "rust_matrix='[\"worker\"]'" in classifier["run"]
     assert "--emit-verified-worker-tests" in classifier["run"]
     steps = {step.get("name"): step for step in job["steps"]}
+    assert steps["Start digest-pinned Rust test services after registry setup"]["if"] == (
+        "matrix.lane != 'selfhost'"
+    )
+    assert steps["Remove owned Rust test services and volumes"]["if"] == (
+        "always() && matrix.lane != 'selfhost'"
+    )
+    selfhost_source = (
+        ROOT / "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
+    ).read_text(encoding="utf-8")
+    assert "PublishedDatabase::start_with_scope" in selfhost_source
+    assert "MARTY_RUST_CI_POSTGRES_ID" not in selfhost_source
+    assert "MARTY_RUST_CI_REDIS_ID" not in selfhost_source
     compile_run = steps["Compile reusable Rust test executables"]["run"]
     assert "cargo test --locked --workspace --no-run" in compile_run
     assert "--exclude" not in compile_run
@@ -278,6 +298,52 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert '"$flow_executable" --nocapture --test-threads=4' in runner
     assert '"$worker_executable" --skip' in runner
     assert '"$selfhost_executable" --nocapture' in runner
+
+
+def test_selfhost_diagnostic_is_additive_and_uses_the_full_image_contract() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["test-rust-services"]
+    matrix = job["strategy"]["matrix"]["lane"]
+    assert "ci-selfhost-diagnostic" in matrix
+    assert "needs.changes.outputs.rust_runtime == 'true'" in matrix
+    assert '\'["canvas","contracts","selfhost"]\'' in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
+    assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
+    steps = {step.get("name"): step for step in job["steps"]}
+    for name in (
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+    ):
+        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+        assert not steps[name].get("continue-on-error", False)
+    renderer = steps["Prepare pinned standalone Compose renderer for Rust contracts"]
+    assert "matrix.lane == 'selfhost'" in renderer["if"]
+    assert "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE" in renderer["run"]
+    suite = steps["Run isolated database contract suites concurrently"]
+    assert '[[ "${{ matrix.lane }}" == selfhost ]]' in suite["run"]
+    assert "run-db-contract-groups.py selfhost-canvas" in suite["run"]
+    assert "export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=\"1\"" in (
+        ROOT / "scripts/ci/run-published-canvas-contracts.sh"
+    ).read_text(encoding="utf-8")
+    runner = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
+        encoding="utf-8"
+    )
+    selfhost_branch = runner.split('if [[ "$mode" == selfhost-only ]]; then', 1)[1].split(
+        "\nfi\ncomposition_executable=", 1
+    )[0]
+    assert "require_selfhost_tests" in selfhost_branch
+    assert "MARTY_SELFHOST_TEST_PACKAGER_BINARY" in selfhost_branch
+    assert "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE" in selfhost_branch
+    assert "MARTY_SELFHOST_TEST_IMAGE" in selfhost_branch
+    assert "MARTY_SELFHOST_TEST_REVISION" in selfhost_branch
+    assert "pull_published_postgres" in selfhost_branch
+    assert 'timed image_pull published_probe docker pull "${images[1]}"' in selfhost_branch
+    assert "--nocapture --test-threads=4" in selfhost_branch
+    assert "12 passed; 0 failed; 0 ignored" in selfhost_branch
+    assert runner.count("selfhost_public_image_loader_isolated: test") == 2
 
 
 def _records(tmp_path: Path) -> tuple[Path, Path, list[dict]]:
@@ -367,6 +433,29 @@ def test_flow_only_artifacts_require_real_flow_and_issuance_binaries(
             VERIFY["verify"](artifacts, target_dir, flow_only=True)
     with pytest.raises(ValueError, match="one owner"):
         VERIFY["verify"](artifacts, target_dir, worker_only=True, flow_only=True)
+
+
+def test_selfhost_only_artifacts_require_exact_test_harness(tmp_path: Path) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    selfhost = records[3]
+    artifacts.write_text(json.dumps(selfhost) + "\n", encoding="utf-8")
+    VERIFY["verify"](artifacts, target_dir, selfhost_only=True)
+    with pytest.raises(ValueError, match="Expected exactly one"):
+        VERIFY["verify"](artifacts, target_dir)
+    for invalid, error in (
+        ({**selfhost, "profile": {"test": False}}, "Expected exactly one"),
+        ({**selfhost, "target": {"name": "other", "kind": ["test"]}}, "Expected exactly one"),
+        ({**selfhost, "package_id": "path+file:///fixture#marty-canvas-acceptance@0.1.0"}, "Expected exactly one"),
+        ({**selfhost, "executable": str(target_dir / "debug/other-test")}, "Expected a test harness"),
+    ):
+        artifacts.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+        with pytest.raises(ValueError, match=error):
+            VERIFY["verify"](artifacts, target_dir, selfhost_only=True)
+    for other_scope in ("worker_only", "flow_only"):
+        with pytest.raises(ValueError, match="one owner"):
+            VERIFY["verify"](
+                artifacts, target_dir, selfhost_only=True, **{other_scope: True}
+            )
 
 
 @pytest.mark.parametrize("index", [0, 5, 6, 9])

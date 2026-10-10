@@ -283,6 +283,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"]
         if step.get("name") == "Start digest-pinned Rust test services after registry setup"
     )
+    assert setup["if"] == "matrix.lane != 'selfhost'"
     for image in (
         "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
         "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
@@ -294,7 +295,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"]
         if step.get("name") == "Remove owned Rust test services and volumes"
     )
-    assert cleanup["if"] == "always()"
+    assert cleanup["if"] == "always() && matrix.lane != 'selfhost'"
     assert "down --volumes --remove-orphans" in cleanup["run"]
     chain_step_name = (
         "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
@@ -1434,6 +1435,9 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "github.event_name == 'pull_request'" in matrix
     assert "ci-worker-diagnostic" in matrix
     assert '\'["canvas","contracts","worker"]\'' in matrix
+    assert "ci-selfhost-diagnostic" in matrix
+    assert '\'["canvas","contracts","selfhost"]\'' in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
     canvas = {
@@ -1443,9 +1447,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
         "Prepare required rendered base executable acceptance",
-        "Expose public image compiler cache credentials",
-        "Build public selfhost image",
-        "Prepare public selfhost image loader acceptance",
         "Verify local passport signing is forbidden",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
@@ -1466,6 +1467,20 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+    ):
+        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+        assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+    ):
+        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+        assert not steps[name].get("continue-on-error", False)
     assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
         "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     )
@@ -1474,7 +1489,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert not steps[name].get("continue-on-error", False)
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
-    ] == "matrix.lane == 'contracts' || matrix.lane == 'flow'"
+    ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
     renderer = steps["Prepare pinned standalone Compose renderer for Rust contracts"]
     assert "bash scripts/ci/install-compose-renderer.sh" in renderer["run"]
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]

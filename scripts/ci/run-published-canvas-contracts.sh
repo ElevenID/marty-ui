@@ -23,8 +23,8 @@ if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" != 0 && "${MARTY_CANVAS_FULL_QUALI
   echo "Invalid Canvas qualification mode" >&2
   exit 2
 fi
-if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight && "$mode" != worker-full && "$mode" != worker-full-after-preflights && "$mode" != worker-mixed-roster-preflight && "$mode" != worker-timeout-preflight && "$mode" != worker-body-timeout-preflight && "$mode" != worker-lease-expiry-preflight ]]; then
-  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight|worker-full|worker-full-after-preflights|worker-timeout-preflight|worker-lease-expiry-preflight|worker-body-timeout-preflight|worker-mixed-roster-preflight]" >&2
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight && "$mode" != worker-full && "$mode" != worker-full-after-preflights && "$mode" != worker-mixed-roster-preflight && "$mode" != worker-timeout-preflight && "$mode" != worker-body-timeout-preflight && "$mode" != worker-lease-expiry-preflight && "$mode" != selfhost-only ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight|worker-full|worker-full-after-preflights|worker-timeout-preflight|worker-lease-expiry-preflight|worker-body-timeout-preflight|worker-mixed-roster-preflight|selfhost-only]" >&2
   exit 2
 fi
 if [[ -v MARTY_CANVAS_WORKER_RETRY_AFTER_TIER ]]; then
@@ -103,6 +103,26 @@ find_issuance_package_binary() {
     return 1
   }
   printf '%s\n' "${matches[0]}"
+}
+require_selfhost_tests() {
+  local actual="$1" expected
+  expected=$(printf '%s\n' \
+  'packaged_remote_secret_fixture_requires_verified_https: test' \
+  'selfhost_public_image_loader_isolated: test' \
+  'selfhost_public_image_loader_child: test' \
+  'selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values: test' \
+  'selfhost_packaged_runtime::tests::database_authentication_failure_never_qualifies_as_healthy: test' \
+  'selfhost_packaged_runtime::tests::process_control_child: test' \
+  'selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery: test' \
+  'selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure: test' \
+  'selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch: test' \
+  'selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts: test' \
+  'selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed: test' \
+  'selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts: test')
+  [[ "$(printf '%s\n' "$actual" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]] || {
+    echo 'Selfhost executable changed its exact twelve-case owner inventory' >&2
+    return 1
+  }
 }
 deadline_serial_test=worker_deadline_matches_frozen_published_process
 mixed_roster_serial_test=worker_mixed_roster_reference_matches_published_process
@@ -211,6 +231,22 @@ if [[ "$mode" == worker-* ]]; then
   python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"
   exit 0
 fi
+if [[ "$mode" == selfhost-only ]]; then
+  selfhost_executable=$(find_executable selfhost_public_image_contract)
+  require_selfhost_tests "$("$selfhost_executable" --list)"
+  [[ "${MARTY_SELFHOST_TEST_IMAGE:?}" =~ ^sha256:[a-f0-9]{64}$ ]]
+  [[ "${MARTY_SELFHOST_TEST_REVISION:?}" =~ ^[a-f0-9]{40}$ ]]
+  test -x "${MARTY_SELFHOST_TEST_PACKAGER_BINARY:?}"
+  test -x "${MARTY_SELFHOST_BUNDLE_TEST_COMPOSE:?}"
+  [[ "$(docker image inspect --format '{{.Id}}' "$MARTY_SELFHOST_TEST_IMAGE")" == "$MARTY_SELFHOST_TEST_IMAGE" ]]
+  timed image_pull postgres pull_published_postgres "${images[0]}"
+  timed image_pull published_probe docker pull "${images[1]}"
+  selfhost_log=$(mktemp "${RUNNER_TEMP:?}/canvas-selfhost-only.XXXXXX")
+  trap 'rm -f -- "$selfhost_log"' EXIT
+  timed canvas_target selfhost "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"
+  grep -Eq '^test result: ok\. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$selfhost_log"
+  exit 0
+fi
 composition_executable=$(find_executable canvas_published_schema_contract)
 worker_executable=$(find_executable canvas_published_worker_contract)
 config_skips=()
@@ -245,23 +281,7 @@ selfhost_tests=''
 if [[ -z "$preflight_target" ]]; then
   selfhost_executable=$(find_executable selfhost_public_image_contract)
   selfhost_tests=$("$selfhost_executable" --list)
-  expected_selfhost_tests=$(printf '%s\n' \
-  'packaged_remote_secret_fixture_requires_verified_https: test' \
-  'selfhost_public_image_loader_isolated: test' \
-  'selfhost_public_image_loader_child: test' \
-  'selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values: test' \
-  'selfhost_packaged_runtime::tests::database_authentication_failure_never_qualifies_as_healthy: test' \
-  'selfhost_packaged_runtime::tests::process_control_child: test' \
-  'selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery: test' \
-  'selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure: test' \
-  'selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch: test' \
-  'selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts: test' \
-  'selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed: test' \
-  'selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts: test')
-  [[ "$(printf '%s\n' "$selfhost_tests" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected_selfhost_tests" | LC_ALL=C sort)" ]] || {
-    echo 'Selfhost executable changed its exact twelve-case owner inventory' >&2
-    exit 1
-  }
+  require_selfhost_tests "$selfhost_tests"
 fi
 printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy: test'
 printf '%s\n' "$composition_tests" | grep -Fx 'rendered_base_process::renderer_bounds_proof_is_image_free: test'

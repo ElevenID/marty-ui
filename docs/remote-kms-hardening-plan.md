@@ -12023,3 +12023,12 @@ fixture without its credential envelope, and release contracts failed at the
 stale workflow invocation count; CI Gate inherited those failures. Both
 corrections, plus the shared provider response bounds above, are in the next
 grouped UI batch. No prior green lane qualifies that new head.
+
+The correction batch was pushed once to UI PR #1192 at `8613fa956`. The PR
+description was updated, but GitHub did not start exact-head checks because
+new `main` commits #1226 and #1225 left the PR merge-conflicted. The local
+reconciliation adopts their additive self-host diagnostic lane and release
+lock while retaining the KMS-only passport self-sign rejection. Its shared
+self-host test inventory now includes the two KMS cases in both full Canvas
+and isolated self-host modes. Merge-specific checks are in progress; a new
+hosted run is required on the reconciled head.
