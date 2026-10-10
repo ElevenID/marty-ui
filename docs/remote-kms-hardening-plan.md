@@ -12678,3 +12678,17 @@ their raw-master-key fixtures and frozen result contracts together. Preserve
 the regression assertions in Rust rather than dropping coverage. Product
 `services/Dockerfile` does not copy these scripts, but that packaging fact
 does not satisfy the test-retirement requirement.
+
+2026-10-10 exact release-schema gate readiness: `cd.yml` now requires both
+services and migrations OCI digests, verifies their GitHub attestations against
+the selected protected `main` source SHA, then runs
+`qualify_selfhost_migrations.py` against those immutable images and pinned
+PostgreSQL/Redis/OpenBao infrastructure. The qualifier executes native schema
+owners twice, records the assembled table/column inventory and rejects
+private-key names/content. The successful PR build uploaded Docker build
+evidence and test artifacts, not a released digest pair attested to protected
+`main`; local cached images are from earlier source revisions. Running the
+release qualifier against those artifacts would not meet its provenance
+contract. The next executable gate is the protected-main release transaction
+after coordinated PR landing, followed by inspection of its exact
+`native-schema.json` artifact and negative/cutover evidence.
