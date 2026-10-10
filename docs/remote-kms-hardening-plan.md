@@ -12679,6 +12679,18 @@ the regression assertions in Rust rather than dropping coverage. Product
 `services/Dockerfile` does not copy these scripts, but that packaging fact
 does not satisfy the test-retirement requirement.
 
+2026-10-10 integration-secret authority reduction (local, unpublished): the
+native Issuance service and Canvas worker call the Signing Keys HTTPS
+integration-secret listener directly. No current production caller uses
+Gateway's old `/internal/signing-keys/integration-secrets/{encrypt,decrypt}`
+compatibility routes. The candidate removes those two routes, their forwarding
+and golden-contract entries, and asserts that even the shared internal key
+gets 404 there. Focused Gateway route-contract and HTTP regression tests
+passed locally. The direct Signing Keys envelope endpoints still accept the
+shared internal key; a distinct envelope credential and deployment wiring are
+needed before this is a final least-privilege boundary. Group both changes in
+one later UI feature push rather than spending CI on the partial correction.
+
 2026-10-10 exact release-schema gate readiness: `cd.yml` now requires both
 services and migrations OCI digests, verifies their GitHub attestations against
 the selected protected `main` source SHA, then runs

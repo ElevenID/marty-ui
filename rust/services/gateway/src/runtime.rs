@@ -3325,9 +3325,7 @@ async fn internal_signing_compatibility_handler(
     };
     if matches!(
         &operation,
-        SigningCompatibilityOperation::IntegrationSecretEncrypt
-            | SigningCompatibilityOperation::IntegrationSecretDecrypt
-            | SigningCompatibilityOperation::PassportArtifactEncrypt
+        SigningCompatibilityOperation::PassportArtifactEncrypt
             | SigningCompatibilityOperation::PassportArtifactDecrypt
             | SigningCompatibilityOperation::PassportCallbackVerify
     ) {
@@ -3585,19 +3583,11 @@ async fn forward_bound_envelope(
         Ok(body) => body,
         Err(_) => return detail_response(413, "Request body too large"),
     };
-    let mut body: Value = match serde_json::from_slice(&body) {
+    let body: Value = match serde_json::from_slice(&body) {
         Ok(Value::Object(body)) => Value::Object(body),
         _ => return detail_response(422, "Request body must be a JSON object."),
     };
     let path = match operation {
-        SigningCompatibilityOperation::IntegrationSecretEncrypt => {
-            body["organization_id"] = Value::String(organization_id.into());
-            "/internal/integration-secrets/encrypt".to_owned()
-        }
-        SigningCompatibilityOperation::IntegrationSecretDecrypt => {
-            body["organization_id"] = Value::String(organization_id.into());
-            "/internal/integration-secrets/decrypt".to_owned()
-        }
         SigningCompatibilityOperation::PassportArtifactEncrypt => format!(
             "/internal/documents/{}/passport-artifacts/encrypt",
             utf8_percent_encode(organization_id, NON_ALPHANUMERIC)
@@ -5335,24 +5325,6 @@ mod tests {
                     if request.method == HttpMethod::Delete =>
                 {
                     br#"{"deleted":"profile-1"}"#.to_vec()
-                }
-                "/internal/integration-secrets/encrypt" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("integration-secret body"),
-                    )
-                    .expect("integration-secret JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    assert_eq!(body["secret_id"], "secret-1");
-                    br#"{"schema":"marty.integration-secret-envelope/v1","ciphertext":"vault:v1:synthetic"}"#.to_vec()
-                }
-                "/internal/integration-secrets/decrypt" => {
-                    let body: Value = serde_json::from_slice(
-                        request.body.as_deref().expect("integration-secret body"),
-                    )
-                    .expect("integration-secret JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    assert_eq!(body["secret_id"], "secret-1");
-                    br#"{"plaintext_b64":"c2VjcmV0"}"#.to_vec()
                 }
                 "/internal/documents/org%2D1/passport-artifacts/encrypt" => {
                     let body: Value = serde_json::from_slice(
@@ -9560,39 +9532,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn integration_secret_routes_replace_client_scope_with_trusted_scope() {
-        let unauthorized = runtime_router()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/internal/signing-keys/integration-secrets/encrypt?organization_id=org-1")
-                    .body(Body::from("{}"))
-                    .expect("request"),
-            )
-            .await
-            .expect("response");
-        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-
-        for (operation, body, expected) in [
-            (
-                "encrypt",
-                json!({
-                    "organization_id": "attacker-org", "secret_id": "secret-1",
-                    "provider": "canvas", "purpose": "oauth_client_secret",
-                    "plaintext_b64": "c2VjcmV0"
-                }),
-                "ciphertext",
-            ),
-            (
-                "decrypt",
-                json!({
-                    "organization_id": "attacker-org", "secret_id": "secret-1",
-                    "provider": "canvas", "purpose": "oauth_client_secret",
-                    "envelope": {"schema": "marty.integration-secret-envelope/v1", "ciphertext": "vault:v1:synthetic"}
-                }),
-                "plaintext_b64",
-            ),
-        ] {
+    async fn legacy_gateway_integration_secret_routes_are_absent() {
+        for operation in ["encrypt", "decrypt"] {
             let response = runtime_router()
                 .oneshot(
                     Request::builder()
@@ -9602,19 +9543,12 @@ mod tests {
                         ))
                         .header("x-api-key", "internal-signing-key")
                         .header("content-type", "application/json")
-                        .body(Body::from(body.to_string()))
+                        .body(Body::from("{}"))
                         .expect("request"),
                 )
                 .await
                 .expect("response");
-            assert_eq!(response.status(), StatusCode::OK);
-            let body: Value = serde_json::from_slice(
-                &to_bytes(response.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-                    .await
-                    .expect("body"),
-            )
-            .expect("response JSON");
-            assert!(body.get(expected).is_some());
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
     }
 

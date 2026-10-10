@@ -4,8 +4,6 @@ use mmf_platform::HttpMethod;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SigningCompatibilityOperation {
-    IntegrationSecretEncrypt,
-    IntegrationSecretDecrypt,
     IssuerContext,
     IssuerDidSign,
     CreateProfile,
@@ -27,12 +25,6 @@ pub enum SigningCompatibilityOperation {
 pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityOperation> {
     let relative = path.strip_prefix("/internal/signing-keys/")?;
     match (method, relative) {
-        (HttpMethod::Post, "integration-secrets/encrypt") => {
-            Some(SigningCompatibilityOperation::IntegrationSecretEncrypt)
-        }
-        (HttpMethod::Post, "integration-secrets/decrypt") => {
-            Some(SigningCompatibilityOperation::IntegrationSecretDecrypt)
-        }
         (HttpMethod::Get, "issuer-context") => Some(SigningCompatibilityOperation::IssuerContext),
         (HttpMethod::Post, "issuer-dids/sign") => {
             Some(SigningCompatibilityOperation::IssuerDidSign)
@@ -129,7 +121,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 17);
+        assert_eq!(contract.routes.len(), 15);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -139,8 +131,6 @@ mod tests {
 
     fn operation_name(operation: &SigningCompatibilityOperation) -> &'static str {
         match operation {
-            SigningCompatibilityOperation::IntegrationSecretEncrypt => "integration_secret_encrypt",
-            SigningCompatibilityOperation::IntegrationSecretDecrypt => "integration_secret_decrypt",
             SigningCompatibilityOperation::IssuerContext => "issuer_context",
             SigningCompatibilityOperation::IssuerDidSign => "issuer_did_sign",
             SigningCompatibilityOperation::CreateProfile => "create_profile",
