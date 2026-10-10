@@ -11105,3 +11105,27 @@ the nine focused Python cutover tests, warnings-denied all-target Signing
 Keys Clippy, targeted Rust formatting and diff checks passed locally. This
 commit is outside published UI PR #1192 head `5df61d68e` and needs the next
 grouped hosted run plus consumer/artifact verification before release.
+
+2026-10-09 service-signing backend authorization correction: local UI commit
+`6f29a3890` requires the Signing Keys internal service credential on
+`POST /v1/signing-keys/services/{service_id}/sign` before parsing or signing.
+Gateway injects that credential only for this exact route after its
+`signing-key:create` permission and organization context are established;
+unrelated signing-key requests do not receive it. The route already resolves
+tenant-registered references and purpose/algorithm bindings in its signing
+kernel. A direct caller without the credential now receives 401 instead of
+reaching a tenant's signer, even from the internal network. All 15 Signing
+Keys HTTP contract tests, the Gateway exact-override and authenticated
+forwarding tests, targeted Rust formatting, and warnings-denied all-target
+Clippy for both services passed. The opt-in live OpenBao service-signing
+fixture now supplies the server credential but has not been rerun. This is
+local source work outside the published UI head.
+
+Security review limitation: `SIGNING_KEYS_INTERNAL_API_KEY` is shared with
+other internal consumers, including Flow and Issuance. This correction blocks
+uncredentialed direct calls but does not isolate Gateway from a compromised
+service holding that shared key. Before landing, replace this route's shared
+credential with a distinct Gateway-only signing credential, validate
+distinctness at startup, update base/self-host/Kubernetes secret wiring and
+prove direct calls with the shared key are rejected while authorized Gateway
+calls continue. Do not count the present check as final least-privilege proof.
