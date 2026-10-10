@@ -72,10 +72,23 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 service_packages[service],
                 (ROOT / relative).read_text(encoding="utf-8"),
             )
-        for producer, marker, expected_count in (
-            ("marty-organization", "OrganizationServiceClient::", 12),
+        expected_clients = (
+            ("marty-auth", "AuthServiceClient::", 1),
+            ("marty-credential-template", "CredentialTemplateServiceClient::", 3),
             ("marty-event-stream", "EventStreamServiceClient::", 4),
-        ):
+            ("marty-flow", "FlowServiceClient::", 1),
+            ("marty-issuance-service", "IssuanceServiceClient::", 1),
+            ("marty-organization", "OrganizationServiceClient::", 12),
+            ("marty-presentation-policy", "PresentationPolicyServiceClient::", 2),
+            ("marty-revocation-profile", "RevocationProfileServiceClient::", 2),
+        )
+        discovered_markers = {
+            marker
+            for _, source in sources.values()
+            for marker in re.findall(r"\b[A-Za-z][A-Za-z0-9_]*ServiceClient::", source)
+        }
+        self.assertEqual(discovered_markers, {marker for _, marker, _ in expected_clients})
+        for producer, marker, expected_count in expected_clients:
             with self.subTest(producer=producer):
                 client_packages = {
                     package for package, source in sources.values() if marker in source
@@ -90,7 +103,6 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 }
                 self.assertEqual(len(client_packages), expected_count)
                 self.assertEqual(client_packages - observed - cargo_consumers, set())
-                self.assertEqual(client_packages, observed | cargo_consumers)
 
     def test_gateway_credential_template_issuer_resolution_is_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()

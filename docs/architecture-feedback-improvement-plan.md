@@ -125,11 +125,12 @@ Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, 
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Separate immutable nightly prerelease tag selected by the user. [#1106](https://github.com/ElevenID/marty-ui/pull/1106) merged the release-owner inventory, fail-closed tag grammar, and exact-main stable qualification gate. [#1113](https://github.com/ElevenID/marty-ui/pull/1113) merged a read-only nightly-claim preparation step; [#1127](https://github.com/ElevenID/marty-ui/pull/1127) merged typed OID4VP/verification transport, not signed-presentation trust or nightly E2E qualification. Neither creates qualified nightly deployment nor relaxes official E2E/YouTube gates. |
 
 2026-10-10 A3 source-inventory candidate: a tracked-source test compares the
-service packages containing the literal `OrganizationServiceClient::` and
-`EventStreamServiceClient::` constructor spellings with their Cargo consumers
-and source-witnessed shadow edges. Current inventories cover 12 and four
-packages respectively; the focused test passes and an independent reviewer
-found no P1-P3 issue. This is a conservative sentinel for those spellings,
+service packages containing eight literal `*ServiceClient::` constructor
+spellings with their Cargo consumers and source-witnessed shadow edges. The
+current inventory covers 26 client/package pairs, including 12 Organization
+and four Event Stream consumers. It requires every constructor package to
+have an owner, not the reverse: other Cargo and shadow consumers use HTTP or
+acceptance boundaries. This is a conservative sentinel for those spellings,
 not a complete runtime dependency graph, and it changes no check selection.
 
 Batch related, independently reviewed changes into one coherent PR when they share an owner and validation path, so the full PR and protected-queue runs are paid once per batch. Keep targeted local checks and explicit test-ownership evidence for each slice. Avoid a PR that simultaneously moves tests, changes their assertions, and reduces their triggers; such changes need separate proof even when bundled. Do not push documentation-only follow-ups that restart a running PR unless they correct a release-blocking defect.
