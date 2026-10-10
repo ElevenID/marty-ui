@@ -10952,3 +10952,19 @@ analysis passed and the full suite remained at 204 tests with four skips.
 Other unsupported extended SDK methods and optional `keyId` signatures still
 need a coherent interface retirement; this is not final mobile API or device
 qualification. The new commit remains local for the grouped PR #57 update.
+
+2026-10-09 extended mobile API retirement: local Authenticator commit
+`1b687c3` removes eight obsolete SDK methods for local-key selection,
+ad hoc presentation signing/creation, key generation, generic crypto and
+channel establishment from the extended platform and client interfaces and
+implementations. It also removes the unused `createAdvancedPresentation`
+wrapper, which led only to the retired ad hoc presentation method, and
+three tests that merely called the removed stubs. The active remote OID4VC
+offer and verified OID4VP initiate/complete routes remain; repository callsite
+search found no production caller of the removed methods. The source guard
+rejects their return. Flutter analysis, Dart formatting and the custody guard
+passed; the full suite passed 201 tests with four skips, and non-generated
+line coverage is **90.35% (1,807/2,000)**. Other extended unsupported
+wallet/mDoc/SD-JWT APIs and optional `keyId` signatures still need review.
+This is local work for the grouped Authenticator PR #57 update, not hosted
+mobile or release-device qualification.
