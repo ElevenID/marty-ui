@@ -12172,3 +12172,18 @@ test credentials. Both focused Azure tests, Rustfmt and all-target Clippy pass.
 Recheck exact-head CodeQL before classifying any remaining alert as a reviewed
 false positive; do not weaken the real Azure metadata behavior merely to clear
 the scanner.
+
+The grouped local follow-up is committed as `4afc962f1`, `5ca090f1d` and
+`bc62d3868` before one push.
+After the Azure request refactor, the full serial `marty-signing-keys --tests`
+selection passed, including 172 library cases with nine expected ignores and
+all non-live integration targets. The prior parallel attempt exhausted this
+Windows host during compilation, so it is not a product test failure. The
+hosted OpenBao plugin image and coordinated recovery lane passed on
+`c0a29d636`. The [exact-head CI run](https://github.com/ElevenID/marty-ui/actions/runs/38048056618)
+is terminal: Canvas and every other substantive lane passed; Contracts failed
+on the missing external Transit HTTPS fixture now corrected locally, and CI
+Gate inherited that failure. A broadened K8 source scan found only
+synthetic private-PEM rejection fixtures and local RSA generation for a
+separate Canvas timeout-oracle TLS identity. This scan is not a substitute
+for live KMS test custody or artifact qualification.
