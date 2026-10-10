@@ -1885,6 +1885,18 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         '  docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET '
         'marty:tests:disposable-guard "$nonce" >/dev/null\n'
         '  export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"\n'
+        '  bao_nonce="$(openssl rand -hex 16)"\n'
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        '    --data "{\\"data\\":{\\"nonce\\":\\"$bao_nonce\\"}}" \\\n'
+        "    http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \\\n"
+        "    | jq -e '.data.exportable == false' >/dev/null\n"
+        "  export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200\n"
+        "  export MARTY_TEST_OPENBAO_TOKEN=test-only\n"
+        '  export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"\n'
+        "  export BAO_TOKEN=test-only\n"
         "fi\n"
         'if [[ "${{ matrix.lane }}" == worker ]]; then\n'
         "  python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
