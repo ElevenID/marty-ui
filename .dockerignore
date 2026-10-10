@@ -120,3 +120,8 @@ rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
 rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
+# Cross-service acceptance targets are compiled from the checkout in CI, not
+# from the production image context.
+rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs
+rust/crates/service-acceptance/tests/passport_gateway_postgres.rs
+rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs

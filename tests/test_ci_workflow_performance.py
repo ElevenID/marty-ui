@@ -4073,6 +4073,7 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
         encoding="utf-8"
     )
     selfhost = "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+    service_acceptance = "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
     proofs = {
         "--emit-verified-worker-tests": {
             "status": 0,
@@ -4083,6 +4084,10 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
             "stdout": "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs\0",
         },
         "--emit-verified-selfhost-tests": {"status": 0, "stdout": selfhost + "\0"},
+        "--emit-verified-service-acceptance-tests": {
+            "status": 0,
+            "stdout": service_acceptance + "\0",
+        },
     }
     harness = r"""
       const fs = require('node:fs');
@@ -4141,6 +4146,11 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
 
     exact = [{"filename": selfhost, "status": "modified"}]
     assert classify(exact)["skip"] == "true"
+    assert classify([{"filename": service_acceptance, "status": "modified"}])["skip"] == "true"
+    assert classify([
+        {"filename": service_acceptance, "status": "modified"},
+        {"filename": selfhost, "status": "modified"},
+    ])["skip"] == "true"
     for path in [
         "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
         "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
@@ -4157,6 +4167,16 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
         "filename": "rust/crates/selfhost-acceptance/tests/support/unverified.rs",
         "status": "modified",
     }])
+    assert "skip" not in classify([{
+        "filename": "rust/crates/service-acceptance/tests/unverified.rs",
+        "status": "modified",
+    }])
+    for status in ("added", "renamed"):
+        assert "skip" not in classify([{
+            "filename": service_acceptance,
+            "status": status,
+            "previous_filename": "old.rs" if status == "renamed" else None,
+        }])
     assert "skip" not in classify(exact, codeql_config=config + "# changed\n")
     assert "skip" not in classify(
         exact, workflow_text=workflow_source.replace("build-mode: none", "build-mode: manual")
@@ -4171,6 +4191,13 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
         "status": 1, "stdout": "", "stderr": "proof failed"
     }}
     assert "skip" not in classify(exact, proof_results=failed_proofs)
+    failed_service_proof = {**proofs, "--emit-verified-service-acceptance-tests": {
+        "status": 1, "stdout": "", "stderr": "proof failed"
+    }}
+    assert "skip" not in classify(
+        [{"filename": service_acceptance, "status": "modified"}],
+        proof_results=failed_service_proof,
+    )
     assert classify(exact, event="merge_group")["analyze"] == "true"
     assert classify([{"filename": "README.md", "status": "modified"}])["analyze"] == "false"
 
