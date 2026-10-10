@@ -85,7 +85,7 @@ tests are explicitly not a Compose emulator.
 
 Locally qualified: no-interpolate and default/empty/custom interpolated current
 model rendering, all ten required inputs missing/empty, exact native dispatcher,
-snapshot identity and 70 mutation guards. Interpolation uses only synthetic
+snapshot identity and 72 mutation guards. Interpolation uses only synthetic
 files and a sanitized subprocess environment, not operator secrets. The
 preservation command remains mandatory in image CI; hosted exact-head proof
 is still required.

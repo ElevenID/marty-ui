@@ -47,6 +47,26 @@ def rendered_models():
 def models(rendered_models):
     return deepcopy(rendered_models)
 
+
+@pytest.mark.parametrize("fault", ["raw-environment", "raw-secret-mount"])
+def test_approved_model_rejects_return_of_raw_master_key(models, fault):
+    approved, current = models
+    for model in (approved, current):
+        if fault == "raw-environment":
+            model["services"]["issuance"]["environment"][
+                "INTEGRATION_SECRET_MASTER_KEY_FILE"
+            ] = "/run/secrets/integration_secret_master_key"
+        else:
+            model["secrets"]["integration_secret_master_key"] = {
+                "file": "/synthetic/integration_secret_master_key"
+            }
+            model["services"]["issuance"]["secrets"].append(
+                {"source": "integration_secret_master_key"}
+            )
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
+
+
 @pytest.mark.parametrize(
     "field",
     [

@@ -24,6 +24,7 @@ BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py
 PROJECT = "marty-conformance-native-config"
 COMMON = "docker-compose.service.issuance-native.yml"
 RUNTIME = "docker-compose.service.issuance-native-runtime.yml"
+APPROVED_COMMON = "tests/fixtures/issuance-native-compose-kms-only.yml"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 TOKEN_RATE_CASES = (
     (None, "30"),
@@ -193,6 +194,8 @@ def run(command):
         yaml.safe_load((ROOT / COMMON).read_text(encoding="utf-8")),
         yaml.safe_load((ROOT / RUNTIME).read_text(encoding="utf-8")),
     )
+    approved_common = yaml.safe_load((ROOT / APPROVED_COMMON).read_text(encoding="utf-8"))
+    assert common == approved_common, "Shared native service changed outside the reviewed KMS-only model"
     base_source = yaml.safe_load(
         (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
     )

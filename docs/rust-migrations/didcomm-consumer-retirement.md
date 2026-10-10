@@ -106,8 +106,10 @@ specific overlays; it does not restore full Python ownership now that the base
 composition is native.
 
 Beta and conformance share `docker-compose.service.issuance-native.yml` at the
-repository root. The current-model Compose gate checks reviewed shared inputs,
-native custody exclusions, unset/empty/custom optional values, and missing
+repository root. The current-model Compose gate pins the complete shared native
+service in `tests/fixtures/issuance-native-compose-kms-only.yml`. It checks
+reviewed shared inputs, native custody exclusions, unset/empty/custom optional
+values, and missing
 required-variable failures. It also checks native conformance selection against
 the current base composition. The historical pre-extraction beta fixture was
 retired because it contained the raw integration-secret master-key input. The
