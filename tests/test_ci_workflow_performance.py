@@ -893,6 +893,67 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
     assert queued["rust_matrix"] == '["canvas","contracts"]'
 
 
+def test_verified_selfhost_test_sources_select_only_selfhost_on_pr(
+    tmp_path: Path,
+) -> None:
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-selfhost-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 4
+    selfhost_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert selfhost_tests == [
+        "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs",
+        "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs",
+        "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["selfhost"]',
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert _classify_changed_paths(
+        selfhost_tests, tmp_path, include_rust_plan=True
+    ) == [expected] * 3
+    assert _classify_changed_paths(
+        selfhost_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [selfhost_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [selfhost_tests[1], "rust/crates/selfhost-acceptance/Cargo.toml"],
+        [selfhost_tests[-1], "rust/services/issuance/tests/support/canvas_published_database.rs"],
+        ["rust/crates/selfhost-acceptance/tests/support/unreviewed.rs"],
+        [selfhost_tests[2] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts"]'
+    without_proof = _classify_changed_paths(
+        [selfhost_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert without_proof["rust_runtime"] == "true"
+    assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    queued = _classify_changed_paths(
+        [selfhost_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
+
+
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
     tmp_path: Path,
 ) -> None:
@@ -1117,9 +1178,12 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         leaf_only=False,
         worker_only=False,
         flow_only=False,
+        selfhost_only=False,
     ):
         selected = set(flags)
-        if "rust" in selected and not (leaf_only or worker_only or flow_only):
+        if "rust" in selected and not (
+            leaf_only or worker_only or flow_only or selfhost_only
+        ):
             selected.add("rust_runtime")
         active = {"changes", "lint"}
         for flag, names in groups.items():
@@ -1147,6 +1211,8 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             if worker_only
             else '["flow"]'
             if flow_only
+            else '["selfhost"]'
+            if selfhost_only
             else '["contracts"]'
             if leaf_only
             else '["canvas","contracts"]'
@@ -1180,6 +1246,18 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise(("rust",), leaf_only=True).returncode == 0
     assert exercise(("rust",), worker_only=True).returncode == 0
     assert exercise(("rust",), flow_only=True).returncode == 0
+    assert exercise(("rust",), selfhost_only=True).returncode == 0
+    assert exercise(("rust",), selfhost_only=True, event="merge_group").returncode != 0
+    assert (
+        exercise(("rust",), selfhost_only=True, overrides={"test-release-contracts": "skipped"})
+        .returncode
+        != 0
+    )
+    assert (
+        exercise(("rust",), selfhost_only=True, overrides={"rust-supply-chain": "skipped"})
+        .returncode
+        != 0
+    )
     assert exercise(("rust",), flow_only=True, event="merge_group").returncode != 0
     assert (
         exercise(("rust",), flow_only=True, overrides={"rust-supply-chain": "skipped"})
