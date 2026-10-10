@@ -12511,3 +12511,15 @@ contains the CI fixture correction and the shared mounted-token origin
 check; `87d7e4399` records the locked production dependency graph. The
 unrelated untracked Canvas `%SystemDrive%` artifact was not staged or
 modified. Publish this grouped candidate for one new exact-head CI cycle.
+
+2026-10-10 K1 packaging-source follow-up on published `6c1e4ba66`: the
+multi-target `rust/services/Dockerfile.ci` and standalone Signing Keys,
+Event Stream and Revocation Profile Dockerfiles all copy the same `rust/`
+workspace and run locked release Cargo builds from `/build/rust`. The two
+cargo-chef standalone images also cook that same workspace. Thus those
+Dockerfile source roots consume the single Cargo manifest/lock graph checked
+above. This is a source/build-input inventory, not proof of built image
+contents, the Python wheel roots, or signed release artifacts. The new
+[exact-head UI CI](https://github.com/ElevenID/marty-ui/actions/runs/38063495286)
+and [production Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38063495269)
+remain live; no terminal result is claimed.
