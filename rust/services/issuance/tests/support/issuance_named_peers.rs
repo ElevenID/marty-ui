@@ -44,6 +44,7 @@ pub(super) const API_KEY: &str = "synthetic-renewal-fresh-main-management-key";
 // Issuance uses this same internal service token for Signing Keys and its
 // remote integration-secret endpoint. Keep both owned peers on one token.
 pub(super) const SIGNING_KEY: &str = super::issuance_process::remote_integration_secret::API_KEY;
+pub(super) const ISSUER_SIGN_KEY: &str = "synthetic-issuance-issuer-sign-key-32-chars";
 pub(super) const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 pub(super) const CLIENT_KEY: &str = "synthetic-base-gateway-client-key";
 pub(super) const CANVAS_CLIENT_KEY: &str = "synthetic-base-canvas-client-key";
@@ -419,7 +420,7 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
         }
         "/issuer-dids/sign" => {
             assert_eq!(method, "POST");
-            assert_eq!(headers["x-api-key"], SIGNING_KEY);
+            assert_eq!(headers["x-api-key"], ISSUER_SIGN_KEY);
             assert_eq!(
                 args,
                 BTreeMap::from([("organization_id".into(), ORGANIZATION.into())])

@@ -563,6 +563,14 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
             "synthetic-distinct-kubernetes-device-signing-key-32-chars".into(),
         ),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
+        (
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "synthetic-kubernetes-service-sign-gateway-key-32-chars".into(),
+        ),
+        (
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "synthetic-kubernetes-issuer-sign-key-32-chars".into(),
+        ),
         ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (
             "CANVAS_CREDENTIALS_SHARED_SECRET".into(),

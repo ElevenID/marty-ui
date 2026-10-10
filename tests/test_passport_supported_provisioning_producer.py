@@ -178,6 +178,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
             "signing_keys_service_sign_gateway_key",
+            "signing_keys_issuer_sign_key",
             "device_registration_gateway_key",
             "passport_beta_reconciliation_operator_token",
             "bureau_database_url", "token_hmac_key",
@@ -189,7 +190,8 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
         assert all(len(key) == 64 for key in ceremony_keys)
         assert len(set(ceremony_keys + [
             (secret_dir / "signing_keys_internal_api_key").read_text(encoding="ascii"),
-            (secret_dir / "signing_keys_service_sign_gateway_key").read_text(encoding="ascii")])) == 4
+            (secret_dir / "signing_keys_service_sign_gateway_key").read_text(encoding="ascii"),
+            (secret_dir / "signing_keys_issuer_sign_key").read_text(encoding="ascii")])) == 5
         operator_token = (secret_dir / "passport_beta_reconciliation_operator_token").read_text(
             encoding="ascii")
         assert len(operator_token) == 64

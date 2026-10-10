@@ -83,6 +83,7 @@ LOADED_INPUTS = {
     "INTEGRATION_SECRET_MASTER_KEY_FILE",
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
     "TOKEN_HMAC_KEY",
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
@@ -239,6 +240,21 @@ def assert_models(
     didcomm_kms_addr="${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}",
 ):
     preserved = deepcopy(after)
+    issuer_secret = preserved["secrets"].pop("signing_keys_issuer_sign_key")
+    assert issuer_secret["file"].endswith("/signing_keys_issuer_sign_key")
+    for name in ("gateway", "signing-keys", "flow", "issuance", "issuance-native", "canvas-sync-worker"):
+        service = preserved["services"][name]
+        if "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" in service["environment"]:
+            assert service["environment"].pop("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE") == (
+                "/run/secrets/signing_keys_issuer_sign_key"
+            )
+        mount = {
+            "source": "signing_keys_issuer_sign_key",
+            "target": "/run/secrets/signing_keys_issuer_sign_key",
+        }
+        assert isinstance(service["secrets"], list)
+        assert service["secrets"].count(mount) == 1, name
+        service["secrets"].remove(mount)
     native = GATE["native_dispatcher_model"](
         preserved["services"].pop("issuance-native")
     )
@@ -268,6 +284,9 @@ def assert_models(
         assert signer_tls["secrets"].count(mount) == 1
         signer_tls["secrets"].remove(mount)
     shared = preserved.pop("x-issuance-application-env")
+    assert shared.pop("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE") == (
+        "/run/secrets/signing_keys_issuer_sign_key"
+    )
     assert {key: shared[key] for key in SHARED_ADDITIONS} == shared_additions
     legacy_after = preserved["services"]["issuance"]["environment"]
     assert {key: legacy_after.pop(key) for key in SHARED_ADDITIONS} == shared_additions
@@ -354,10 +373,12 @@ def assert_models(
     flow["environment"]["ISSUANCE_GRPC_TARGET"] = "issuance:9005"
     for key in ("ISSUANCE_API_KEY_FILE", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"):
         assert flow["environment"].pop(key) == "/run/secrets/issuance_api_key"
-    assert flow["secrets"].pop() == {
+    flow_issuance_secret = {
         "source": "issuance_api_key",
         "target": "/run/secrets/issuance_api_key",
     }
+    assert flow["secrets"].count(flow_issuance_secret) == 1
+    flow["secrets"].remove(flow_issuance_secret)
     if "canvas-sync-worker" in preserved["services"]:
         worker_after = preserved["services"]["canvas-sync-worker"]
         worker_before = before["services"]["canvas-sync-worker"]
@@ -439,7 +460,7 @@ def assert_models(
             "source": "device_registration_gateway_key",
             "target": "/run/secrets/device_registration_gateway_key",
         }
-        assert service["secrets"].count(mount) == 1
+        assert service["secrets"].count(mount) == 1, name
         service["secrets"].remove(mount)
     holder_secret = preserved["secrets"].pop("device_registration_signing_keys_key")
     assert holder_secret["file"].endswith("/device_registration_signing_keys_key")

@@ -32,7 +32,12 @@ async fn live_flow_decrypts_go_holder_response_through_signing_keys() {
     }
     let (path, base_url, api_key) = (path.unwrap(), base_url.unwrap(), api_key.unwrap());
     let input: HolderInput = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-    let provider = HttpSigningProvider::new(&format!("{base_url}/internal/"), &api_key).unwrap();
+    let provider = HttpSigningProvider::new(
+        &format!("{base_url}/internal/"),
+        &api_key,
+        "synthetic-issuer-sign-key-32-characters",
+    )
+    .unwrap();
     let remote = provider
         .create_haip_key(&input.organization_id, &input.flow_instance_id)
         .await

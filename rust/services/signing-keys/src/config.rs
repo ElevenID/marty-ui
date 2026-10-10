@@ -4,6 +4,7 @@ const DEFAULT_HTTP_PORT: u16 = 8017;
 const DEFAULT_INTEGRATION_SECRET_TLS_PORT: u16 = 8018;
 const DEVELOPMENT_INTERNAL_API_KEY: &str = "dev-signing-keys-internal-api-key";
 const DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY: &str = "dev-signing-keys-service-sign-gateway-key";
+const DEVELOPMENT_ISSUER_SIGN_KEY: &str = "dev-signing-keys-issuer-did-sign-key";
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct IntegrationSecretTls {
@@ -20,6 +21,7 @@ pub struct Config {
     pub build_revision: String,
     pub internal_api_key: String,
     pub service_sign_gateway_key: String,
+    pub issuer_sign_key: String,
     pub holder_device_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
@@ -91,6 +93,13 @@ impl Config {
         let service_sign_gateway_key =
             secret_value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY")?
                 .unwrap_or_else(|| DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY.to_string());
+        if value(values, "SIGNING_KEYS_ISSUER_SIGN_KEY").is_some()
+            && value(values, "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE").is_some()
+        {
+            return Err("SIGNING_KEYS_ISSUER_SIGN_KEY must use one secret source".into());
+        }
+        let issuer_sign_key = secret_value(values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?
+            .unwrap_or_else(|| DEVELOPMENT_ISSUER_SIGN_KEY.to_string());
         let environment = value(values, "ENVIRONMENT").unwrap_or_else(|| "development".into());
         let nondevelopment_environment = !matches!(
             environment.to_ascii_lowercase().as_str(),
@@ -106,11 +115,22 @@ impl Config {
                     .into(),
             );
         }
+        if issuer_sign_key.len() < 32
+            || issuer_sign_key == internal_api_key
+            || issuer_sign_key == service_sign_gateway_key
+            || ((release_version != "development" || nondevelopment_environment)
+                && issuer_sign_key == DEVELOPMENT_ISSUER_SIGN_KEY)
+        {
+            return Err(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters".into(),
+            );
+        }
         let holder_device_key = secret_value(values, "DEVICE_REGISTRATION_SIGNING_KEYS_KEY")?;
         if holder_device_key.as_ref().is_some_and(|key| {
             key.len() < 32
                 || key == &internal_api_key
                 || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
                 || dsc_issue_gateway_key.as_ref() == Some(key)
         }) {
             return Err(
@@ -119,7 +139,10 @@ impl Config {
             );
         }
         if dsc_issue_gateway_key.as_ref().is_some_and(|key| {
-            key.len() < 32 || key == &internal_api_key || key == &service_sign_gateway_key
+            key.len() < 32
+                || key == &internal_api_key
+                || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
         }) {
             return Err(
                 "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
@@ -154,6 +177,7 @@ impl Config {
             key.len() < 32
                 || key == &internal_api_key
                 || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
                 || dsc_issue_gateway_key.as_ref() == Some(key)
                 || holder_device_key.as_ref() == Some(key)
         }) {
@@ -176,6 +200,17 @@ impl Config {
         }) || bao_token.as_deref() == Some(service_sign_gateway_key.as_str())
         {
             return Err("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must not be reused by another configuration value".into());
+        }
+        if values.iter().any(|(name, value)| {
+            name != "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                && name != "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"
+                && value.contains(&issuer_sign_key)
+        }) || bao_token.as_deref() == Some(issuer_sign_key.as_str())
+        {
+            return Err(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must not be reused by another configuration value"
+                    .into(),
+            );
         }
         if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
@@ -219,6 +254,7 @@ impl Config {
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
             service_sign_gateway_key,
+            issuer_sign_key,
             holder_device_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
@@ -323,6 +359,10 @@ mod tests {
                 "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
                 "dedicated-production-service-sign-key-000001".into(),
             ),
+            (
+                "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                "dedicated-production-issuer-sign-key-000001".into(),
+            ),
         ]);
         assert_eq!(
             Config::from_values(&configured).unwrap().internal_api_key,
@@ -356,6 +396,37 @@ mod tests {
         values.remove("OTHER_SERVICE_SECRET");
         values.insert("ENVIRONMENT".into(), "production".into());
         values.remove("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY");
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn issuer_sign_key_is_required_for_release_and_cannot_reuse_other_authority() {
+        let mut values = HashMap::from([
+            ("MARTY_RELEASE_VERSION".into(), "beta".into()),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+                "shared-internal-signing-key-32-chars".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-service-sign-key-32-chars".into(),
+            ),
+        ]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "shared-internal-signing-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "dedicated-issuer-sign-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "OTHER_SERVICE_SECRET".into(),
+            "dedicated-issuer-sign-key-32-chars".into(),
+        );
         assert!(Config::from_values(&values).is_err());
     }
 
@@ -454,6 +525,10 @@ mod tests {
                 "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
                 "dedicated-service-sign-gateway-key-000001".into(),
             ),
+            (
+                "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                "dedicated-issuer-sign-key-000001".into(),
+            ),
         ]);
         assert!(Config::from_values(&values).is_err());
         values.insert(
@@ -516,6 +591,10 @@ mod tests {
             (
                 "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
                 "dedicated-service-sign-gateway-key-000001".into(),
+            ),
+            (
+                "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                "dedicated-issuer-sign-key-000001".into(),
             ),
             (
                 "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),

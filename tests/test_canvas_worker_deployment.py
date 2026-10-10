@@ -219,6 +219,7 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     assert secret_names == {
         "DATABASE_URL": "DATABASE_URL",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "SIGNING_KEYS_ISSUER_SIGN_KEY",
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
     issuance = next(

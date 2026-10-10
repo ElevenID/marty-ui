@@ -62,6 +62,7 @@ pub struct FlowServiceConfig {
     pub trust_profile_url: String,
     pub deployment_profile_url: String,
     pub signing_keys_api_key: Option<String>,
+    pub issuer_sign_key: Option<String>,
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
@@ -174,6 +175,7 @@ impl fmt::Debug for FlowServiceConfig {
                 "signing_keys_api_key",
                 &redacted(&self.signing_keys_api_key),
             )
+            .field("issuer_sign_key", &redacted(&self.issuer_sign_key))
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
@@ -232,6 +234,7 @@ impl FlowServiceConfig {
                 "FLOW_WEBHOOK_SECRET",
                 "FLOW_APPLICATION_EVENT_HMAC_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_ISSUER_SIGN_KEY",
                 "ISSUANCE_API_KEY",
                 "PASSPORT_TENANT_API_KEYS",
             ],
@@ -466,7 +469,16 @@ impl FlowServiceConfig {
         )?;
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
+        let issuer_sign_key =
+            optional_secret(&values, "SIGNING_KEYS_ISSUER_SIGN_KEY", environment)?;
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        if issuer_sign_key.as_ref().is_some_and(|key| {
+            signing_keys_api_key.as_ref() == Some(key)
+                || issuance_api_key.as_ref() == Some(key)
+                || service_token.as_ref() == Some(key)
+        }) {
+            return Err(invalid("SIGNING_KEYS_ISSUER_SIGN_KEY"));
+        }
         let passport_internal_service_auth_enabled = parse_boolean(
             value(&values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED").unwrap_or("false"),
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
@@ -557,6 +569,7 @@ impl FlowServiceConfig {
             trust_profile_url,
             deployment_profile_url,
             signing_keys_api_key,
+            issuer_sign_key,
             issuance_url,
             issuance_native_url,
             issuance_api_key,

@@ -413,7 +413,12 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
             KmsPassportArtifactCipher::new(kms_url.clone(), "synthetic-kms-key").unwrap(),
         )),
         Some(PassportSigner::Managed(Box::new(
-            ManagedProfileSigner::new(kms_url, Some("synthetic-kms-key")).unwrap(),
+            ManagedProfileSigner::new(
+                kms_url,
+                Some("synthetic-kms-key"),
+                Some("synthetic-issuer-sign-key"),
+            )
+            .unwrap(),
         ))),
         Some(client),
     );
@@ -889,7 +894,12 @@ async fn run_beta_batch_http_recovery(
             KmsPassportArtifactCipher::new(kms_url.clone(), "synthetic-kms-key").unwrap(),
         )),
         Some(PassportSigner::Managed(Box::new(
-            ManagedProfileSigner::new(kms_url, Some("synthetic-kms-key")).unwrap(),
+            ManagedProfileSigner::new(
+                kms_url,
+                Some("synthetic-kms-key"),
+                Some("synthetic-issuer-sign-key"),
+            )
+            .unwrap(),
         ))),
         Some(BureauClient::new(&format!("http://{bureau_address}"), "bureau-key").unwrap()),
     );

@@ -26,6 +26,7 @@ SPEC_KEYS = {"native_rpc", "legacy_rpc", "legacy_http", "directory"}
 SECRET_VALUES = {
     "grpc_service_token": TOKEN,
     "issuance_api_key": KEY,
+    "signing_keys_issuer_sign_key": "synthetic-flow-issuer-sign-key-32-chars",
     "marty_db_password": "synthetic-flow-database-password",
     "flow_webhook_secret": "synthetic-flow-rendered-webhook-secret",
     "flow_application_event_hmac_key": "synthetic-flow-rendered-event-hmac-key",

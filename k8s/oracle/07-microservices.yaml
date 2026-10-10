@@ -116,6 +116,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
             - name: DEPLOYMENT_PROFILE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
@@ -879,6 +884,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
           resources:
             requests:
               memory: "512Mi"
@@ -978,6 +988,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
           volumeMounts:
             - name: integration-secret-ca
               mountPath: /run/secrets/integration-secret-ca
@@ -1736,6 +1751,21 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: FLOW_APPLICATION_EVENT_HMAC_KEY
+            - name: SIGNING_KEYS_INTERNAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: ISSUANCE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: ISSUANCE_API_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
             - name: ISSUANCE_GRPC_TARGET

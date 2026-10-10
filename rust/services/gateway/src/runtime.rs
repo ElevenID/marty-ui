@@ -96,6 +96,7 @@ pub struct GatewayRuntimeState {
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
     pub service_sign_gateway_key: Option<String>,
+    pub issuer_sign_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
@@ -209,6 +210,7 @@ impl GatewayRuntimeState {
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
             service_sign_gateway_key: None,
+            issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             issuance_service_api_key,
@@ -282,6 +284,27 @@ impl GatewayRuntimeState {
             ));
         }
         self.service_sign_gateway_key = Some(key);
+        Ok(self)
+    }
+
+    pub fn with_issuer_sign_key(
+        mut self,
+        key: String,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if key.len() < 32
+            || key == self.signing_service_api_key
+            || key == self.issuance_service_api_key
+            || self.service_sign_gateway_key.as_ref() == Some(&key)
+            || self.service_token.as_ref() == Some(&key)
+            || self.device_registration_gateway_key.as_ref() == Some(&key)
+            || self.dsc_issue_gateway_key.as_ref() == Some(&key)
+            || self.csca_issue_gateway_key.as_ref() == Some(&key)
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "issuer signing credential must be distinct and at least 32 bytes".into(),
+            ));
+        }
+        self.issuer_sign_key = Some(key);
         Ok(self)
     }
 
@@ -3273,10 +3296,17 @@ async fn internal_signing_compatibility_handler(
     state: Arc<GatewayRuntimeState>,
     request: Request,
 ) -> Response {
-    if !constant_time_header_matches(
-        request.headers().get("x-api-key"),
-        &state.signing_service_api_key,
-    ) {
+    let expected = if request.method() == axum::http::Method::POST
+        && request.uri().path() == "/internal/signing-keys/issuer-dids/sign"
+    {
+        let Some(key) = state.issuer_sign_key.as_ref() else {
+            return detail_response(401, "Invalid internal API key");
+        };
+        key
+    } else {
+        &state.signing_service_api_key
+    };
+    if !constant_time_header_matches(request.headers().get("x-api-key"), expected) {
         return detail_response(401, "Invalid internal API key");
     }
     let Some(method) = http_method(request.method().as_str()) else {
@@ -3747,8 +3777,16 @@ async fn signing_service_request(
             .insert("content-type".into(), "application/json".into());
     }
     request.body = body;
+    let api_key = if path == "/internal/compat/issuer-dids/sign" {
+        state
+            .issuer_sign_key
+            .as_ref()
+            .ok_or_else(|| detail_response(503, "Issuer signing credential is unavailable."))?
+    } else {
+        &state.signing_service_api_key
+    };
     let overrides = ProxyOverrides {
-        headers: BTreeMap::from([("x-api-key".into(), state.signing_service_api_key.clone())]),
+        headers: BTreeMap::from([("x-api-key".into(), api_key.clone())]),
         ..ProxyOverrides::default()
     };
     state
@@ -5147,6 +5185,9 @@ mod tests {
             }
             if request.path.starts_with("/internal/") {
                 let expected = match instance.service_name.as_str() {
+                    "signing-keys" if request.path == "/internal/compat/issuer-dids/sign" => {
+                        Some("dedicated-issuer-sign-key-000001")
+                    }
                     "signing-keys" => Some("internal-signing-key"),
                     "issuance" | "issuance-native" => Some("issuance-service-key"),
                     "organizations" => None,
@@ -6248,6 +6289,8 @@ mod tests {
         .expect("service token")
         .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
         .expect("service sign credential")
+        .with_issuer_sign_key("dedicated-issuer-sign-key-000001".into())
+        .expect("issuer sign credential")
         .with_passport_native_gateway(
             passport_native,
             passport_native.then(|| {
@@ -9808,12 +9851,28 @@ mod tests {
             .expect("response");
         assert_eq!(direct.status(), StatusCode::NOT_FOUND);
 
-        let did = runtime_router()
+        let shared = runtime_router()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
                     .header("x-api-key", "internal-signing-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        br#"{"organization_id":"org-1","issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt","key_purpose":"vc_jwt_issuer","algorithm":"ES256","payload_b64":"cGF5bG9hZA"}"#.as_slice(),
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(shared.status(), StatusCode::UNAUTHORIZED);
+
+        let did = runtime_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                    .header("x-api-key", "dedicated-issuer-sign-key-000001")
                     .header("content-type", "application/json")
                     .body(Body::from(
                         br#"{"organization_id":"attacker","issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt","key_purpose":"vc_jwt_issuer","algorithm":"ES256","payload_b64":"cGF5bG9hZA"}"#.as_slice(),

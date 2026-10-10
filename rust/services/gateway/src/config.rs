@@ -108,6 +108,7 @@ pub struct GatewayConfig {
     pub device_registration_gateway_key: String,
     pub signing_internal_api_key: String,
     pub service_sign_gateway_key: String,
+    pub issuer_sign_key: String,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
@@ -150,6 +151,7 @@ impl fmt::Debug for GatewayConfig {
             .field("device_registration_gateway_key_configured", &true)
             .field("signing_internal_api_key_configured", &true)
             .field("service_sign_gateway_key_configured", &true)
+            .field("issuer_sign_key_configured", &true)
             .field(
                 "dsc_issue_gateway_key_configured",
                 &self.dsc_issue_gateway_key.is_some(),
@@ -298,6 +300,18 @@ impl GatewayConfig {
                 "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be distinct and at least 32 characters",
             ));
         }
+        let issuer_sign_key = secret(values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-issuer-did-sign-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_ISSUER_SIGN_KEY is required"))?;
+        if issuer_sign_key.len() < 32
+            || issuer_sign_key == signing_internal_api_key
+            || issuer_sign_key == service_sign_gateway_key
+            || (production && issuer_sign_key == "dev-signing-keys-issuer-did-sign-key")
+        {
+            return Err(error(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters",
+            ));
+        }
         let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
         if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
             return Err(error("CSCA issuance credential is beta-only"));
@@ -342,6 +356,7 @@ impl GatewayConfig {
         }
         if device_registration_gateway_key == signing_internal_api_key
             || device_registration_gateway_key == service_sign_gateway_key
+            || device_registration_gateway_key == issuer_sign_key
             || device_registration_gateway_key == issuance_api_key
         {
             return Err(error(
@@ -374,6 +389,20 @@ impl GatewayConfig {
         {
             return Err(error(
                 "Service signing credential must not be reused by another configuration value",
+            ));
+        }
+        if issuer_sign_key == issuance_api_key
+            || grpc_service_token.as_deref() == Some(issuer_sign_key.as_str())
+            || dsc_issue_gateway_key.as_deref() == Some(issuer_sign_key.as_str())
+            || csca_issue_gateway_key.as_deref() == Some(issuer_sign_key.as_str())
+            || values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                    && name != "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"
+                    && value.contains(&issuer_sign_key)
+            })
+        {
+            return Err(error(
+                "Issuer signing credential must not be reused by another configuration value",
             ));
         }
         if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
@@ -526,6 +555,7 @@ impl GatewayConfig {
             device_registration_gateway_key,
             signing_internal_api_key,
             service_sign_gateway_key,
+            issuer_sign_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
             issuance_api_key,
@@ -985,6 +1015,7 @@ mod tests {
             "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
             "k".repeat(32),
         );
+        values.insert("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32));
         values.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
         assert!(GatewayConfig::from_values(&values)
             .expect_err("missing TLS")
@@ -1010,6 +1041,7 @@ mod tests {
                 "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
                 "k".repeat(32),
             ),
+            ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
             ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
             ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
         ]);

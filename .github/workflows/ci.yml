@@ -2077,6 +2077,7 @@ jobs:
           ISSUANCE_API_KEY: ci-only-issuance-api-key-with-32-characters
           SIGNING_KEYS_INTERNAL_API_KEY: ci-only-signing-key-api-key-32-characters
           SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ci-only-dedicated-service-sign-key-32-characters
+          SIGNING_KEYS_ISSUER_SIGN_KEY: ci-only-dedicated-issuer-sign-key-32-characters
           VERIFICATION_GOVERNANCE_JSON: '{"ci_compose_render_only":true}'
           FLOW_WEBHOOK_SECRET: ci-only-flow-webhook-secret-32-characters
           FLOW_APPLICATION_EVENT_HMAC_KEY: ci-only-flow-application-event-key-32-chars

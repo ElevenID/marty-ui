@@ -318,10 +318,18 @@ cmd_setup_secrets() {
   smtp_username="$(resolve_secret_input SMTP_USERNAME)"
   smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
+  issuer_sign_key="$(resolve_secret_input SIGNING_KEYS_ISSUER_SIGN_KEY)"
+  require_resolved_secret SIGNING_KEYS_ISSUER_SIGN_KEY "$issuer_sign_key"
+  if (( ${#issuer_sign_key} < 32 )) || [[ "$issuer_sign_key" == "$issuance_api_key" ]]; then
+    error "SIGNING_KEYS_ISSUER_SIGN_KEY must be at least 32 characters and distinct from the shared Signing Keys credential."
+  fi
   service_sign_gateway_key="$(resolve_secret_input SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY)"
   require_resolved_secret SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY "$service_sign_gateway_key"
   if (( ${#service_sign_gateway_key} < 32 )) || [[ "$service_sign_gateway_key" == "$issuance_api_key" ]]; then
     error "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be at least 32 characters and distinct from shared Signing Keys credentials."
+  fi
+  if [[ "$issuer_sign_key" == "$service_sign_gateway_key" ]]; then
+    error "SIGNING_KEYS_ISSUER_SIGN_KEY must differ from SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY."
   fi
   token_hmac_key="$(resolve_secret_input TOKEN_HMAC_KEY)"
   require_resolved_secret TOKEN_HMAC_KEY "$token_hmac_key"
@@ -406,6 +414,7 @@ cmd_setup_secrets() {
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
     --from-literal=TOKEN_HMAC_KEY="$token_hmac_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
+    --from-literal=SIGNING_KEYS_ISSUER_SIGN_KEY="$issuer_sign_key" \
     --from-literal=SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY="$service_sign_gateway_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
     --from-literal=DEVICE_REGISTRATION_GATEWAY_KEY="$device_registration_gateway_key" \

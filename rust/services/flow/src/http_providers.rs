@@ -341,11 +341,19 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
 #[derive(Clone)]
 pub struct HttpSigningProvider {
     signing: BoundedHttpClient,
+    issuer_signing: BoundedHttpClient,
     envelopes: BoundedHttpClient,
 }
 
 impl HttpSigningProvider {
-    pub fn new(base_url: &str, api_key: &str) -> Result<Self, FlowProviderError> {
+    pub fn new(
+        base_url: &str,
+        api_key: &str,
+        issuer_sign_key: &str,
+    ) -> Result<Self, FlowProviderError> {
+        if api_key == issuer_sign_key {
+            return Err(invalid_config("signing_identity"));
+        }
         let envelopes = BoundedHttpClient::new(
             base_url,
             api_key,
@@ -360,6 +368,12 @@ impl HttpSigningProvider {
             signing: BoundedHttpClient::new(
                 compatibility_url.as_str(),
                 api_key,
+                "signing_identity",
+                Duration::from_secs(10),
+            )?,
+            issuer_signing: BoundedHttpClient::new(
+                compatibility_url.as_str(),
+                issuer_sign_key,
                 "signing_identity",
                 Duration::from_secs(10),
             )?,
@@ -417,7 +431,7 @@ impl SigningIdentityProvider for HttpSigningProvider {
             "algorithm": request.algorithm
         });
         let response: Value = self
-            .signing
+            .issuer_signing
             .json(
                 Method::POST,
                 "issuer-dids/sign",
@@ -875,11 +889,18 @@ mod tests {
 
     #[test]
     fn provider_configuration_rejects_credentials_and_weak_api_keys() {
-        assert!(
-            HttpSigningProvider::new("https://user@example.com/internal/", &"a".repeat(32))
-                .is_err()
-        );
-        assert!(HttpSigningProvider::new("https://example.com/internal/", "short").is_err());
+        assert!(HttpSigningProvider::new(
+            "https://user@example.com/internal/",
+            &"a".repeat(32),
+            &"b".repeat(32)
+        )
+        .is_err());
+        assert!(HttpSigningProvider::new(
+            "https://example.com/internal/",
+            "short",
+            &"b".repeat(32)
+        )
+        .is_err());
         assert!(HttpFlowReferenceProvider::new(
             "https://issuance.example",
             &"a".repeat(32),
@@ -889,8 +910,12 @@ mod tests {
             Some("short"),
         )
         .is_err());
-        let signing =
-            HttpSigningProvider::new("https://example.com/internal/", &"a".repeat(32)).unwrap();
+        let signing = HttpSigningProvider::new(
+            "https://example.com/internal/",
+            &"a".repeat(32),
+            &"b".repeat(32),
+        )
+        .unwrap();
         assert_eq!(
             signing.signing.base_url.as_str(),
             "https://example.com/internal/compat/"
@@ -942,8 +967,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
         let identity = provider
             .resolve(
@@ -984,8 +1013,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
         let result = provider
             .sign(&SigningRequest {
@@ -1004,7 +1037,7 @@ mod tests {
         let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
         assert_eq!(uri.path(), "/internal/compat/issuer-dids/sign");
         assert_eq!(uri.query(), Some("organization_id=org-1"));
-        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(headers.get("x-api-key").unwrap(), &"b".repeat(32));
         assert_eq!(
             body,
             json!({
@@ -1040,8 +1073,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
         let key = provider.create_haip_key("org-1", "flow-1").await.unwrap();
         assert!(key.public_jwk.get("d").is_none());

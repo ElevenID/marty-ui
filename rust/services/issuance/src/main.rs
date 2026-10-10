@@ -506,7 +506,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?),
         Arc::new(HttpCanvasLtiToolSignatureProvider::new(
             config.signing_keys_internal_url.clone(),
-            config.signing_keys_internal_api_key.as_deref(),
+            config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
         )?),
     ));
@@ -524,6 +524,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             canvas_lti_tool_signer.clone(),
             config.signing_keys_internal_url.clone(),
             config.signing_keys_internal_api_key.as_deref(),
+            config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
         )?),
         config.canvas_portable_enabled,
@@ -573,7 +574,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     ));
     let credential_builder = Arc::new(HttpCredentialBuilder::new(
         config.signing_keys_internal_url.clone(),
-        config.signing_keys_internal_api_key.as_deref(),
+        config.issuer_sign_key.as_deref(),
         config.dependency_timeout,
     )?);
     let credential_lifecycle = Arc::new(PostgresCredentialLifecycle::new(

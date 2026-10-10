@@ -112,6 +112,10 @@ impl OwnedWorker {
                 remote_integration_secret::API_KEY,
             )
             .env(
+                "SIGNING_KEYS_ISSUER_SIGN_KEY",
+                "synthetic-worker-issuer-sign-key-32-chars",
+            )
+            .env(
                 "SIGNING_KEYS_INTERNAL_URL",
                 remote_integration_secret::base_url().as_str(),
             )

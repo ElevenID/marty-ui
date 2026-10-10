@@ -227,7 +227,11 @@ impl CscaTrustAnchorClient {
 }
 
 impl ManagedProfileSigner {
-    pub fn new(base_url: Url, api_key: Option<&str>) -> Result<Self, SignerError> {
+    pub fn new(
+        base_url: Url,
+        api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+    ) -> Result<Self, SignerError> {
         Ok(Self {
             resolver: HttpIssuerContextResolver::new(
                 base_url.clone(),
@@ -235,7 +239,7 @@ impl ManagedProfileSigner {
                 Duration::from_secs(15),
             )
             .map_err(|_| SignerError::ManagedUnavailable)?,
-            signer: HttpDidSigner::new(base_url.clone(), api_key, Duration::from_secs(30))
+            signer: HttpDidSigner::new(base_url.clone(), issuer_sign_key, Duration::from_secs(30))
                 .map_err(|_| SignerError::ManagedUnavailable)?,
             trust: CscaTrustAnchorClient::new(base_url, api_key)?,
         })
@@ -722,7 +726,7 @@ mod tests {
             headers: HeaderMap,
             Json(request): Json<Value>,
         ) -> Json<Value> {
-            assert_eq!(headers["x-api-key"], "existing-internal-auth");
+            assert_eq!(headers["x-api-key"], "synthetic-issuer-sign-key");
             state.requests.lock().unwrap().push(request.clone());
             let input = URL_SAFE_NO_PAD
                 .decode(request["payload_b64"].as_str().unwrap())
@@ -776,6 +780,7 @@ mod tests {
         let signer = ManagedProfileSigner::new(
             Url::parse(&format!("http://{address}/internal/signing-keys/")).unwrap(),
             Some("existing-internal-auth"),
+            Some("synthetic-issuer-sign-key"),
         )
         .unwrap();
         let groups = BTreeMap::from([
@@ -931,6 +936,7 @@ mod tests {
         let signer = ManagedProfileSigner::new(
             Url::parse(&format!("http://{address}/internal/signing-keys/")).unwrap(),
             Some("existing-internal-auth"),
+            Some("synthetic-issuer-sign-key"),
         )
         .unwrap();
         let groups = BTreeMap::from([(BigUint::from(1u8), "AQ==".into())]);
@@ -979,6 +985,7 @@ mod tests {
             let signer = ManagedProfileSigner::new(
                 Url::parse(&format!("http://{address}/internal/signing-keys/")).unwrap(),
                 None,
+                Some("synthetic-issuer-sign-key"),
             )
             .unwrap();
             let groups = BTreeMap::from([(BigUint::from(1u8), "AQ==".into())]);

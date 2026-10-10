@@ -93,6 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = http::router_with_all_keys(
         config.internal_api_key,
         Some(config.service_sign_gateway_key),
+        Some(config.issuer_sign_key),
         config.dsc_issue_gateway_key,
         config.csca_issue_gateway_key,
         config.beta_csca_issuance_enabled,

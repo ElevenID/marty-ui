@@ -242,6 +242,7 @@ pub struct IssuanceServiceConfig {
     pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
+    pub issuer_sign_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
     pub internal_service_token: Option<String>,
     pub organization_grpc_target: String,
@@ -333,6 +334,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field(
                 "signing_keys_internal_api_key_configured",
                 &self.signing_keys_internal_api_key.is_some(),
+            )
+            .field(
+                "issuer_sign_key_configured",
+                &self.issuer_sign_key.is_some(),
             )
             .field(
                 "revocation_profile_service_url",
@@ -562,6 +567,12 @@ impl IssuanceServiceConfig {
                 "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY is required for integration secrets",
             ));
         }
+        if config.issuer_sign_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY is required for issuer signing",
+            ));
+        }
         validate_grpc_service_token(
             config.internal_service_token.as_deref(),
             config.grpc_enabled,
@@ -742,6 +753,25 @@ impl IssuanceServiceConfig {
         }
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
+        if values.get("SIGNING_KEYS_ISSUER_SIGN_KEY").is_some()
+            && values.get("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE").is_some()
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must use one secret source",
+            ));
+        }
+        let issuer_sign_key = secret_value(&values, "SIGNING_KEYS_ISSUER_SIGN_KEY")?;
+        if issuer_sign_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || signing_keys_internal_api_key.as_ref() == Some(key)
+                || issuance_api_key.as_ref() == Some(key)
+        }) {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters",
+            ));
+        }
         if values
             .get("GRPC_SERVICE_TOKEN")
             .is_some_and(|value| !value.trim().is_empty())
@@ -757,6 +787,15 @@ impl IssuanceServiceConfig {
         let internal_service_token = secret_value(&values, "GRPC_SERVICE_TOKEN")?
             .map(|value| value.trim().to_owned())
             .filter(|value| !value.is_empty());
+        if issuer_sign_key
+            .as_ref()
+            .is_some_and(|key| internal_service_token.as_ref() == Some(key))
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY must differ from GRPC_SERVICE_TOKEN",
+            ));
+        }
         if passport_native.internal_service_auth_enabled
             && internal_service_token
                 .as_deref()
@@ -972,6 +1011,7 @@ impl IssuanceServiceConfig {
             passport_native,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
+            issuer_sign_key,
             revocation_profile_service_url,
             internal_service_token,
             organization_grpc_target,

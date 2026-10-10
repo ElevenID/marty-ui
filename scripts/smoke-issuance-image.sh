@@ -106,6 +106,7 @@ docker run --detach \
   --env TOKEN_HMAC_KEY=ci-only-token-hmac-key \
   --env GRPC_SERVICE_TOKEN=ci-only-grpc-service-token-at-least-32-bytes \
   --env SIGNING_KEYS_INTERNAL_API_KEY="$secret_api_key" \
+  --env SIGNING_KEYS_ISSUER_SIGN_KEY=ci-only-dedicated-issuer-sign-key-32-chars \
   --env SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys \
   --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8017/internal/signing-keys \
   --env INTEGRATION_SECRET_KMS_CA_FILE=/verification/tls/ca.crt \

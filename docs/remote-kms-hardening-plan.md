@@ -11233,6 +11233,24 @@ into both a generic text column and a generic JSON field, with teardown.
 This is stronger source/database evidence, not a completed assembled release
 inventory or proof against arbitrary encoded key material.
 
+2026-10-09 grouped issuer-DID credential correction in progress: the local
+candidate introduces a distinct `SIGNING_KEYS_ISSUER_SIGN_KEY` for the active
+issuer-DID signing route at both Gateway and Signing Keys. Flow, Rust Issuance,
+and the Canvas sync worker use that credential only for sign requests; their
+resolution and other internal calls keep the shared non-signing credential.
+Gateway and Signing Keys reject the shared credential on issuer-DID signing,
+and the signing route still resolves an active tenant-bound managed profile
+before invoking KMS. Self-host, disposable Compose, Kubernetes, secret catalog,
+provisioning, and CI render inputs now distribute the issuer credential only to
+the signing workloads. The previous published UI head's hosted run
+`38014048422` failed on frozen fixture drift and Gateway executable smoke
+configuration; the local candidate repairs those failures, but no new hosted
+head qualifies it yet. This is a service-authorization separation, not a
+private cryptographic key or a per-tenant credential. A compromised authorized
+Flow or Issuance workload can still ask to sign for any active tenant profile;
+further workload/tenant authorization needs review before calling this final
+least-privilege proof.
+
 2026-10-09 K10 content-scan alignment follow-up: review against the shared
 Rust key-material policy found that the SQL qualifier still missed field
 names such as `issuerPrivateKeyMultibase`, `private_pem` and `pkcs8`, and a
@@ -11242,3 +11260,13 @@ PostgreSQL 16 run passed on clean rows and rejected five synthetic cases:
 generic text PEM, generic JSON encrypted PEM, both private-name variants,
 and nested RSA JWK private material. The container was removed. This remains
 candidate source proof pending exact release-image qualification.
+
+The issuer-DID credential candidate subsequently passed local focused
+qualification: 1,030 relevant Python tests (three skipped), 267 deployment and
+native-model tests, Gateway/Signing Keys/Flow/Issuance Rust library suites,
+Gateway and Issuance executable smoke tests, Flow startup/provider integration
+tests, release-evidence tests, all-target checks for changed Rust packages,
+targeted Rust formatting, Ruff, shell syntax, and diff checks. The disposable
+managed-key integration target compiles; the Linux-only Canvas runtime and
+hosted release-image gates remain outstanding. The unrelated untracked Canvas
+`%SystemDrive%` artifact is excluded from the grouped commit.

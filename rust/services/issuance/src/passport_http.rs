@@ -263,6 +263,7 @@ impl PassportHttpService {
                 ManagedProfileSigner::new(
                     config.signing_keys_internal_url.clone(),
                     config.signing_keys_internal_api_key.as_deref(),
+                    config.issuer_sign_key.as_deref(),
                 )?,
             )))
         } else if let Some(url) = native.signer_url.as_deref() {

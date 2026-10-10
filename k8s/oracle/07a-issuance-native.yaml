@@ -262,6 +262,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
             - name: PERSONALIZATION_BUREAU_API_KEY
               valueFrom:
                 secretKeyRef:

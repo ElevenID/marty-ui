@@ -145,6 +145,10 @@ fn standalone_process_rejects_missing_remote_kms_even_with_signing_key_fallback(
             "SIGNING_KEYS_INTERNAL_API_KEY",
             "signing-only-deployment-key",
         )
+        .env(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY",
+            "synthetic-worker-issuer-sign-key-32-chars",
+        )
         .env("CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID", "system-tools")
         .env(
             "CANVAS_LTI_TOOL_ISSUER_DID",

@@ -117,6 +117,13 @@ async fn run_initialized_worker(
     )?;
     let signing_key =
         required_secret_with_fallback("SIGNING_KEYS_INTERNAL_API_KEY", "ISSUANCE_API_KEY")?;
+    let issuer_sign_key = optional_secret("SIGNING_KEYS_ISSUER_SIGN_KEY")?
+        .ok_or("SIGNING_KEYS_ISSUER_SIGN_KEY is required")?;
+    if issuer_sign_key.len() < 32 || issuer_sign_key == signing_key {
+        return Err(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters".into(),
+        );
+    }
     let cipher = KmsIntegrationSecretCipher::from_environment(&signing_key)?;
     let mut audit_connection = pool.acquire().await?;
     cipher.verify_storage(&mut audit_connection).await?;
@@ -167,7 +174,7 @@ async fn run_initialized_worker(
         )?),
         Arc::new(HttpCanvasLtiToolSignatureProvider::new(
             signing_url,
-            Some(&signing_key),
+            Some(&issuer_sign_key),
             Duration::from_secs(15),
         )?),
     ));

@@ -48,6 +48,7 @@ x-issuance-application-env: &issuance-application-env
   TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
   SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
   SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+  SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
   CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
   CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
   CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
@@ -344,9 +345,11 @@ services:
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
     secrets:
       - issuance_api_key
       - signing_keys_service_sign_gateway_key
+      - signing_keys_issuer_sign_key
       - openbao_service_token
       - grpc_service_token
       - device_registration_gateway_key
@@ -586,6 +589,7 @@ services:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
@@ -653,6 +657,7 @@ services:
     secrets:
       - marty_db_password
       - issuance_api_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
@@ -688,6 +693,7 @@ services:
       INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
       INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
@@ -712,6 +718,7 @@ services:
     secrets:
       - marty_db_password
       - issuance_api_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
       - workload_identity_ca_cert
     depends_on:
@@ -932,6 +939,7 @@ services:
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE: /run/secrets/device_registration_signing_keys_key
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
@@ -942,6 +950,7 @@ services:
     secrets:
       - issuance_api_key
       - signing_keys_service_sign_gateway_key
+      - signing_keys_issuer_sign_key
       - device_registration_signing_keys_key
       - signing_keys_openbao_token
       - haip_kms_token
@@ -989,6 +998,7 @@ services:
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -1012,6 +1022,7 @@ services:
       - flow_webhook_secret
       - flow_application_event_hmac_key
       - issuance_api_key
+      - signing_keys_issuer_sign_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1277,6 +1288,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
   signing_keys_service_sign_gateway_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_service_sign_gateway_key
+  signing_keys_issuer_sign_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_issuer_sign_key
   grpc_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
   device_registration_gateway_key:

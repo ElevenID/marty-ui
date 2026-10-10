@@ -333,6 +333,7 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
+        ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
         ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
         (

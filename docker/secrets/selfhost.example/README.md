@@ -20,6 +20,7 @@ Required files:
 - `marty_api_client_secret`
 - `issuance_api_key`
 - `signing_keys_service_sign_gateway_key` (Gateway and Signing Keys only; distinct random value, at least 32 characters)
+- `signing_keys_issuer_sign_key` (Gateway, Signing Keys, Flow, Issuance, and Canvas sync worker; distinct random value, at least 32 characters)
 - `grpc_service_token`
 - `device_registration_gateway_key` (distinct random value, at least 32 characters)
 - `device_registration_signing_keys_key` (a different random value, at least 32 characters)

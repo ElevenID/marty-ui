@@ -171,6 +171,7 @@ impl LiveCanvasReadinessChallengeProvider {
         lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
         signing_service_url: Url,
         signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, String> {
         let issuer_resolver = HttpIssuerContextResolver::new(
@@ -179,7 +180,7 @@ impl LiveCanvasReadinessChallengeProvider {
             timeout,
         )
         .map_err(|_| "Canvas readiness issuer resolver could not be configured".to_owned())?;
-        let did_signer = HttpDidSigner::new(signing_service_url, signing_service_api_key, timeout)
+        let did_signer = HttpDidSigner::new(signing_service_url, issuer_sign_key, timeout)
             .map_err(|_| "Canvas readiness DID signer could not be configured".to_owned())?;
         Ok(Self::with_ports(
             lti_signer,

@@ -82,7 +82,11 @@ async fn terminal_haip_http_replays_decrypt_with_remote_custody() -> TestResult 
     .bind(now)
     .execute(&pool)
     .await?;
-    let provider = HttpSigningProvider::new(&format!("{signing_url}/internal/"), &api_key)?;
+    let provider = HttpSigningProvider::new(
+        &format!("{signing_url}/internal/"),
+        &api_key,
+        "synthetic-issuer-sign-key-32-characters",
+    )?;
     let http_state = FlowHttpState {
         repository: PostgresFlowRepository::new(pool.clone()),
         providers: Arc::new(FlowProviderRegistry {
