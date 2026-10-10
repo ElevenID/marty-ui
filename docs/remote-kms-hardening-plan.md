@@ -10851,3 +10851,34 @@ outstanding. UI #1192's exact published head remains green except for its
 still-running Canvas Rust service job, currently in isolated database
 contract suites. Core #355, Verifier #154, and Credentials #313 retain their
 previously green exact-head checks and remain unmerged.
+
+2026-10-09 active mobile liveness custody correction: local Authenticator
+commit `ea759c3` removes the build-time `MARTY_LIVENESS_SIGNING_SECRET` and
+`LivenessChallenge.create` Dart call into native local signing. With no
+production remote challenge provider, the liveness screen now fails closed
+before opening the camera. Its existing test-only challenge injection still
+exercises gesture UI, but does not qualify real liveness or KMS custody.
+The obsolete private signing adapter test was removed and the mobile source
+guard rejects those local-signing names in active liveness Dart files. Dart
+analysis passed; the focused tests passed; the default Flutter suite passed
+197 tests with four skips; the source guard passed. Non-generated line
+coverage is 88.00% (1,804/2,050), below the 90% protected gate. The Rust
+`create_liveness_challenge`/`verify_liveness_challenge` exports and generated
+FRB surface still exist and **must be removed** before calling mobile custody
+complete. Local FRB generation with pinned 2.13.0 cannot finish on Windows:
+after using a short target path, `marty-zkp` Longfellow C++ compilation
+fails on missing `zstd.h` and `openssl/sha.h` and MSVC `sbb`/`adc` errors.
+The attempted native removal was not retained without generated bridge
+parity; generate and verify this retirement on the hosted Linux toolchain
+as part of the next grouped mobile update. Real server-issued, KMS-backed
+liveness challenge and authenticated submission remain release blockers.
+Authenticator PR #57 still points to the older published head; these local
+mobile commits are intentionally batched before its next CI run.
+
+2026-10-09 UI exact-head hosted gate: draft PR #1192 at published source
+head `148d85b8f4a09eb52cc6a8b37d57b1de1314007d` now has 28 successful
+checks and one skipped check. Its last Canvas Rust service job
+`114068395407` completed successfully after the isolated database contracts.
+The local integration branch has tracker-only commits beyond the published
+head; do not describe those local commits as hosted qualified. The PR remains
+draft, mergeable, and unmerged.
