@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -39,6 +40,58 @@ GATEWAY_UPSTREAM_TARGETS = {
 
 
 class AffectedRustPlannerTests(unittest.TestCase):
+    def test_known_grpc_constructor_spellings_have_cargo_or_shadow_owners(self) -> None:
+        """Catch new source packages using these clients; not a full call graph."""
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", "--", "rust/services"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        sources: dict[str, tuple[str, str]] = {}
+        service_packages: dict[str, str] = {}
+        for raw in tracked.split(b"\0"):
+            if not raw:
+                continue
+            relative = Path(raw.decode("utf-8"))
+            parts = relative.parts
+            if len(parts) < 5 or parts[:2] != ("rust", "services"):
+                continue
+            if parts[3] != "src" or relative.suffix != ".rs":
+                continue
+            service = parts[2]
+            if service not in service_packages:
+                manifest = ROOT / "rust" / "services" / service / "Cargo.toml"
+                service_packages[service] = tomllib.loads(
+                    manifest.read_text(encoding="utf-8")
+                )["package"]["name"]
+            sources[relative.as_posix()] = (
+                service_packages[service],
+                (ROOT / relative).read_text(encoding="utf-8"),
+            )
+        for producer, marker, expected_count in (
+            ("marty-organization", "OrganizationServiceClient::", 12),
+            ("marty-event-stream", "EventStreamServiceClient::", 4),
+        ):
+            with self.subTest(producer=producer):
+                client_packages = {
+                    package for package, source in sources.values() if marker in source
+                }
+                cargo_consumers = {
+                    name for name, package in packages.items()
+                    if any(dep["name"] == producer for dep in package["dependencies"])
+                }
+                observed = {
+                    edge["package"]
+                    for edge in planner.OBSERVED_NON_CARGO_CONSUMERS[producer]
+                }
+                self.assertEqual(len(client_packages), expected_count)
+                self.assertEqual(client_packages - observed - cargo_consumers, set())
+                self.assertEqual(client_packages, observed | cargo_consumers)
+
     def test_gateway_credential_template_issuer_resolution_is_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
