@@ -12,6 +12,18 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[2]
 RUST = ROOT / "rust"
 
+# One authenticated Gateway compatibility route serves several issuer-key
+# consumers. Keep its source witness shared while each consumer retains its
+# own configuration, call-site, and deployment evidence.
+GATEWAY_ISSUER_RESOLUTION_ROUTE = {
+    "provider_evidence": "rust/services/gateway/src/runtime.rs",
+    "provider_route_marker": 'request.uri().path().starts_with("/internal/signing-keys")',
+    "provider_dispatch_marker": "forward_resolve_issuer_did(&state, &organization_id, &query).await",
+    "provider_auth_marker": "constant_time_header_matches(",
+    "provider_operation_evidence": "rust/services/gateway/src/signing_compat.rs",
+    "provider_operation_marker": '(HttpMethod::Get, "resolve-issuer-did")',
+}
+
 # These are observed HTTP/deployment consumers, not a complete runtime graph.
 # Keep the service fallback below until every service and its transitive inputs
 # have an obligation owner. The paths document the source of each observation.
@@ -33,16 +45,54 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_method_marker": "self.http.get(endpoint)",
             "request_auth_marker": 'request.header("x-api-key", api_key.as_ref())',
             "send_marker": ".send()",
-            "provider_evidence": "rust/services/gateway/src/runtime.rs",
-            "provider_route_marker": 'request.uri().path().starts_with("/internal/signing-keys")',
-            "provider_dispatch_marker": "forward_resolve_issuer_did(&state, &organization_id, &query).await",
-            "provider_auth_marker": "constant_time_header_matches(",
-            "provider_operation_evidence": "rust/services/gateway/src/signing_compat.rs",
-            "provider_operation_marker": '(HttpMethod::Get, "resolve-issuer-did")',
+            **GATEWAY_ISSUER_RESOLUTION_ROUTE,
             "deployment_evidence": "docker-compose.base.yml",
             "deployment_service": "credential-template",
             "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys",
             "deployment_auth_key": "SIGNING_KEYS_INTERNAL_API_KEY",
+        },
+        {
+            # Issuance's configured resolver calls Gateway's authenticated
+            # issuer-DID compatibility route in the standard Compose stack.
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/config.rs",
+            "binding": 'values.get("SIGNING_KEYS_INTERNAL_URL")',
+            "auth_binding": 'secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?',
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "runtime_marker": "Arc::new(HttpIssuerContextResolver::new(",
+            "auth_runtime_marker": "config.signing_keys_internal_api_key.as_deref()",
+            "request_evidence": "rust/services/issuance/src/credential_issuer.rs",
+            "request_marker": '"{}/resolve-issuer-did"',
+            "request_method_marker": "self.client.get(self.endpoint()?).query(&query)",
+            "request_auth_marker": 'request.header("X-API-Key", api_key)',
+            "send_marker": "request.send().await",
+            **GATEWAY_ISSUER_RESOLUTION_ROUTE,
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "issuance",
+            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys",
+            "deployment_auth_key": "SIGNING_KEYS_INTERNAL_API_KEY",
+        },
+        {
+            # Verification's Credentials compatibility mode is conditional;
+            # when enabled, its resolver uses the same Gateway route.
+            "package": "marty-verification-service",
+            "evidence": "rust/services/verification/src/config.rs",
+            "binding": 'value(&values, "SIGNING_KEYS_INTERNAL_URL")',
+            "auth_binding": 'value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")',
+            "runtime_evidence": "rust/services/verification/src/main.rs",
+            "conditional_marker": "if config.credentials_compat_enabled {",
+            "runtime_marker": "OrganizationIssuerKeyResolver::new(",
+            "request_evidence": "rust/services/verification/src/credentials_compat/resolver.rs",
+            "request_marker": '.get(format!("{}/resolve-issuer-did", self.base_url))',
+            "request_auth_marker": '.header("X-API-Key", &self.api_key)',
+            "send_marker": ".send()",
+            "fallback_marker": "allow_public_did_fallback()",
+            **GATEWAY_ISSUER_RESOLUTION_ROUTE,
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "verification",
+            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys",
+            "deployment_auth_key": "SIGNING_KEYS_INTERNAL_API_KEY",
+            "deployment_conditional_key": "VERIFICATION_CREDENTIALS_COMPAT_ENABLED",
         },
         {
             # Trust Profile resolves issuer did:web documents through the
@@ -544,7 +594,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "evidence": "rust/services/applicant/src/main.rs",
             "binding": "NOTIFICATION_EVENT_INGEST_URL",
             "default_binding_marker": 'env::var("NOTIFICATION_SERVICE_URL")',
-            "default_path_marker": 'format!("{}/internal/events", url.trim_end_matches(\'/\'))',
+            "default_path_marker": "format!(\"{}/internal/events\", url.trim_end_matches('/'))",
             "token_marker": 'optional_secret("NOTIFICATION_APPLICANT_EVENT_TOKEN")?',
             "startup_marker": "GrpcEventPublisher::new(",
             "startup_url_marker": "notification_url,",

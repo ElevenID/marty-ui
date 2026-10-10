@@ -3223,6 +3223,18 @@ Adding Applicant as a shadow runtime edge would duplicate established Cargo
 closure, not improve selection. Continue the non-Cargo audit with consumers
 that are absent from both Cargo and the source-witnessed graph.
 
+A3 Gateway issuer-resolution follow-up (2026-10-10, local candidate): the
+standard Compose Issuance service and conditional Verification Credentials
+compatibility mode both call Gateway's authenticated
+`/internal/signing-keys/resolve-issuer-did` route without a Gateway Cargo
+dependency. The shadow planner now records their configuration, runtime
+construction, HTTP call, Gateway auth/dispatch, and Compose bindings, reusing
+one Gateway route witness shared with Credential Template. Its service-change
+fallback still selects the full Rust workspace; no CI gate or runtime behavior
+changes. The focused planner suite passes 47 tests (one pre-existing skip) and
+406 subtests locally. Independent review and hosted validation remain pending;
+no speedup is claimed.
+
 A5 published-image invocation follow-up (2026-10-10): the v6 mount inventory
 did not witness the Python command that executes the mounted provider oracle.
 The v7 candidate records the exact `python -c` command, ties its `runpy`
