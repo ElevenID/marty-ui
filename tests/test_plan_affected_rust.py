@@ -87,14 +87,17 @@ class AffectedRustPlannerTests(unittest.TestCase):
             for _, source in sources.values()
             for marker in re.findall(r"\b[A-Za-z][A-Za-z0-9_]*ServiceClient::", source)
         }
-        self.assertEqual(discovered_markers, {marker for _, marker, _ in expected_clients})
+        self.assertEqual(
+            discovered_markers, {marker for _, marker, _ in expected_clients}
+        )
         for producer, marker, expected_count in expected_clients:
             with self.subTest(producer=producer):
                 client_packages = {
                     package for package, source in sources.values() if marker in source
                 }
                 cargo_consumers = {
-                    name for name, package in packages.items()
+                    name
+                    for name, package in packages.items()
                     if any(dep["name"] == producer for dep in package["dependencies"])
                 }
                 observed = {
@@ -184,6 +187,117 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertIn(
             edge["deployment_marker"],
             (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8"),
+        )
+
+    def test_gateway_issuance_and_verification_issuer_resolution_is_shadow_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/gateway/src/runtime.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = {
+            edge["package"]: edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-gateway"
+            and edge["package"]
+            in {"marty-issuance-service", "marty-verification-service"}
+            and edge.get("provider_operation_marker")
+            == '(HttpMethod::Get, "resolve-issuer-did")'
+        }
+        self.assertEqual(
+            set(edges), {"marty-issuance-service", "marty-verification-service"}
+        )
+        compose = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
+        for package, edge in edges.items():
+            with self.subTest(package=package):
+                self.assertNotIn(
+                    "marty-gateway",
+                    {dep["name"] for dep in packages[package]["dependencies"]},
+                )
+                for marker, evidence in (
+                    ("binding", "evidence"),
+                    ("auth_binding", "evidence"),
+                    ("runtime_marker", "runtime_evidence"),
+                    ("request_marker", "request_evidence"),
+                    ("request_auth_marker", "request_evidence"),
+                    ("send_marker", "request_evidence"),
+                    ("provider_route_marker", "provider_evidence"),
+                    ("provider_dispatch_marker", "provider_evidence"),
+                    ("provider_auth_marker", "provider_evidence"),
+                    ("provider_operation_marker", "provider_operation_evidence"),
+                ):
+                    self.assertIn(
+                        edge[marker],
+                        (ROOT / edge[evidence]).read_text(encoding="utf-8"),
+                        marker,
+                    )
+                environment = compose["services"][edge["deployment_service"]][
+                    "environment"
+                ]
+                self.assertEqual(
+                    environment["SIGNING_KEYS_INTERNAL_URL"],
+                    "http://gateway:8000/internal/signing-keys",
+                )
+                self.assertIn(
+                    edge["deployment_marker"],
+                    (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8"),
+                )
+                self.assertEqual(
+                    environment[edge["deployment_auth_key"]],
+                    compose["services"]["gateway"]["environment"][
+                        edge["deployment_auth_key"]
+                    ],
+                )
+        issuance = edges["marty-issuance-service"]
+        issuance_main = (ROOT / issuance["runtime_evidence"]).read_text(
+            encoding="utf-8"
+        )
+        resolver_call = issuance_main.split(issuance["runtime_marker"], 1)[1].split(
+            ")?);", 1
+        )[0]
+        self.assertIn("config.signing_keys_internal_url.clone()", resolver_call)
+        self.assertIn(issuance["auth_runtime_marker"], resolver_call)
+        self.assertIn(
+            issuance["request_method_marker"],
+            (ROOT / issuance["request_evidence"]).read_text(encoding="utf-8"),
+        )
+        verification = edges["marty-verification-service"]
+        main = (ROOT / verification["runtime_evidence"]).read_text(encoding="utf-8")
+        conditional_start = (
+            "let credentials_compat = " + verification["conditional_marker"]
+        )
+        conditional_end = "    } else {\n        None\n    };"
+
+        def assert_conditional_resolver(source: str) -> None:
+            self.assertEqual(source.count(conditional_start), 1)
+            section = source.split(conditional_start, 1)[1].split(
+                "let http_listener", 1
+            )[0]
+            self.assertEqual(section.count(conditional_end), 1)
+            body = section.split(conditional_end, 1)[0]
+            self.assertIn(verification["runtime_marker"], body)
+
+        assert_conditional_resolver(main)
+        call_start = main.index("        let issuer_resolver = ")
+        call_end = main.index("        let service = ", call_start)
+        call = main[call_start:call_end]
+        moved = main[:call_start] + main[call_end:]
+        moved = moved.replace(conditional_end, conditional_end + "\n" + call, 1)
+        with self.assertRaises(AssertionError):
+            assert_conditional_resolver(moved)
+        self.assertEqual(
+            compose["services"]["verification"]["environment"][
+                verification["deployment_conditional_key"]
+            ],
+            "${VERIFICATION_CREDENTIALS_COMPAT_ENABLED:-false}",
+        )
+        self.assertIn(
+            verification["fallback_marker"],
+            (ROOT / verification["request_evidence"]).read_text(encoding="utf-8"),
         )
 
     def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
@@ -509,11 +623,15 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     {dep["name"] for dep in packages[edge["package"]]["dependencies"]},
                 )
 
-    def test_applicant_notification_ingest_witness_is_scoped_and_shadow_only(self) -> None:
+    def test_applicant_notification_ingest_witness_is_scoped_and_shadow_only(
+        self,
+    ) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
         packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
-        result = planner.plan(["rust/services/notification/src/http.rs"], metadata, ROOT)
+        result = planner.plan(
+            ["rust/services/notification/src/http.rs"], metadata, ROOT
+        )
         self.assertTrue(result["all"])
         self.assertEqual(result["packages"], sorted(packages))
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
@@ -925,7 +1043,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertEqual(result["packages"], sorted(packages))
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
         edges = [
-            edge for edge in result["observed_non_cargo_consumers"]
+            edge
+            for edge in result["observed_non_cargo_consumers"]
             if edge["producer"] == producer and edge["package"] == consumer
         ]
         self.assertEqual(len(edges), 1)
@@ -977,9 +1096,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
         packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
-        result = planner.plan(
-            ["rust/services/gateway/src/runtime.rs"], metadata, ROOT
-        )
+        result = planner.plan(["rust/services/gateway/src/runtime.rs"], metadata, ROOT)
         self.assertTrue(result["all"])
         self.assertEqual(result["packages"], sorted(packages))
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
@@ -989,8 +1106,18 @@ class AffectedRustPlannerTests(unittest.TestCase):
             if edge["producer"] == "marty-gateway"
         ]
         edges = {}
-        for consumer in ("marty-trust-profile", "marty-issuance-service"):
-            matches = [edge for edge in gateway_edges if edge["package"] == consumer]
+        for consumer, binding in (
+            (
+                "marty-trust-profile",
+                'value(&values, "DID_RESOLUTION_BASE_URL").unwrap_or("http://gateway:8000")',
+            ),
+            ("marty-issuance-service", '"DIDCOMM_DID_WEB_INTERNAL_BASE_URL"'),
+        ):
+            matches = [
+                edge
+                for edge in gateway_edges
+                if edge["package"] == consumer and edge["binding"] == binding
+            ]
             self.assertEqual(len(matches), 1)
             edges[consumer] = matches[0]
         for consumer in edges:
@@ -1016,7 +1143,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 'request.uri().path() == "/.well-known/did.json"',
             ),
             ("rust/services/gateway/src/runtime.rs", '.strip_prefix("/orgs/")'),
-            ("rust/services/gateway/src/runtime.rs", "did_web_root_handler(state).await"),
+            (
+                "rust/services/gateway/src/runtime.rs",
+                "did_web_root_handler(state).await",
+            ),
             (
                 "rust/services/gateway/src/runtime.rs",
                 "did_web_slug_handler(state, slug).await",
@@ -1063,8 +1193,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
         for path, marker in witnesses:
             original = sources[path]
             sources[path] = original.replace(marker, "removed-runtime-witness")
-            with self.subTest(path=path, marker=marker), self.assertRaises(
-                AssertionError
+            with (
+                self.subTest(path=path, marker=marker),
+                self.assertRaises(AssertionError),
             ):
                 assert_witnesses()
             sources[path] = original
@@ -1079,8 +1210,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
         ):
             original = sources[path]
             sources[path] = original.replace(marker, "removed-deployment-witness")
-            with self.subTest(path=path, marker=marker), self.assertRaises(
-                AssertionError
+            with (
+                self.subTest(path=path, marker=marker),
+                self.assertRaises(AssertionError),
             ):
                 assert_witnesses()
             sources[path] = original
@@ -1194,9 +1326,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertIn(f"\n  {service}:\n", compose)
 
     def test_oracle_kubernetes_wires_every_configured_gateway_upstream(self) -> None:
-        configmap = (ROOT / "k8s/oracle/01-configmap.yaml").read_text(
-            encoding="utf-8"
-        )
+        configmap = (ROOT / "k8s/oracle/01-configmap.yaml").read_text(encoding="utf-8")
         configmaps = [
             document
             for document in yaml.safe_load_all(configmap)
@@ -1257,9 +1387,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
         signing_services = [
             document
             for document in yaml.safe_load_all(
-                (ROOT / "k8s/oracle/07b-signing-keys.yaml").read_text(
-                    encoding="utf-8"
-                )
+                (ROOT / "k8s/oracle/07b-signing-keys.yaml").read_text(encoding="utf-8")
             )
             if document
             and document.get("kind") == "Service"
@@ -1357,7 +1485,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
         packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
-        result = planner.plan(["rust/services/auth/src/http_service.rs"], metadata, ROOT)
+        result = planner.plan(
+            ["rust/services/auth/src/http_service.rs"], metadata, ROOT
+        )
         self.assertTrue(result["all"])
         self.assertEqual(result["packages"], sorted(packages))
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
@@ -1420,12 +1550,15 @@ class AffectedRustPlannerTests(unittest.TestCase):
         assert_deployment_markers()
         for marker, service in deployment_markers:
             original = deployments[service]
-            deployments[service] = original.replace(edge[marker], "removed-runtime-edge")
+            deployments[service] = original.replace(
+                edge[marker], "removed-runtime-edge"
+            )
             with self.subTest(marker=marker), self.assertRaises(AssertionError):
                 assert_deployment_markers()
             deployments[service] = original
         self.assertNotIn(
-            "marty-auth", {dep["name"] for dep in packages["marty-flow"]["dependencies"]}
+            "marty-auth",
+            {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
         )
 
     def test_organization_trust_profile_control_plane_is_observed(self) -> None:
@@ -1824,14 +1957,18 @@ class AffectedRustPlannerTests(unittest.TestCase):
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
         packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
-        result = planner.plan(["rust/services/issuance/src/application_template_http.rs"],
-                              metadata, ROOT)
+        result = planner.plan(
+            ["rust/services/issuance/src/application_template_http.rs"], metadata, ROOT
+        )
         self.assertTrue(result["all"])
         self.assertEqual(result["packages"], sorted(packages))
         self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
-        edges = [edge for edge in result["observed_non_cargo_consumers"]
-                 if edge["producer"] == "marty-issuance-service"
-                 and edge["package"] == "marty-applicant"]
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-issuance-service"
+            and edge["package"] == "marty-applicant"
+        ]
         self.assertEqual(len(edges), 1)
         edge = edges[0]
         markers = (
@@ -1842,8 +1979,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("provider_marker", "provider_evidence"),
             ("deployment_marker", "deployment_evidence"),
         )
-        sources = {path: (ROOT / path).read_text(encoding="utf-8")
-                   for path in {edge[source] for _, source in markers}}
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in {edge[source] for _, source in markers}
+        }
 
         def assert_markers() -> None:
             for marker, source in markers:
@@ -1863,9 +2002,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 assert_markers()
             sources[path] = original
         assert_markers()
-        self.assertNotIn("marty-issuance-service", {
-            dep["name"] for dep in packages["marty-applicant"]["dependencies"]
-        })
+        self.assertNotIn(
+            "marty-issuance-service",
+            {dep["name"] for dep in packages["marty-applicant"]["dependencies"]},
+        )
 
     def test_issuance_presentation_policy_status_http_consumer_is_observed_only(
         self,
@@ -1876,9 +2016,12 @@ class AffectedRustPlannerTests(unittest.TestCase):
         result = planner.plan(["rust/services/issuance/src/http.rs"], metadata, ROOT)
         self.assertTrue(result["all"])
         self.assertEqual(result["packages"], sorted(packages))
-        edges = [edge for edge in result["observed_non_cargo_consumers"]
-                 if edge["producer"] == "marty-issuance-service"
-                 and edge["package"] == "marty-presentation-policy"]
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-issuance-service"
+            and edge["package"] == "marty-presentation-policy"
+        ]
         self.assertEqual(len(edges), 1)
         edge = edges[0]
         markers = (
@@ -1888,8 +2031,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("request_marker", "request_evidence"),
             ("provider_marker", "provider_evidence"),
         )
-        sources = {path: (ROOT / path).read_text(encoding="utf-8")
-                   for path in {edge[source] for _, source in markers}}
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in {edge[source] for _, source in markers}
+        }
 
         def assert_markers() -> None:
             for marker, source in markers:
@@ -1914,9 +2059,13 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 edge["deployment_marker"],
                 presentation.replace(edge["deployment_marker"], "removed-binding"),
             )
-        self.assertNotIn("marty-issuance-service", {
-            dep["name"] for dep in packages["marty-presentation-policy"]["dependencies"]
-        })
+        self.assertNotIn(
+            "marty-issuance-service",
+            {
+                dep["name"]
+                for dep in packages["marty-presentation-policy"]["dependencies"]
+            },
+        )
 
     def test_three_flow_grpc_runtime_consumers_are_observed_without_narrowing(
         self,
@@ -2305,8 +2454,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
                         sources[path] = original.replace(
                             edge[marker], "removed-runtime-contract-marker"
                         )
-                        with self.subTest(marker=marker), self.assertRaises(
-                            AssertionError
+                        with (
+                            self.subTest(marker=marker),
+                            self.assertRaises(AssertionError),
                         ):
                             assert_markers()
                         sources[path] = original
@@ -2315,9 +2465,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                         encoding="utf-8"
                     )
                     auth_tail = compose.split("\n  auth:\n", 1)[1]
-                    next_service = re.search(
-                        r"(?m)^  [a-z][a-z0-9_-]*:\s*$", auth_tail
-                    )
+                    next_service = re.search(r"(?m)^  [a-z][a-z0-9_-]*:\s*$", auth_tail)
                     self.assertIsNotNone(next_service)
                     auth_service = auth_tail[: next_service.start()]
                     self.assertIn(edge["deployment_marker"], auth_service)
