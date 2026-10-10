@@ -13021,3 +13021,17 @@ forward a checked tenant context; Flow and Issuance can also call the route
 without Gateway. A verifier at Signing Keys therefore needs a canonical,
 purpose-scoped grant format and issuer-specific authority sources rather than
 trusting the transport hop or profile lookup.
+
+Historical Canvas oracle dependency audit: the native Rust startup acceptance
+test `worker_startup_matches_published_process_and_idle_heartbeat` still calls
+`PublishedDatabase::start_with_worker_startup()`, which launches the Python
+startup oracle and compares its output with
+`contracts/canvas-worker-startup-oracle.json` before replaying eight native
+cases. The Rust replay itself checks idle heartbeat, liveness, job count and
+POSIX interruption against that Python output. Thus matching Rust module names
+do not make the Python graph disposable: replace runtime Python oracle
+generation and its source-hash attestation with explicit native expected
+behavior, while retaining the eight-case real-process/database assertions.
+The startup runner's child environment still supplies a synthetic raw
+`INTEGRATION_SECRET_MASTER_KEY`; the REST runner also sets it before OAuth
+seeding. These are active test execution paths, not merely stale strings.
