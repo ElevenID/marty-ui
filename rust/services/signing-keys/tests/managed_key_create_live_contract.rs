@@ -2,6 +2,7 @@
 
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -35,6 +36,34 @@ const ED25519_PUBLIC_B64: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 const ROTATED_ED25519_PUBLIC_B64: &str = "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=";
 
 type Keys = Arc<Mutex<BTreeMap<String, String>>>;
+
+static BAO_ADDR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+struct MockBaoAddr {
+    previous: Option<OsString>,
+    _lock: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl Drop for MockBaoAddr {
+    fn drop(&mut self) {
+        if let Some(previous) = &self.previous {
+            std::env::set_var("BAO_ADDR", previous);
+        } else {
+            std::env::remove_var("BAO_ADDR");
+        }
+    }
+}
+
+async fn mock_bao_addr(endpoint: &str) -> MockBaoAddr {
+    // The mounted service-token adapter must be bound to this exact mock origin.
+    let lock = BAO_ADDR_LOCK.lock().await;
+    let previous = std::env::var_os("BAO_ADDR");
+    std::env::set_var("BAO_ADDR", endpoint);
+    MockBaoAddr {
+        previous,
+        _lock: lock,
+    }
+}
 
 async fn disposable_redis_url() -> String {
     let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
@@ -247,6 +276,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let _bao_addr = mock_bao_addr(&endpoint).await;
     let organization_id = format!("managed-profile-{}", Uuid::new_v4().simple());
     let did = format!("did:web:issuer.example:orgs:{organization_id}");
     let registry = RegistryStore::connect(&redis_url)
@@ -519,6 +549,7 @@ async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let _bao_addr = mock_bao_addr(&endpoint).await;
     let organization_id = format!("managed-profile-fail-{}", Uuid::new_v4().simple());
     let did = format!("did:web:issuer.example:orgs:{}", Uuid::new_v4().simple());
     let registry = RegistryStore::connect(&redis_url)
@@ -589,6 +620,7 @@ async fn denied_read_or_missing_mount_never_provisions_a_profile() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+        let _bao_addr = mock_bao_addr(&endpoint).await;
         let organization_id = format!("managed-read-fail-{}", Uuid::new_v4().simple());
         let registry = RegistryStore::connect(&redis_url)
             .await
@@ -671,6 +703,7 @@ async fn existing_managed_key_profiles_with_read_access_and_no_create_permission
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let _bao_addr = mock_bao_addr(&endpoint).await;
     let registry = RegistryStore::connect(&redis_url)
         .await
         .unwrap()
@@ -771,6 +804,7 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let _bao_addr = mock_bao_addr(&endpoint).await;
     let registry = RegistryStore::connect(&redis_url)
         .await
         .unwrap()
