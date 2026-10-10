@@ -13347,3 +13347,14 @@ full PR-event run. After merging main, 65 base-native fixture tests, 144 of
 OpenBao/service selector cases, complete base/beta/conformance Compose models,
 Ruff and Rustfmt passed locally. The broader Canvas source scan was stopped
 after slow OneDrive filesystem progress; it is not a suite pass.
+
+The grouped correction and mainline merge were pushed as UI `95284232a` to
+draft [PR #1192](https://github.com/ElevenID/marty-ui/pull/1192).
+GitHub created [PR-event CI run
+38089378067](https://github.com/ElevenID/marty-ui/actions/runs/38089378067)
+for that exact head at 2026-10-10 21:54 UTC, resolving the previous
+manual-dispatch attachment concern for this head. Exact-head Rust CodeQL run
+[38089378068](https://github.com/ElevenID/marty-ui/actions/runs/38089378068)
+and other policy/quality workflows started. The PR description records the
+terminal `cf27e0e88` result and this grouped fix. No new-head leaf result is
+yet counted as acceptance.
