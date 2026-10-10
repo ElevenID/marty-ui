@@ -12,12 +12,37 @@ use base64::{
     Engine,
 };
 use marty_oid4vp_contract::haip_key::{matches_public_jwk, valid_version as valid_haip_version};
-use reqwest::Client;
+use reqwest::{Client, Response as HttpResponse};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_OPENBAO_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Error)]
+pub(crate) enum OpenBaoTransportError {
+    #[error("OpenBao request failed")]
+    Http(#[from] reqwest::Error),
+    #[error("OpenBao response exceeds the size limit")]
+    Oversized,
+    #[error("OpenBao response is invalid")]
+    InvalidResponse,
+}
+
+async fn bounded_json(
+    mut response: HttpResponse,
+    max_bytes: usize,
+) -> Result<Value, OpenBaoTransportError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(OpenBaoTransportError::Oversized);
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|_| OpenBaoTransportError::InvalidResponse)
+}
 
 #[derive(Clone)]
 pub struct OpenBaoEnvelopeProvider {
@@ -180,7 +205,11 @@ impl OpenBaoEnvelopeProvider {
         }))
     }
 
-    pub(crate) async fn post(&self, path: &str, body: Value) -> Result<Value, reqwest::Error> {
+    pub(crate) async fn post(
+        &self,
+        path: &str,
+        body: Value,
+    ) -> Result<Value, OpenBaoTransportError> {
         self.post_with_token(path, body, &self.token).await
     }
 
@@ -193,7 +222,8 @@ impl OpenBaoEnvelopeProvider {
 
     async fn get_haip(&self, path: &str) -> Result<Value, FlowEnvelopeError> {
         let token = self.haip_token()?;
-        self.client
+        let response = self
+            .client
             .get(format!("{}{path}", self.endpoint))
             .timeout(TIMEOUT)
             .header("X-Vault-Token", token)
@@ -202,8 +232,8 @@ impl OpenBaoEnvelopeProvider {
             .await
             .map_err(|_| FlowEnvelopeError::HaipFailed)?
             .error_for_status()
-            .map_err(|_| FlowEnvelopeError::HaipFailed)?
-            .json()
+            .map_err(|_| FlowEnvelopeError::HaipFailed)?;
+        bounded_json(response, MAX_OPENBAO_RESPONSE_BYTES)
             .await
             .map_err(|_| FlowEnvelopeError::HaipFailed)
     }
@@ -232,8 +262,9 @@ impl OpenBaoEnvelopeProvider {
         path: &str,
         body: Value,
         token: &str,
-    ) -> Result<Value, reqwest::Error> {
-        self.client
+    ) -> Result<Value, OpenBaoTransportError> {
+        let response = self
+            .client
             .post(format!("{}{path}", self.endpoint))
             .timeout(TIMEOUT)
             .header("X-Vault-Token", token)
@@ -241,22 +272,21 @@ impl OpenBaoEnvelopeProvider {
             .json(&body)
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await
+            .error_for_status()?;
+        bounded_json(response, MAX_OPENBAO_RESPONSE_BYTES).await
     }
 
-    pub(crate) async fn get(&self, path: &str) -> Result<Value, reqwest::Error> {
-        self.client
+    pub(crate) async fn get(&self, path: &str) -> Result<Value, OpenBaoTransportError> {
+        let response = self
+            .client
             .get(format!("{}{path}", self.endpoint))
             .timeout(TIMEOUT)
             .header("X-Vault-Token", &self.token)
             .header("accept", "application/json")
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await
+            .error_for_status()?;
+        bounded_json(response, MAX_OPENBAO_RESPONSE_BYTES).await
     }
 }
 
@@ -322,6 +352,29 @@ mod tests {
 
     use super::*;
     use axum::{extract::State, http::HeaderMap, routing::post, Router};
+
+    #[tokio::test]
+    async fn openbao_json_reader_rejects_oversized_responses() {
+        let app = Router::new().route(
+            "/response",
+            axum::routing::get(|| async { Json(json!({"data": "x".repeat(64)})) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/response", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = Client::new();
+        let response = client.get(&url).send().await.unwrap();
+        assert!(matches!(
+            bounded_json(response, 16).await,
+            Err(OpenBaoTransportError::Oversized)
+        ));
+        let response = client.get(&url).send().await.unwrap();
+        assert_eq!(
+            bounded_json(response, 128).await.unwrap()["data"],
+            "x".repeat(64)
+        );
+        server.abort();
+    }
 
     #[test]
     fn haip_scope_and_public_jwk_require_exact_public_p256_binding() {

@@ -11969,3 +11969,16 @@ lane finished successfully. The PR description now reflects that evidence.
 Exact-head CI [`38042364164`](https://github.com/ElevenID/marty-ui/actions/runs/38042364164)
 started; its final result is still due. The unrelated untracked Canvas
 `%SystemDrive%` artifact remains untouched.
+
+2026-10-10 K8 response-bound self-review, held locally while the published
+`e131e16fb` run executes: the shared Rust OpenBao envelope client still used
+unbounded `reqwest::Response::json()` for Transit and HAIP responses. A
+malformed or compromised backend could therefore force an excessive process
+allocation before the operation failed. The local correction streams each
+response into a bounded 4 MiB buffer and rejects malformed or oversized
+JSON through one shared helper; redirects remain disabled. A focused
+oversized-response test passed, the full non-opt-in Signing Keys package
+suite passed (165 library tests, nine expected opt-in ignores), and
+all-target warnings-denied Clippy passed. This local code requires its own
+exact-head hosted qualification after batching with any findings from the
+running CI; it is not evidence of live backend custody by itself.
