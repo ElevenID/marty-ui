@@ -38,8 +38,8 @@ async fn integration_secret_coordinated_restore_phase() {
     );
     std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_URL")
         .expect("live Signing Keys URL is required");
-    std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_API_KEY")
-        .expect("live Signing Keys API key is required");
+    std::env::var("MARTY_TEST_SIGNING_KEYS_INTEGRATION_SECRET_KEY")
+        .expect("live Signing Keys integration-secret key is required");
     let pool = PgPoolOptions::new()
         .max_connections(2)
         .connect(&database_url)

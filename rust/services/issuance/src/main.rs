@@ -312,9 +312,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
     let integration_secret_cipher = KmsIntegrationSecretCipher::from_environment(
         config
-            .signing_keys_internal_api_key
+            .integration_secret_api_key
             .as_deref()
-            .expect("from_env requires signing-keys authentication"),
+            .expect("from_env requires integration-secret authentication"),
     )?;
     let mut integration_secret_connection = pool.acquire().await?;
     integration_secret_cipher

@@ -20,6 +20,7 @@ SECRETS = {
     "ISSUANCE_API_KEY": "synthetic-startup-api-key",
     "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-startup-api-key",
     "SIGNING_KEYS_ISSUER_SIGN_KEY": "synthetic-dedicated-issuer-sign-key-32-chars",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-dedicated-integration-secret-key-32-chars",
     "MARTY_DB_PASSWORD": PASSWORD,
 }
 HARDENED = ("--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges")

@@ -36,6 +36,7 @@ from probe_didcomm_openbao_ha import (
 ensure_tls = runpy.run_path(
     str(ROOT / "scripts/ensure-dev-integration-secret-tls.py")
 )["ensure_tls"]
+INTEGRATION_SECRET_KEY = "disposable-dedicated-integration-secret-key-32-chars"
 
 CATALOG = json.loads(
     (ROOT / "deploy-config/passport-supported-disposable-infra-images.json").read_text(
@@ -329,6 +330,7 @@ def start_signing(
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": str(tls_directory / "tls.crt"),
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE": str(tls_directory / "tls.key"),
             "SIGNING_KEYS_INTERNAL_API_KEY": key,
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY": INTEGRATION_SECRET_KEY,
             "SIGNING_KEYS_REDIS_URL": f"redis://127.0.0.1:{redis_port}/2",
             "ISSUER_BASE_URL": "https://issuer.example",
             "BAO_ADDR": bao_url,
@@ -395,7 +397,7 @@ def rust_phase(
             "MARTY_ISSUANCE_POSTGRES_CONTRACT_URL": database_url,
             "MARTY_TEST_SIGNING_KEYS_INTERNAL_URL": signing_url,
             "MARTY_TEST_SIGNING_KEYS_INTERNAL_CA_FILE": str(ca_file),
-            "MARTY_TEST_SIGNING_KEYS_INTERNAL_API_KEY": key,
+            "MARTY_TEST_SIGNING_KEYS_INTEGRATION_SECRET_KEY": INTEGRATION_SECRET_KEY,
         }
     )
     result = subprocess.run(

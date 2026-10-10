@@ -84,6 +84,7 @@ struct AppState {
     internal_api_key: Arc<str>,
     service_sign_gateway_key: Option<Arc<str>>,
     issuer_sign_key: Option<Arc<str>>,
+    integration_secret_key: Option<Arc<str>>,
     dsc_issue_gateway_key: Option<Arc<str>>,
     csca_issue_gateway_key: Option<Arc<str>>,
     beta_csca_issuance_enabled: bool,
@@ -143,6 +144,7 @@ pub fn router_with_dependencies_and_sign_key(
         None,
         None,
         None,
+        None,
         false,
         registry_store,
         document_store,
@@ -195,6 +197,7 @@ pub fn router_with_dependencies_and_ceremony_keys(
         internal_api_key,
         None,
         None,
+        None,
         dsc_issue_gateway_key,
         csca_issue_gateway_key,
         beta_csca_issuance_enabled,
@@ -212,6 +215,7 @@ pub fn router_with_all_keys(
     internal_api_key: String,
     service_sign_gateway_key: Option<String>,
     issuer_sign_key: Option<String>,
+    integration_secret_key: Option<String>,
     dsc_issue_gateway_key: Option<String>,
     csca_issue_gateway_key: Option<String>,
     beta_csca_issuance_enabled: bool,
@@ -540,6 +544,7 @@ pub fn router_with_all_keys(
             internal_api_key: Arc::from(internal_api_key),
             service_sign_gateway_key: service_sign_gateway_key.map(Arc::from),
             issuer_sign_key: issuer_sign_key.map(Arc::from),
+            integration_secret_key: integration_secret_key.map(Arc::from),
             dsc_issue_gateway_key: dsc_issue_gateway_key.map(Arc::from),
             csca_issue_gateway_key: csca_issue_gateway_key.map(Arc::from),
             beta_csca_issuance_enabled,
@@ -6660,8 +6665,9 @@ async fn encrypt_integration_secret(
     headers: HeaderMap,
     Json(request): Json<EncryptIntegrationSecretRequest>,
 ) -> Result<Json<Value>, IntegrationSecretEnvelopeError> {
-    authorize_internal(&state, &headers)
-        .map_err(|_| IntegrationSecretEnvelopeError::Unauthorized)?;
+    if !authorize_integration_secret(&state, &headers) {
+        return Err(IntegrationSecretEnvelopeError::Unauthorized);
+    }
     let provider = state
         .flow_envelopes
         .as_ref()
@@ -6676,8 +6682,9 @@ async fn decrypt_integration_secret(
     headers: HeaderMap,
     Json(request): Json<DecryptIntegrationSecretRequest>,
 ) -> Result<Json<Value>, IntegrationSecretEnvelopeError> {
-    authorize_internal(&state, &headers)
-        .map_err(|_| IntegrationSecretEnvelopeError::Unauthorized)?;
+    if !authorize_integration_secret(&state, &headers) {
+        return Err(IntegrationSecretEnvelopeError::Unauthorized);
+    }
     let provider = state
         .flow_envelopes
         .as_ref()
@@ -7644,6 +7651,27 @@ fn authorize_issuer_sign(state: &AppState, headers: &HeaderMap) -> bool {
     expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
 }
 
+fn authorize_integration_secret(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.integration_secret_key.as_ref() else {
+        return false;
+    };
+    if expected.as_ref() == state.internal_api_key.as_ref()
+        || state.service_sign_gateway_key.as_deref() == Some(expected.as_ref())
+        || state.issuer_sign_key.as_deref() == Some(expected.as_ref())
+        || state.dsc_issue_gateway_key.as_deref() == Some(expected.as_ref())
+        || state.csca_issue_gateway_key.as_deref() == Some(expected.as_ref())
+    {
+        return false;
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .as_bytes();
+    let expected = expected.as_bytes();
+    expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
+}
+
 fn authorize_dsc_issue(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(expected) = state.dsc_issue_gateway_key.as_ref() else {
         return false;
@@ -7870,6 +7898,7 @@ mod public_contract_tests {
             Some("dedicated-issuer-sign-key-32-chars".into()),
             None,
             None,
+            None,
             false,
             None,
             None,
@@ -7908,6 +7937,59 @@ mod public_contract_tests {
                 .await
                 .unwrap();
             assert_eq!(response.status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn integration_secret_routes_require_their_dedicated_key() {
+        let app = router_with_all_keys(
+            "shared-internal-signing-key-32-chars".into(),
+            Some("dedicated-service-sign-key-32-chars".into()),
+            Some("dedicated-issuer-sign-key-32-chars".into()),
+            Some("dedicated-integration-secret-key-32-chars".into()),
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        for (operation, payload) in [
+            (
+                "encrypt",
+                json!({"organization_id":"org-a","secret_id":"secret-a","provider":"canvas","purpose":"oauth_client_secret","plaintext_b64":"c2VjcmV0"}),
+            ),
+            (
+                "decrypt",
+                json!({"organization_id":"org-a","secret_id":"secret-a","provider":"canvas","purpose":"oauth_client_secret","envelope":{"schema":"marty.integration-secret-envelope/v1","ciphertext":"vault:v1:synthetic"}}),
+            ),
+        ] {
+            for (key, expected) in [
+                (
+                    "shared-internal-signing-key-32-chars",
+                    StatusCode::UNAUTHORIZED,
+                ),
+                (
+                    "dedicated-integration-secret-key-32-chars",
+                    StatusCode::SERVICE_UNAVAILABLE,
+                ),
+            ] {
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::post(format!("/internal/integration-secrets/{operation}"))
+                            .header("content-type", "application/json")
+                            .header("x-api-key", key)
+                            .body(Body::from(payload.to_string()))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), expected);
+            }
         }
     }
 
@@ -8505,6 +8587,7 @@ mod public_contract_tests {
             internal_api_key: Arc::from("test-key"),
             service_sign_gateway_key: None,
             issuer_sign_key: None,
+            integration_secret_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,
@@ -9527,6 +9610,7 @@ mod public_contract_tests {
             internal_api_key: Arc::from("test-key"),
             service_sign_gateway_key: None,
             issuer_sign_key: None,
+            integration_secret_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,
@@ -9570,6 +9654,7 @@ mod public_contract_tests {
             internal_api_key: Arc::from("test-key"),
             service_sign_gateway_key: None,
             issuer_sign_key: None,
+            integration_secret_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,

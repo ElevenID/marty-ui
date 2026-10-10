@@ -63,6 +63,7 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
                     | "SIGNING_KEYS_INTERNAL_URL"
                     | "SIGNING_KEYS_INTERNAL_API_KEY"
                     | "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                    | "SIGNING_KEYS_INTEGRATION_SECRET_KEY"
                     | "MARTY_RELEASE_VERSION"
                     | "MARTY_UI_SHA"
                     | "ISSUER_BASE_URL"
@@ -100,6 +101,10 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
         .env(
             "SIGNING_KEYS_ISSUER_SIGN_KEY",
             "synthetic-issuance-issuer-sign-key-32-chars",
+        )
+        .env(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+            remote_integration_secret::INTEGRATION_SECRET_KEY,
         )
         .env("MARTY_RELEASE_VERSION", "9.8.7")
         .env("MARTY_UI_SHA", "smoke-revision")

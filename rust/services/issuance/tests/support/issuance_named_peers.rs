@@ -472,7 +472,7 @@ pub(super) async fn start_peers(state: PeerState) -> OwnedHttp {
         Router::new()
             .fallback(peer)
             .with_state(state)
-            .merge(super::issuance_process::remote_integration_secret::router_for(SIGNING_KEY)),
+            .merge(super::issuance_process::remote_integration_secret::router_for(super::issuance_process::remote_integration_secret::INTEGRATION_SECRET_KEY)),
     )
     .await
 }

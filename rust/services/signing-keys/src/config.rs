@@ -22,6 +22,7 @@ pub struct Config {
     pub internal_api_key: String,
     pub service_sign_gateway_key: String,
     pub issuer_sign_key: String,
+    pub integration_secret_key: Option<String>,
     pub holder_device_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
@@ -189,6 +190,35 @@ impl Config {
         let bao_addr = value(values, "BAO_ADDR");
         let bao_token =
             secret_value(values, "BAO_TOKEN")?.or(secret_value(values, "OPENBAO_SERVICE_TOKEN")?);
+        if value(values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY").is_some()
+            && value(values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE").is_some()
+        {
+            return Err("SIGNING_KEYS_INTEGRATION_SECRET_KEY must use one secret source".into());
+        }
+        let integration_secret_key = secret_value(values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY")?;
+        if integration_secret_tls.is_some() && integration_secret_key.is_none() {
+            return Err("integration-secret TLS requires its dedicated API key".into());
+        }
+        if integration_secret_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || key == &internal_api_key
+                || key == &service_sign_gateway_key
+                || key == &issuer_sign_key
+                || holder_device_key.as_ref() == Some(key)
+                || dsc_issue_gateway_key.as_ref() == Some(key)
+                || csca_issue_gateway_key.as_ref() == Some(key)
+                || bao_token.as_ref() == Some(key)
+                || values.iter().any(|(name, value)| {
+                    name != "SIGNING_KEYS_INTEGRATION_SECRET_KEY"
+                        && name != "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"
+                        && value.contains(key)
+                })
+        }) {
+            return Err(
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
         if holder_device_key.as_deref() == bao_token.as_deref() && holder_device_key.is_some() {
             return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from BAO_TOKEN".into());
         }
@@ -255,6 +285,7 @@ impl Config {
             internal_api_key,
             service_sign_gateway_key,
             issuer_sign_key,
+            integration_secret_key,
             holder_device_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
@@ -332,6 +363,11 @@ mod tests {
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE".into(),
             "/run/secrets/signing-keys.key".into(),
         );
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            "dedicated-integration-secret-key-32-chars".into(),
+        );
         let config = Config::from_values(&values).unwrap();
         assert_eq!(
             config.integration_secret_tls.unwrap().addr.port(),
@@ -340,6 +376,25 @@ mod tests {
         values.insert(
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT".into(),
             DEFAULT_HTTP_PORT.to_string(),
+        );
+        assert!(Config::from_values(&values).is_err());
+    }
+
+    #[test]
+    fn integration_secret_key_rejects_shared_authority_and_duplicate_sources() {
+        let mut values = HashMap::from([(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            DEVELOPMENT_INTERNAL_API_KEY.into(),
+        )]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            "dedicated-integration-secret-key-32-chars".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE".into(),
+            "/run/secrets/integration-secret-key".into(),
         );
         assert!(Config::from_values(&values).is_err());
     }

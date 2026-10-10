@@ -889,6 +889,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTEGRATION_SECRET_KEY
           resources:
             requests:
               memory: "512Mi"
@@ -993,6 +998,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTEGRATION_SECRET_KEY
           volumeMounts:
             - name: integration-secret-ca
               mountPath: /run/secrets/integration-secret-ca

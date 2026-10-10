@@ -95,7 +95,7 @@ async fn integration_secret_transit_routes_require_auth_and_kms() {
             .await
             .unwrap();
         assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
-        let unavailable = marty_signing_keys::http::router()
+        let shared_key_denied = marty_signing_keys::http::router()
             .oneshot(
                 Request::post(path.as_str())
                     .header("content-type", "application/json")
@@ -105,7 +105,7 @@ async fn integration_secret_transit_routes_require_auth_and_kms() {
             )
             .await
             .unwrap();
-        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(shared_key_denied.status(), StatusCode::UNAUTHORIZED);
     }
 }
 

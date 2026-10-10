@@ -331,6 +331,11 @@ cmd_setup_secrets() {
   if [[ "$issuer_sign_key" == "$service_sign_gateway_key" ]]; then
     error "SIGNING_KEYS_ISSUER_SIGN_KEY must differ from SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY."
   fi
+  integration_secret_key="$(resolve_secret_input SIGNING_KEYS_INTEGRATION_SECRET_KEY)"
+  require_resolved_secret SIGNING_KEYS_INTEGRATION_SECRET_KEY "$integration_secret_key"
+  if (( ${#integration_secret_key} < 32 )) || [[ "$integration_secret_key" == "$issuance_api_key" || "$integration_secret_key" == "$issuer_sign_key" || "$integration_secret_key" == "$service_sign_gateway_key" ]]; then
+    error "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be at least 32 characters and distinct from Signing Keys credentials."
+  fi
   token_hmac_key="$(resolve_secret_input TOKEN_HMAC_KEY)"
   require_resolved_secret TOKEN_HMAC_KEY "$token_hmac_key"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
@@ -415,6 +420,7 @@ cmd_setup_secrets() {
     --from-literal=TOKEN_HMAC_KEY="$token_hmac_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
     --from-literal=SIGNING_KEYS_ISSUER_SIGN_KEY="$issuer_sign_key" \
+    --from-literal=SIGNING_KEYS_INTEGRATION_SECRET_KEY="$integration_secret_key" \
     --from-literal=SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY="$service_sign_gateway_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
     --from-literal=DEVICE_REGISTRATION_GATEWAY_KEY="$device_registration_gateway_key" \

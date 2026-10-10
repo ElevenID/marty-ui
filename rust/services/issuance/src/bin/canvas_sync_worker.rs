@@ -124,7 +124,18 @@ async fn run_initialized_worker(
             "SIGNING_KEYS_ISSUER_SIGN_KEY must be distinct and at least 32 characters".into(),
         );
     }
-    let cipher = KmsIntegrationSecretCipher::from_environment(&signing_key)?;
+    let integration_secret_key = optional_secret("SIGNING_KEYS_INTEGRATION_SECRET_KEY")?
+        .ok_or("SIGNING_KEYS_INTEGRATION_SECRET_KEY is required")?;
+    if integration_secret_key.len() < 32
+        || integration_secret_key == signing_key
+        || integration_secret_key == issuer_sign_key
+    {
+        return Err(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be distinct and at least 32 characters"
+                .into(),
+        );
+    }
+    let cipher = KmsIntegrationSecretCipher::from_environment(&integration_secret_key)?;
     let mut audit_connection = pool.acquire().await?;
     cipher.verify_storage(&mut audit_connection).await?;
     drop(audit_connection);

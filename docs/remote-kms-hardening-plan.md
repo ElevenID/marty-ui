@@ -12704,3 +12704,22 @@ release qualifier against those artifacts would not meet its provenance
 contract. The next executable gate is the protected-main release transaction
 after coordinated PR landing, followed by inspection of its exact
 `native-schema.json` artifact and negative/cutover evidence.
+
+2026-10-10 dedicated integration-secret authority (local candidate, not yet
+published): Signing Keys now requires a separate credential on its direct
+integration-secret encrypt/decrypt routes; the shared internal credential is
+denied. Native Issuance and the Canvas sync worker require and use the
+dedicated credential for their HTTPS envelope client. The candidate wires
+that credential to only those callers and Signing Keys in base, self-host,
+disposable passport and Oracle Kubernetes models, plus secret catalog,
+provisioning, CI and process fixtures. Self-host and base native whole-model
+configuration gates pass; Signing Keys unit tests and Issuance test-target
+compilation passed. Signing Keys unit tests passed (175/9 ignored), HTTP golden
+vectors passed (16), Issuance executable smoke passed (6), focused Canvas
+worker behavior passed (5), direct envelope client tests passed (3), and
+warnings-denied Clippy passed for Signing Keys and Issuance test targets. The
+affected self-host/base Compose whole-model checks and 156 passport
+provisioning/ownership/ceremony/infra Python tests passed (2 skipped). The
+direct Rust client now rejects the retired Gateway URL prefix as well. The
+grouped candidate remains unpublished; hosted exact-head CI and live recovery
+qualification still need evidence before this authority reduction is final.

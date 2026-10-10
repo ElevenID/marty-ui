@@ -242,6 +242,7 @@ pub struct IssuanceServiceConfig {
     pub passport_native: PassportNativeConfig,
     pub signing_keys_internal_url: url::Url,
     pub signing_keys_internal_api_key: Option<String>,
+    pub integration_secret_api_key: Option<String>,
     pub issuer_sign_key: Option<String>,
     pub revocation_profile_service_url: url::Url,
     pub internal_service_token: Option<String>,
@@ -564,7 +565,13 @@ impl IssuanceServiceConfig {
         if config.signing_keys_internal_api_key.is_none() {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
-                "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY is required for integration secrets",
+                "SIGNING_KEYS_INTERNAL_API_KEY or ISSUANCE_API_KEY is required",
+            ));
+        }
+        if config.integration_secret_api_key.is_none() {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY is required for integration secrets",
             ));
         }
         if config.issuer_sign_key.is_none() {
@@ -753,6 +760,26 @@ impl IssuanceServiceConfig {
         }
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
+        if values.contains_key("SIGNING_KEYS_INTEGRATION_SECRET_KEY")
+            && values.contains_key("SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must use one secret source",
+            ));
+        }
+        let integration_secret_api_key =
+            secret_value(&values, "SIGNING_KEYS_INTEGRATION_SECRET_KEY")?;
+        if integration_secret_api_key.as_ref().is_some_and(|key| {
+            key.len() < 32
+                || signing_keys_internal_api_key.as_ref() == Some(key)
+                || issuance_api_key.as_ref() == Some(key)
+        }) {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be distinct and at least 32 characters",
+            ));
+        }
         if values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY")
             && values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE")
         {
@@ -766,6 +793,7 @@ impl IssuanceServiceConfig {
             key.len() < 32
                 || signing_keys_internal_api_key.as_ref() == Some(key)
                 || issuance_api_key.as_ref() == Some(key)
+                || integration_secret_api_key.as_ref() == Some(key)
         }) {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
@@ -1011,6 +1039,7 @@ impl IssuanceServiceConfig {
             passport_native,
             signing_keys_internal_url,
             signing_keys_internal_api_key,
+            integration_secret_api_key,
             issuer_sign_key,
             revocation_profile_service_url,
             internal_service_token,

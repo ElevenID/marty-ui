@@ -99,7 +99,9 @@ async fn decrypt(
     Ok(Json(json!({"plaintext_b64":stored["plaintext_b64"]})))
 }
 
+#[allow(dead_code)] // Some isolated test targets use only the envelope authority.
 pub const API_KEY: &str = "test-remote-secret";
+pub const INTEGRATION_SECRET_KEY: &str = "synthetic-dedicated-integration-secret-key-32-chars";
 
 pub(crate) fn router_for(api_key: &'static str) -> Router {
     let state = RemoteState {
@@ -150,7 +152,7 @@ fn server() -> &'static TestServer {
                 .unwrap();
                 axum_server::from_tcp_rustls(listener, tls)
                     .unwrap()
-                    .serve(router_for(API_KEY).into_make_service())
+                    .serve(router_for(INTEGRATION_SECRET_KEY).into_make_service())
                     .await
                     .unwrap();
             });
@@ -261,7 +263,7 @@ pub fn ca_file() -> &'static std::path::Path {
 pub fn cipher() -> KmsIntegrationSecretCipher {
     match (
         std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_URL"),
-        std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_API_KEY"),
+        std::env::var("MARTY_TEST_SIGNING_KEYS_INTEGRATION_SECRET_KEY"),
     ) {
         (Ok(remote_url), Ok(api_key)) => {
             let ca_pem = std::env::var("MARTY_TEST_SIGNING_KEYS_INTERNAL_CA_FILE")
@@ -277,11 +279,13 @@ pub fn cipher() -> KmsIntegrationSecretCipher {
             .expect("live Signing Keys test configuration");
         }
         (Err(_), Err(_)) => {}
-        _ => panic!("live Signing Keys test requires both URL and internal API key"),
+        _ => {
+            panic!("live Signing Keys test requires both URL and dedicated integration-secret key")
+        }
     }
     KmsIntegrationSecretCipher::new_with_ca_pem(
         base_url(),
-        API_KEY,
+        INTEGRATION_SECRET_KEY,
         Some(server().ca_pem.as_bytes()),
     )
     .unwrap()

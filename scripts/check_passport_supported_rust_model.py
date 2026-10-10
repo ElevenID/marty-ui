@@ -930,6 +930,16 @@ def validate_model(
         "Disposable native issuance startup secrets are missing",
     )
     signing_keys_service = services["signing-keys"]
+    integration_secret_holders = {
+        name for name, service in services.items()
+        if any(item.get("source") == "signing_keys_integration_secret_key"
+               for item in service.get("secrets", []) if isinstance(item, dict))
+    }
+    require(integration_secret_holders == {"signing-keys", "issuance-native"}
+            and all(service["environment"].get("SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE")
+                    == "/run/secrets/signing_keys_integration_secret_key"
+                    for service in (signing_keys_service, services["issuance-native"])),
+            "Disposable integration-secret credential escaped its direct custody boundary")
     require(signing_keys_service["environment"].get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE")
             == "/run/secrets/signing_keys_workload_server_cert"
             and signing_keys_service["environment"].get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE")

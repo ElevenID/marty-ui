@@ -157,6 +157,7 @@ impl KmsIntegrationSecretCipher {
             || base_url.password().is_some()
             || base_url.query().is_some()
             || base_url.fragment().is_some()
+            || !matches!(base_url.path(), "/internal" | "/internal/")
         {
             return Err(KmsIntegrationSecretError::InvalidConfig);
         }
@@ -353,6 +354,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn client_rejects_retired_gateway_envelope_path() {
+        assert!(KmsIntegrationSecretCipher::new(
+            Url::parse("https://signing-keys.example/internal/signing-keys").unwrap(),
+            "test-key",
+        )
+        .is_err());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn client_sends_bound_identity_and_rejects_legacy_reads() {
         async fn encrypt(
@@ -420,25 +430,15 @@ mod tests {
                 .unwrap()
                 .serve(
                     Router::new()
-                        .route(
-                            "/internal/signing-keys/integration-secrets/encrypt",
-                            post(encrypt),
-                        )
-                        .route(
-                            "/internal/signing-keys/integration-secrets/decrypt",
-                            post(decrypt),
-                        )
+                        .route("/internal/integration-secrets/encrypt", post(encrypt))
+                        .route("/internal/integration-secrets/decrypt", post(decrypt))
                         .into_make_service(),
                 )
                 .await
                 .unwrap();
         });
         let client = KmsIntegrationSecretCipher::new_with_ca_pem(
-            Url::parse(&format!(
-                "https://127.0.0.1:{}/internal/signing-keys",
-                address.port()
-            ))
-            .unwrap(),
+            Url::parse(&format!("https://127.0.0.1:{}/internal", address.port())).unwrap(),
             "test-key",
             Some(ca_pem.as_bytes()),
         )

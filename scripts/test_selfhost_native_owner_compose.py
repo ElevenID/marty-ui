@@ -84,6 +84,7 @@ LOADED_INPUTS = {
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     "TOKEN_HMAC_KEY",
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
@@ -255,6 +256,21 @@ def assert_models(
         assert isinstance(service["secrets"], list)
         assert service["secrets"].count(mount) == 1, name
         service["secrets"].remove(mount)
+    envelope_secret = preserved["secrets"].pop("signing_keys_integration_secret_key")
+    assert envelope_secret["file"].endswith("/signing_keys_integration_secret_key")
+    for name in ("signing-keys", "issuance-native", "canvas-sync-worker"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE") == (
+            "/run/secrets/signing_keys_integration_secret_key"
+        )
+        mount = {
+            "source": "signing_keys_integration_secret_key",
+            "target": "/run/secrets/signing_keys_integration_secret_key",
+        }
+        assert service["secrets"].count(mount) == 1, name
+        service["secrets"].remove(mount)
+    for name in ("gateway", "flow", "issuance"):
+        assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in preserved["services"][name]["environment"]
     native = GATE["native_dispatcher_model"](
         preserved["services"].pop("issuance-native")
     )
