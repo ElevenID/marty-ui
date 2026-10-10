@@ -2502,20 +2502,35 @@ mod tests {
 
     #[tokio::test]
     async fn azure_client_secret_uses_scoped_oauth_form() {
-        async fn token(request: axum::extract::Request) -> axum::Json<Value> {
+        async fn token(request: axum::extract::Request, expected_scope: &str) -> axum::Json<Value> {
             assert_eq!(request.method(), reqwest::Method::POST);
             let body = axum::body::to_bytes(request.into_body(), 4096)
                 .await
                 .unwrap();
             let form = String::from_utf8(body.to_vec()).unwrap();
             assert!(form.contains("grant_type=client_credentials"));
-            assert!(form.contains("scope=https%3A%2F%2Fvault.azure.net%2F.default"));
+            assert!(form.contains(expected_scope));
             assert!(form.contains("client_secret=fixture-secret"));
             axum::Json(json!({"access_token": "scoped-azure-token"}))
         }
-        let app = axum::Router::new().route("/token", axum::routing::post(token));
+        let app = axum::Router::new()
+            .route(
+                "/vault",
+                axum::routing::post(|request| {
+                    token(request, "scope=https%3A%2F%2Fvault.azure.net%2F.default")
+                }),
+            )
+            .route(
+                "/hsm",
+                axum::routing::post(|request| {
+                    token(
+                        request,
+                        "scope=https%3A%2F%2Fmanagedhsm.azure.net%2F.default",
+                    )
+                }),
+            );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let config = json!({
             "auth_mode": "client_secret",
@@ -2526,9 +2541,23 @@ mod tests {
             panic!("client-secret mode was not selected")
         };
         assert_eq!(
-            azure_client_secret_token(&endpoint, &credential, "https://vault.azure.net")
-                .await
-                .unwrap(),
+            azure_client_secret_token(
+                &format!("{endpoint}/vault"),
+                &credential,
+                "https://vault.azure.net"
+            )
+            .await
+            .unwrap(),
+            "scoped-azure-token"
+        );
+        assert_eq!(
+            azure_client_secret_token(
+                &format!("{endpoint}/hsm"),
+                &credential,
+                "https://managedhsm.azure.net",
+            )
+            .await
+            .unwrap(),
             "scoped-azure-token"
         );
         server.abort();
