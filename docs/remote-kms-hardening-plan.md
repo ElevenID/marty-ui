@@ -13516,3 +13516,17 @@ eight-case run passed again; warnings-denied Canvas acceptance Clippy,
 32 focused packaged/startup/closure checks, 45 surrounding inventory and
 current-input checks, and Ruff passed. Hosted exact-image execution of this
 new head is still required.
+
+Before the next grouped UI push, `main` advanced to `63622d8043`
+(worktree-local feedback isolation and CI fail-fast source selection). It
+merged locally at `322e8de46`. The CI conflict retained this branch's
+fresh Organization/Credential Template/Issuance migration and private-key
+catalog verification; it accepted upstream's earlier dedicated native
+passport webhook test. The upstream hand-made OID4VCI SQL fixture was not
+reintroduced. The merged classifier initially exceeded its guarded
+20,500-byte script budget; removing four redundant category comments restored
+the limit without changing selection logic. The CI performance suite passed
+143/143 tests with its pre-existing Windows `git bash` subprocess-timeout
+case excluded; the targeted classifier-budget test passed after the comment
+trim. The local merge and startup changes are still unpublished and have no
+hosted exact-head CI evidence.
