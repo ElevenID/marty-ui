@@ -170,7 +170,6 @@ jobs:
                 seen_k8s_policy_paths+=("$path")
               done
             fi
-            # Verified test-only leaves retain their actual test owner.
             leaf_only=false
             leaf_candidate=true
             if (( ${#changed_files[@]} == 0 )); then
@@ -203,7 +202,6 @@ jobs:
                 done
               fi
             fi
-            # Four verified worker test sources use the published-worker lane.
             worker_test_only=false
             worker_candidate=true
             if [[ "${{ github.event_name }}" != pull_request ||
@@ -239,7 +237,6 @@ jobs:
                 fi
               fi
             fi
-            # Verified Flow acceptance tests narrow only after image proof.
             flow_test_only=false
             flow_candidate=true
             if [[ "${{ github.event_name }}" != pull_request ||
@@ -275,7 +272,6 @@ jobs:
                 fi
               fi
             fi
-            # Verified self-host tests retain their Rust and Python owners.
             selfhost_test_only=false
             selfhost_candidate=true
             if [[ "${{ github.event_name }}" != pull_request ||
@@ -312,9 +308,18 @@ jobs:
               fi
             fi
             service_acceptance_test_only=false
-            # The verifier checks exact source ownership and all six Docker
-            # contexts on this checkout before selecting only contracts.
-            if [[ "${{ github.event_name }}" == pull_request && ${#changed_files[@]} -gt 0 ]] &&
+            service_acceptance_candidate=true
+            if [[ "${{ github.event_name }}" != pull_request || ${#changed_files[@]} -eq 0 ]]; then
+              service_acceptance_candidate=false
+            fi
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                rust/crates/service-acceptance/tests/*) ;;
+                *) service_acceptance_candidate=false; break ;;
+              esac
+            done
+            # The prefix only rejects; exact ownership and six contexts grant.
+            if [[ "$service_acceptance_candidate" == true ]] &&
                printf '%s\0' "${changed_files[@]}" |
                  python3 tests/test_rust_test_only_docker_context.py \
                    --select-service-acceptance-tests; then
@@ -1688,6 +1693,19 @@ jobs:
           python3 scripts/verify_fresh_kms_issuance_schema.py \
             --container "$MARTY_RUST_CI_POSTGRES_ID" \
             --database marty_issuance_executable_smoke_test
+      # This source-owned acceptance case has its own disposable database and
+      # needs no prior contract group. Report a regression after compilation
+      # rather than after the unrelated Redis/OpenBao and database suites.
+      - name: Test native passport Gateway signed webhook on PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        env:
+          MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
+        run: |
+          set -euo pipefail
+          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -2003,16 +2021,6 @@ jobs:
           MARTY_PASSPORT_RECONCILIATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_reconciliation_test
         run: |
           cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
-      - name: Test native passport Gateway signed webhook on PostgreSQL
-        if: matrix.lane == 'contracts'
-        working-directory: rust
-        env:
-          MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
-        run: |
-          set -euo pipefail
-          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

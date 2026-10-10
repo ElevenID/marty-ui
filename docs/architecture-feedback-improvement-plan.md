@@ -473,6 +473,19 @@ Bundle related code, policy, tests, and documentation into reviewed PRs to limit
 
 Repeat check (2026-10-03): in two successful Core PR runs, preflight took 11.7m versus affected tests 13.9m ([37098640425](https://github.com/ElevenID/marty-core/actions/runs/37098640425)) and 16.9m versus affected tests 18.5m ([37101783100](https://github.com/ElevenID/marty-core/actions/runs/37101783100)). The successful protected run [37099476951](https://github.com/ElevenID/marty-core/actions/runs/37099476951) took 14.5m in preflight versus 19.2m in the Windows platform lane. These three distinct runs again place another required lane on the critical path; a preflight split is not yet an evidence-backed wall-time improvement. The preflight may still be worth reorganizing for earlier diagnostic output, but that requires per-step failure timing and cannot drop the existing KMS/security/feature checks.
 
+October 10 A7 recheck: three recent successful Core PR runs put preflight at
+13m56s versus affected tests 16m18s ([38029635868](https://github.com/ElevenID/marty-core/actions/runs/38029635868)),
+16m10s versus 15m37s ([38029628248](https://github.com/ElevenID/marty-core/actions/runs/38029628248)),
+and 17m04s versus 11m29s ([38024718140](https://github.com/ElevenID/marty-core/actions/runs/38024718140)).
+Preflight was the later required lane in the last two samples, by 33 seconds
+and 5m35s respectively; the latter includes a separate 3m06s live OpenBao
+issuer-signing proof absent from the other two. Exact KMS graphs consumed
+6m33s, 8m09s and 8m33s within these preflights. This warrants continued
+step-level observation, but does not yet establish that a second runner's
+duplicated toolchain/compilation would shorten ordinary PR feedback or fit
+the free-tier budget better. Keep all KMS, feature and security checks while
+evaluating a split against comparable ordinary and KMS-specific runs.
+
 A6 first selective-PR observation (2026-10-04): after inventory-only selector [#1080](https://github.com/ElevenID/marty-ui/pull/1080) merged, its follow-up [#1082](https://github.com/ElevenID/marty-ui/pull/1082) completed [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/37185053263) in 8m37s (07:11:50–07:20:27 UTC). Release Contract Tests and the final CI Gate passed; the Rust Canvas lane was not scheduled for those exact inventory inputs. Protected combined-head validation remained full, and #1082 merged. This is observed turnaround for that scoped PR, not a whole-repository average or a claim that the Canvas lane itself became faster.
 
 A6 frozen-reference test-source follow-up (2026-10-05, local review): `tests/test_signing_response_reference.py`, `tests/test_token_rate_reference.py`, and `tests/test_canvas_url_template_reference.py` are exact root test sources collected by Release Contract Tests (`python -m pytest tests -v --tb=short`), with no other CI collector or service-image copy of root tests. The signing test parses pinned capture literals with standard-library AST/JSON; the token-rate test imports only its standard-library capture module; the Canvas URL test imports its capture module and standard-library mirror/output helpers, using controlled children rather than application imports. Native Rust tests consume their frozen `contracts/*` corpora, so corpus changes still select Rust; `scripts/*`, implementation, unknown paths, and protected merge groups remain broad. The PR security lane audits dependency lockfiles and scans `services/ packages/`, not root test modules, so this exact test-source routing does not drop a scanned-source or dependency-audit obligation. This is a proposed path-selection change, not a measured speedup; record hosted PR and protected evidence before making a saving claim.

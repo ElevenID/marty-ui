@@ -62,3 +62,22 @@ The acceptance package has an empty library and only development dependencies. `
 - [x] Complete self-review and reviewer-worker review; fix findings before merge. The reviewed head `ca9dbb909` passed full PR and merge-queue CI and merged as `48c77c9fc`.
 
 No measured CI speedup is claimed for this first extraction. It establishes acceptance ownership and removes a real service test dependency; the larger Canvas split and selective execution remain separate work.
+
+## Later service-acceptance targets: exact execution ownership
+
+The two subsequent A1 moves, [#1118](https://github.com/ElevenID/marty-ui/pull/1118)
+and [#1121](https://github.com/ElevenID/marty-ui/pull/1121), left their
+cross-service tests in the explicit `marty-service-acceptance` targets below.
+The contracts lane is their CI owner; a default workspace test result alone
+does not prove their disposable-resource cases executed.
+
+| Target | Required contracts-lane execution | Distinct obligation and external inputs |
+| --- | --- | --- |
+| `passport_gateway_postgres` | List and run `native_passport_gateway_signed_webhook_updates_durable_tenant_job` with `--exact`; the target also has a database-free Gateway fixture/route check. | Real Gateway-to-native-Issuance webhook handoff, HMAC tamper rejection, tenant isolation and durable job/tracking updates. `MARTY_PASSPORT_GATEWAY_TEST_URL` must name the dedicated loopback `marty_passport_gateway_test` PostgreSQL database; without it the live test returns early. |
+| `gateway_signing_acceptance` | Require all six named cases in the compiled executable, then run each with `--ignored --exact` in the contracts lane. | Authenticated Gateway-to-Signing Keys routes, managed-key creation/rotation, profile and dedicated-service CSRs, and DSC issuance with operator grant. Cases use guarded disposable Redis databases 13/14; the CSR/DSC cases additionally use guarded loopback OpenBao Transit, and the DSC case verifies issued certificate signatures. |
+
+The workflow creates the dedicated PostgreSQL database earlier and provisions
+Redis/OpenBao disposable guards before their respective invocations. It retains
+their separate Redis/OpenBao and PostgreSQL steps. The file and
+target ownership is exact, but this entry is not a complete transitive
+non-Cargo input graph or permission to skip protected merge-group coverage.
