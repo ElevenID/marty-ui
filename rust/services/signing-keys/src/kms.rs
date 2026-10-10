@@ -156,11 +156,75 @@ pub(crate) fn validate_service_auth_config(config: &Value) -> Result<(), KmsErro
         "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible" => {
             validate_transit_auth_config(config)
         }
-        "aws-kms" => validate_aws_auth_config(config),
-        "azure-key-vault" => validate_azure_auth_config(config),
-        "gcp-cloud-kms" => validate_gcp_auth_config(config),
+        "aws-kms" => {
+            validate_cloud_endpoint(config, "aws")?;
+            validate_aws_auth_config(config)
+        }
+        "azure-key-vault" => {
+            validate_cloud_endpoint(config, "azure")?;
+            validate_azure_auth_config(config)
+        }
+        "gcp-cloud-kms" => {
+            validate_cloud_endpoint(config, "gcp")?;
+            validate_gcp_auth_config(config)
+        }
         other => Err(KmsError::UnsupportedProvider(other.to_string())),
     }
+}
+
+fn validate_cloud_endpoint(config: &Value, provider: &str) -> Result<(), KmsError> {
+    let endpoint = string(config, "endpoint").filter(|value| !value.is_empty());
+    let Some(endpoint) = endpoint else {
+        return if provider == "azure" {
+            Err(KmsError::InvalidConfig(
+                "Azure Key Vault endpoint is required.".into(),
+            ))
+        } else {
+            Ok(())
+        };
+    };
+    let parsed = reqwest::Url::parse(endpoint)
+        .map_err(|_| KmsError::InvalidConfig("KMS endpoint is invalid.".into()))?;
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/"
+    {
+        return Err(KmsError::InvalidConfig("KMS endpoint is invalid.".into()));
+    }
+    let host = parsed.host_str().unwrap_or_default();
+    // Local HTTP stubs are confined to debug builds. Release artifacts can
+    // never redirect a workload token or managed identity to a tenant URL.
+    if cfg!(debug_assertions)
+        && matches!(parsed.scheme(), "http" | "https")
+        && matches!(host, "127.0.0.1" | "localhost" | "::1")
+    {
+        return Ok(());
+    }
+    let official = parsed.scheme() == "https"
+        && parsed.port().is_none()
+        && match provider {
+            "aws" => false,
+            "azure" => [".vault.azure.net", ".managedhsm.azure.net"]
+                .iter()
+                .any(|suffix| host.ends_with(suffix) && host.len() > suffix.len()),
+            "gcp" => host == "cloudkms.googleapis.com",
+            _ => false,
+        };
+    if !official {
+        return Err(KmsError::InvalidConfig(
+            "KMS endpoint is not a supported provider endpoint.".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn cloud_http_client() -> Result<Client, KmsError> {
+    Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| KmsError::Provider("Cloud KMS HTTP client is unavailable.".into()))
 }
 
 pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsError> {
@@ -1090,6 +1154,7 @@ async fn azure_managed_token(
 ) -> Result<String, KmsError> {
     let client = Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| KmsError::Provider("Azure identity HTTP client is unavailable.".into()))?;
     let version = if header.is_some() {
@@ -1118,12 +1183,17 @@ async fn azure_client_secret_token(
     endpoint: &str,
     credential: &AzureClientSecret,
 ) -> Result<String, KmsError> {
-    let response = send_json(Client::new().post(endpoint).timeout(HTTP_TIMEOUT).form(&[
-        ("grant_type", "client_credentials"),
-        ("client_id", credential.client_id.as_str()),
-        ("client_secret", credential.client_secret.as_str()),
-        ("scope", "https://vault.azure.net/.default"),
-    ]))
+    let response = send_json(
+        cloud_http_client()?
+            .post(endpoint)
+            .timeout(HTTP_TIMEOUT)
+            .form(&[
+                ("grant_type", "client_credentials"),
+                ("client_id", credential.client_id.as_str()),
+                ("client_secret", credential.client_secret.as_str()),
+                ("scope", "https://vault.azure.net/.default"),
+            ]),
+    )
     .await
     .map_err(|_| KmsError::Provider("Azure client token acquisition failed.".into()))?;
     azure_token_value(response)
@@ -1165,7 +1235,7 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
     let (_, digest) = signing_digest(algorithm, payload)?;
     let response = send_json(
         azure_bearer(
-            Client::new().post(format!(
+            cloud_http_client()?.post(format!(
                 "{}/keys/{key_path}/sign?api-version=7.4",
                 endpoint.trim_end_matches('/')
             )),
@@ -1205,7 +1275,7 @@ async fn public_key_azure(config: &Value) -> Result<Value, KmsError> {
     let key_path = key_path(key_reference, string(config, "key_version"));
     let response = send_json(
         azure_bearer(
-            Client::new().get(format!(
+            cloud_http_client()?.get(format!(
                 "{}/keys/{key_path}?api-version=7.4",
                 endpoint.trim_end_matches('/')
             )),
@@ -1235,8 +1305,12 @@ async fn verify_azure(config: &Value) -> CapabilityResult {
         Some(value) => value,
         None => return CapabilityResult::fail("Endpoint", "endpoint is required"),
     };
+    let client = match cloud_http_client() {
+        Ok(client) => client,
+        Err(error) => return CapabilityResult::fail("Connectivity", error.to_string()),
+    };
     let builder = match azure_bearer(
-        Client::new().get(format!(
+        client.get(format!(
             "{}/keys?api-version=7.4",
             endpoint.trim_end_matches('/')
         )),
@@ -1366,6 +1440,7 @@ async fn gcp_metadata_token() -> Result<String, KmsError> {
     }
     let client = Client::builder()
         .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|_| KmsError::Provider("GCP metadata HTTP client is unavailable.".into()))?;
     let response = send_json(
@@ -1387,7 +1462,7 @@ async fn gcp_service_account_token_at(
     let email =
         percent_encoding::utf8_percent_encode(&account.email, percent_encoding::NON_ALPHANUMERIC);
     let response = send_json(
-        Client::new()
+        cloud_http_client()?
             .post(format!(
                 "{}/v1/projects/-/serviceAccounts/{email}:generateAccessToken",
                 endpoint.trim_end_matches('/')
@@ -1434,8 +1509,14 @@ async fn gcp_bearer(
     Ok(builder.bearer_auth(gcp_access_token(config).await?))
 }
 
+fn gcp_endpoint(config: &Value) -> &str {
+    string(config, "endpoint")
+        .filter(|value| !value.is_empty())
+        .unwrap_or("https://cloudkms.googleapis.com")
+}
+
 async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
-    let endpoint = string(config, "endpoint").unwrap_or("https://cloudkms.googleapis.com");
+    let endpoint = gcp_endpoint(config);
     let key_reference = required(
         config,
         "key_reference",
@@ -1445,7 +1526,7 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
     let body = gcp_sign_body(algorithm, payload)?;
     let response = send_json(
         gcp_bearer(
-            Client::new().post(format!(
+            cloud_http_client()?.post(format!(
                 "{}/v1/{key_reference}:asymmetricSign",
                 endpoint.trim_end_matches('/')
             )),
@@ -1469,7 +1550,7 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
 }
 
 async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
-    let endpoint = string(config, "endpoint").unwrap_or("https://cloudkms.googleapis.com");
+    let endpoint = gcp_endpoint(config);
     let key_reference = required(
         config,
         "key_reference",
@@ -1477,7 +1558,7 @@ async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
     )?;
     let response = send_json(
         gcp_bearer(
-            Client::new().get(format!(
+            cloud_http_client()?.get(format!(
                 "{}/v1/{key_reference}/publicKey",
                 endpoint.trim_end_matches('/')
             )),
@@ -1509,13 +1590,17 @@ async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
 }
 
 async fn verify_gcp(config: &Value) -> CapabilityResult {
-    let endpoint = string(config, "endpoint").unwrap_or("https://cloudkms.googleapis.com");
+    let endpoint = gcp_endpoint(config);
     let key_reference = match string(config, "key_reference").filter(|value| !value.is_empty()) {
         Some(value) => value,
         None => return CapabilityResult::fail("Key reference", "key_reference is required"),
     };
+    let client = match cloud_http_client() {
+        Ok(client) => client,
+        Err(error) => return CapabilityResult::fail("Connectivity", error.to_string()),
+    };
     let builder = match gcp_bearer(
-        Client::new().get(format!(
+        client.get(format!(
             "{}/v1/{key_reference}",
             endpoint.trim_end_matches('/')
         )),
@@ -2098,6 +2183,77 @@ fn bounded(value: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn cloud_provider_endpoints_cannot_route_credentials_to_tenant_hosts() {
+        for (service_type, auth_mode, endpoint) in [
+            ("aws-kms", "iam_role", "https://attacker.example"),
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://attacker.example",
+            ),
+            (
+                "gcp-cloud-kms",
+                "workload_identity",
+                "https://attacker.example",
+            ),
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://vault.azure.net.attacker.example",
+            ),
+            (
+                "gcp-cloud-kms",
+                "workload_identity",
+                "https://cloudkms.googleapis.com.attacker.example",
+            ),
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://vault.vault.azure.net:444",
+            ),
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://vault.vault.azure.net/other",
+            ),
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://user@vault.vault.azure.net",
+            ),
+        ] {
+            let config =
+                json!({"service_type": service_type, "auth_mode": auth_mode, "endpoint": endpoint});
+            assert!(validate_service_auth_config(&config).is_err(), "{endpoint}");
+        }
+        for (service_type, auth_mode, endpoint) in [
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://vault.vault.azure.net",
+            ),
+            (
+                "azure-key-vault",
+                "managed_identity",
+                "https://vault.managedhsm.azure.net",
+            ),
+            (
+                "gcp-cloud-kms",
+                "workload_identity",
+                "https://cloudkms.googleapis.com",
+            ),
+        ] {
+            let config =
+                json!({"service_type": service_type, "auth_mode": auth_mode, "endpoint": endpoint});
+            assert!(validate_service_auth_config(&config).is_ok(), "{endpoint}");
+        }
+        assert_eq!(
+            gcp_endpoint(&json!({"endpoint": ""})),
+            "https://cloudkms.googleapis.com"
+        );
+    }
+
     #[tokio::test]
     async fn gcp_impersonation_uses_short_lived_cloud_scope_without_a_key() {
         async fn token(request: axum::extract::Request) -> axum::Json<Value> {
@@ -2666,10 +2822,16 @@ mod tests {
                 "gcp-cloud-kms" => ("workload_identity", ""),
                 _ => ("token", "fixture-token"),
             };
+            let endpoint = if service_type == "azure-key-vault" {
+                "https://fixture.vault.azure.net"
+            } else {
+                ""
+            };
             assert!(Provider::from_config(&json!({
                 "service_type": service_type,
                 "auth_mode": auth_mode,
-                "auth_reference": auth_reference
+                "auth_reference": auth_reference,
+                "endpoint": endpoint
             }))
             .is_ok());
         }

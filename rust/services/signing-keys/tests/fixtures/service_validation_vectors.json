@@ -42,6 +42,7 @@
     "input": {
       "service_type": "azure-key-vault",
       "auth_mode": "client_secret",
+      "endpoint": "https://fixture.vault.azure.net",
       "algorithms": ["HS256"],
       "live_probe": false
     },

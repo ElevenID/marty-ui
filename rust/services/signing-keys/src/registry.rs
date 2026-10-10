@@ -1535,6 +1535,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         .unwrap_or("custom");
     let auth_config = json!({
         "service_type": definition.id,
+        "endpoint": string_or(service.get("endpoint"), ""),
         "auth_mode": auth_mode,
         "auth_reference": string_or(service.get("auth_reference"), ""),
     });
@@ -2737,6 +2738,25 @@ mod tests {
             assert!(
                 normalize_service_value(&service).is_err(),
                 "{service_type}: {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_registration_rejects_untrusted_credential_destinations() {
+        for (service_type, auth_mode) in [
+            ("aws-kms", "iam_role"),
+            ("azure-key-vault", "managed_identity"),
+            ("gcp-cloud-kms", "workload_identity"),
+        ] {
+            assert!(
+                normalize_service_value(&json!({
+                    "service_type": service_type,
+                    "auth_mode": auth_mode,
+                    "endpoint": "https://attacker.example"
+                }))
+                .is_err(),
+                "{service_type}"
             );
         }
     }

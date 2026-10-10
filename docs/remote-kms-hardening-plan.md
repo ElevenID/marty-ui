@@ -1225,11 +1225,11 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed current-head checks. UI #1192 `279c0bc` passed its complete exact-head CI run `38028988797`, including Canvas, OpenBao, images and contracts. Final release artifacts and wallet cutover remain. |
-| K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed current-head checks. UI #1192's previous head `279c0bc` passed complete CI run `38028988797`; grouped BYOK head `c98755c2e` is under exact-head run `38035762692`. Final release artifacts and wallet cutover remain. |
+| K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed. Grouped UI head adds sealed provider credentials, native AWS/Azure/GCP auth selection, mode-specific wizard inputs, and fail-closed unsupported-mode/service-type checks. Exact-head CI, packaged gateway, real AWS/Azure/GCP acceptance and security review remain. |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 at `d562739` pins Core `7f276a4`; all 19 exact-head checks passed (one scorecard skipped), including Core wheels, local binding, Rust/Python/WASM tests, Clippy and retirement guard. The repository root remains an empty Python test-harness wheel; Core owns canonical native wheels. Released-artifact qualification and native UI cutover remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355, UI #1192, Verifier #154, Credentials #313, Authenticator #57 and Subscriptions #71 have green current-head checks; Core still requires protected review. Exact release artifacts, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. UI #1192's grouped `c98755c2e` head awaits exact-head CI; the other consumer PR heads were green at the last check. Core #355 still requires protected review. Exact release artifacts, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. Local fresh PostgreSQL 16 checks ran Organization, Credential Template and Rust Issuance migrations twice: 47 service tables, nine Issuance ledger entries and no private-key catalog entries; injected Alembic/key state was rejected. The catalog gate and generic JSON/JSONB scan in published UI `5df61d68e` passed hosted CI. A newer local content scan also rejected synthetic PEM in generic text and JSON fields. Exact signed-image execution, final assembled table/column inventory, self-host cutover and release proof remain. |
 
 ### First execution steps
@@ -11831,3 +11831,45 @@ package suite, and the three focused UI suites (11 tests) passed. The
 opt-in Redis rotation suite and actual provider
 credential/signing acceptance remain K6/K8 evidence gates. This correction
 is still local for the grouped UI PR push.
+
+2026-10-10 K6 grouped PR checkpoint: pushed the eleven local commits after
+`279c0bcebd59572273ab4a30545d5d6378cfd5c5` together to UI draft PR
+[#1192](https://github.com/ElevenID/marty-ui/pull/1192) at exact head
+`c98755c2e22da8cb251345cf85adc75a5412b4e1`. The PR description now
+states the provider credential-envelope, native auth-mode, digest-signing,
+public-JWK, wizard, and fail-closed catalog changes and distinguishes local
+stub proof from real cloud acceptance. Hosted CI run
+[`38035762692`](https://github.com/ElevenID/marty-ui/actions/runs/38035762692)
+was in progress at this checkpoint; do not infer a result until exact-head
+checks finish. The prior successful run `38028988797` proves only the older
+`279c0bce` head. Keep this PR draft pending review and the remaining K6/K8/K9
+gates; further local notes or corrections should be batched before another
+hosted push.
+
+2026-10-10 K6 credential-routing self-review, local correction pending the
+next grouped UI push: registration, preflight, and runtime now share a cloud
+endpoint policy. AWS KMS uses its SDK regional endpoint; Azure accepts only
+public-cloud Key Vault or Managed HSM HTTPS hosts; GCP accepts the global
+Cloud KMS HTTPS host. Malformed URLs, credentials in URLs, alternate paths,
+queries, fragments, and nonstandard ports fail before a provider token is
+acquired. Loopback stubs are available only in debug builds for local tests.
+Azure/GCP identity and data-plane HTTP clients no longer follow redirects,
+and an empty normalized GCP endpoint resolves to the official default.
+Provider, registry, and validation fixtures cover rejected destinations.
+This closes a self-review finding in the `c98755c2` PR head, which has not
+yet received this correction; it does not constitute real cloud acceptance.
+
+The first `c98755c2` hosted contracts lane failed in
+`authenticated_gateway_reaches_remaining_rust_signing_handlers`: a VDS-NC
+BYOK registration reached Redis persistence without an OpenBao credential
+envelope and correctly returned 503. The acceptance fixture now supplies the
+disposable OpenBao envelope provider, and that case runs after the CI lane
+provisions its non-exportable integration-secret Transit key. The original
+run's other jobs may still be in progress; verify the next exact-head run
+after this grouped correction is pushed.
+Local checks for this correction: Signing Keys library 161 passed with nine
+expected opt-in ignores; full non-opt-in Signing Keys package suite passed;
+provider, registry, and service-validation golden vectors passed; Signing
+Keys and service-acceptance all-target warnings-denied Clippy passed; the
+Gateway acceptance test compiled. Its disposable OpenBao/Redis runtime proof
+is delegated to the next hosted contracts lane.

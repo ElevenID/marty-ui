@@ -31,6 +31,7 @@ use marty_gateway::{
 use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
+    flow_envelope::OpenBaoEnvelopeProvider,
     http::{
         router_with_all_keys, router_with_dependencies_and_ceremony_keys,
         router_with_dependencies_and_sign_key as signing_router,
@@ -1746,11 +1747,17 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
     let redis_url = disposable_signing_redis_url().await;
+    let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-signing-{}", uuid::Uuid::new_v4().simple());
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     store
         .save(
             &organization_id,
