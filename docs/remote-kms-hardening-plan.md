@@ -11452,4 +11452,13 @@ remote-secret server. This local environment result leaves the full loader
 proof to hosted Canvas CI;
 temporary diagnostic instrumentation was reverted. Authenticator now points
 directly at Core `7f276a4` and Verifier `e42dd8d`, with a single locked Core
-graph; its full bridge check remains in progress.
+graph.
+
+The grouped UI repin and fixture correction are published at `f0239db18`
+on PR `#1192`; Credentials' Core repin is published at `d562739` on PR
+`#313`. Verifier PR `#154` passed its exact-head checks. Authenticator's
+Core-and-Verifier repin is published at `a8fdcbb` on PR `#57` after its
+locked metadata resolved one Core revision. The local Windows bridge check
+stopped in the vendored `openssl-sys`/`nmake` build before Authenticator
+sources were checked; hosted Linux CI remains the authoritative compile
+result. The UI and Credentials exact-head checks are pending.
