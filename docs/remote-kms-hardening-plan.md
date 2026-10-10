@@ -12744,3 +12744,7 @@ slot. Both now pass an explicit absent credential, preserving their signing
 scope. `cargo check --locked -p marty-service-acceptance --tests` and format
 checks for service, Canvas and Flow acceptance crates pass locally. This fix
 is part of the held follow-up; the failed hosted job remains immutable.
+The same head's [production Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38073205041)
+completed successfully. The hosted CI run is still active in its Canvas,
+service-image, release-contract and live coordinated OpenBao/PostgreSQL/Raft
+recovery lanes; do not infer their outcome from the successful local compile.
