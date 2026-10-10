@@ -12901,3 +12901,25 @@ positive assertions about the old key. Keep the negative startup tests that
 prove the old key is rejected; those tests do not restore private-key use.
 This is separate from retiring the Python Canvas worker oracle graph, whose
 startup/REST fixtures still *execute* with raw master-key configuration.
+
+Grouped correction head `6869d336d` has a successful
+[exact-head Rust CodeQL run](https://github.com/ElevenID/marty-ui/actions/runs/38076853453).
+Its [UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38076853519)
+has passed Rust Lint, Release Contracts, Rust Feature Regression Probe,
+Supply Chain, all four UI shards, browser lifecycle, security scanning and
+early protocol/service checks. Rust Contracts, Canvas, service images and
+OpenBao coordinated recovery are still active at this checkpoint; no
+current-head CI Gate result is claimed yet.
+
+The `6869d336d` Rust Contracts job is now terminal success, including the
+self-host bundle executable group that failed at `577cd5320`. This confirms
+the closed-model envelope-secret fixture correction for that lane. Canvas's
+packaged self-host loader and coordinated OpenBao recovery remain active, so
+their shared-cause and timeout hypotheses are not yet qualified.
+
+The same head's OpenBao plugin job is terminal success, including live
+coordinated PostgreSQL/Raft integration-secret recovery. The bounded
+replacement-initialization wait therefore passed in the hosted probe; this
+does not substitute for the later exact release-artifact cutover test.
+Rust Service Images also passed. Canvas remains the only substantive CI job
+still active at this checkpoint.
