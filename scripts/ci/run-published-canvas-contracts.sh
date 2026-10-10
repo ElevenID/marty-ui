@@ -582,32 +582,34 @@ trap cleanup_target_logs EXIT
 : > "$worker_log"
 : > "$selfhost_log"
 relay_target_timing() {
-  local pid="$1" log="$2" end_file="$3"
+  local pid="$1" log="$2" end_file="$3" target="$4"
+  [[ "$target" == composition || "$target" == flow || "$target" == worker || "$target" == selfhost ]] || return 1
   # This observer cannot own or obscure the Rust child exit status. Its
-  # completion clock has at most the 100 ms tail polling resolution.
-  if ( set -o pipefail; tail --pid="$pid" --sleep-interval=0.1 -n +1 -f "$log" | sed -u -n '/^MARTY_CI_PHASE_V1 /p' ); then
+  # completion clock has at most the 100 ms tail polling resolution. Tag only
+  # this target's own fixed log; raw test output remains unchanged for replay.
+  if ( set -o pipefail; tail --pid="$pid" --sleep-interval=0.1 -n +1 -f "$log" | sed -u -n "s/^MARTY_CI_PHASE_V1 /MARTY_CI_TARGET_PHASE_V1 $target /p" ); then
     python3 -c 'import time; print(time.monotonic_ns())' >"$end_file"
   fi
 }
 selfhost_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 "$selfhost_executable" --nocapture --test-threads=4 >"$selfhost_log" 2>&1 &
 selfhost_pid=$!
-relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" &
+relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &
 selfhost_relay_pid=$!
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
-relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &
+relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &
 composition_relay_pid=$!
 flow_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &
 flow_pid=$!
-relay_target_timing "$flow_pid" "$flow_log" "$flow_end" &
+relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &
 flow_relay_pid=$!
 worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
-relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &
+relay_target_timing "$worker_pid" "$worker_log" "$worker_end" worker &
 worker_relay_pid=$!
 report_target_timing() {
   local name="$1" started="$2" status="$3" end_file="$4" ended

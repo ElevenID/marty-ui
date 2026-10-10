@@ -2892,6 +2892,18 @@ Next measure its internal validation/provider phases and the target's
 critical-path overlap before proposing a fixture or qualification change;
 keep the current required case inventory and exact-owned cleanup meanwhile.
 
+Target-attribution follow-up (2026-10-10, local candidate): the #1229 and
+#1230 Canvas artifacts each record 77 `published_probe` migrations in the
+published-canvas group. Their worker/composition targets took 385/356 and
+486/468 seconds respectively, while the overlapping migration sums were
+341 and 425 seconds. The two targets are close enough that optimizing only
+one may not shorten the group; summed phase durations are not wall time.
+The four parallel targets already write separate owned logs. Tag only their
+relayed, allowlisted phase rows with a fixed target identity, retaining raw
+logs, case execution, cleanup, and all gates. Use the resulting per-target
+counts before proposing database-template reuse; this candidate itself
+claims no speedup.
+
 The next local A0/A6 candidate records four bounded JSON-depth oracle
 subphases—setup, published validation, published provider, and observation
 encoding—beside the unchanged frozen observation. The Rust fixture admits

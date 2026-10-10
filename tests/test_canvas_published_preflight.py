@@ -250,12 +250,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(': > "$composition_log"') < script.index(composition_full)
     assert script.index(': > "$worker_log"') < script.index(worker_full)
     assert (
-        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
+        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &'
         in script
     )
-    assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in script
+    assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" worker &' in script
     assert (
-        'relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" &'
+        'relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &'
         in script
     )
     assert script.index(composition_full) < script.index(worker_full)
@@ -1468,16 +1468,18 @@ def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
     assert live.count('"name":"worker-contract"') == 1
     assert live.count('"name":"flow-contract"') == 1
     assert live.count('"name":"selfhost-contract"') == 1
-    assert (
-        result.stdout.count('MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"')
-        == 2
-    )
-    assert (
-        result.stdout.count(
-            'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"worker-contract"'
-        )
-        == 2
-    )
+    for target, name in (
+        ("composition", "contract"),
+        ("worker", "worker-contract"),
+        ("flow", "flow-contract"),
+        ("selfhost", "selfhost-contract"),
+    ):
+        assert result.stdout.count(
+            f'MARTY_CI_TARGET_PHASE_V1 {target} {{"phase":"scenario","name":"{name}"'
+        ) == 1
+        assert result.stdout.count(
+            f'[raw-log] MARTY_CI_PHASE_V1 {{"phase":"scenario","name":"{name}"'
+        ) == 1
     assert (
         result.stdout.count(
             '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"'
