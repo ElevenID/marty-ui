@@ -13202,3 +13202,16 @@ selection, wire a scoped token and plugin-backed OpenBao endpoint, and prove
 real live authcrypt in the beta/conformance composition. Do not count the
 current opt-in overlay as a working compatibility path or weaken the Rust
 fail-closed behavior.
+
+The published `7b8c81631` [CI run
+38082985033](https://github.com/ElevenID/marty-ui/actions/runs/38082985033)
+is terminal failure. Canvas finished successfully, including the public
+self-host image build, packaged loader/health acceptance, disposable DIDComm
+KMS backend and its database contract group. The OpenBao plugin and
+coordinated PostgreSQL/Raft recovery, Rust Contracts, service images, lint,
+security, protocol, browser and UI jobs also passed. Only Release Contract
+Tests failed, from seven stale `assert_beta_shared_setting_repairs` calls;
+CI Gate inherited that failure. The held local KMS-only conformance test
+replacement and native shared-owner corrections require one new exact-head
+run. Preserve this failed run as evidence; its successful leaf jobs qualify
+only `7b8c81631`.
