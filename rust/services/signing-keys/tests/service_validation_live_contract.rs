@@ -1,4 +1,4 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use axum::{
     body::Body,
@@ -21,8 +21,6 @@ struct CapturedRequest {
 
 #[derive(Clone)]
 struct StubState(Arc<tokio::sync::Mutex<Vec<CapturedRequest>>>);
-
-static ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 async fn transit_stub(State(state): State<StubState>, request: Request<Body>) -> Response {
     let path = request.uri().path().to_string();
@@ -56,13 +54,7 @@ async fn transit_stub(State(state): State<StubState>, request: Request<Body>) ->
 }
 
 #[tokio::test]
-async fn service_token_and_namespace_reach_every_custom_transit_probe() {
-    let _env_guard = ENV_LOCK
-        .get_or_init(|| tokio::sync::Mutex::new(()))
-        .lock()
-        .await;
-    std::env::set_var("BAO_TOKEN", "service-token-from-environment");
-
+async fn tenant_token_and_namespace_reach_every_custom_transit_probe() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind provider stub");
@@ -86,14 +78,14 @@ async fn service_token_and_namespace_reach_every_custom_transit_probe() {
         "endpoint": format!("http://{address}"),
         "mount": "transit",
         "namespace": "tenant-a",
-        "auth_mode": "service_token",
+        "auth_mode": "token",
+        "auth_reference": "tenant-provided-token",
         "key_reference": "issuer",
         "algorithms": ["ES256"]
     }))
     .expect("validation request");
     let result = validate(request).await;
 
-    std::env::remove_var("BAO_TOKEN");
     let _ = shutdown_tx.send(());
     assert!(result.ok, "custom transit validation should pass");
     let requests = captured.lock().await;
@@ -110,7 +102,7 @@ async fn service_token_and_namespace_reach_every_custom_transit_probe() {
         ]
     );
     for request in requests.iter() {
-        assert_eq!(request.token, "service-token-from-environment");
+        assert_eq!(request.token, "tenant-provided-token");
         assert_eq!(request.namespace, "tenant-a");
     }
 }

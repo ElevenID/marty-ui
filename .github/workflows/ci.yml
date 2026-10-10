@@ -1742,6 +1742,7 @@ jobs:
             docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n "$db" SET marty:tests:disposable-guard "$nonce" >/dev/null
           done
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
+          export BAO_ADDR=http://127.0.0.1:8200
           export BAO_TOKEN=test-only
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14
           for entry in public_config_resolve_live_contract:2 public_key_metadata_live_contract:2; do
@@ -1791,6 +1792,7 @@ jobs:
           export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200
           export MARTY_TEST_OPENBAO_TOKEN=test-only
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
+          export BAO_ADDR=http://127.0.0.1:8200
           export BAO_TOKEN=test-only
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
             --header 'Content-Type: application/json' --request POST \

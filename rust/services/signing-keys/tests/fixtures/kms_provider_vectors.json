@@ -21,6 +21,7 @@
         "endpoint": "$STUB",
         "mount": "transit",
         "key_reference": "issuer-key",
+        "auth_mode": "token",
         "auth_reference": "root",
         "algorithm": "ES256"
       },
@@ -46,7 +47,7 @@
     },
     {
       "name": "openbao_rs256_pkcs1v15",
-      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "rsa-key", "auth_reference": "root", "algorithm": "RS256" },
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "rsa-key", "auth_mode": "token", "auth_reference": "root", "algorithm": "RS256" },
       "payload_b64": "aGVsbG8gd29ybGQ",
       "expected_request": {
         "method": "POST", "path_query": "/v1/transit/sign/rsa-key", "headers": { "x-vault-token": "root" },
@@ -57,7 +58,7 @@
     },
     {
       "name": "openbao_ps256_hash_salt",
-      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "rsa-key", "auth_reference": "root", "algorithm": "PS256" },
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "rsa-key", "auth_mode": "token", "auth_reference": "root", "algorithm": "PS256" },
       "payload_b64": "aGVsbG8gd29ybGQ",
       "expected_request": {
         "method": "POST", "path_query": "/v1/transit/sign/rsa-key", "headers": { "x-vault-token": "root" },
@@ -73,6 +74,7 @@
         "endpoint": "$STUB",
         "mount": "/transit/",
         "key_reference": "eddsa-key",
+        "auth_mode": "token",
         "auth_reference": "root",
         "algorithm": "EdDSA"
       },
@@ -103,6 +105,7 @@
         "endpoint": "$STUB",
         "mount": "transit",
         "key_reference": "csca-p521",
+        "auth_mode": "token",
         "auth_reference": "root",
         "algorithm": "ES512"
       },
@@ -212,15 +215,15 @@
     },
     {
       "name": "openbao_raw_ed25519",
-      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "eddsa-key", "auth_reference": "root" },
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "eddsa-key", "auth_mode": "token", "auth_reference": "root" },
       "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/eddsa-key", "headers": { "x-vault-token": "root" } },
       "provider_response": { "data": { "latest_version": 1, "type": "ed25519", "keys": { "1": { "name": "ed25519", "public_key": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=" } } } },
       "expected_response": { "kty": "OKP", "crv": "Ed25519", "x": "ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ", "kid": "eddsa-key" }
     },
     {
       "name": "openbao_ed448_pem",
-      "service_config": { "service_type": "hashicorp-vault-transit", "endpoint": "$STUB", "key_reference": "ed448-key" },
-      "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/ed448-key", "headers": { "x-vault-token": "" } },
+      "service_config": { "service_type": "hashicorp-vault-transit", "endpoint": "$STUB", "key_reference": "ed448-key", "auth_mode": "token", "auth_reference": "root" },
+      "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/ed448-key", "headers": { "x-vault-token": "root" } },
       "provider_response": { "data": { "latest_version": "1", "type": "ed448", "keys": { "1": { "name": "ed448", "public_key": "-----BEGIN PUBLIC KEY-----\nMEMwBQYDK2VxAzoA2pGLo+V/3KAyb0bH7IQ7qPyw1X+hXyWIpXuunfVYIQNR5+FV\ngbJEWcCnzeHoNVgtcXwGmepy6MkA\n-----END PUBLIC KEY-----\n" } } } },
       "expected_response": { "kty": "OKP", "crv": "Ed448", "x": "2pGLo-V_3KAyb0bH7IQ7qPyw1X-hXyWIpXuunfVYIQNR5-FVgbJEWcCnzeHoNVgtcXwGmepy6MkA", "kid": "ed448-key" }
     },
@@ -242,7 +245,7 @@
   "verify_cases": [
     {
       "name": "openbao_signing_key_reachable",
-      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "issuer-key", "auth_reference": "root" },
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "issuer-key", "auth_mode": "token", "auth_reference": "root" },
       "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/issuer-key", "headers": { "x-vault-token": "root" } },
       "provider_status": 200,
       "provider_response": { "data": { "supports_signing": true } },
@@ -250,7 +253,7 @@
     },
     {
       "name": "openbao_authentication_rejected",
-      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "bad" },
+      "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_mode": "token", "auth_reference": "bad" },
       "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/issuer-key", "headers": { "x-vault-token": "bad" } },
       "provider_status": 403,
       "provider_response": { "errors": ["permission denied"] },

@@ -1492,6 +1492,11 @@ pub fn storage_key(organization_id: &str) -> String {
 }
 
 fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryError> {
+    if crate::private_material::contains_private_key(service) {
+        return Err(RegistryError::Invalid(
+            "signing service must not include private key material".into(),
+        ));
+    }
     let Some(service) = service.as_object() else {
         return Ok(None);
     };
@@ -1500,12 +1505,16 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
             "Only the managed OpenBao service may use the mounted service token.".into(),
         ));
     }
-    let definition = service_type(
-        service
-            .get("service_type")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-    );
+    let requested_type = service
+        .get("service_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let definition = service_type(requested_type);
+    if definition.id != requested_type {
+        return Err(RegistryError::Invalid(
+            "Signing service type is unsupported.".into(),
+        ));
+    }
     let now = Utc::now().to_rfc3339();
     let key_aliases = dedupe_strings(service.get("key_aliases"));
     let mut algorithms = supported_algorithms(service.get("algorithms"));
@@ -1515,12 +1524,22 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
             .cloned()
             .unwrap_or(Value::Null)])));
     }
-    let auth_mode = service
-        .get("auth_mode")
-        .and_then(Value::as_str)
-        .filter(|mode| definition.auth_modes.contains(mode))
+    let requested_auth_mode = service.get("auth_mode").and_then(Value::as_str);
+    if requested_auth_mode.is_some_and(|mode| !definition.auth_modes.contains(&mode)) {
+        return Err(RegistryError::Invalid(
+            "Authentication mode is unsupported for this KMS service.".into(),
+        ));
+    }
+    let auth_mode = requested_auth_mode
         .or_else(|| definition.auth_modes.first().copied())
         .unwrap_or("custom");
+    let auth_config = json!({
+        "service_type": definition.id,
+        "auth_mode": auth_mode,
+        "auth_reference": string_or(service.get("auth_reference"), ""),
+    });
+    kms::validate_service_auth_config(&auth_config)
+        .map_err(|error| RegistryError::Invalid(error.to_string()))?;
     let provider = nonblank_string(service.get("provider")).unwrap_or(definition.provider);
     let provider_label = nonblank_string(service.get("provider_label")).unwrap_or(definition.label);
     let created_at = service
@@ -2698,6 +2717,37 @@ mod tests {
             mode: RegistryMode::Requested,
             registry: json!({"services": [service]}),
         })
+        .is_err());
+    }
+
+    #[test]
+    fn unsupported_auth_modes_are_rejected_instead_of_becoming_token_mode() {
+        for (service_type, mode) in [
+            ("openbao-transit", "approle"),
+            ("hashicorp-vault-transit", "mtls"),
+            ("custom-transit-compatible", "api_key"),
+            ("custom-transit-compatible", "custom"),
+            ("azure-key-vault", "certificate"),
+        ] {
+            let service = json!({
+                "service_type": service_type,
+                "auth_mode": mode,
+                "auth_reference": "must-not-be-reinterpreted"
+            });
+            assert!(
+                normalize_service_value(&service).is_err(),
+                "{service_type}: {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_service_type_is_not_registered_as_custom_transit() {
+        assert!(normalize_service_value(&json!({
+            "service_type": "not-a-kms",
+            "auth_mode": "token",
+            "auth_reference": "fixture-token"
+        }))
         .is_err());
     }
 

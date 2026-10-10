@@ -11804,3 +11804,30 @@ external GCP federation, Azure certificate remote assertion signing, and
 supported AppRole/mTLS implementations or removal from the advertised
 backend catalog. No cloud-provider acceptance is claimed from UI or local
 stub tests.
+
+2026-10-10 K6 advertised-auth correction, continuing local UI batch: the
+backend and fallback UI catalogs now advertise only auth modes that native
+provider adapters implement. External OpenBao, Vault, and custom Transit
+registrations offer tenant-provided token mode; Azure offers managed identity
+and client secret. AppRole, mTLS, API-key, custom, and Azure certificate modes
+are no longer selectable or silently rewritten to token mode. The Rust
+registry validates provider auth documents before persistence, while the
+provider adapter checks the same shared parser before sign, public-key read,
+or verification. Unknown service types now fail registration and preflight
+instead of being silently mapped to custom Transit. Transit requires an
+explicit nonempty tenant token or
+the tightly bound internal managed token. Preflight reports unsupported
+modes as failures even without a live probe. Tests that had exercised an
+unimplemented mounted-token path for custom Transit now use a tenant token;
+the live stub checks it reaches all three probes with the namespace intact.
+The disposable OpenBao probe runner and UI contracts CI lane now set
+`BAO_ADDR` to the same guarded endpoint as the managed token, matching the
+new runtime binding; opt-in managed tests assert that precondition.
+Local checks: Signing Keys library 159 passed with nine expected opt-in
+ignores; HTTP (16), provider (five), registry (four), validation vector
+(one), and live local-stub validation (two) tests passed; all-target
+warnings-denied Clippy, targeted Rustfmt, the full non-opt-in Signing Keys
+package suite, and the three focused UI suites (11 tests) passed. The
+opt-in Redis rotation suite and actual provider
+credential/signing acceptance remain K6/K8 evidence gates. This correction
+is still local for the grouped UI PR push.

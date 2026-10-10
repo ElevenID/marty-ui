@@ -55,6 +55,19 @@ pub struct ValidationResult {
 
 pub async fn validate(request: ValidationRequest) -> ValidationResult {
     let body = Value::Object(request.service_config);
+    let requested_type = trimmed(body.get("service_type")).unwrap_or_default();
+    if service_type(requested_type).id != requested_type {
+        return ValidationResult {
+            ok: false,
+            checks: vec![ValidationCheck {
+                name: "Service type".into(),
+                status: "fail".into(),
+                detail: "Signing service type is unsupported.".into(),
+                source: "baseline".into(),
+            }],
+            validated_at: Utc::now().to_rfc3339(),
+        };
+    }
     let payload = normalize_payload(&body);
     let mut checks = Vec::new();
     append_baseline_checks(&payload, &mut checks);
@@ -78,7 +91,7 @@ pub async fn validate(request: ValidationRequest) -> ValidationResult {
 }
 
 fn normalize_payload(body: &Value) -> Value {
-    let requested_type = trimmed(body.get("service_type")).unwrap_or("custom-transit-compatible");
+    let requested_type = trimmed(body.get("service_type")).expect("validated service type");
     let definition = service_type(requested_type);
     let algorithms = string_list(body.get("algorithms"))
         .into_iter()
@@ -276,13 +289,14 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
 }
 
 fn append_provider_auth(payload: &Value, checks: &mut Vec<ValidationCheck>) {
-    let (name, result) = match string(payload, "provider") {
-        "aws" => ("AWS", kms::validate_aws_auth_config(payload)),
-        "azure" => ("Azure", kms::validate_azure_auth_config(payload)),
-        "gcp" => ("GCP", kms::validate_gcp_auth_config(payload)),
+    let name = match string(payload, "provider") {
+        "openbao" | "hashicorp-vault" | "custom" => "Transit",
+        "aws" => "AWS",
+        "azure" => "Azure",
+        "gcp" => "GCP",
         _ => return,
     };
-    match result {
+    match kms::validate_service_auth_config(payload) {
         Ok(()) => add(
             checks,
             "Provider auth policy",
@@ -716,7 +730,7 @@ fn transit_token(payload: &Value) -> String {
                 .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
                 .unwrap_or_default()
         }
-        "token" | "api_key" | "custom" => string(payload, "auth_reference").to_string(),
+        "token" => string(payload, "auth_reference").to_string(),
         _ => String::new(),
     }
 }
@@ -848,6 +862,44 @@ mod tests {
             .checks
             .iter()
             .any(|check| { check.name == "Authentication reference" && check.status == "fail" }));
+    }
+
+    #[tokio::test]
+    async fn unsupported_transit_auth_does_not_pass_registration_preflight() {
+        let config = json!({
+            "service_type": "custom-transit-compatible",
+            "auth_mode": "mtls",
+            "key_reference": "signer",
+            "algorithms": ["ES256"]
+        });
+        let result = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(!result.ok);
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+    }
+
+    #[tokio::test]
+    async fn unknown_service_type_fails_before_any_provider_probe() {
+        let config = json!({
+            "service_type": "not-a-kms",
+            "auth_mode": "token",
+            "auth_reference": "tenant-token",
+            "endpoint": "https://external.example"
+        });
+        let result = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: true,
+        })
+        .await;
+        assert!(!result.ok);
+        assert_eq!(result.checks.len(), 1);
+        assert_eq!(result.checks[0].name, "Service type");
     }
 
     #[tokio::test]

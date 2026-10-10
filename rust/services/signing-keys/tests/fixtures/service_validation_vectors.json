@@ -108,6 +108,7 @@
       {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
       {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: RS256", "source": "baseline"},
       {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) RS256 may not be suitable for the declared key purpose(s) mdoc_dsc.", "source": "baseline"},
+      {"name": "Provider auth policy", "status": "pass", "detail": "Transit credential configuration matches the selected auth mode.", "source": "provider"},
       {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected custom signer capabilities.", "source": "provider"}
     ]
   },
@@ -115,7 +116,8 @@
     "name": "lti_requires_rs256",
     "input": {
       "service_type": "custom-transit-compatible",
-      "auth_mode": "mtls",
+      "auth_mode": "token",
+      "auth_reference": "lti-token",
       "key_reference": "lti-tool",
       "algorithms": ["ES256"],
       "key_purposes": ["lti_tool_signing"],
@@ -127,6 +129,7 @@
       {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
       {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES256", "source": "baseline"},
       {"name": "Key purpose algorithm fit", "status": "warning", "detail": "Algorithm(s) ES256 may not be suitable for the declared key purpose(s) lti_tool_signing.", "source": "baseline"},
+      {"name": "Provider auth policy", "status": "pass", "detail": "Transit credential configuration matches the selected auth mode.", "source": "provider"},
       {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected custom signer capabilities.", "source": "provider"}
     ]
   }

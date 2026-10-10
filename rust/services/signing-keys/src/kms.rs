@@ -129,16 +129,17 @@ impl Provider {
                 "Provider configuration must not contain private key material.".into(),
             ));
         }
-        validate_transit_auth_config(config)?;
-        match string(config, "service_type").unwrap_or_default() {
+        let provider = match string(config, "service_type").unwrap_or_default() {
             "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible" => {
-                Ok(Self::OpenBao)
+                Self::OpenBao
             }
-            "aws-kms" => Ok(Self::Aws),
-            "azure-key-vault" => Ok(Self::Azure),
-            "gcp-cloud-kms" => Ok(Self::Gcp),
-            other => Err(KmsError::UnsupportedProvider(other.to_string())),
-        }
+            "aws-kms" => Self::Aws,
+            "azure-key-vault" => Self::Azure,
+            "gcp-cloud-kms" => Self::Gcp,
+            other => return Err(KmsError::UnsupportedProvider(other.to_string())),
+        };
+        validate_service_auth_config(config)?;
+        Ok(provider)
     }
 
     fn signature_encoding(self, algorithm: &str) -> &'static str {
@@ -150,20 +151,48 @@ impl Provider {
     }
 }
 
-pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsError> {
-    if string(config, "auth_mode") != Some("service_token") {
-        return Ok(());
+pub(crate) fn validate_service_auth_config(config: &Value) -> Result<(), KmsError> {
+    match string(config, "service_type").unwrap_or_default() {
+        "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible" => {
+            validate_transit_auth_config(config)
+        }
+        "aws-kms" => validate_aws_auth_config(config),
+        "azure-key-vault" => validate_azure_auth_config(config),
+        "gcp-cloud-kms" => validate_gcp_auth_config(config),
+        other => Err(KmsError::UnsupportedProvider(other.to_string())),
     }
-    let configured = env::var("BAO_ADDR")
-        .map_err(|_| KmsError::InvalidConfig("Managed OpenBao endpoint is unavailable.".into()))?;
-    let endpoint = string(config, "endpoint").unwrap_or_default();
-    if string(config, "id") != Some("managed-openbao-transit")
-        || string(config, "service_type") != Some("openbao-transit")
-        || configured.trim_end_matches('/') != endpoint.trim_end_matches('/')
-    {
-        return Err(KmsError::InvalidConfig(
-            "Mounted OpenBao service token is restricted to the managed endpoint.".into(),
-        ));
+}
+
+pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsError> {
+    match string(config, "auth_mode") {
+        Some("token") => {
+            let token = string(config, "auth_reference").unwrap_or_default();
+            if token.trim().is_empty() || token.len() > 16_384 {
+                return Err(KmsError::InvalidConfig(
+                    "A transit token is required for external KMS access.".into(),
+                ));
+            }
+        }
+        Some("service_token") => {
+            let configured = env::var("BAO_ADDR").map_err(|_| {
+                KmsError::InvalidConfig("Managed OpenBao endpoint is unavailable.".into())
+            })?;
+            let endpoint = string(config, "endpoint").unwrap_or_default();
+            if string(config, "id") != Some("managed-openbao-transit")
+                || string(config, "service_type") != Some("openbao-transit")
+                || configured.trim_end_matches('/') != endpoint.trim_end_matches('/')
+                || string(config, "auth_reference").is_some_and(|reference| !reference.is_empty())
+            {
+                return Err(KmsError::InvalidConfig(
+                    "Mounted OpenBao service token is restricted to the managed endpoint.".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(KmsError::InvalidConfig(
+                "Transit authentication mode is unsupported.".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -2118,6 +2147,24 @@ mod tests {
     }
 
     #[test]
+    fn transit_adapter_rejects_missing_token_and_unimplemented_auth_modes() {
+        for mode in ["approle", "mtls", "api_key", "custom", ""] {
+            let config = json!({
+                "service_type": "openbao-transit",
+                "auth_mode": mode,
+                "auth_reference": "fixture-token"
+            });
+            assert!(Provider::from_config(&config).is_err(), "{mode}");
+        }
+        assert!(Provider::from_config(&json!({
+            "service_type": "openbao-transit",
+            "auth_mode": "token",
+            "auth_reference": " "
+        }))
+        .is_err());
+    }
+
+    #[test]
     fn provider_operations_reject_nested_private_material() {
         for config in [
             json!({"service_type": "aws-kms", "auth_reference": "{\"private_key\":\"test\"}"}),
@@ -2215,7 +2262,7 @@ mod tests {
         let config = json!({
             "id":"managed-openbao-transit", "service_type":"openbao-transit",
             "endpoint":endpoint, "mount":"transit", "key_reference":"holder-key",
-            "algorithm":"EdDSA", "auth_reference":"fixture-token", "key_version":1
+            "algorithm":"EdDSA", "auth_mode":"token", "auth_reference":"fixture-token", "key_version":1
         });
         let metadata = read_managed_openbao(ProviderRequest {
             service_config: config.clone(),
@@ -2328,7 +2375,7 @@ mod tests {
         let mut config = json!({
             "id": "managed-openbao-transit", "service_type": "openbao-transit",
             "endpoint": endpoint, "mount": "transit", "key_reference": "issuer-key",
-            "algorithm": "ES256", "auth_reference": "test-token"
+            "algorithm": "ES256", "auth_mode": "token", "auth_reference": "test-token"
         });
         let result = sign(SignRequest {
             service_config: config.clone(),
@@ -2513,6 +2560,8 @@ mod tests {
                 "service_type": "openbao-transit",
                 "endpoint": endpoint,
                 "mount": "transit",
+                "auth_mode": "token",
+                "auth_reference": "fixture-token",
                 "key_reference": "missing-key"
             }),
         })
@@ -2611,7 +2660,18 @@ mod tests {
             "azure-key-vault",
             "gcp-cloud-kms",
         ] {
-            assert!(Provider::from_config(&json!({"service_type": service_type})).is_ok());
+            let (auth_mode, auth_reference) = match service_type {
+                "aws-kms" => ("iam_role", ""),
+                "azure-key-vault" => ("managed_identity", ""),
+                "gcp-cloud-kms" => ("workload_identity", ""),
+                _ => ("token", "fixture-token"),
+            };
+            assert!(Provider::from_config(&json!({
+                "service_type": service_type,
+                "auth_mode": auth_mode,
+                "auth_reference": auth_reference
+            }))
+            .is_ok());
         }
         assert!(Provider::from_config(&json!({"service_type": "unknown"})).is_err());
     }

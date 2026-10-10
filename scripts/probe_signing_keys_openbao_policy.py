@@ -378,6 +378,7 @@ def qualify(*, rust_adapter: bool = False) -> None:
             environment.update(
                 {
                     "MARTY_TEST_OPENBAO_URL": endpoint.removesuffix("/v1"),
+                    "BAO_ADDR": endpoint.removesuffix("/v1"),
                     "MARTY_TEST_OPENBAO_TOKEN": managed,
                     "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
                     "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,

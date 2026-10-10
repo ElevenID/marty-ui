@@ -19,6 +19,11 @@ async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
     assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    assert_eq!(
+        std::env::var("BAO_ADDR").ok().as_deref(),
+        Some(endpoint.as_str()),
+        "managed token must be bound to the configured OpenBao endpoint"
+    );
     let scoped_token =
         std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable scoped OpenBao token");
     assert_eq!(

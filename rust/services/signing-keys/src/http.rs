@@ -8657,7 +8657,7 @@ mod public_contract_tests {
         let service = json!({
             "id": "service-a", "service_type": "openbao-transit",
             "endpoint": endpoint, "mount": "transit", "key_reference": "vc-key",
-            "key_aliases": ["dsc-ed"], "auth_reference": "never-echo-this"
+            "key_aliases": ["dsc-ed"], "auth_mode": "token", "auth_reference": "never-echo-this"
         });
         let registry = json!({
             "services": [service], "default_service_id": "service-a",

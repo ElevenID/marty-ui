@@ -143,6 +143,11 @@ async fn disposable_openbao() -> (String, String) {
     let url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&url).expect("disposable OpenBao URL syntax");
     assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    assert_eq!(
+        std::env::var("BAO_ADDR").ok().as_deref(),
+        Some(url.as_str()),
+        "managed token must be bound to the configured OpenBao endpoint"
+    );
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
     let guard_token = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN")
         .expect("disposable OpenBao marker guard token");

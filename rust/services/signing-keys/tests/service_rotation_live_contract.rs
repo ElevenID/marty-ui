@@ -236,7 +236,7 @@ async fn public_rotation_updates_state_only_after_kms_success() {
                 }, {
                     "id": "managed-alias", "name": "Aliased managed service",
                     "service_type": "openbao-transit", "endpoint": endpoint,
-                    "mount": "transit", "auth_mode": "service_token",
+                    "mount": "transit", "auth_mode": "token", "auth_reference": "fixture-token",
                     "key_reference": "signing-key", "algorithms": ["ES256"]
                 }],
                 "default_service_id": "service-a"
