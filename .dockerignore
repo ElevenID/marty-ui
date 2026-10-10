@@ -79,7 +79,7 @@ tests/demo-recordings/
 tests/demo-recordings-report/
 tests/artifacts/
 
-# macOS-specific pre-built wheels (useless in Linux containers)
+# Do not admit local wheel artifacts into service build contexts.
 wheels/
 
 # CI/CD and infra (not needed in image)
