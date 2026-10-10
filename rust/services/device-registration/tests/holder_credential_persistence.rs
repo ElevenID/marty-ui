@@ -277,6 +277,7 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
     let first_metadata = serde_json::json!({
         "status":"active", "type":"ed25519", "latest_version":1, "selected_version":"1",
         "exportable":false, "allow_plaintext_backup":false, "deletion_allowed":false,
+        "provider_only_marker":"must-not-be-persisted",
         "public_jwk":{"kty":"OKP", "crv":"Ed25519", "x":public_x, "kid":first_reference}
     });
     let first_key = HolderKeyRecord::from_provider(
@@ -310,6 +311,39 @@ async fn durable_holder_digest_rotates_and_deactivation_revokes() {
     assert_eq!(active_key.provider_reference, first_reference);
     assert_eq!(active_key.public_jwk(), first_key.public_jwk());
     assert!(active_key.valid_for(&registration));
+    let stored_key: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(k) FROM device_registration_service.device_holder_keys k WHERE k.id=$1",
+    )
+    .bind(&first_key.id)
+    .fetch_one(&pool)
+    .await
+    .expect("raw holder-key row");
+    let stored_fields = stored_key
+        .as_object()
+        .expect("holder-key row is a JSON object");
+    let expected_fields = [
+        "id",
+        "registration_id",
+        "user_id",
+        "organization_id",
+        "purpose",
+        "algorithm",
+        "provider_reference",
+        "remote_version",
+        "public_x",
+        "public_y",
+        "created_at",
+        "revoked_at",
+    ];
+    assert_eq!(stored_fields.len(), expected_fields.len());
+    assert!(expected_fields
+        .iter()
+        .all(|field| stored_fields.contains_key(*field)));
+    assert_eq!(stored_key["provider_reference"], first_reference);
+    assert_eq!(stored_key["remote_version"], 1);
+    assert_eq!(stored_key["public_x"], first_key.public_x);
+    assert_eq!(stored_key["public_y"], serde_json::Value::Null);
+    assert!(!stored_key.to_string().contains("must-not-be-persisted"));
 
     let second_reference = new_reference(
         registration.organization_id.as_deref().unwrap(),

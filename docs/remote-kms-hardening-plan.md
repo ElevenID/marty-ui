@@ -12335,3 +12335,25 @@ found no production Dockerfile or CI consumer of the checked-in `wheels/`
 directory; `.dockerignore` already excludes it. `make -n help`, diff checks
 and a fresh reference search passed. This retires an obsolete local packaging
 route, but does not qualify or publish the replacement Core wheel artifacts.
+
+K10 device-key table source review: the clean Device Registration schema's
+`device_holder_keys` columns are scoped registration/user/organization IDs,
+purpose/algorithm, a constrained remote provider reference and version,
+public `x`/`y` coordinates, and lifecycle timestamps. The provision/deletion
+tables hold only scoped references and lifecycle state. The sole holder-key
+insert binds a `HolderKeyRecord` created from provider metadata only after
+rejecting private members, requiring an active non-exportable/non-backup key,
+matching the tenant/registration/purpose reference and selected remote
+version, and accepting only public JWK members. This supports retaining those
+public-only tables under the K10 exception; final assembled database/content
+and representative runtime-write qualification remain required.
+
+K10 Device Registration row-level guard, local candidate: the existing
+PostgreSQL holder lifecycle test now reads the raw `device_holder_keys` row
+after a remote-reference bind. It requires exactly the approved scope,
+reference/version, public-coordinate and lifecycle fields, checks their
+values, and proves an extra provider-only metadata marker never reaches the
+row. The focused test passed against a fresh disposable PostgreSQL 16
+database with Rust 1.95. This is representative local write evidence, not
+final assembled-schema or exact-image qualification; the expanded assertion
+is not yet published for hosted CI.
