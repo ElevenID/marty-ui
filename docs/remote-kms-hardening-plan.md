@@ -12923,3 +12923,18 @@ replacement-initialization wait therefore passed in the hosted probe; this
 does not substitute for the later exact release-artifact cutover test.
 Rust Service Images also passed. Canvas remains the only substantive CI job
 still active at this checkpoint.
+
+The `6869d336d` [CI run](https://github.com/ElevenID/marty-ui/actions/runs/38076853519)
+is terminal failure solely because Canvas's packaged self-host acceptance
+failed two tests. The unit test explicitly showed that
+`write_synthetic_secrets` omitted the new dedicated integration-secret
+credential while `expected_secrets("issuance-native")` required it. The
+isolated packaged loader then failed at `correct:create` with an incomplete
+native-create operation; the missing secret mount is the leading shared
+cause, but only hosted replay can confirm that second failure. The held
+follow-up adds the distinct synthetic credential to the fixture. Its exact
+unit test now passes locally; native Linux image creation remains untested
+locally. All other CI leaf jobs passed, including Rust Contracts, service
+images, Release Contracts, OpenBao coordinated recovery and Rust Lint;
+the CI Gate inherited Canvas failure. The separate exact-head Rust CodeQL
+run passed. Preserve this failed run as immutable evidence.

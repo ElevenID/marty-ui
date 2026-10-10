@@ -591,6 +591,10 @@ fn write_synthetic_secrets(
             "signing_keys_issuer_sign_key",
             "synthetic-selfhost-issuer-sign-key-00000001",
         ),
+        (
+            "signing_keys_integration_secret_key",
+            "synthetic-selfhost-integration-secret-key-00000001",
+        ),
     ];
     if matches!(case, SecretCase::Empty | SecretCase::Placeholder) {
         let service_token = values
