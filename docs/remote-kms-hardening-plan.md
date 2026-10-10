@@ -11442,3 +11442,14 @@ credential and locates the negative-case service-token fixture by name. The
 focused mount-roster test passes locally. The source image builds locally;
 the isolated Linux packaged run remains to be verified by the next exact-head
 Canvas gate after the grouped UI repin/correction push.
+
+Core's new-head main CI run `38024718140` passed. Verifier repin `e42dd8d`
+passed local locked metadata and `marty-sync` check and is published to PR
+`#154`. A Linux packaged run against the new local self-host image completed
+the fixture's seed step, but stopped before the first secret case, where the
+WSL host needs access to the Docker Desktop bridge gateway for the disposable
+remote-secret server. This local environment result leaves the full loader
+proof to hosted Canvas CI;
+temporary diagnostic instrumentation was reverted. Authenticator now points
+directly at Core `7f276a4` and Verifier `e42dd8d`, with a single locked Core
+graph; its full bridge check remains in progress.
