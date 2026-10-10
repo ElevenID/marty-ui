@@ -6,112 +6,127 @@ CREATE TABLE IF NOT EXISTS device_registration_service.device_registrations (
     organization_id varchar(36),
     device_id varchar(255) NOT NULL,
     platform varchar(32) NOT NULL,
-    fcm_token text NOT NULL,
+    fcm_token text,
     app_version varchar(64),
     os_version varchar(128),
     device_model varchar(255),
     preferences json NOT NULL DEFAULT '{}'::json,
-    public_key_der text,
-    public_key_kid varchar(255),
-    key_valid_from timestamptz,
-    key_valid_until timestamptz,
-    key_version bigint,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     last_seen_at timestamptz
 );
-ALTER TABLE device_registration_service.device_registrations ADD COLUMN IF NOT EXISTS key_version bigint;
-
-DO $$ BEGIN
-    IF EXISTS (
-        SELECT 1 FROM device_registration_service.device_registrations
-        WHERE (public_key_der IS NULL) <> (public_key_kid IS NULL)
-    ) THEN
-        RAISE EXCEPTION 'cannot migrate incomplete legacy device key projection';
-    END IF;
-END $$;
-
-CREATE TABLE IF NOT EXISTS device_registration_service.device_registration_keys (
-    id varchar(36) PRIMARY KEY,
-    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
-    key_version bigint NOT NULL CONSTRAINT ck_device_key_version_range CHECK (key_version BETWEEN 1 AND 9007199254740991),
-    public_key_der text NOT NULL CONSTRAINT ck_device_key_der_length CHECK (char_length(public_key_der) BETWEEN 1 AND 8192),
-    public_key_kid varchar(43) NOT NULL CONSTRAINT ck_device_key_kid_length CHECK (char_length(public_key_kid) = 43),
-    state varchar(16) NOT NULL CONSTRAINT ck_device_key_state CHECK (state IN ('CURRENT','RETIRING','RETIRED','REVOKED')),
-    valid_from timestamptz NOT NULL,
-    valid_until timestamptz,
-    rotated_at timestamptz,
-    retire_at timestamptz,
-    revoked_at timestamptz,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT uq_device_key_registration_version UNIQUE (registration_id, key_version),
-    CONSTRAINT ck_device_key_retiring_deadline CHECK ((state = 'RETIRING' AND rotated_at IS NOT NULL AND retire_at IS NOT NULL) OR state <> 'RETIRING'),
-    CONSTRAINT ck_device_key_revoked_at CHECK ((state = 'REVOKED' AND revoked_at IS NOT NULL) OR state <> 'REVOKED'),
-    CONSTRAINT ck_device_key_validity_window CHECK (valid_until IS NULL OR valid_until > valid_from),
-    CONSTRAINT ck_device_key_retirement_window CHECK (retire_at IS NULL OR rotated_at IS NULL OR retire_at >= rotated_at)
-);
-
-CREATE TABLE IF NOT EXISTS device_registration_service.device_key_transitions (
-    id varchar(36) PRIMARY KEY,
-    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
-    event varchar(32) NOT NULL CONSTRAINT ck_device_key_transition_event CHECK (event IN ('KEY_REGISTERED','KEY_ROTATED','KEYS_REVOKED')),
-    from_version bigint,
-    to_version bigint,
-    committed_at timestamptz NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ux_device_key_one_current ON device_registration_service.device_registration_keys(registration_id) WHERE state = 'CURRENT';
-CREATE INDEX IF NOT EXISTS ix_device_key_registration_kid ON device_registration_service.device_registration_keys(registration_id, public_key_kid);
-CREATE INDEX IF NOT EXISTS ix_device_key_transition_registration_time ON device_registration_service.device_key_transitions(registration_id, committed_at);
 CREATE INDEX IF NOT EXISTS ix_device_registrations_user_id ON device_registration_service.device_registrations(user_id);
 CREATE INDEX IF NOT EXISTS ix_device_registrations_organization_id ON device_registration_service.device_registrations(organization_id);
+
+CREATE TABLE IF NOT EXISTS device_registration_service.device_pairing_confirmations (
+    pairing_id varchar(36) PRIMARY KEY,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    trust_profile_id varchar(36) NOT NULL,
+    registration_id varchar(36) UNIQUE REFERENCES device_registration_service.device_registrations(id),
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    confirmed_at timestamptz,
+    expired_at timestamptz,
+    CONSTRAINT device_pairing_time_order CHECK (expires_at > issued_at),
+    CONSTRAINT device_pairing_confirmation_requires_registration CHECK (confirmed_at IS NULL OR registration_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS ix_device_pairing_expiry ON device_registration_service.device_pairing_confirmations(expires_at) WHERE confirmed_at IS NULL AND expired_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_device_registrations_device_id ON device_registration_service.device_registrations(device_id);
 CREATE INDEX IF NOT EXISTS ix_device_registrations_user_org ON device_registration_service.device_registrations(user_id, organization_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_registrations_active_identity
+    ON device_registration_service.device_registrations(user_id, COALESCE(organization_id, ''), device_id)
+    WHERE is_active;
 
-INSERT INTO device_registration_service.device_registration_keys
-    (id, registration_id, key_version, public_key_der, public_key_kid, state, valid_from, valid_until, revoked_at, created_at)
-SELECT r.id, r.id, 1, r.public_key_der, r.public_key_kid,
-       CASE WHEN r.is_active THEN 'CURRENT' ELSE 'REVOKED' END,
-       COALESCE(r.key_valid_from, r.created_at), r.key_valid_until,
-       CASE WHEN r.is_active THEN NULL ELSE r.updated_at END, r.created_at
-FROM device_registration_service.device_registrations r
-WHERE r.public_key_der IS NOT NULL
-  AND NOT EXISTS (SELECT 1 FROM device_registration_service.device_registration_keys k WHERE k.registration_id = r.id);
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_credentials (
+    id varchar(36) PRIMARY KEY,
+    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    token_sha256 bytea NOT NULL CONSTRAINT ck_device_holder_token_digest CHECK (octet_length(token_sha256) = 32),
+    issued_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
+    revoked_at timestamptz,
+    CONSTRAINT uq_device_holder_token_digest UNIQUE (token_sha256),
+    CONSTRAINT ck_device_holder_lifetime CHECK (expires_at > issued_at AND expires_at <= issued_at + interval '30 days'),
+    CONSTRAINT ck_device_holder_revocation CHECK (revoked_at IS NULL OR revoked_at >= issued_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_one_current
+    ON device_registration_service.device_holder_credentials(registration_id)
+    WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_device_holder_scope
+    ON device_registration_service.device_holder_credentials(user_id, organization_id, registration_id);
 
-UPDATE device_registration_service.device_registrations
-SET key_version = 1, key_valid_from = COALESCE(key_valid_from, created_at)
-WHERE public_key_der IS NOT NULL AND key_version IS NULL;
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_keys (
+    id varchar(36) PRIMARY KEY,
+    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    purpose varchar(32) NOT NULL CONSTRAINT ck_device_holder_key_purpose CHECK (purpose IN ('holder_binding','presentation_signing')),
+    algorithm varchar(16) NOT NULL CONSTRAINT ck_device_holder_key_algorithm CHECK (algorithm IN ('EdDSA','ES256')),
+    provider_reference varchar(128) NOT NULL UNIQUE CONSTRAINT ck_device_holder_key_reference CHECK (
+        (purpose='holder_binding' AND provider_reference ~ '^cred-holder-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$') OR
+        (purpose='presentation_signing' AND provider_reference ~ '^cred-presenter-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$')
+    ),
+    remote_version bigint NOT NULL CONSTRAINT ck_device_holder_key_version CHECK (remote_version > 0),
+    public_x varchar(43) NOT NULL CONSTRAINT ck_device_holder_key_public_x CHECK (public_x ~ '^[A-Za-z0-9_-]{43}$'),
+    public_y varchar(43),
+    created_at timestamptz NOT NULL,
+    revoked_at timestamptz,
+    CONSTRAINT ck_device_holder_key_public_y CHECK ((algorithm='EdDSA' AND public_y IS NULL) OR (algorithm='ES256' AND public_y ~ '^[A-Za-z0-9_-]{43}$')),
+    CONSTRAINT ck_device_holder_key_revocation CHECK (revoked_at IS NULL OR revoked_at >= created_at)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_key_one_current
+    ON device_registration_service.device_holder_keys(registration_id, purpose)
+    WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_device_holder_key_scope
+    ON device_registration_service.device_holder_keys(user_id, organization_id, registration_id);
 
-INSERT INTO device_registration_service.device_key_transitions
-    (id, registration_id, event, from_version, to_version, committed_at)
-SELECT r.id, r.id,
-       CASE WHEN r.is_active THEN 'KEY_REGISTERED' ELSE 'KEYS_REVOKED' END,
-       CASE WHEN r.is_active THEN NULL ELSE 1 END,
-       CASE WHEN r.is_active THEN 1 ELSE NULL END,
-       CASE WHEN r.is_active THEN r.created_at ELSE r.updated_at END
-FROM device_registration_service.device_registrations r
-WHERE r.key_version = 1
-  AND NOT EXISTS (SELECT 1 FROM device_registration_service.device_key_transitions t WHERE t.registration_id = r.id);
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_key_provisions (
+    provider_reference varchar(128) PRIMARY KEY,
+    registration_id varchar(36) NOT NULL REFERENCES device_registration_service.device_registrations(id) ON DELETE RESTRICT,
+    user_id varchar(255) NOT NULL,
+    organization_id varchar(36) NOT NULL,
+    purpose varchar(32) NOT NULL CONSTRAINT ck_device_holder_provision_purpose CHECK (purpose IN ('holder_binding','presentation_signing')),
+    algorithm varchar(16) NOT NULL CONSTRAINT ck_device_holder_provision_algorithm CHECK (algorithm IN ('EdDSA','ES256')),
+    reserved_at timestamptz NOT NULL,
+    cleanup_after timestamptz NOT NULL,
+    retry_after timestamptz NOT NULL,
+    bound_at timestamptz,
+    cleaned_at timestamptz,
+    CONSTRAINT ck_device_holder_provision_times CHECK (
+        cleanup_after > reserved_at AND retry_after >= cleanup_after
+        AND (bound_at IS NULL OR (bound_at >= reserved_at AND cleaned_at IS NULL))
+        AND (cleaned_at IS NULL OR (cleaned_at >= cleanup_after AND bound_at IS NULL))
+    ),
+    CONSTRAINT ck_device_holder_provision_reference CHECK (
+        (purpose='holder_binding' AND provider_reference ~ '^cred-holder-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$') OR
+        (purpose='presentation_signing' AND provider_reference ~ '^cred-presenter-[0-9a-f]{32}-[0-9a-f]{32}-[0-9a-f]{32}$')
+    )
+);
+CREATE INDEX IF NOT EXISTS ix_device_holder_provisions_cleanup
+    ON device_registration_service.device_holder_key_provisions(retry_after)
+    WHERE bound_at IS NULL AND cleaned_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_device_holder_one_unbound_provision
+    ON device_registration_service.device_holder_key_provisions(registration_id, purpose)
+    WHERE bound_at IS NULL AND cleaned_at IS NULL;
 
-UPDATE device_registration_service.device_registrations
-SET public_key_der = NULL, public_key_kid = NULL, key_valid_from = NULL,
-    key_valid_until = NULL, key_version = NULL
-WHERE NOT is_active AND key_version IS NOT NULL;
-
-DO $$ BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_device_registration_current_key_projection') THEN
-        ALTER TABLE device_registration_service.device_registrations
-        ADD CONSTRAINT ck_device_registration_current_key_projection CHECK (
-            (public_key_der IS NULL AND public_key_kid IS NULL AND key_valid_from IS NULL AND key_valid_until IS NULL AND key_version IS NULL)
-            OR (public_key_der IS NOT NULL AND public_key_kid IS NOT NULL AND key_valid_from IS NOT NULL AND key_version IS NOT NULL)
-        );
-    END IF;
-END $$;
+CREATE TABLE IF NOT EXISTS device_registration_service.device_holder_key_deletions (
+    provider_reference varchar(128) PRIMARY KEY REFERENCES device_registration_service.device_holder_keys(provider_reference) ON DELETE RESTRICT,
+    queued_at timestamptz NOT NULL,
+    retry_after timestamptz NOT NULL,
+    attempts integer NOT NULL DEFAULT 0 CONSTRAINT ck_device_holder_key_deletion_attempts CHECK (attempts >= 0),
+    deleted_at timestamptz,
+    CONSTRAINT ck_device_holder_key_deletion_time CHECK (retry_after >= queued_at AND (deleted_at IS NULL OR deleted_at >= queued_at))
+);
+CREATE INDEX IF NOT EXISTS ix_device_holder_key_deletions_pending
+    ON device_registration_service.device_holder_key_deletions(retry_after, queued_at)
+    WHERE deleted_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS device_registration_service.alembic_version (
     version_num varchar(32) PRIMARY KEY
 );
 INSERT INTO device_registration_service.alembic_version(version_num)
-VALUES ('20260809_0001')
+VALUES ('20261009_0001')
 ON CONFLICT (version_num) DO NOTHING;

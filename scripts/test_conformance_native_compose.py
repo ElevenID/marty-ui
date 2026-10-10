@@ -56,13 +56,10 @@ SHARED_SETTING_REPAIRS = (
     "CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS",
 ) + MIRROR_WORKER_SETTINGS
 PASSPORT_SHARED_INPUTS = (
-    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "ICAO_DOCUMENT_SIGNER_URL",
     "ICAO_DOCUMENT_SIGNER_API_KEY",
-    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
     "PERSONALIZATION_BUREAU_URL",
     "PERSONALIZATION_BUREAU_API_KEY",
-    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
 )
 PASSPORT_NATIVE_ONLY = {
     "PASSPORT_NATIVE_HTTP_ENABLED": ("${PASSPORT_NATIVE_HTTP_ENABLED:-false}", "false"),
@@ -114,6 +111,7 @@ def synthetic_values(model, directory):
         CORS_ORIGINS="https://conformance.example:9443",
         OIDF_TLS_CERT_DIR=(directory / "tls").as_posix(),
         DIDCOMM_ENCRYPTION_POLICY_DIR=(directory / "policy").as_posix(),
+        INTEGRATION_SECRET_MASTER_KEY="synthetic-frozen-reference-only",
     )
     return values
 
@@ -155,6 +153,8 @@ def assert_beta_shared_setting_repairs(previous, actual, inputs=None):
     """Reviewed shared and default-off passport inputs only."""
     expected = deepcopy(previous)
     before = expected["services"]["issuance-native"]["environment"]
+    assert "INTEGRATION_SECRET_MASTER_KEY" in before
+    before.pop("INTEGRATION_SECRET_MASTER_KEY")
     legacy = expected["services"]["issuance"]["environment"]
     assert before["DATABASE_URL"].startswith("postgresql+asyncpg://")
     before["DATABASE_URL"] = before["DATABASE_URL"].replace(
@@ -230,6 +230,8 @@ def run(command):
     expected_environment = expected_common["services"]["issuance-native"][
         "environment"
     ]
+    assert "INTEGRATION_SECRET_MASTER_KEY" in expected_environment
+    expected_environment.pop("INTEGRATION_SECRET_MASTER_KEY")
     assert expected_environment["DATABASE_URL"].startswith("postgresql+asyncpg://")
     expected_environment["DATABASE_URL"] = expected_environment["DATABASE_URL"].replace(
         "postgresql+asyncpg://", "postgresql://", 1

@@ -9,8 +9,20 @@ fn production_command() -> std::process::Command {
             "production-grpc-token-at-least-32-characters",
         )
         .env(
+            "DEVICE_REGISTRATION_GATEWAY_KEY",
+            "production-device-gateway-key-at-least-32-characters",
+        )
+        .env(
             "SIGNING_KEYS_INTERNAL_API_KEY",
             "production-signing-key-at-least-32-characters",
+        )
+        .env(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+            "production-service-sign-gateway-key-at-least-32-characters",
+        )
+        .env(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY",
+            "production-issuer-sign-key-at-least-32-characters",
         )
         .env("ISSUANCE_API_KEY", "production-issuance-key")
         .env("GRPC_INSECURE_ALLOWED", "true")

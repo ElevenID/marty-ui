@@ -57,7 +57,6 @@ from passport_disposable_identity import (  # noqa: E402 - services path is boot
 SERVICES = []
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
-MARTY_FLOW_ENVELOPE_KEY_ID = "flow-response-envelope-marty-aes256"
 MARTY_NOTIFICATION_WEBHOOK_ENVELOPE_KEY_ID = (
     "notification-webhook-envelope-marty-aes256"
 )
@@ -558,13 +557,6 @@ def _ensure_openbao_symmetric_key(
         ) from exc
 
 
-def _ensure_openbao_envelope_key(bao_addr: str, bao_token: str) -> None:
-    """Ensure the non-exportable KEK used for per-flow private key envelopes."""
-    _ensure_openbao_symmetric_key(
-        bao_addr, bao_token, MARTY_FLOW_ENVELOPE_KEY_ID, "flow envelope"
-    )
-
-
 def prepare_notification_webhook_envelope_key() -> bool:
     """Provision/check the KEK before plaintext webhook rows are migrated."""
     bao_addr = os.environ.get("BAO_ADDR", "").strip()
@@ -1033,7 +1025,6 @@ def bootstrap_marty_kms_identity() -> bool:
         )
 
         _ensure_transit_mount(bao_addr, bao_token)
-        _ensure_openbao_envelope_key(bao_addr, bao_token)
         for spec in disposable_specs:
             data = _read_openbao_transit_key(bao_addr, bao_token, spec["id"])
             if not isinstance(data, dict) or data.get("type") != spec["type"] or data.get("exportable") is not False:
@@ -1048,9 +1039,6 @@ def bootstrap_marty_kms_identity() -> bool:
         _seed_issuer_profiles(redis_client, organization_id, issuer_did, issuer_url)
 
         print(f"  Seeded {len(key_records)} OpenBao keys for org {organization_id}.")
-        print(
-            f"  Ensured non-exportable flow envelope key: {MARTY_FLOW_ENVELOPE_KEY_ID}"
-        )
         print(f"  Published issuer DID: {issuer_did}")
         print(f"  Published did:web slug: {_marty_org_slug()} -> {organization_id}")
         print("  Seeded signing registry, DID document, JWKS, and issuer profiles.")

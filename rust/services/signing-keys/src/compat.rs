@@ -222,6 +222,17 @@ impl SigningCompatibilityService {
     ) -> Result<Value, CompatibilityError> {
         let service_id = required(profile, "signing_service_id")?;
         let key_reference = required(profile, "signing_key_reference")?;
+        if service_id == "managed-openbao-transit"
+            && !crate::registry::managed_profile_key_belongs_to_tenant(
+                organization_id,
+                profile,
+                key_reference,
+            )
+        {
+            return Err(CompatibilityError::Conflict(
+                "Managed signing key does not belong to this tenant and profile.".into(),
+            ));
+        }
         let registry = self
             .registry
             .load(organization_id)
@@ -379,6 +390,32 @@ impl SigningCompatibilityService {
         )?;
         let key_reference = clean(request.key_reference.as_deref())
             .or_else(|| clean(service.get("key_reference").and_then(Value::as_str)));
+        if service_id == "managed-openbao-transit"
+            && !key_reference.as_deref().is_some_and(|reference| {
+                service
+                    .get("key_aliases")
+                    .and_then(Value::as_array)
+                    .is_some_and(|aliases| {
+                        aliases
+                            .iter()
+                            .any(|alias| alias.as_str() == Some(reference))
+                    })
+                    && service
+                        .get("key_algorithms")
+                        .and_then(|algorithms| algorithms.get(reference))
+                        .and_then(Value::as_str)
+                        .is_some_and(|algorithm| {
+                            request
+                                .algorithm
+                                .as_deref()
+                                .is_none_or(|requested| requested == algorithm)
+                        })
+            })
+        {
+            return Err(CompatibilityError::Conflict(
+                "Managed signing key is not available for this tenant and algorithm.".into(),
+            ));
+        }
         if let Some(reference) = &key_reference {
             service.insert("key_reference".into(), Value::String(reference.clone()));
         }
@@ -480,6 +517,20 @@ impl SigningCompatibilityService {
             return Err(CompatibilityError::Conflict(
                 "Signing algorithm must match the DID-resolved issuer profile binding.".into(),
             ));
+        }
+        if service_id == "managed-openbao-transit" {
+            let current = self
+                .provider_public_key_for_profile(
+                    &request.organization_id,
+                    &Value::Object(profile.clone()),
+                )
+                .await?;
+            if !documents::same_public_jwk(&identity["public_jwk"], &current) {
+                return Err(CompatibilityError::Conflict(
+                    "DID verification method does not match the current managed signing key."
+                        .into(),
+                ));
+            }
         }
         let mut signed = self
             .sign_with_service(
@@ -1535,6 +1586,16 @@ async fn complete_profile_binding(
                 "Issuer profiles require an explicit signing key reference.".into(),
             )
         })?;
+        let organization_id = required(profile, "organization_id")?;
+        if !crate::registry::managed_profile_key_belongs_to_tenant(
+            organization_id,
+            profile,
+            reference,
+        ) {
+            return Err(CompatibilityError::Conflict(
+                "Managed signing key does not belong to this tenant and profile.".into(),
+            ));
+        }
         let purpose = required(profile, "key_purpose")?;
         if !managed_key_purposes(reference).contains(&purpose) {
             return Err(CompatibilityError::Invalid(format!(

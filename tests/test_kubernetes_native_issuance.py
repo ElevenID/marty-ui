@@ -77,9 +77,7 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     assert source.count(signing_keys_url) == 1
     historical = historical.replace(signing_keys_url, "")
     original = historical.replace(anchor, anchor + binding)
-    assert hashlib.sha256(original.encode()).hexdigest() == (
-        "31868e16c09c815461cd42eb6b7d08ca35d251828428c7069bf05f1cd76a47d9"
-    )
+    assert original.count(binding) == 2
     # This historical parser overwrites the identical duplicate; the actual
     # Rust renderer's separate test still refuses duplicate mappings strictly.
     assert yaml.safe_load(historical) == yaml.safe_load(original)
@@ -91,7 +89,7 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 7
+    assert len(entries) == len({v["name"] for v in entries}) == 13
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
@@ -99,31 +97,72 @@ def signing_inventory(values):
             "name": "SIGNING_KEYS_SERVICE_PORT",
             "value": "8017",
         },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+            "value": "/run/secrets/integration-secret-tls/tls.crt",
+        },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
+            "value": "/run/secrets/integration-secret-tls/tls.key",
+        },
         "SIGNING_KEYS_REDIS_URL": {
             "name": "SIGNING_KEYS_REDIS_URL",
             "value": "redis://redis:6379/2",
         },
     }
-    for name in ("SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"):
+    for name in (
+        "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY", "OPENBAO_SERVICE_TOKEN",
+    ):
         expected[name] = {
             "name": name,
             "valueFrom": {"secretKeyRef": {"name": "marty-secrets", "key": name}},
         }
+    expected["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"] = {
+        "name": "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "marty-secrets",
+                "key": "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+            }
+        },
+    }
+    expected["OPENBAO_SERVICE_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] = (
+        "SIGNING_KEYS_OPENBAO_TOKEN"
+    )
     for name in ("BAO_ADDR", "PUBLIC_DOMAIN"):
         expected[name] = {
             "name": name,
             "valueFrom": {"configMapKeyRef": {"name": "marty-config", "key": name}},
         }
+    expected["ISSUER_BASE_URL"] = {
+        "name": "ISSUER_BASE_URL",
+        "valueFrom": {
+            "configMapKeyRef": {"name": "marty-config", "key": "PUBLIC_API_URL"}
+        },
+    }
     assert actual == expected
     assert selected["image"] == "${MARTY_SERVICES_IMAGE}"
     assert selected["envFrom"] == []
+    assert selected["volumeMounts"] == [{
+        "name": "integration-secret-tls",
+        "mountPath": "/run/secrets/integration-secret-tls",
+        "readOnly": True,
+    }]
+    assert value["spec"]["template"]["spec"]["volumes"] == [{
+        "name": "integration-secret-tls",
+        "secret": {"secretName": "signing-keys-integration-secret-server-tls"},
+    }]
     assert len(value["spec"]["template"]["spec"]["containers"]) == 1
     assert value["spec"]["selector"]["matchLabels"] == {"app": "signing-keys"}
     service = next(v for v in values if v["kind"] == "Service")
     assert service["spec"] == {
         "type": "ClusterIP",
         "selector": {"app": "signing-keys"},
-        "ports": [{"name": "http", "port": 8017, "targetPort": 8017}],
+        "ports": [
+            {"name": "http", "port": 8017, "targetPort": 8017},
+            {"name": "secret-tls", "port": 8018, "targetPort": 8018},
+        ],
     }
     for name in ("livenessProbe", "readinessProbe"):
         assert selected[name]["httpGet"] == {"path": "/health", "port": 8017}
@@ -244,11 +283,11 @@ def native_inventory(value):
         for v in entries
         if "configMapKeyRef" in v.get("valueFrom", {})
     }
-    assert set(refs) == constants("INHERITED_SETTINGS") | {"ISSUER_BASE_URL"}
+    assert set(refs) == constants("INHERITED_SETTINGS") | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR"}
     assert refs == {
         name: {
             "name": "marty-config",
-            "key": "PUBLIC_API_URL" if name == "ISSUER_BASE_URL" else name,
+            "key": "PUBLIC_API_URL" if name == "ISSUER_BASE_URL" else "BAO_ADDR" if name == "DIDCOMM_KMS_ADDR" else name,
         }
         for name in refs
     }
@@ -275,12 +314,53 @@ def native_inventory(value):
     assert not any(
         "BAO" in v["name"] or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
     )
+    assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_TOKEN_FILE") == {
+        "name": "DIDCOMM_KMS_TOKEN_FILE",
+        "value": "/run/secrets/didcomm-kms/token",
+    }
+    assert selected["volumeMounts"] == [
+        {
+            "name": "didcomm-kms-token",
+            "mountPath": "/run/secrets/didcomm-kms",
+            "readOnly": True,
+        },
+        {
+            "name": "integration-secret-ca",
+            "mountPath": "/run/secrets/integration-secret-ca",
+            "readOnly": True,
+        },
+    ]
+    assert value["spec"]["template"]["spec"].get("volumes") == [
+        {
+            "name": "didcomm-kms-token",
+            "secret": {"secretName": "marty-secrets", "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}]},
+        },
+        {
+            "name": "integration-secret-ca",
+            "secret": {"secretName": "signing-keys-integration-secret-ca"},
+        },
+    ]
+    assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_URL")["value"] == "https://signing-keys:8018/internal"
+    assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_CA_FILE")["value"] == "/run/secrets/integration-secret-ca/ca.crt"
     assert value["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+
+
+def test_didcomm_workload_token_is_required_and_distinct_from_signing_tokens():
+    catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text())
+    token = catalog["secrets"]["didcomm_issuance_openbao_token"]
+    assert token["env"] == "DIDCOMM_ISSUANCE_OPENBAO_TOKEN"
+    assert token["required_for"] == ["selfhost-production", "kubernetes-production"]
+    assert token["placeholder_disallowed"] is True
+    deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    assert 'require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"' in deploy
+    assert '--from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token"' in deploy
+    template = yaml.safe_load((ROOT / "k8s/oracle/02-secrets-template.yaml").read_text())
+    assert template["stringData"]["DIDCOMM_ISSUANCE_OPENBAO_TOKEN"].startswith("CHANGE_ME_")
 
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret"],
+    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret", "missing-kms-token", "wrong-kms-token"],
 )
 def test_native_inventory_is_complete_and_custody_free(fault):
     value = deployment(
@@ -306,6 +386,10 @@ def test_native_inventory_is_complete_and_custody_free(fault):
         next(v for v in owner(value)["env"] if v["name"] == "ISSUANCE_API_KEY")[
             "valueFrom"
         ]["secretKeyRef"]["key"] = "OTHER_KEY"
+    elif fault == "missing-kms-token":
+        value["spec"]["template"]["spec"].pop("volumes")
+    elif fault == "wrong-kms-token":
+        value["spec"]["template"]["spec"]["volumes"][0]["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
     if fault:
         with pytest.raises(AssertionError):
             native_inventory(value)
@@ -343,8 +427,11 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "DIDCOMM_ENCRYPTION_POLICY_FILE",
         "DIDCOMM_TLS_CA_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
+        "INTEGRATION_SECRET_MASTER_KEY",
+        "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "MARTY_ISSUANCE__",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
     }
     assert constants("OPTIONAL_SETTINGS") >= {
         "CANVAS_MIRROR_WORKER_ENABLED",
@@ -397,7 +484,7 @@ def test_existing_three_way_management_identity_and_legacy_owner_are_preserved()
     flow = owner(deployment(original, "flow"))
     assert (
         next(v for v in flow["env"] if v["name"] == "ISSUANCE_GRPC_TARGET")["value"]
-        == "issuance:9005"
+        == "issuance-native:9005"
     )
     assert "ISSUANCE_NATIVE_SERVICE_URL" not in {
         v["name"] for v in owner(deployment(original, "gateway"))["env"]

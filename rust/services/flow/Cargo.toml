@@ -16,12 +16,14 @@ chrono.workspace = true
 futures-core.workspace = true
 marty-crypto.workspace = true
 marty-didcomm.workspace = true
-marty-iso18013.workspace = true
-marty-oid4vci.workspace = true
+marty-iso18013 = { workspace = true, features = ["verifier"] }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-oid4vci = { workspace = true, features = ["issuer", "verifier", "sd_jwt"] }
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
 marty-verification.workspace = true
+p256.workspace = true
 percent-encoding.workspace = true
 rand.workspace = true
 mmf-messaging.workspace = true
@@ -51,10 +53,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-ed25519-dalek.workspace = true
+hex.workspace = true
 http.workspace = true
-jsonwebtoken.workspace = true
-p256.workspace = true
 tower.workspace = true
 
 [build-dependencies]

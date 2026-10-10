@@ -9,7 +9,6 @@ use axum::{
     Router,
 };
 use chrono::Utc;
-use hmac::{Hmac, Mac};
 use marty_gateway::{
     authorization::{OrganizationMembership, OrganizationMembershipProvider},
     contract::GatewayContract,
@@ -25,7 +24,6 @@ use marty_gateway::{
 };
 use marty_issuance_service::{
     migration,
-    passport_bureau::BureauClient,
     passport_http::{router as passport_router, PassportHttpService},
     passport_repository::{
         PassportJobInsert, PassportJobPatch, PassportJobStatus, PostgresPassportRepository,
@@ -37,12 +35,14 @@ use mmf_platform::{
     PlatformError, ProxyConfig, ServiceInstance, UpstreamClient,
 };
 use mmf_security::{InMemoryRateLimiter, SecurityError};
-use sha2::Sha256;
 use sqlx::postgres::PgPoolOptions;
 use tower::ServiceExt;
 
 const TENANT_KEYS: &str = r#"{"org-1":"native-passport-key-for-org-1-00000001","org-2":"native-passport-key-for-org-2-00000002"}"#;
 const MAXIMUM_BODY_BYTES: usize = 10 * 1024 * 1024;
+
+#[path = "../../../services/issuance/tests/support/passport_mock_artifact_kms.rs"]
+mod passport_mock_artifact_kms;
 
 // This boundary does not use identities, membership, ownership, readiness or
 // events. Fail loudly if the public webhook unexpectedly starts requiring one.
@@ -208,12 +208,6 @@ impl UpstreamClient for PassportRouterUpstream {
     }
 }
 
-fn signature(secret: &str, body: &[u8]) -> String {
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
-    mac.update(body);
-    hex::encode(mac.finalize().into_bytes())
-}
-
 async fn send_webhook(router: &Router, body: &[u8], signature: &str) -> StatusCode {
     router
         .clone()
@@ -303,19 +297,15 @@ async fn native_passport_gateway_signed_webhook_updates_durable_tenant_job() {
             .unwrap();
     }
 
-    let secret = "synthetic-personalization-webhook-secret";
-    let bureau = BureauClient::new("http://127.0.0.1:1", "unused", Some(secret)).unwrap();
-    let issuance = passport_router(PassportHttpService::new(
-        keyring.clone(),
-        repository.clone(),
-        None,
-        None,
-        Some(bureau),
-    ));
+    let callback_kms = passport_mock_artifact_kms::start().await;
+    let issuance = passport_router(
+        PassportHttpService::new(keyring.clone(), repository.clone(), None, None, None)
+            .with_webhook_verifier(callback_kms.webhook_verifier.clone()),
+    );
     let gateway = passport_gateway(issuance);
 
     let raw = br#"{ "organization_id" : "org-1", "bureau_job_id":"bureau-shared", "status":"PRINTING", "tracking_number":"tracking-org-1" }"#;
-    let signed = signature(secret, raw);
+    let signed = callback_kms.callback_signature(raw);
     assert_eq!(send_webhook(&gateway, raw, &signed).await, StatusCode::OK);
     let org_1 = keyring
         .authenticate(
@@ -369,7 +359,7 @@ async fn native_passport_gateway_signed_webhook_updates_durable_tenant_job() {
     let shipped =
         br#"{"organization_id":"org-1","bureau_job_id":"bureau-shared","status":"SHIPPED"}"#;
     assert_eq!(
-        send_webhook(&gateway, shipped, &signature(secret, shipped)).await,
+        send_webhook(&gateway, shipped, &callback_kms.callback_signature(shipped)).await,
         StatusCode::OK
     );
     let completed = repository
@@ -385,4 +375,5 @@ async fn native_passport_gateway_signed_webhook_updates_durable_tenant_job() {
     assert_eq!(completed.status, "READY_FOR_ACTIVATION");
     assert_eq!(completed.tracking_number.as_deref(), Some("tracking-org-1"));
     assert_eq!(untouched.status, "SUBMITTED");
+    callback_kms.server.abort();
 }

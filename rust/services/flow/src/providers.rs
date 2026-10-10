@@ -264,20 +264,12 @@ impl SigningResult {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct FlowKeyEnvelopeRequest {
+#[derive(Clone, Debug, PartialEq)]
+pub struct HaipRemoteKey {
     pub organization_id: String,
     pub flow_instance_id: String,
-    pub purpose: String,
-    pub key_json: String,
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct FlowKeyEnvelope {
-    pub organization_id: String,
-    pub flow_instance_id: String,
-    pub purpose: String,
-    pub envelope: String,
+    pub key_reference: String,
+    pub public_jwk: Value,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -399,12 +391,38 @@ pub trait SigningIdentityProvider: Send + Sync {
 
 #[async_trait]
 pub trait FlowKeyEnvelopeProvider: Send + Sync {
-    async fn wrap(
+    async fn resolve_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError>;
+        _organization_id: &str,
+        _flow_instance_id: &str,
+        _version: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })
+    }
 
-    async fn unwrap(&self, envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError>;
+    async fn create_haip_key(
+        &self,
+        _organization_id: &str,
+        _flow_instance_id: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })
+    }
+
+    async fn decrypt_haip_response(
+        &self,
+        _organization_id: &str,
+        _flow_instance_id: &str,
+        _version: &str,
+        _jwe: &str,
+    ) -> Result<Vec<u8>, FlowProviderError> {
+        Err(FlowProviderError::Unavailable {
+            provider: "flow_key_envelope",
+        })
+    }
 }
 
 #[async_trait]

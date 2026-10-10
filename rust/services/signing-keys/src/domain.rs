@@ -49,6 +49,7 @@ const CUSTOM_TRANSIT_ALGORITHMS: &[&str] = &["ES256", "ES384", "RS256", "EdDSA"]
 const EC_AND_EDDSA: &[&str] = &["ES256", "ES384", "EdDSA"];
 const ES256_AND_EDDSA: &[&str] = &["ES256", "EdDSA"];
 const CLOUD_RSA_EC: &[&str] = &["ES256", "ES384", "ES512", "RS256"];
+const ALGORITHM_DEPENDENT_SIGNATURE_ENCODING: &str = "algorithm-dependent";
 
 const SERVICE_TYPES: &[ServiceType] = &[
     ServiceType {
@@ -58,7 +59,7 @@ const SERVICE_TYPES: &[ServiceType] = &[
         provider: "openbao",
         protocol: "vault-transit",
         category: "service-hsm",
-        auth_modes: &["service_token", "token", "approle", "mtls"],
+        auth_modes: &["token"],
         connection_fields: &["endpoint", "mount", "namespace"],
         key_reference_label: "Transit key name",
         supports_inventory: true,
@@ -70,7 +71,7 @@ const SERVICE_TYPES: &[ServiceType] = &[
         provider: "hashicorp-vault",
         protocol: "vault-transit",
         category: "service-hsm",
-        auth_modes: &["token", "approle", "mtls"],
+        auth_modes: &["token"],
         connection_fields: &["endpoint", "mount", "namespace"],
         key_reference_label: "Transit key name",
         supports_inventory: true,
@@ -94,7 +95,7 @@ const SERVICE_TYPES: &[ServiceType] = &[
         provider: "azure",
         protocol: "azure-key-vault",
         category: "cloud-kms",
-        auth_modes: &["managed_identity", "client_secret", "certificate"],
+        auth_modes: &["managed_identity", "client_secret"],
         connection_fields: &["endpoint"],
         key_reference_label: "Key identifier",
         supports_inventory: false,
@@ -119,7 +120,7 @@ const SERVICE_TYPES: &[ServiceType] = &[
         provider: "custom",
         protocol: "vault-transit-compatible",
         category: "custom",
-        auth_modes: &["token", "mtls", "api_key", "custom"],
+        auth_modes: &["token"],
         connection_fields: &["endpoint", "mount", "namespace"],
         key_reference_label: "Key reference",
         supports_inventory: false,
@@ -264,34 +265,69 @@ pub fn service_capabilities() -> Vec<ServiceCapability> {
         ServiceCapability {
             service_type_id: "openbao-transit",
             label: "OpenBao Transit",
-            capabilities: capabilities(P521_PROVIDER_ALGORITHMS, "der", false, false, true, true),
+            capabilities: capabilities(
+                P521_PROVIDER_ALGORITHMS,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                false,
+                false,
+                true,
+                true,
+            ),
         },
         ServiceCapability {
             service_type_id: "hashicorp-vault-transit",
             label: "HashiCorp Vault Transit",
-            capabilities: capabilities(P521_PROVIDER_ALGORITHMS, "der", false, false, true, true),
+            capabilities: capabilities(
+                P521_PROVIDER_ALGORITHMS,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                false,
+                false,
+                true,
+                true,
+            ),
         },
         ServiceCapability {
             service_type_id: "aws-kms",
             label: "AWS KMS",
-            capabilities: capabilities(CLOUD_RSA_EC, "der", true, true, false, false),
+            capabilities: capabilities(
+                CLOUD_RSA_EC,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                true,
+                true,
+                false,
+                false,
+            ),
         },
         ServiceCapability {
             service_type_id: "azure-key-vault",
             label: "Azure Key Vault",
-            capabilities: capabilities(CLOUD_RSA_EC, "der", true, true, true, true),
+            capabilities: capabilities(
+                CLOUD_RSA_EC,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                true,
+                true,
+                true,
+                true,
+            ),
         },
         ServiceCapability {
             service_type_id: "gcp-cloud-kms",
             label: "Google Cloud KMS",
-            capabilities: capabilities(GCP_ALGORITHMS, "der", true, true, false, true),
+            capabilities: capabilities(
+                GCP_ALGORITHMS,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
+                true,
+                true,
+                false,
+                true,
+            ),
         },
         ServiceCapability {
             service_type_id: "custom-transit-compatible",
             label: "Custom Transit-Compatible Service",
             capabilities: ProviderCapabilities {
                 supported_algorithms: CUSTOM_TRANSIT_ALGORITHMS,
-                signature_encoding: "der",
+                signature_encoding: ALGORITHM_DEPENDENT_SIGNATURE_ENCODING,
                 public_key_export: false,
                 hardware_attestation: false,
                 key_import: false,
@@ -327,11 +363,12 @@ mod tests {
     }
 
     #[test]
-    fn transit_ecdsa_signatures_are_provider_native_der() {
-        for provider in service_capabilities().into_iter().filter(|value| {
-            value.service_type_id.contains("transit") && value.capabilities.public_key_export
-        }) {
-            assert_eq!(provider.capabilities.signature_encoding, "der");
+    fn provider_signature_encoding_is_selected_per_algorithm() {
+        for provider in service_capabilities() {
+            assert_eq!(
+                provider.capabilities.signature_encoding,
+                ALGORITHM_DEPENDENT_SIGNATURE_ENCODING
+            );
         }
     }
 

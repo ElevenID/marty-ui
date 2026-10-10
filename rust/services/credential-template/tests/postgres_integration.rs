@@ -37,6 +37,19 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
     )
     .await
     .expect("Credential Template data reconciliation must pass");
+    let private_key_columns: Vec<(String, String)> = sqlx::query_as(
+        "SELECT table_name, column_name FROM information_schema.columns
+         WHERE table_schema='credential_template_service'
+           AND (table_name ~* '(private|secret|jwk|pem)'
+                OR column_name ~* '(private|secret|jwk|pem)')",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("fresh Credential Template schema inspection must pass");
+    assert!(
+        private_key_columns.is_empty(),
+        "Credential Template schema cannot store private keys: {private_key_columns:?}"
+    );
     let store = PostgresCredentialTemplateStore::new(pool.clone());
     let now = chrono::DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
         .expect("current timestamp");
@@ -130,6 +143,15 @@ async fn complete_repository_round_trip_is_tenant_bound_when_configured() {
         created_at: now,
         updated_at: now,
     };
+    let mut rejected_template = template.clone();
+    rejected_template.compliance_profile =
+        Some(json!({"metadata": {"private_jwk": "synthetic-secret"}}));
+    assert!(store.save_template(&rejected_template).await.is_err());
+    assert!(store
+        .template_by_id(&template_id)
+        .await
+        .expect("rejected template lookup must pass")
+        .is_none());
     store
         .save_template(&template)
         .await

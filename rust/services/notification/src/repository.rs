@@ -7,6 +7,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use std::{collections::HashMap, sync::Arc};
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
@@ -124,6 +125,7 @@ impl Default for InMemoryNotificationRepository {
 #[async_trait]
 impl NotificationRepository for InMemoryNotificationRepository {
     async fn save_notification(&self, notification: Notification) -> Result<(), RepositoryError> {
+        reject_private_record(&notification)?;
         self.state
             .write()
             .await
@@ -201,6 +203,7 @@ impl NotificationRepository for InMemoryNotificationRepository {
     }
 
     async fn save_subscription(&self, subscription: Subscription) -> Result<(), RepositoryError> {
+        reject_private_record(&subscription)?;
         self.state
             .write()
             .await
@@ -301,6 +304,7 @@ impl NotificationRepository for InMemoryNotificationRepository {
         &self,
         event: WebhookOutboxEvent,
     ) -> Result<bool, RepositoryError> {
+        reject_private_record(&event)?;
         let mut outbox = self.outbox.lock().await;
         if outbox.contains_key(&event.id) {
             return Ok(false);
@@ -407,4 +411,15 @@ impl NotificationRepository for InMemoryNotificationRepository {
     ) -> Result<Option<WebhookOutboxEvent>, RepositoryError> {
         Ok(self.outbox.lock().await.get(id).cloned())
     }
+}
+
+pub(crate) fn reject_private_record<T: Serialize>(record: &T) -> Result<(), RepositoryError> {
+    let value = serde_json::to_value(record)
+        .map_err(|_| RepositoryError::Invalid("record serialization failed".into()))?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(RepositoryError::Invalid(
+            "private key material is not allowed in notification records".into(),
+        ));
+    }
+    Ok(())
 }

@@ -23,7 +23,12 @@ use crate::dsc_issuance_store::{
     DscIssuanceStoreError,
 };
 use crate::flow_envelope::{
-    FlowEnvelopeError, OpenBaoEnvelopeProvider, UnwrapRequest, WrapRequest,
+    CreateHaipKeyRequest, DecryptHaipResponseRequest, FlowEnvelopeError, OpenBaoEnvelopeProvider,
+    ResolveHaipKeyRequest,
+};
+use crate::integration_secret_envelope::{
+    self, DecryptRequest as DecryptIntegrationSecretRequest,
+    EncryptRequest as EncryptIntegrationSecretRequest, IntegrationSecretEnvelopeError,
 };
 use crate::kms::{self, ProviderRequest, SignRequest};
 use crate::passport_artifact_envelope::{
@@ -41,6 +46,9 @@ use crate::registry::{
     ResolveResponse, RotationLease, SaveRegistryRequest,
 };
 use crate::validation::{self, ValidationRequest};
+use crate::vc_api_holder_proof::{
+    HolderProofError, HolderProofRequest, HolderProofResponse, OpenBaoHolderProofProvider,
+};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -74,6 +82,8 @@ struct ServiceStatus {
 #[derive(Clone)]
 struct AppState {
     internal_api_key: Arc<str>,
+    service_sign_gateway_key: Option<Arc<str>>,
+    issuer_sign_key: Option<Arc<str>>,
     dsc_issue_gateway_key: Option<Arc<str>>,
     csca_issue_gateway_key: Option<Arc<str>>,
     beta_csca_issuance_enabled: bool,
@@ -104,9 +114,36 @@ pub fn router_with_dependencies(
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     public_domain: Option<String>,
 ) -> Router {
-    router_with_dependencies_and_dsc_key(
+    router_with_dependencies_and_sign_key(
         internal_api_key,
         None,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_dependencies_and_sign_key(
+    internal_api_key: String,
+    service_sign_gateway_key: Option<String>,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+) -> Router {
+    router_with_all_keys(
+        internal_api_key,
+        service_sign_gateway_key,
+        None,
+        None,
+        None,
+        false,
         registry_store,
         document_store,
         csca_lifecycle_store,
@@ -144,6 +181,37 @@ pub fn router_with_dependencies_and_dsc_key(
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_dependencies_and_ceremony_keys(
     internal_api_key: String,
+    dsc_issue_gateway_key: Option<String>,
+    csca_issue_gateway_key: Option<String>,
+    beta_csca_issuance_enabled: bool,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+) -> Router {
+    router_with_all_keys(
+        internal_api_key,
+        None,
+        None,
+        dsc_issue_gateway_key,
+        csca_issue_gateway_key,
+        beta_csca_issuance_enabled,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_all_keys(
+    internal_api_key: String,
+    service_sign_gateway_key: Option<String>,
+    issuer_sign_key: Option<String>,
     dsc_issue_gateway_key: Option<String>,
     csca_issue_gateway_key: Option<String>,
     beta_csca_issuance_enabled: bool,
@@ -293,11 +361,29 @@ pub fn router_with_dependencies_and_ceremony_keys(
                 .patch(update_public_signing_key)
                 .delete(delete_public_signing_key),
         )
-        .route("/internal/kms/sign", post(kms_sign))
         .route("/internal/kms/public-key", post(kms_public_key))
         .route("/internal/kms/verify", post(kms_verify))
-        .route("/internal/flow-key-envelopes/wrap", post(wrap_flow_key))
-        .route("/internal/flow-key-envelopes/unwrap", post(unwrap_flow_key))
+        .route("/internal/vc-api/holder-proof", post(vc_api_holder_proof))
+        .route(
+            "/internal/haip-response-keys/create",
+            post(create_haip_response_key),
+        )
+        .route(
+            "/internal/haip-response-keys/resolve",
+            post(resolve_haip_response_key),
+        )
+        .route(
+            "/internal/haip-response-keys/decrypt",
+            post(decrypt_haip_response),
+        )
+        .route(
+            "/internal/integration-secrets/encrypt",
+            post(encrypt_integration_secret),
+        )
+        .route(
+            "/internal/integration-secrets/decrypt",
+            post(decrypt_integration_secret),
+        )
         .route("/internal/compat/issuer-context", post(issuer_context))
         .route(
             "/internal/compat/resolve-issuer-did",
@@ -310,10 +396,6 @@ pub fn router_with_dependencies_and_ceremony_keys(
         .route(
             "/internal/compat/issuer-profiles/{profile_id}/public-identity",
             post(profile_public_identity),
-        )
-        .route(
-            "/internal/compat/services/{service_id}/sign",
-            post(service_sign),
         )
         .route("/internal/compat/issuer-dids/sign", post(issuer_did_sign))
         .route(
@@ -456,6 +538,8 @@ pub fn router_with_dependencies_and_ceremony_keys(
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
+            service_sign_gateway_key: service_sign_gateway_key.map(Arc::from),
+            issuer_sign_key: issuer_sign_key.map(Arc::from),
             dsc_issue_gateway_key: dsc_issue_gateway_key.map(Arc::from),
             csca_issue_gateway_key: csca_issue_gateway_key.map(Arc::from),
             beta_csca_issuance_enabled,
@@ -3556,8 +3640,15 @@ async fn sign_public_service_payload(
     State(state): State<AppState>,
     Path(service_id): Path<String>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     input: Result<Json<PublicServiceSignRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
+    if !authorize_service_sign(&state, &headers) {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Signing service authentication required.",
+        );
+    }
     let Json(input) = match input {
         Ok(input) => input,
         Err(error) => {
@@ -4642,6 +4733,12 @@ async fn authorize_public_service_reference(
                     && profile.get("signing_service_id").and_then(Value::as_str) == Some(service_id)
                     && profile.get("signing_key_reference").and_then(Value::as_str)
                         == Some(reference)
+                    && (!managed
+                        || registry::managed_profile_key_belongs_to_tenant(
+                            organization_id,
+                            profile,
+                            reference,
+                        ))
                     && key_purpose.is_none_or(|purpose| {
                         profile.get("key_purpose").and_then(Value::as_str) == Some(purpose)
                     })
@@ -4661,12 +4758,7 @@ async fn authorize_public_service_reference(
 }
 
 fn is_tenant_managed_create_reference(organization_id: &str, reference: &str) -> bool {
-    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes())
-        .simple()
-        .to_string();
-    crate::domain::MANAGED_KEY_PREFIXES
-        .iter()
-        .any(|prefix| reference.starts_with(&format!("{prefix}{namespace}-")))
+    registry::tenant_managed_key_name(organization_id, reference)
 }
 
 fn managed_alias_allowed(
@@ -5534,13 +5626,9 @@ fn discovered_key_matches_algorithm(response: &Value, algorithm: &str) -> Result
                 .get("key_usage")
                 .and_then(Value::as_str)
                 .ok_or(())?;
-            let native = match algorithm {
-                "ES256" => "ECDSA_SHA_256",
-                "ES384" => "ECDSA_SHA_384",
-                "ES512" => "ECDSA_SHA_512",
-                "RS256" => "RSASSA_PKCS1_V1_5_SHA_256",
-                "PS256" => "RSASSA_PSS_SHA_256",
-                _ => return Ok(false),
+            let native = match kms::aws_signing_algorithm(algorithm) {
+                Ok(native) => native,
+                Err(_) => return Ok(false),
             };
             let supported = response
                 .get("signing_algorithms")
@@ -6037,60 +6125,82 @@ async fn enroll_public_csca_certificate(
             "CSCA lifecycle storage is unavailable.",
         );
     }
-    let profile = match one_matching_profile(&state, &scope.organization_id, &identity).await {
-        Ok(profile) => profile,
+    let lease = match csca_signing_lease(&state, &scope.organization_id).await {
+        Ok(lease) => lease,
         Err(error) => return error.into_response(),
     };
-    let Some(compatibility) = state.compatibility.as_ref() else {
-        return public_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Issuer identity service is unavailable.",
-        );
-    };
-    let resolved = match compatibility
-        .resolve_issuer_did(&ResolveIssuerDidRequest {
-            organization_id: scope.organization_id.clone(),
-            issuer_did: input.issuer_did.clone(),
-            verification_method_id: None,
-            credential_format: Some(input.credential_format.clone()),
-            key_purpose: Some("csca".into()),
-            algorithm: Some(canonical_algorithm(&input.algorithm)),
-        })
-        .await
-    {
-        Ok(resolved) => resolved,
-        Err(error) => return error.into_response(),
-    };
-    let provider_public_jwk = match compatibility
-        .provider_public_key_for_profile(&scope.organization_id, &profile)
-        .await
-    {
-        Ok(jwk) => jwk,
-        Err(error) => return error.into_response(),
-    };
-    let request = match managed_csca_import(&input, &profile, &resolved, &provider_public_jwk) {
-        Ok(request) => request,
-        Err(error) => return error.into_response(),
-    };
-    let now = chrono::Utc::now();
-    let mut document = match load_csca_lifecycle(&state, &scope.organization_id, now).await {
-        Ok(document) => document,
-        Err(error) => return error.into_response(),
-    };
-    let view = match document.import(&input.certificate_id, request, now) {
-        Ok(view) => view,
-        Err(error) => return csca_lifecycle_error(error).into_response(),
-    };
-    if let Err(error) = save_csca_lifecycle(&state, &document).await {
-        return error.into_response();
+    let result = async {
+        let profile = match one_matching_profile(&state, &scope.organization_id, &identity).await {
+            Ok(profile) => profile,
+            Err(error) => return error.into_response(),
+        };
+        let Some(compatibility) = state.compatibility.as_ref() else {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Issuer identity service is unavailable.",
+            );
+        };
+        let resolved = match compatibility
+            .resolve_issuer_did(&ResolveIssuerDidRequest {
+                organization_id: scope.organization_id.clone(),
+                issuer_did: input.issuer_did.clone(),
+                verification_method_id: None,
+                credential_format: Some(input.credential_format.clone()),
+                key_purpose: Some("csca".into()),
+                algorithm: Some(canonical_algorithm(&input.algorithm)),
+            })
+            .await
+        {
+            Ok(resolved) => resolved,
+            Err(error) => return error.into_response(),
+        };
+        let provider_public_jwk = match compatibility
+            .provider_public_key_for_profile(&scope.organization_id, &profile)
+            .await
+        {
+            Ok(jwk) => jwk,
+            Err(error) => return error.into_response(),
+        };
+        let request = match managed_csca_import(&input, &profile, &resolved, &provider_public_jwk) {
+            Ok(request) => request,
+            Err(error) => return error.into_response(),
+        };
+        let profile_revision =
+            match validate_managed_csca_binding(&state, &scope.organization_id, &request).await {
+                Ok(revision) => revision,
+                Err(error) => return error.into_response(),
+            };
+        let now = chrono::Utc::now();
+        let mut document = match load_csca_lifecycle(&state, &scope.organization_id, now).await {
+            Ok(document) => document,
+            Err(error) => return error.into_response(),
+        };
+        let view = match document.import(&input.certificate_id, request, now) {
+            Ok(view) => view,
+            Err(error) => return csca_lifecycle_error(error).into_response(),
+        };
+        let store = state
+            .csca_lifecycle_store
+            .as_ref()
+            .expect("CSCA storage checked above");
+        if let Err(error) = store
+            .save_with_rotation_lease(&document, &lease, profile_revision)
+            .await
+            .map_err(csca_lifecycle_error)
+        {
+            return error.into_response();
+        }
+        Json(json!({
+            "certificate_id": view.certificate.certificate_id,
+            "subject": view.certificate.subject,
+            "not_after": view.certificate.not_after,
+            "status": view.status,
+        }))
+        .into_response()
     }
-    Json(json!({
-        "certificate_id": view.certificate.certificate_id,
-        "subject": view.certificate.subject,
-        "not_after": view.certificate.not_after,
-        "status": view.status,
-    }))
-    .into_response()
+    .await;
+    let _ = lease.release().await;
+    result
 }
 
 async fn delete_public_issuer_identity(
@@ -6138,10 +6248,6 @@ fn public_config_document(state: &AppState, registry: Value) -> Value {
         })
         .unwrap_or_default();
     json!({
-        "hsm_enabled": !services.is_empty(),
-        "hsm_settings": {},
-        "vault_enabled": false,
-        "vault_settings": {},
         "provider_metadata": {"provider": "openbao", "status": "configured", "managed_by": "Marty service stack"},
         "domain_config": {"public_domain": state.public_domain},
         "supports_native_key_management": true,
@@ -6173,16 +6279,6 @@ fn public_service_config(service: &Value) -> Value {
 // unchanged. An explicit null clears it; changing the endpoint or auth mode
 // must never silently forward the old credential to another destination.
 fn preserve_unchanged_auth_references(request: &mut Value, existing: &Value) {
-    const BINDING: [&str; 8] = [
-        "provider",
-        "service_type",
-        "protocol",
-        "endpoint",
-        "region",
-        "auth_mode",
-        "mount",
-        "namespace",
-    ];
     let Some(requested) = request.get_mut("services").and_then(Value::as_array_mut) else {
         return;
     };
@@ -6207,7 +6303,7 @@ fn preserve_unchanged_auth_references(request: &mut Value, existing: &Value) {
         }) {
             continue;
         }
-        if BINDING
+        if registry::AUTH_CONNECTION_FIELDS
             .iter()
             .any(|field| fields.get(*field) != previous.get(*field))
         {
@@ -6362,19 +6458,12 @@ fn validate_identity_operation_fields(
 }
 
 fn managed_key_reference(organization_id: &str, input: &IssuerIdentityRequest) -> String {
-    let tuple = format!(
-        "{organization_id}|{}|{}|{}|{}",
-        input.issuer_did, input.key_purpose, input.credential_format, input.algorithm
-    );
-    let token = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, tuple.as_bytes())
-        .simple()
-        .to_string();
-    let prefix =
-        crate::domain::managed_key_prefix_for_purpose(&input.key_purpose).unwrap_or("cred-issuer-");
-    format!(
-        "{prefix}{}-{}",
-        &token[..20],
-        input.algorithm.to_ascii_lowercase()
+    registry::managed_key_reference_for_fields(
+        organization_id,
+        &input.issuer_did,
+        &input.key_purpose,
+        &input.credential_format,
+        &input.algorithm,
     )
 }
 
@@ -6465,29 +6554,14 @@ async fn profile_identity_response(
         .map(Json)
 }
 
-async fn service_sign(
-    State(state): State<AppState>,
-    Path(service_id): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<ServiceSignRequest>,
-) -> Result<Json<serde_json::Value>, CompatibilityError> {
-    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
-    let service = state
-        .compatibility
-        .as_ref()
-        .ok_or(CompatibilityError::Unavailable)?;
-    service
-        .sign_with_service(&service_id, &request)
-        .await
-        .map(Json)
-}
-
 async fn issuer_did_sign(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(request): Json<IssuerDidSignRequest>,
 ) -> Result<Json<serde_json::Value>, CompatibilityError> {
-    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
+    if !authorize_issuer_sign(&state, &headers) {
+        return Err(CompatibilityError::Unauthorized);
+    }
     let service = state
         .compatibility
         .as_ref()
@@ -6542,30 +6616,75 @@ async fn attach_compatibility_certificate(
         .map(Json)
 }
 
-async fn wrap_flow_key(
+async fn create_haip_response_key(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<WrapRequest>,
-) -> Result<Json<serde_json::Value>, FlowEnvelopeError> {
+    Json(request): Json<CreateHaipKeyRequest>,
+) -> Result<Json<Value>, FlowEnvelopeError> {
     authorize_internal(&state, &headers).map_err(|_| FlowEnvelopeError::Unauthorized)?;
     let provider = state
         .flow_envelopes
         .as_ref()
         .ok_or(FlowEnvelopeError::Unavailable)?;
-    provider.wrap(request).await.map(Json)
+    provider.create_haip_key(request).await.map(Json)
 }
 
-async fn unwrap_flow_key(
+async fn resolve_haip_response_key(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<UnwrapRequest>,
-) -> Result<Json<serde_json::Value>, FlowEnvelopeError> {
+    Json(request): Json<ResolveHaipKeyRequest>,
+) -> Result<Json<Value>, FlowEnvelopeError> {
     authorize_internal(&state, &headers).map_err(|_| FlowEnvelopeError::Unauthorized)?;
     let provider = state
         .flow_envelopes
         .as_ref()
         .ok_or(FlowEnvelopeError::Unavailable)?;
-    provider.unwrap(request).await.map(Json)
+    provider.resolve_haip_key(request).await.map(Json)
+}
+
+async fn decrypt_haip_response(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DecryptHaipResponseRequest>,
+) -> Result<Json<Value>, FlowEnvelopeError> {
+    authorize_internal(&state, &headers).map_err(|_| FlowEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(FlowEnvelopeError::Unavailable)?;
+    provider.decrypt_haip_response(request).await.map(Json)
+}
+
+async fn encrypt_integration_secret(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<EncryptIntegrationSecretRequest>,
+) -> Result<Json<Value>, IntegrationSecretEnvelopeError> {
+    authorize_internal(&state, &headers)
+        .map_err(|_| IntegrationSecretEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(IntegrationSecretEnvelopeError::Unavailable)?;
+    integration_secret_envelope::encrypt(provider, request)
+        .await
+        .map(Json)
+}
+
+async fn decrypt_integration_secret(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DecryptIntegrationSecretRequest>,
+) -> Result<Json<Value>, IntegrationSecretEnvelopeError> {
+    authorize_internal(&state, &headers)
+        .map_err(|_| IntegrationSecretEnvelopeError::Unauthorized)?;
+    let provider = state
+        .flow_envelopes
+        .as_ref()
+        .ok_or(IntegrationSecretEnvelopeError::Unavailable)?;
+    integration_secret_envelope::decrypt(provider, request)
+        .await
+        .map(Json)
 }
 
 async fn encrypt_passport_artifact_chunk(
@@ -6616,13 +6735,33 @@ async fn verify_passport_callback(
         .map(Json)
 }
 
-async fn kms_sign(
+async fn vc_api_holder_proof(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(request): Json<SignRequest>,
-) -> Result<Json<kms::SignResponse>, kms::KmsError> {
-    authorize_internal(&state, &headers)?;
-    Ok(Json(kms::sign(request).await?))
+    Json(request): Json<HolderProofRequest>,
+) -> Result<Json<HolderProofResponse>, (StatusCode, Json<Value>)> {
+    authorize_internal(&state, &headers).map_err(|_| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"detail":"Invalid internal API key"})),
+        )
+    })?;
+    let provider = OpenBaoHolderProofProvider::from_environment().map_err(holder_proof_error)?;
+    provider
+        .issue(request)
+        .await
+        .map(Json)
+        .map_err(holder_proof_error)
+}
+
+fn holder_proof_error(error: HolderProofError) -> (StatusCode, Json<Value>) {
+    let status = match error {
+        HolderProofError::InvalidRequest => StatusCode::UNPROCESSABLE_ENTITY,
+        HolderProofError::Unavailable | HolderProofError::Provider => {
+            StatusCode::SERVICE_UNAVAILABLE
+        }
+    };
+    (status, Json(json!({"detail":error.to_string()})))
 }
 
 async fn kms_public_key(
@@ -6864,13 +7003,24 @@ async fn import_csca_certificate(
     Json(request): Json<ImportCscaCertificateRequest>,
 ) -> Result<Json<CscaCertificateView>, DocumentHttpError> {
     authorize_documents(&state, &headers)?;
-    let now = chrono::Utc::now();
-    let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
-    let view = document
-        .import(&certificate_id, request, now)
-        .map_err(csca_lifecycle_error)?;
-    save_csca_lifecycle(&state, &document).await?;
-    Ok(Json(view))
+    let lease = csca_signing_lease(&state, &organization_id).await?;
+    let result = async {
+        let profile_revision =
+            validate_managed_csca_binding(&state, &organization_id, &request).await?;
+        let now = chrono::Utc::now();
+        let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
+        let view = document
+            .import(&certificate_id, request, now)
+            .map_err(csca_lifecycle_error)?;
+        csca_lifecycle_store(&state)?
+            .save_with_rotation_lease(&document, &lease, profile_revision)
+            .await
+            .map_err(csca_lifecycle_error)?;
+        Ok(Json(view))
+    }
+    .await;
+    let _ = lease.release().await;
+    result
 }
 
 async fn get_csca_certificate(
@@ -6932,21 +7082,138 @@ async fn renew_csca_certificate(
     Json(request): Json<RenewCscaCertificateRequest>,
 ) -> Result<Json<CscaCertificateView>, DocumentHttpError> {
     authorize_documents(&state, &headers)?;
-    let now = chrono::Utc::now();
-    let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
-    let replacement_id = request.replacement_certificate_id.clone();
-    let reuse_key = request.reuse_key;
-    let view = document
-        .renew(
-            &certificate_id,
-            &replacement_id,
-            request.into_import(),
-            reuse_key,
-            now,
+    let lease = csca_signing_lease(&state, &organization_id).await?;
+    let result = async {
+        let now = chrono::Utc::now();
+        let mut document = load_csca_lifecycle(&state, &organization_id, now).await?;
+        let replacement_id = request.replacement_certificate_id.clone();
+        let reuse_key = request.reuse_key;
+        let replacement = request.into_import();
+        let prior = document
+            .get(&certificate_id, now)
+            .map_err(csca_lifecycle_error)?;
+        if prior.certificate.metadata.get("issuer_did") != replacement.metadata.get("issuer_did") {
+            return Err(csca_lifecycle_error(CscaLifecycleError::Invalid(
+                "replacement CSCA issuer identity must match the existing certificate".into(),
+            )));
+        }
+        let profile_revision =
+            validate_managed_csca_binding(&state, &organization_id, &replacement).await?;
+        let view = document
+            .renew(
+                &certificate_id,
+                &replacement_id,
+                replacement,
+                reuse_key,
+                now,
+            )
+            .map_err(csca_lifecycle_error)?;
+        csca_lifecycle_store(&state)?
+            .save_with_rotation_lease(&document, &lease, profile_revision)
+            .await
+            .map_err(csca_lifecycle_error)?;
+        Ok(Json(view))
+    }
+    .await;
+    let _ = lease.release().await;
+    result
+}
+
+async fn validate_managed_csca_binding(
+    state: &AppState,
+    organization_id: &str,
+    request: &ImportCscaCertificateRequest,
+) -> Result<u64, DocumentHttpError> {
+    let invalid = || {
+        csca_lifecycle_error(CscaLifecycleError::Invalid(
+            "CSCA certificate must match an active managed KMS key".into(),
+        ))
+    };
+    let unavailable = || {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail": "Managed CSCA key verification is unavailable"})),
         )
-        .map_err(csca_lifecycle_error)?;
-    save_csca_lifecycle(&state, &document).await?;
-    Ok(Json(view))
+    };
+    let issuer_did = request
+        .metadata
+        .get("issuer_did")
+        .and_then(Value::as_str)
+        .filter(|did| !did.is_empty() && did.len() <= 2048)
+        .ok_or_else(invalid)?;
+    let store = state.profile_store.as_ref().ok_or_else(unavailable)?;
+    let compatibility = state.compatibility.as_ref().ok_or_else(unavailable)?;
+    let profiles = store
+        .find(
+            organization_id,
+            FindProfilesRequest {
+                active_only: true,
+                issuer_did: Some(issuer_did.into()),
+                key_purpose: Some("csca".into()),
+                require_signing_service: true,
+                require_signing_key_reference: true,
+                require_public_identity: true,
+                ..FindProfilesRequest::default()
+            },
+        )
+        .await
+        .map_err(|_| unavailable())?;
+    let mut matching = profiles.iter().filter(|profile| {
+        profile.get("signing_key_reference").and_then(Value::as_str)
+            == Some(request.key_reference.as_str())
+    });
+    let profile = matching.next().ok_or_else(invalid)?;
+    if matching.any(|candidate| {
+        candidate.get("signing_service_id") != profile.get("signing_service_id")
+            || candidate.get("algorithm") != profile.get("algorithm")
+    }) {
+        return Err(invalid());
+    }
+    let current_public = compatibility
+        .provider_public_key_for_profile(organization_id, profile)
+        .await
+        .map_err(|_| unavailable())?;
+    if !documents::same_public_jwk(&current_public, &request.expected_public_jwk) {
+        return Err(invalid());
+    }
+    let profile_document = store
+        .list(organization_id)
+        .await
+        .map_err(|_| unavailable())?;
+    if !profile_document
+        .get("profiles")
+        .and_then(Value::as_array)
+        .is_some_and(|profiles| profiles.iter().any(|candidate| candidate == profile))
+    {
+        return Err(invalid());
+    }
+    profile_document
+        .get("revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(unavailable)
+}
+
+async fn csca_signing_lease(
+    state: &AppState,
+    organization_id: &str,
+) -> Result<RotationLease, DocumentHttpError> {
+    let unavailable = || {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"detail": "Tenant signing lease is unavailable"})),
+        )
+    };
+    let store = state.registry_store.as_ref().ok_or_else(unavailable)?;
+    store
+        .acquire_rotation_lease(organization_id)
+        .await
+        .map_err(|_| unavailable())?
+        .ok_or_else(|| {
+            (
+                StatusCode::CONFLICT,
+                Json(json!({"detail": "Tenant signing state is changing"})),
+            )
+        })
 }
 
 async fn expiring_csca_certificates(
@@ -7338,6 +7605,45 @@ fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::
     Ok(())
 }
 
+fn authorize_service_sign(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.service_sign_gateway_key.as_ref() else {
+        return false;
+    };
+    if expected.as_ref() == state.internal_api_key.as_ref()
+        || state.dsc_issue_gateway_key.as_deref() == Some(expected.as_ref())
+        || state.csca_issue_gateway_key.as_deref() == Some(expected.as_ref())
+    {
+        return false;
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .as_bytes();
+    let expected = expected.as_bytes();
+    expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
+}
+
+fn authorize_issuer_sign(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.issuer_sign_key.as_ref() else {
+        return false;
+    };
+    if expected.as_ref() == state.internal_api_key.as_ref()
+        || state.service_sign_gateway_key.as_deref() == Some(expected.as_ref())
+        || state.dsc_issue_gateway_key.as_deref() == Some(expected.as_ref())
+        || state.csca_issue_gateway_key.as_deref() == Some(expected.as_ref())
+    {
+        return false;
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .as_bytes();
+    let expected = expected.as_bytes();
+    expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
+}
+
 fn authorize_dsc_issue(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(expected) = state.dsc_issue_gateway_key.as_ref() else {
         return false;
@@ -7555,6 +7861,55 @@ mod public_contract_tests {
         middleware::{self, Next},
     };
     use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn issuer_signing_rejects_shared_internal_key_before_reaching_provider() {
+        let app = router_with_all_keys(
+            "shared-internal-signing-key-32-chars".into(),
+            Some("dedicated-service-sign-key-32-chars".into()),
+            Some("dedicated-issuer-sign-key-32-chars".into()),
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let payload = json!({
+            "organization_id": "org-a",
+            "issuer_did": "did:web:issuer.example:orgs:org-a",
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA",
+            "payload_b64": "cGF5bG9hZA"
+        });
+        for (key, expected) in [
+            (
+                "shared-internal-signing-key-32-chars",
+                StatusCode::UNAUTHORIZED,
+            ),
+            (
+                "dedicated-issuer-sign-key-32-chars",
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::post("/internal/compat/issuer-dids/sign")
+                        .header("content-type", "application/json")
+                        .header("x-api-key", key)
+                        .body(Body::from(payload.to_string()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+    }
 
     #[tokio::test]
     async fn dsc_issuance_rejects_shared_internal_key_and_requires_distinct_gateway_key() {
@@ -8148,6 +8503,8 @@ mod public_contract_tests {
             .unwrap();
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            service_sign_gateway_key: None,
+            issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,
@@ -8300,7 +8657,7 @@ mod public_contract_tests {
         let service = json!({
             "id": "service-a", "service_type": "openbao-transit",
             "endpoint": endpoint, "mount": "transit", "key_reference": "vc-key",
-            "key_aliases": ["dsc-ed"], "auth_reference": "never-echo-this"
+            "key_aliases": ["dsc-ed"], "auth_mode": "token", "auth_reference": "never-echo-this"
         });
         let registry = json!({
             "services": [service], "default_service_id": "service-a",
@@ -8813,11 +9170,10 @@ mod public_contract_tests {
             "keys": [{
                 "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y", "kid": "public-id",
                 "x5c": ["public-cert"], "service_id": "service-a", "status": "active",
-                "d": "private-scalar", "key_reference": "internal-key-name",
-                "auth_reference": "secret-token", "private_key": "forbidden"
+                "key_reference": "internal-key-name", "auth_reference": "secret-token"
             }]
         });
-        let projected = public_jwks_document(document, "org-a").unwrap();
+        let projected = public_jwks_document(document.clone(), "org-a").unwrap();
         assert_eq!(projected["keys"][0]["kid"], "public-id");
         assert_eq!(projected["organization_id"], "org-a");
         assert_eq!(projected["keys"][0]["x5c"][0], "public-cert");
@@ -8825,6 +9181,9 @@ mod public_contract_tests {
         for field in behavior["forbidden_fields"].as_array().unwrap() {
             assert!(projected["keys"][0].get(field.as_str().unwrap()).is_none());
         }
+        let mut private = document;
+        private["keys"][0]["d"] = json!("private-scalar");
+        assert!(public_jwks_document(private, "org-a").is_err());
         assert!(public_jwks_document(json!({"keys": [{}]}), "org-a").is_err());
     }
 
@@ -8850,7 +9209,7 @@ mod public_contract_tests {
         }
         let jwk = json!({
             "kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y",
-            "kid": "internal-key-name", "d": "private-scalar", "key_reference": "internal-key-name",
+            "kid": "internal-key-name", "key_reference": "internal-key-name",
             "auth_reference": "secret-token"
         });
         let public = public_issuer_jwk(&jwk).unwrap();
@@ -8858,6 +9217,9 @@ mod public_contract_tests {
         for field in behavior["forbidden_public_jwk_fields"].as_array().unwrap() {
             assert!(public.get(field.as_str().unwrap()).is_none());
         }
+        let mut private = jwk;
+        private["d"] = json!("private-scalar");
+        assert!(public_issuer_jwk(&private).is_err());
         assert!(public_issuer_jwk(&json!({"d": "private-only"})).is_err());
     }
 
@@ -8899,14 +9261,13 @@ mod public_contract_tests {
             "id": "did:web:beta.example:orgs:org-a", "controller": "did:web:beta.example:orgs:org-a",
             "verificationMethod": [{
                 "id": "did:web:beta.example:orgs:org-a#key-1", "type": "JsonWebKey2020",
-                "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y", "d": "private-scalar", "key_reference": "secret-key-name"},
-                "privateKeyJwk": {"d": "private-scalar"}
+                "publicKeyJwk": {"kty": "EC", "crv": "P-256", "x": "public-x", "y": "public-y", "key_reference": "secret-key-name"}
             }],
             "assertionMethod": ["did:web:beta.example:orgs:org-a#key-1"],
             "service": [{"id": "#endpoint", "serviceEndpoint": "https://example.org", "auth_reference": "secret-token"}],
             "key_reference": "secret-key-name"
         });
-        let projected = public_did_document(document).unwrap();
+        let projected = public_did_document(document.clone()).unwrap();
         assert_eq!(
             projected["verificationMethod"][0]["publicKeyJwk"]["x"],
             "public-x"
@@ -8922,6 +9283,9 @@ mod public_contract_tests {
         for forbidden in ["private-scalar", "secret-key-name", "secret-token"] {
             assert!(!projected.to_string().contains(forbidden));
         }
+        let mut private = document;
+        private["verificationMethod"][0]["publicKeyJwk"]["d"] = json!("private-scalar");
+        assert!(public_did_document(private).is_err());
         assert!(public_did_document(json!({"id": "did:web:beta.example", "verificationMethod": [{"publicKeyJwk": {"d": "private"}}]})).is_err());
     }
 
@@ -9039,6 +9403,50 @@ mod public_contract_tests {
     }
 
     #[test]
+    fn managed_profile_reference_must_derive_from_its_tenant_and_purpose() {
+        let input = identity("vc_jwt_issuer", "ES256");
+        let tuple_reference = managed_key_reference("org-a", &input);
+        let mut profile = json!({
+            "organization_id": "org-a",
+            "issuer_did": input.issuer_did,
+            "key_purpose": input.key_purpose,
+            "credential_format": input.credential_format,
+            "algorithm": input.algorithm
+        });
+        assert!(registry::managed_profile_key_belongs_to_tenant(
+            "org-a",
+            &profile,
+            &tuple_reference
+        ));
+        assert!(!registry::managed_profile_key_belongs_to_tenant(
+            "org-b",
+            &profile,
+            &tuple_reference
+        ));
+        profile["organization_id"] = json!("org-b");
+        assert!(!registry::managed_profile_key_belongs_to_tenant(
+            "org-b",
+            &profile,
+            &tuple_reference
+        ));
+
+        let tenant_reference = managed_key_name("org-a", "issuer", "vc_jwt_issuer", "ES256")
+            .expect("tenant-scoped key");
+        profile["organization_id"] = json!("org-a");
+        assert!(registry::managed_profile_key_belongs_to_tenant(
+            "org-a",
+            &profile,
+            &tenant_reference
+        ));
+        profile["key_purpose"] = json!("mdoc_dsc");
+        assert!(!registry::managed_profile_key_belongs_to_tenant(
+            "org-a",
+            &profile,
+            &tenant_reference
+        ));
+    }
+
+    #[test]
     fn disposable_passport_key_references_match_root_only_bootstrap() {
         let organization_id = "00000000-0000-0000-0000-000000000001";
         let mut request = identity("csca", "ES256");
@@ -9099,6 +9507,7 @@ mod public_contract_tests {
             "issuer_profile_id",
             "signing_service_id",
             "signing_key_reference",
+            "private_key_pem",
         ] {
             let mut request = json!({
                 "organization_id": "org-a",
@@ -9116,6 +9525,8 @@ mod public_contract_tests {
     fn public_config_preserves_provider_routing_defaults_for_lossless_updates() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            service_sign_gateway_key: None,
+            issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,
@@ -9140,12 +9551,25 @@ mod public_contract_tests {
         );
         assert_eq!(projected["format_defaults"]["dc+sd-jwt"], "provider-b");
         assert_eq!(projected["type_defaults"]["vc_jwt_issuer"], "provider-c");
+        for legacy in [
+            "hsm_enabled",
+            "hsm_settings",
+            "vault_enabled",
+            "vault_settings",
+        ] {
+            assert!(
+                projected.get(legacy).is_none(),
+                "legacy field {legacy} in public config"
+            );
+        }
     }
 
     #[test]
     fn public_config_redacts_credentials_without_hiding_service_metadata() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            service_sign_gateway_key: None,
+            issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,

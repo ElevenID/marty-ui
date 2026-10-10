@@ -11,6 +11,7 @@ import {
   RevocationPolicy,
   createDefaultHealthStatus,
 } from '../../ports/types';
+import { managedIssuerCertificateRequest } from '../../ports/managedIssuerCertificate';
 
 // Simulated latency for realistic UX
 const MOCK_LATENCY_MS = 500;
@@ -108,46 +109,33 @@ class MockTrustAdapter {
   }
 
   /**
-   * Upload BYOK (Bring Your Own Key) certificates.
+   * Attach a public certificate to an existing mock issuer identity.
    * @param {string} orgId - Organization ID
    * @param {import('../ports/types').BYOKCertificateUpload} certificates - Certificate data
    * @returns {Promise<Object>}
    */
-  async uploadBYOKCertificates(orgId, _certificates) {
+  async uploadBYOKCertificates(orgId, certificates) {
     await delay(this.latencyMs);
 
     if (this.shouldFail) {
       throw new Error('Mock: Failed to upload certificates');
     }
 
-    // Simulate processing and return mock key info
-    const keyId = `key-${Date.now()}`;
-    const mockKey = {
-      id: keyId,
-      keyId: keyId,
-      algorithm: 'ES256',
-      keyType: 'EC',
-      did: `did:key:z${keyId}`,
-      didMethod: 'key',
-      isActive: true,
-      isDefault: true,
-      validFrom: new Date(),
-      validUntil: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
-      hasCertificate: true,
-    };
-
-    // Update profile with new key
+    const request = managedIssuerCertificateRequest(orgId, certificates);
     const profile = await this.getTrustConfig(orgId);
-    profile.issuerKeys = [...profile.issuerKeys, mockKey];
-    profile.keySource = IssuerKeySource.IMPORTED;
-    profile.isConfigured = true;
+    const key = profile.issuerKeys.find(candidate =>
+      candidate.did === request.issuer_did && candidate.algorithm === request.algorithm);
+    if (!key) {
+      throw new Error('Mock: An existing issuer identity and public certificate are required');
+    }
+    key.hasCertificate = true;
     profile.updatedAt = new Date();
     mockProfiles.set(orgId, profile);
 
     return {
       success: true,
-      key: mockKey,
-      message: 'Certificates uploaded successfully',
+      key,
+      message: 'Public certificate attached to existing issuer identity',
     };
   }
 

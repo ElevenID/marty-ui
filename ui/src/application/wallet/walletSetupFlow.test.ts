@@ -2,30 +2,29 @@ import { describe, expect, it } from 'vitest'
 import {
   buildPairingState,
   buildPushRegistrationPayload,
-  createPairingCode,
   formatCountdown,
   generateWalletDeviceId,
   getWalletDeviceStorageKey,
   resolveNotificationPermissionState,
   resolveNotificationRequestOutcome,
-  resolveSimulatedPairing,
   resolveSkipNotifications,
   resolveWalletSetupComplete,
-  resolveWalletStatusResponse,
   shouldPollWalletStatus,
   shouldTickPairingCountdown,
   walletSetupDefaults,
 } from './walletSetupFlow'
 
 describe('walletSetupFlow helpers', () => {
-  it('creates pairing codes and QR state', () => {
-    const code = createPairingCode({ random: () => 0.123456789 })
-    expect(code).toHaveLength(8)
-    expect(buildPairingState({ deepLinkProtocol: 'marty', pairingCode: 'ABC12345' })).toEqual({
-      pairingCode: 'ABC12345',
-      qrContent: 'marty//pair?code=ABC12345',
-      expiresIn: walletSetupDefaults.expirySeconds,
-    })
+  it('builds a wallet QR only from an unexpired server ticket and HTTPS origin', () => {
+    const pairingCode = 'A'.repeat(43)
+    const pairingId = '11111111-2222-4333-8444-555555555555'
+    const state = buildPairingState({ pairingCode, pairingId, apiOrigin: 'https://wallet.example', expiresAt: new Date(300000).toISOString(), now: 0 })
+    expect(state.pairingCode).toBe(pairingCode)
+    expect(state.pairingId).toBe(pairingId)
+    expect(state.qrContent).toBe(`marty://pair?code=${pairingCode}&api=https%3A%2F%2Fwallet.example`)
+    expect(state.expiresIn).toBe(walletSetupDefaults.expirySeconds)
+    expect(() => buildPairingState({ pairingCode: 'SHORT', pairingId, apiOrigin: 'https://wallet.example', expiresAt: new Date(300000).toISOString(), now: 0 })).toThrow()
+    expect(() => buildPairingState({ pairingCode, pairingId, apiOrigin: 'http://wallet.example', expiresAt: new Date(300000).toISOString(), now: 0 })).toThrow()
   })
 
   it('decides when countdown and polling should run', () => {
@@ -33,15 +32,6 @@ describe('walletSetupFlow helpers', () => {
     expect(shouldTickPairingCountdown({ expiresIn: 0, pairingCode: 'ABC' })).toBe(false)
     expect(shouldPollWalletStatus({ activeStep: 0, walletConnected: false })).toBe(true)
     expect(shouldPollWalletStatus({ activeStep: 1, walletConnected: false })).toBe(false)
-  })
-
-  it('resolves wallet status responses', () => {
-    expect(resolveWalletStatusResponse({ activeStep: 0, devices: [{ device_id: 'device-1' }] })).toEqual({
-      walletConnected: true,
-      walletDeviceId: 'device-1',
-      nextStep: 1,
-      successMessage: 'Wallet paired successfully!',
-    })
   })
 
   it('maps notification permission into state and outcomes', () => {
@@ -77,15 +67,10 @@ describe('walletSetupFlow helpers', () => {
     })
   })
 
-  it('resolves skip, simulate, and completion outcomes', () => {
+  it('resolves skip and completion outcomes', () => {
     expect(resolveSkipNotifications()).toEqual({
       nextStep: 2,
       successMessage: 'Wallet setup complete! (Notifications skipped)',
-    })
-    expect(resolveSimulatedPairing()).toEqual({
-      walletConnected: true,
-      nextStep: 1,
-      successMessage: 'Wallet paired successfully!',
     })
     expect(resolveWalletSetupComplete()).toEqual({
       successMessage: 'Wallet setup complete! You can now receive credentials and notifications.',

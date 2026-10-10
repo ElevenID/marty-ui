@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "routes": [
-    {"method": "POST", "path": "/internal/signing-keys/flow-key-envelopes/unwrap", "operation": "flow_envelope_unwrap"},
-    {"method": "POST", "path": "/internal/signing-keys/flow-key-envelopes/wrap", "operation": "flow_envelope_wrap"},
+    {"method": "POST", "path": "/internal/signing-keys/integration-secrets/encrypt", "operation": "integration_secret_encrypt"},
+    {"method": "POST", "path": "/internal/signing-keys/integration-secrets/decrypt", "operation": "integration_secret_decrypt"},
     {"method": "GET", "path": "/internal/signing-keys/issuer-context", "operation": "issuer_context"},
     {"method": "POST", "path": "/internal/signing-keys/issuer-dids/sign", "operation": "issuer_did_sign"},
     {"method": "POST", "path": "/internal/signing-keys/issuer-profiles", "operation": "create_profile"},
@@ -17,8 +17,7 @@
     {"method": "GET", "path": "/internal/signing-keys/csca-trust-anchors", "operation": "csca_trust_anchors"},
     {"method": "POST", "path": "/internal/signing-keys/passport-artifacts/encrypt", "operation": "passport_artifact_encrypt"},
     {"method": "POST", "path": "/internal/signing-keys/passport-artifacts/decrypt", "operation": "passport_artifact_decrypt"},
-    {"method": "POST", "path": "/internal/signing-keys/passport-callbacks/verify", "operation": "passport_callback_verify"},
-    {"method": "POST", "path": "/internal/signing-keys/services/{service_id}/sign", "example_path": "/internal/signing-keys/services/service-1/sign", "operation": "service_sign"}
+    {"method": "POST", "path": "/internal/signing-keys/passport-callbacks/verify", "operation": "passport_callback_verify"}
   ],
   "dedicated_auth": {
     "header": "X-API-Key",

@@ -12,6 +12,7 @@
 **/.next
 **/out
 **/target
+openbao/didcomm-authcrypt/.build/
 
 # CI inventory manifests are not product compilation or runtime inputs.
 contracts/canvas-worker-oracle-producers.json
@@ -58,6 +59,7 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+docker/secrets/
 
 # Documentation
 *.md
@@ -77,7 +79,7 @@ tests/demo-recordings/
 tests/demo-recordings-report/
 tests/artifacts/
 
-# macOS-specific pre-built wheels (useless in Linux containers)
+# Do not admit local wheel artifacts into service build contexts.
 wheels/
 
 # CI/CD and infra (not needed in image)

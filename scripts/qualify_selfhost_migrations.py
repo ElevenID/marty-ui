@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a released migrations digest against disposable self-host dependencies.
+"""Run released migrations and Rust Issuance images on disposable dependencies.
 
 This is a release-role compatibility probe, not a full bundle installation or
 an OpenBao least-privilege qualification. It never selects an existing stack.
@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMPOSE = ROOT / "docker-compose.selfhost-migrations-disposable.yml"
 IMAGES = {
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "postgres": "docker.io/library/postgres",
     "redis": "docker.io/library/redis",
     "openbao": "quay.io/openbao/openbao",
@@ -32,7 +33,106 @@ ORG_ID = "00000000-0000-0000-0000-000000000001"
 NOTIFICATION_HEAD = (
     "SELECT version_num FROM notification_service.alembic_version LIMIT 1"
 )
+PRIVATE_KEY_SCHEMA_QUERY = """
+SELECT 'table:' || n.nspname || '.' || c.relname
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
+  AND (c.relname = 'issuer_signing_keys'
+       OR c.relname ~* '(private_key|private_jwk|secret_key)')
+UNION ALL
+SELECT 'column:' || n.nspname || '.' || c.relname || '.' || a.attname
+FROM pg_catalog.pg_attribute AS a
+JOIN pg_catalog.pg_class AS c ON c.oid = a.attrelid
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND a.attnum > 0 AND NOT a.attisdropped
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
+  AND a.attname ~* '(private_key|private_jwk|encrypted_jwk|secret_key|key_material)'
+ORDER BY 1
+LIMIT 20
+"""
+PRIVATE_KEY_CONTENT_QUERY = """
+DO $kms_private_content$
+DECLARE
+    candidate record;
+    found boolean;
+BEGIN
+    FOR candidate IN
+        SELECT n.nspname AS schema_name, c.relname AS table_name,
+               a.attname AS column_name,
+               a.atttypid IN ('json'::regtype, 'jsonb'::regtype) AS is_json
+        FROM pg_catalog.pg_class AS c
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        JOIN pg_catalog.pg_attribute AS a ON a.attrelid = c.oid
+        WHERE c.relkind IN ('r', 'p', 'm', 'f')
+          AND a.attnum > 0 AND NOT a.attisdropped
+          AND a.atttypid IN ('json'::regtype, 'jsonb'::regtype,
+                              'text'::regtype, 'varchar'::regtype,
+                              'bpchar'::regtype)
+          AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+          AND left(n.nspname, 3) <> 'pg_'
+    LOOP
+        IF candidate.is_json THEN
+            EXECUTE format(
+                'SELECT EXISTS (SELECT 1 FROM %I.%I WHERE %I::text ~* %L '
+                || 'OR %I::text ~* %L '
+                || 'OR jsonb_path_exists(%I::jsonb, %L::jsonpath))',
+                candidate.schema_name, candidate.table_name,
+                candidate.column_name,
+                '"[^\"]*(private[^[:alnum:]]*(key|jwk|pem)|secret[^[:alnum:]]*key|encrypted[^[:alnum:]]*jwk|key[^[:alnum:]]*material|pkcs8)[^\"]*"[[:space:]]*:',
+                candidate.column_name,
+                '-----BEGIN (RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----',
+                candidate.column_name,
+                '$.** ? (exists(@.kty) && (exists(@.d) || exists(@.p) || exists(@.q) || exists(@.dp) || exists(@.dq) || exists(@.qi) || exists(@.oth) || exists(@.k) || exists(@.rsa_d)))'
+            ) INTO found;
+        ELSE
+            EXECUTE format(
+                'SELECT EXISTS (SELECT 1 FROM %I.%I WHERE %I::text ~* %L)',
+                candidate.schema_name, candidate.table_name,
+                candidate.column_name,
+                '-----BEGIN (RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----'
+            ) INTO found;
+        END IF;
+        IF found THEN
+            RAISE EXCEPTION 'private-key content storage in %.%.%',
+                candidate.schema_name, candidate.table_name,
+                candidate.column_name;
+        END IF;
+    END LOOP;
+END
+$kms_private_content$;
+"""
+SCHEMA_INVENTORY_QUERY = """
+SELECT COALESCE(json_agg(json_build_object(
+    'schema', n.nspname, 'table', c.relname,
+    'column', a.attname,
+    'data_type', pg_catalog.format_type(a.atttypid, a.atttypmod)
+) ORDER BY n.nspname, c.relname, a.attnum), '[]'::json)::text
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_attribute AS a ON a.attrelid = c.oid
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND a.attnum > 0 AND NOT a.attisdropped
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
+"""
 REDIS_REGISTRY = f"org:{ORG_ID}:signing-key-services"
+NATIVE_BINARIES = (
+    "marty-organization", "marty-credential-template",
+    "marty-device-registration", "marty-issuance-service",
+)
+
+
+def native_command(operation: str) -> str:
+    return ". /app/load-secrets-env.sh; " + " && ".join(
+        ("exec " if index == len(NATIVE_BINARIES) - 1 else "")
+        + f"/usr/local/bin/{binary} {operation}"
+        for index, binary in enumerate(NATIVE_BINARIES)
+    )
 
 
 class QualificationError(ValueError):
@@ -61,7 +161,7 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and set(model) == {"name", "services", "networks", "secrets", "configs"}
             and model["name"] == project
             and set(model.get("services", {})) ==
-            {"postgres", "redis", "openbao", "db-migrate"},
+            {"postgres", "redis", "openbao", "db-migrate", "native-schema-migrate"},
             "Disposable service set changed")
     services = model["services"]
     service_keys = {
@@ -72,9 +172,12 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                     "image", "networks", "secrets"},
         "db-migrate": {"command", "depends_on", "entrypoint", "environment",
                        "image", "networks", "restart", "secrets"},
+        "native-schema-migrate": {"command", "depends_on", "entrypoint", "environment",
+                                  "image", "networks", "restart", "secrets"},
     }
     for name, role in (("postgres", "postgres"), ("redis", "redis"),
-                       ("openbao", "openbao"), ("db-migrate", "migrations")):
+                       ("openbao", "openbao"), ("db-migrate", "migrations"),
+                       ("native-schema-migrate", "services")):
         service = services[name]
         require(set(service) == service_keys[name]
                 and service.get("image") == images[role]
@@ -149,6 +252,20 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                 name: {"condition": "service_healthy", "required": True}
                 for name in ("postgres", "redis", "openbao")},
             "Self-host migration entrypoint, profile or dependencies changed")
+    native = services["native-schema-migrate"]
+    require(native["entrypoint"] == ["/bin/sh", "-ec"]
+            and native["command"] == [native_command("migrate")]
+            and native["environment"] == {
+                "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+                "DATABASE_URL_TEMPLATE":
+                    "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"}
+            and native["secrets"] == [{
+                "source": "marty_db_password",
+                "target": "/run/secrets/marty_db_password"}]
+            and native["depends_on"] == {
+                "postgres": {"condition": "service_healthy", "required": True}}
+            and native["restart"] == "no",
+            "Rust services image does not own the disposable native migrations")
     require(model.get("networks") == {"private": {
                 "name": f"{project}_private", "ipam": {}, "internal": True}},
             "Disposable network is not internal")
@@ -228,6 +345,7 @@ def qualify(images: dict[str, str], *,
         environment = os.environ.copy()
         environment.update({
             "PROBE_MIGRATIONS_IMAGE": images["migrations"],
+            "PROBE_SERVICES_IMAGE": images["services"],
             "PROBE_POSTGRES_IMAGE": images["postgres"],
             "PROBE_REDIS_IMAGE": images["redis"],
             "PROBE_OPENBAO_IMAGE": images["openbao"],
@@ -250,11 +368,20 @@ def qualify(images: dict[str, str], *,
                           "postgres", "redis", "openbao"], environment, 240),
                      "Disposable dependencies did not become ready")
             ledger = None
+            inventory = None
             for _ in range(2):
                 migration = run([*compose, "run", "--no-deps", "--rm",
                                  "db-migrate"], environment, 900)
                 _checked(migration, "Released self-host migrations failed")
                 _assert_run(migration.stdout + migration.stderr)
+                _checked(run([*compose, "run", "--no-deps", "--rm",
+                              "native-schema-migrate"], environment, 900),
+                         "Released Rust native schema migrations failed")
+                _checked(run([*compose, "run", "--no-deps", "--rm",
+                              "--entrypoint", "/bin/sh", "native-schema-migrate",
+                              "-ec", native_command("verify-owned-schema")],
+                             environment, 900),
+                         "Released Rust native schema verification failed")
                 head = _checked(run([*compose, "exec", "-T", "postgres", "psql",
                                      "-U", "marty", "-d", "marty", "-Atqc",
                                      NOTIFICATION_HEAD], environment),
@@ -264,6 +391,41 @@ def qualify(images: dict[str, str], *,
                 require(ledger is None or head == ledger,
                         "Notification migration head changed on idempotent rerun")
                 ledger = head
+                alembic = _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-Atqc",
+                    "SELECT to_regclass('issuance_service.alembic_version') IS NULL",
+                ], environment), "Issuance historical schema inventory failed").strip()
+                require(alembic == "t", "Released Issuance schema retains Alembic state")
+                private_schema = _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-Atqc", PRIVATE_KEY_SCHEMA_QUERY,
+                ], environment), "Private-key schema inventory failed").strip()
+                require(not private_schema,
+                        "Released self-host migrations created private-key storage")
+                _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-v", "ON_ERROR_STOP=1", "-qAtc",
+                    PRIVATE_KEY_CONTENT_QUERY,
+                ], environment), "Private-key content storage scan failed")
+                raw_inventory = _checked(run([
+                    *compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+                    "-d", "marty", "-Atqc", SCHEMA_INVENTORY_QUERY,
+                ], environment), "Assembled schema inventory failed").strip()
+                try:
+                    current_inventory = json.loads(raw_inventory)
+                except (TypeError, ValueError) as exc:
+                    raise QualificationError("Assembled schema inventory is invalid") from exc
+                require(isinstance(current_inventory, list) and current_inventory
+                        and all(isinstance(column, dict)
+                                and set(column) == {"schema", "table", "column", "data_type"}
+                                and all(isinstance(value, str) and value
+                                        for value in column.values())
+                                for column in current_inventory),
+                        "Assembled schema inventory is invalid")
+                require(inventory is None or current_inventory == inventory,
+                        "Assembled schema changed on idempotent rerun")
+                inventory = current_inventory
                 redis = _checked(run([*compose, "exec", "-T", "redis", "redis-cli",
                                       "-n", "2", "EXISTS", REDIS_REGISTRY], environment),
                                  "KMS registry verification failed").strip()
@@ -280,9 +442,13 @@ def qualify(images: dict[str, str], *,
                 ], environment), "OpenBao notification key verification failed").strip()
                 require(transit.splitlines() == ["aes256-gcm96", "false"],
                         "Notification envelope key has unsafe attributes")
-            return {"schema": "marty.selfhost-migrations-qualification/v1",
+            return {"schema": "marty.selfhost-migrations-qualification/v3",
                     "migrations_image": images["migrations"],
+                    "services_image": images["services"],
+                    "native_schemas": "verified",
                     "notification_head": ledger,
+                    "private_key_storage": "absent",
+                    "table_columns": inventory,
                     "profile": "selfhost-production", "runs": "2"}
         finally:
             if started:

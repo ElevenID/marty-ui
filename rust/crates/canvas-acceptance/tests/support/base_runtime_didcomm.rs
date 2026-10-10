@@ -133,17 +133,16 @@ pub(super) async fn run(input: Input<'_>) {
     assert_eq!(captures["messages"].as_array().unwrap().len(), 2);
     let encrypted = captures["messages"][1].as_str().unwrap();
     let plaintext = if authenticated {
-        let envelope = marty_didcomm::decrypt_authenticated_jwe(
+        let envelope = super::didcomm_test_fixtures::holder_decrypt_authcrypt(
             encrypted,
             recipient_secret,
             &peers.recipient,
             &peers.sender,
-        )
-        .unwrap();
+        );
         assert_eq!(envelope.sender_kid, format!("{ISSUER}#key-1"));
         envelope.plaintext
     } else {
-        marty_didcomm::decrypt_jwe(encrypted, recipient_secret).unwrap()
+        super::didcomm_test_fixtures::holder_decrypt_anoncrypt(encrypted, recipient_secret)
     };
     let message = marty_didcomm::unpack_didcomm_message(&plaintext).unwrap();
     assert_eq!(message.thid.as_deref(), Some(id));

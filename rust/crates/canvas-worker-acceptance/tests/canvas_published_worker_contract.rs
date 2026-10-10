@@ -1080,6 +1080,9 @@ mod canvas_worker_provider_signals_replay;
 #[path = "../../../services/issuance/tests/support/canvas_worker_rest_replay.rs"]
 mod canvas_worker_rest_replay;
 
+#[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
+mod remote_integration_secret;
+
 #[test]
 fn worker_provider_signals_match_frozen_published_process() {
     assert_worker_provider_https("signals");

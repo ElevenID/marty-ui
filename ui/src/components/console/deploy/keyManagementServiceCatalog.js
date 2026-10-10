@@ -6,7 +6,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     provider: 'openbao',
     protocol: 'vault-transit',
     category: 'service-hsm',
-    auth_modes: ['service_token', 'token', 'approle', 'mtls'],
+    auth_modes: ['token'],
     connection_fields: ['endpoint', 'mount', 'namespace'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,
@@ -18,7 +18,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     provider: 'hashicorp-vault',
     protocol: 'vault-transit',
     category: 'service-hsm',
-    auth_modes: ['token', 'approle', 'mtls'],
+    auth_modes: ['token'],
     connection_fields: ['endpoint', 'mount', 'namespace'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,
@@ -42,7 +42,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     provider: 'azure',
     protocol: 'azure-key-vault',
     category: 'cloud-kms',
-    auth_modes: ['managed_identity', 'client_secret', 'certificate'],
+    auth_modes: ['managed_identity', 'client_secret'],
     connection_fields: ['endpoint'],
     key_reference_label: 'Key identifier',
     supports_inventory: false,
@@ -66,7 +66,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     provider: 'custom',
     protocol: 'vault-transit-compatible',
     category: 'custom',
-    auth_modes: ['token', 'mtls', 'api_key', 'custom'],
+    auth_modes: ['token'],
     connection_fields: ['endpoint', 'mount', 'namespace'],
     key_reference_label: 'Key reference',
     supports_inventory: false,
@@ -131,10 +131,6 @@ export const PURPOSES_REQUIRING_CERTIFICATE = ['mdoc_dsc', 'x509_doc_signer', 'v
 export const PURPOSES_REQUIRING_AUTHORITY = ['vdsnc_signing', 'csca', 'mdoc_dsc']
 
 export const DEFAULT_KEY_MANAGEMENT_CONFIG = {
-  hsm_enabled: false,
-  hsm_settings: {},
-  vault_enabled: false,
-  vault_settings: {},
   provider_metadata: null,
   domain_config: null,
   supports_native_key_management: false,
@@ -192,43 +188,6 @@ export const getServiceTypeDefinition = (catalog, serviceTypeId) => {
   return normalizedCatalog.find((entry) => entry.id === serviceTypeId)
     || normalizedCatalog.find((entry) => entry.id === 'custom-transit-compatible')
     || normalizedCatalog[0]
-}
-
-const createLegacyServiceFromConfig = (normalized, catalog) => {
-  if (!normalized.hsm_enabled || !normalized.hsm_settings || typeof normalized.hsm_settings !== 'object') {
-    return []
-  }
-
-  const managed = Boolean(normalized.hsm_settings.managed_by)
-  const serviceType = managed ? 'openbao-transit' : 'custom-transit-compatible'
-  const definition = getServiceTypeDefinition(catalog, serviceType)
-  const legacyService = normalizeKeyManagementService(
-    {
-      id: managed ? 'managed-openbao-transit' : 'legacy-signing-service',
-      name: managed ? 'Marty managed OpenBao transit' : (normalized.hsm_settings.provider_label || normalized.hsm_settings.provider || 'Registered KMS/HSM'),
-      service_type: serviceType,
-      provider: normalizeString(normalized.hsm_settings.provider) || definition.provider,
-      provider_label: managed ? 'OpenBao Transit' : (normalized.hsm_settings.provider_label || definition.label),
-      protocol: definition.protocol,
-      endpoint: normalizeString(normalized.hsm_settings.service_url),
-      mount: normalizeString(normalized.hsm_settings.mount),
-      namespace: normalizeString(normalized.hsm_settings.namespace),
-      region: normalizeString(normalized.hsm_settings.region),
-      key_reference: normalizeString(normalized.hsm_settings.key_reference),
-      key_aliases: parseListInput(normalized.hsm_settings.signing_key_names),
-      algorithms: parseListInput(normalized.hsm_settings.algorithms),
-      auth_mode: normalizeString(normalized.hsm_settings.auth_mode) || definition.auth_modes[0],
-      auth_reference: normalizeString(normalized.hsm_settings.auth_reference),
-      status: managed ? 'configured' : 'registered',
-      managed,
-      read_only: managed,
-      managed_by: normalizeString(normalized.hsm_settings.managed_by),
-      key_count: Number.isFinite(normalized.hsm_settings.signing_key_count) ? normalized.hsm_settings.signing_key_count : undefined,
-    },
-    catalog,
-  )
-
-  return legacyService ? [legacyService] : []
 }
 
 export const normalizeKeyManagementService = (service, catalog) => {
@@ -305,7 +264,7 @@ export const normalizeKeyManagementService = (service, catalog) => {
 export const normalizeKeyManagementConfig = (data) => {
   const normalized = data && typeof data === 'object' ? data : {}
   const serviceTypeCatalog = normalizeServiceTypeCatalog(normalized.service_type_catalog)
-  const rawServices = Array.isArray(normalized.services) ? normalized.services : createLegacyServiceFromConfig(normalized, serviceTypeCatalog)
+  const rawServices = Array.isArray(normalized.services) ? normalized.services : []
   const services = rawServices
     .map((service) => normalizeKeyManagementService(service, serviceTypeCatalog))
     .filter(Boolean)
@@ -315,14 +274,6 @@ export const normalizeKeyManagementConfig = (data) => {
     : services[0]?.id || null
 
   return {
-    hsm_enabled: Boolean(normalized.hsm_enabled || services.length > 0),
-    hsm_settings: normalized.hsm_settings && typeof normalized.hsm_settings === 'object'
-      ? normalized.hsm_settings
-      : {},
-    vault_enabled: Boolean(normalized.vault_enabled),
-    vault_settings: normalized.vault_settings && typeof normalized.vault_settings === 'object'
-      ? normalized.vault_settings
-      : {},
     provider_metadata: normalized.provider_metadata && typeof normalized.provider_metadata === 'object'
       ? normalized.provider_metadata
       : null,

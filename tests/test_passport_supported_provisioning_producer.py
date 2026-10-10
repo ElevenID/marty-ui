@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -178,8 +177,11 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
             "dsc_issue_gateway_key", "csca_issue_gateway_key",
             "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+            "signing_keys_service_sign_gateway_key",
+            "signing_keys_issuer_sign_key",
+            "device_registration_gateway_key",
             "passport_beta_reconciliation_operator_token",
-            "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+            "bureau_database_url", "token_hmac_key",
             "flow_webhook_secret", "flow_application_event_hmac_key",
         } | TLS_FILES
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
@@ -187,7 +189,9 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "dsc_issue_gateway_key", "csca_issue_gateway_key")]
         assert all(len(key) == 64 for key in ceremony_keys)
         assert len(set(ceremony_keys + [
-            (secret_dir / "signing_keys_internal_api_key").read_text(encoding="ascii")])) == 3
+            (secret_dir / "signing_keys_internal_api_key").read_text(encoding="ascii"),
+            (secret_dir / "signing_keys_service_sign_gateway_key").read_text(encoding="ascii"),
+            (secret_dir / "signing_keys_issuer_sign_key").read_text(encoding="ascii")])) == 5
         operator_token = (secret_dir / "passport_beta_reconciliation_operator_token").read_text(
             encoding="ascii")
         assert len(operator_token) == 64
@@ -195,14 +199,17 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             (secret_dir / "grpc_service_token").read_text(encoding="ascii"),
             (secret_dir / "issuance_api_key").read_text(encoding="ascii"),
         }
+        gateway_key = (secret_dir / "device_registration_gateway_key").read_text(
+            encoding="ascii")
+        assert len(gateway_key) == 64
+        assert gateway_key not in {
+            (secret_dir / "grpc_service_token").read_text(encoding="ascii"),
+            (secret_dir / "issuance_api_key").read_text(encoding="ascii"),
+        }
         password = (secret_dir / "marty_db_password").read_text(encoding="ascii")
         assert (secret_dir / "bureau_database_url").read_text(encoding="ascii") == (
             f"postgresql://marty:{password}@postgres:5432/marty"
         )
-        assert len(base64.b64decode(
-            (secret_dir / "integration_secret_master_key").read_text(encoding="ascii"),
-            validate=True,
-        )) == 32
         env = dict(line.split("=", 1) for line in env_file.read_text(
             encoding="ascii").splitlines())
         assert env["PASSPORT_ACCEPTANCE_PROJECT"] == project

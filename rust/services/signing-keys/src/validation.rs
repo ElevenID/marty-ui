@@ -55,6 +55,19 @@ pub struct ValidationResult {
 
 pub async fn validate(request: ValidationRequest) -> ValidationResult {
     let body = Value::Object(request.service_config);
+    let requested_type = trimmed(body.get("service_type")).unwrap_or_default();
+    if service_type(requested_type).id != requested_type {
+        return ValidationResult {
+            ok: false,
+            checks: vec![ValidationCheck {
+                name: "Service type".into(),
+                status: "fail".into(),
+                detail: "Signing service type is unsupported.".into(),
+                source: "baseline".into(),
+            }],
+            validated_at: Utc::now().to_rfc3339(),
+        };
+    }
     let payload = normalize_payload(&body);
     let mut checks = Vec::new();
     append_baseline_checks(&payload, &mut checks);
@@ -78,7 +91,7 @@ pub async fn validate(request: ValidationRequest) -> ValidationResult {
 }
 
 fn normalize_payload(body: &Value) -> Value {
-    let requested_type = trimmed(body.get("service_type")).unwrap_or("custom-transit-compatible");
+    let requested_type = trimmed(body.get("service_type")).expect("validated service type");
     let definition = service_type(requested_type);
     let algorithms = string_list(body.get("algorithms"))
         .into_iter()
@@ -89,6 +102,7 @@ fn normalize_payload(body: &Value) -> Value {
         .filter(|value| KEY_PURPOSES.contains(&value.as_str()))
         .collect::<Vec<_>>();
     json!({
+        "id": trimmed(body.get("id")).unwrap_or_default(),
         "service_type": definition.id,
         "provider": definition.provider,
         "protocol": definition.protocol,
@@ -110,7 +124,15 @@ fn normalize_payload(body: &Value) -> Value {
 fn append_baseline_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     let auth_mode = string(payload, "auth_mode");
     let auth_reference = string(payload, "auth_reference");
-    if requires_auth_reference(auth_mode) && auth_reference.is_empty() {
+    if auth_mode == "service_token" && kms::validate_transit_auth_config(payload).is_err() {
+        add(
+            checks,
+            "Authentication reference",
+            "fail",
+            "Mounted OpenBao token is only available to the managed service at its configured endpoint.",
+            "baseline",
+        );
+    } else if requires_auth_reference(auth_mode) && auth_reference.is_empty() {
         add(
             checks,
             "Authentication reference",
@@ -206,29 +228,30 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     let service_type_id = string(payload, "service_type");
     let key_reference = string(payload, "key_reference");
     if !key_reference.is_empty() {
-        let (pattern, pass, fail) = match provider {
+        let (valid, pass, fail) = match provider {
             "aws" => (
-                r"^arn:aws:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$",
+                Regex::new(r"^arn:aws:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$")
+                    .expect("static provider regex")
+                    .is_match(key_reference),
                 "AWS key reference looks like a valid KMS key ARN.",
                 "AWS key reference should be a key ARN (arn:aws:kms:region:account:key/<id>).",
             ),
             "azure" => (
-                r"^https://[a-z0-9-]+\.vault\.azure\.net/keys/[A-Za-z0-9-]+(/[A-Za-z0-9-]+)?$",
+                kms::azure_key_path(payload).is_ok(),
                 "Azure key reference looks like a Key Vault key identifier.",
-                "Azure key reference should look like https://<vault>.vault.azure.net/keys/<name>/<version?>.",
+                "Azure key reference must name a key in the configured Key Vault or Managed HSM.",
             ),
             "gcp" => (
-                r"^projects/[a-z0-9-]+/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+(/cryptoKeyVersions/[0-9]+)?$",
+                Regex::new(r"^projects/[a-z0-9-]+/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+(/cryptoKeyVersions/[0-9]+)?$")
+                    .expect("static provider regex")
+                    .is_match(key_reference),
                 "GCP key reference looks like a Cloud KMS resource path.",
                 "GCP key reference should look like projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>[/cryptoKeyVersions/<v>].",
             ),
-            _ => ("", "", ""),
+            _ => (false, "", ""),
         };
-        if !pattern.is_empty() {
-            if Regex::new(pattern)
-                .expect("static provider regex")
-                .is_match(key_reference)
-            {
+        if !pass.is_empty() {
+            if valid {
                 add(checks, "Provider key format", "pass", pass, "provider");
             } else {
                 add(checks, "Provider key format", "fail", fail, "provider");
@@ -267,23 +290,28 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
 }
 
 fn append_provider_auth(payload: &Value, checks: &mut Vec<ValidationCheck>) {
-    let provider = string(payload, "provider");
-    let auth_mode = string(payload, "auth_mode");
-    let has_reference = !string(payload, "auth_reference").is_empty();
-    let result = match (provider, auth_mode, has_reference) {
-        ("aws", "iam_role", _) => Some(("pass", "IAM role mode selected; ensure gateway runtime identity has kms:Sign permissions.")),
-        ("aws", "access_key" | "assume_role", true) => Some(("pass", "Credential reference provided for AWS auth mode.")),
-        ("aws", "access_key" | "assume_role", false) => Some(("warning", "Provide an auth reference for access_key/assume_role modes.")),
-        ("azure", "managed_identity", _) => Some(("pass", "Managed identity mode selected; ensure Key Vault sign permissions are granted.")),
-        ("azure", "client_secret" | "certificate", true) => Some(("pass", "Credential reference provided for Azure auth mode.")),
-        ("azure", "client_secret" | "certificate", false) => Some(("warning", "Provide an auth reference for client_secret/certificate modes.")),
-        ("gcp", "workload_identity", _) => Some(("pass", "Workload identity selected; ensure cloudkms.cryptoKeyVersions.useToSign permission is granted.")),
-        ("gcp", "service_account", true) => Some(("pass", "Service account reference provided for GCP auth mode.")),
-        ("gcp", "service_account", false) => Some(("warning", "Provide a service account reference for GCP auth mode.")),
-        _ => None,
+    let name = match string(payload, "provider") {
+        "openbao" | "hashicorp-vault" | "custom" => "Transit",
+        "aws" => "AWS",
+        "azure" => "Azure",
+        "gcp" => "GCP",
+        _ => return,
     };
-    if let Some((status, detail)) = result {
-        add(checks, "Provider auth policy", status, detail, "provider");
+    match kms::validate_service_auth_config(payload) {
+        Ok(()) => add(
+            checks,
+            "Provider auth policy",
+            "pass",
+            format!("{name} credential configuration matches the selected auth mode."),
+            "provider",
+        ),
+        Err(error) => add(
+            checks,
+            "Provider auth policy",
+            "fail",
+            error.to_string(),
+            "provider",
+        ),
     }
 }
 
@@ -331,6 +359,16 @@ async fn validate_provider_adapter(payload: &Value, checks: &mut Vec<ValidationC
 }
 
 async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationCheck>) {
+    if let Err(error) = kms::validate_transit_auth_config(payload) {
+        add(
+            checks,
+            "Provider auth",
+            "fail",
+            error.to_string(),
+            "adapter",
+        );
+        return;
+    }
     let endpoint = string(payload, "endpoint");
     if endpoint.is_empty() {
         add(
@@ -353,7 +391,10 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
     let key_reference = string(payload, "key_reference");
     let token = transit_token(payload);
     let namespace = string(payload, "namespace");
-    let mut health = Client::new()
+    let Some(client) = provider_client(checks) else {
+        return;
+    };
+    let mut health = client
         .get(format!("{}/v1/sys/health", endpoint.trim_end_matches('/')))
         .timeout(PROBE_TIMEOUT);
     if !token.is_empty() {
@@ -409,7 +450,6 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
         }
     }
 
-    let client = Client::new();
     if token.is_empty() {
         add(
             checks,
@@ -490,8 +530,7 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
     let response = request.send().await;
     match response {
         Ok(response) if response.status().is_success() => {
-            let has_signature = response
-                .json::<Value>()
+            let has_signature = kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES)
                 .await
                 .ok()
                 .and_then(|value| {
@@ -548,7 +587,9 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
 }
 
 async fn validate_bridge(payload: &Value, validator_url: &str, checks: &mut Vec<ValidationCheck>) {
-    let client = Client::new();
+    let Some(client) = provider_client(checks) else {
+        return;
+    };
     let auth_reference = string(payload, "auth_reference");
     let mut health_request = client
         .get(format!("{}/health", validator_url.trim_end_matches('/')))
@@ -615,7 +656,9 @@ async fn validate_bridge(payload: &Value, validator_url: &str, checks: &mut Vec<
     }
     match request.send().await {
         Ok(response) if response.status().as_u16() == 200 => {
-            let body = response.json::<Value>().await.unwrap_or_default();
+            let body = kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES)
+                .await
+                .unwrap_or_default();
             if body.get("ok").and_then(Value::as_bool) == Some(true) {
                 add(
                     checks,
@@ -688,10 +731,12 @@ fn validator_url(provider: &str) -> Option<String> {
 
 fn transit_token(payload: &Value) -> String {
     match string(payload, "auth_mode") {
-        "service_token" => secret_value("BAO_TOKEN")
-            .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
-            .unwrap_or_default(),
-        "token" | "api_key" | "custom" => string(payload, "auth_reference").to_string(),
+        "service_token" if kms::validate_transit_auth_config(payload).is_ok() => {
+            secret_value("BAO_TOKEN")
+                .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
+                .unwrap_or_default()
+        }
+        "token" => string(payload, "auth_reference").to_string(),
         _ => String::new(),
     }
 }
@@ -708,6 +753,22 @@ fn secret_value(name: &str) -> Option<String> {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         })
+}
+
+fn provider_client(checks: &mut Vec<ValidationCheck>) -> Option<Client> {
+    match kms::provider_http_client() {
+        Ok(client) => Some(client),
+        Err(_) => {
+            add(
+                checks,
+                "Provider connectivity",
+                "warning",
+                "KMS HTTP client is unavailable.",
+                "live",
+            );
+            None
+        }
+    }
 }
 
 fn add(
@@ -802,5 +863,174 @@ mod tests {
             .checks
             .iter()
             .any(|check| check.name == "Algorithm coverage" && check.status == "fail"));
+    }
+
+    #[tokio::test]
+    async fn external_transit_validation_rejects_mounted_token_even_without_live_probe() {
+        let config = json!({
+            "service_type": "openbao-transit",
+            "auth_mode": "service_token",
+            "endpoint": "https://external.example",
+            "key_reference": "signer",
+            "algorithms": ["ES256"]
+        });
+        let result = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(!result.ok);
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| { check.name == "Authentication reference" && check.status == "fail" }));
+    }
+
+    #[tokio::test]
+    async fn unsupported_transit_auth_does_not_pass_registration_preflight() {
+        let config = json!({
+            "service_type": "custom-transit-compatible",
+            "auth_mode": "mtls",
+            "key_reference": "signer",
+            "algorithms": ["ES256"]
+        });
+        let result = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(!result.ok);
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+    }
+
+    #[tokio::test]
+    async fn unknown_service_type_fails_before_any_provider_probe() {
+        let config = json!({
+            "service_type": "not-a-kms",
+            "auth_mode": "token",
+            "auth_reference": "tenant-token",
+            "endpoint": "https://external.example"
+        });
+        let result = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: true,
+        })
+        .await;
+        assert!(!result.ok);
+        assert_eq!(result.checks.len(), 1);
+        assert_eq!(result.checks[0].name, "Service type");
+    }
+
+    #[tokio::test]
+    async fn aws_validation_rejects_auth_mode_reference_mismatch() {
+        for (mode, reference) in [
+            ("access_key", "opaque-reference-only"),
+            ("assume_role", r#"{"role_arn":"not-an-arn"}"#),
+            ("iam_role", "unexpected-credential"),
+        ] {
+            let config = json!({
+                "service_type": "aws-kms",
+                "auth_mode": mode,
+                "auth_reference": reference,
+                "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test",
+                "algorithms": ["ES256"]
+            });
+            let result = validate(ValidationRequest {
+                service_config: config.as_object().unwrap().clone(),
+                live_probe: false,
+            })
+            .await;
+            assert!(!result.ok, "{mode} must fail");
+            assert!(result
+                .checks
+                .iter()
+                .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_validation_rejects_literal_tokens_and_local_certificate_keys() {
+        for (mode, reference) in [
+            ("managed_identity", "literal-bearer-token"),
+            ("client_secret", "literal-bearer-token"),
+            ("certificate", r#"{"private_key":"local-key"}"#),
+        ] {
+            let config = json!({
+                "service_type": "azure-key-vault",
+                "auth_mode": mode,
+                "auth_reference": reference,
+                "key_reference": "https://vault.azure.net/keys/test",
+                "algorithms": ["ES256"]
+            });
+            let result = validate(ValidationRequest {
+                service_config: config.as_object().unwrap().clone(),
+                live_probe: false,
+            })
+            .await;
+            assert!(!result.ok, "{mode} must fail");
+            assert!(result
+                .checks
+                .iter()
+                .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_validation_accepts_vault_uri_and_rejects_cross_vault_key() {
+        let config = json!({
+            "service_type": "azure-key-vault",
+            "endpoint": "https://issuer.vault.azure.net",
+            "auth_mode": "managed_identity",
+            "key_reference": "https://issuer.vault.azure.net/keys/signing-key/version-1",
+            "algorithms": ["ES256"]
+        });
+        let accepted = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(accepted.ok);
+        let mut cross_vault = config;
+        cross_vault["key_reference"] = json!("https://other.vault.azure.net/keys/signing-key");
+        let rejected = validate(ValidationRequest {
+            service_config: cross_vault.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(!rejected.ok);
+        assert!(rejected
+            .checks
+            .iter()
+            .any(|check| check.name == "Provider key format" && check.status == "fail"));
+    }
+
+    #[tokio::test]
+    async fn gcp_validation_rejects_bearer_and_service_account_private_key() {
+        for (mode, reference) in [
+            ("workload_identity", "literal-bearer-token"),
+            ("service_account", r#"{"private_key":"local-key"}"#),
+            ("service_account", r#"{"email":"not-a-service-account"}"#),
+        ] {
+            let config = json!({
+                "service_type": "gcp-cloud-kms",
+                "auth_mode": mode,
+                "auth_reference": reference,
+                "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
+                "algorithms": ["ES256"]
+            });
+            let result = validate(ValidationRequest {
+                service_config: config.as_object().unwrap().clone(),
+                live_probe: false,
+            })
+            .await;
+            assert!(!result.ok, "{mode} must fail");
+            assert!(result
+                .checks
+                .iter()
+                .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+        }
     }
 }

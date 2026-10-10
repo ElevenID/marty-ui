@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_oid4vci::{
     issuer::IssuanceEngine,
-    types::{IssuerConfig, IssuerKey, SigningAlgorithm, TokenResponse},
+    types::{IssuerConfig, TokenResponse},
 };
 use marty_oid4vci::{AuthorizationCodeTokenRequest, AuthorizationSession, CodeChallengeMethod};
 use serde::Deserialize;
@@ -375,11 +375,6 @@ pub fn protocol_engine() -> IssuanceEngine {
         credential_issuer_url: String::new(),
         issuer_name: String::new(),
         credential_types: vec![],
-        issuer_key: IssuerKey {
-            issuer_id: String::new(),
-            jwk_json: String::new(),
-            algorithm: SigningAlgorithm::EdDSA,
-        },
         token_endpoint: None,
         credential_endpoint: None,
         authorization_endpoint: None,

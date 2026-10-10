@@ -101,6 +101,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.release_identity.clone(),
         )?
         .with_service_token(config.grpc_service_token.clone())?
+        .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
+        .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
+        .with_issuer_sign_key(config.issuer_sign_key.clone())?
         .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
         .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?
         .with_passport_native_gateway(

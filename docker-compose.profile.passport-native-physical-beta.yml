@@ -37,9 +37,6 @@ services:
       PASSPORT_KMS_CALLBACKS_ENABLED: "true"
       PASSPORT_TENANT_API_KEYS: ""
       PASSPORT_TENANT_API_KEYS_FILE: ""
-      PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: "false"
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY: ""
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE: ""
       ICAO_DOCUMENT_SIGNER_URL: ""
       ICAO_DOCUMENT_SIGNER_API_KEY: ""
       ICAO_DOCUMENT_SIGNER_API_KEY_FILE: ""
@@ -47,29 +44,8 @@ services:
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:?select a registered physical bureau profile}
       PERSONALIZATION_BUREAU_API_KEY: ""
       PERSONALIZATION_BUREAU_API_KEY_FILE: /run/secrets/passport_physical_provider_api_key
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ""
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE: ""
     secrets:
       - passport_physical_provider_api_key
-
-  # Keep the beta-only binary under the ingress's private signer DNS name. It
-  # shares the Rust KMS MAC router but receives only dedicated file credentials.
-  passport-callback-signer-supported:
-    environment:
-      SERVICE_NAME: passport_callback_signer
-      ENVIRONMENT: beta
-      PASSPORT_CALLBACK_SIGNER_ENABLED: "true"
-      PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED: "false"
-      SIGNING_KEYS_SERVICE_PORT: "8018"
-      SIGNING_KEYS_INTERNAL_API_KEY: ""
-      SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/passport_callback_signer_api_key
-      BAO_TOKEN: ""
-      BAO_TOKEN_FILE: /run/secrets/passport_callback_signer_bao_token
-      OPENBAO_SERVICE_TOKEN: ""
-      OPENBAO_SERVICE_TOKEN_FILE: ""
-      PASSPORT_CALLBACK_SIGNER_API_KEY_FILE: ""
-      PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE: ""
-      BAO_ADDR: http://openbao:8200
 
   passport-provider-ingress:
     environment:

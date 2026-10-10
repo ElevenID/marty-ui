@@ -140,10 +140,18 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "--offline",
             "-p",
             "marty-issuance-service",
+            "-p",
+            "marty-organization",
+            "-p",
+            "marty-credential-template",
             "--bin",
             "marty-issuance-service",
             "--bin",
             "marty-canvas-sync-worker",
+            "--bin",
+            "marty-organization",
+            "--bin",
+            "marty-credential-template",
             "--message-format=json",
         ],
         [
@@ -336,7 +344,7 @@ def test_selfhost_diagnostic_is_additive_and_uses_the_full_image_contract() -> N
     assert "pull_published_postgres" in selfhost_branch
     assert 'timed image_pull published_probe docker pull "${images[1]}"' in selfhost_branch
     assert "--nocapture --test-threads=4" in selfhost_branch
-    assert "10 passed; 0 failed; 0 ignored" in selfhost_branch
+    assert "12 passed; 0 failed; 0 ignored" in selfhost_branch
     assert runner.count("selfhost_public_image_loader_isolated: test") == 2
 
 

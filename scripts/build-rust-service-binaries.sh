@@ -1,15 +1,10 @@
 #!/bin/sh
 set -eu
 
-# Keep the production and opt-in test image on the same explicit binary list.
-# An unknown mode must fail closed rather than silently building a default image.
+# Build the single KMS-only public service binary set.
 case "${1:-}" in
   default) shift; set -- ;;
-  passport-self-signed-test)
-    shift
-    set -- --features marty-issuance-service/passport-self-signed-test
-    ;;
-  *) echo "expected default or passport-self-signed-test build mode" >&2; exit 2 ;;
+  *) echo "expected default build mode" >&2; exit 2 ;;
 esac
 
 exec cargo build --locked --release "$@" \

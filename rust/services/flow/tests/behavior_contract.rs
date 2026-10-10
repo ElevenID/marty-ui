@@ -137,6 +137,14 @@ fn private_context_is_rejected_and_recursively_removed_from_public_results() {
     let prefixed = json!({"items": [{"_marty_private": "secret", "ok": true}]});
     assert!(reject_private_context(&prefixed).is_err());
     assert_eq!(public_context(&prefixed), json!({"items": [{"ok": true}]}));
+    assert!(reject_private_context(&json!({
+        "issuer": {"public_jwk": {"kty": "EC", "crv": "P-256", "d": "secret"}}
+    }))
+    .is_err());
+    assert!(reject_private_context(&json!({
+        "issuer": "{\"private_jwk\":\"secret\"}"
+    }))
+    .is_err());
 }
 
 #[test]

@@ -21,7 +21,7 @@ mmf-platform.workspace = true
 mmf-push.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
-marty-oid4vci.workspace = true
+marty-oid4vci = { workspace = true, features = ["jose-verification"] }
 prost.workspace = true
 rand.workspace = true
 reqwest.workspace = true
@@ -41,8 +41,6 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
-jsonwebtoken.workspace = true
-p256.workspace = true
 serde_json.workspace = true
 tower.workspace = true
 

@@ -74,8 +74,7 @@ for spec in \
     cred-dsc-marty-primary:ecdsa-p256 \
     "$csca_key":ecdsa-p256 \
     "$dsc_key":ecdsa-p256 \
-    passport-artifact-marty-aes256:aes256-gcm96 \
-    flow-response-envelope-marty-aes256:aes256-gcm96; do
+    passport-artifact-marty-aes256:aes256-gcm96; do
     key=${spec%%:*}
     expected_type=${spec#*:}
     if [ "$(bao read -field=type "transit/keys/$key")" != "$expected_type" ] ||
@@ -95,7 +94,7 @@ service_tmp=$(mktemp /work/secrets/.bao_token.XXXXXX)
 callback_tmp=$(mktemp /work/secrets/.callback_signer_bao_token.XXXXXX)
 trap 'rm -f "$service_tmp" "$callback_tmp"' EXIT HUP INT TERM
 service_token=$(bao token create -policy=credential-service -orphan -ttl=2h -renewable=false -field=token)
-callback_token=$(bao token create -policy=passport-callback-hmac-service -orphan -ttl=2h -renewable=false -field=token)
+callback_token=$(bao token create -policy=passport-provider-callback-service -orphan -ttl=2h -renewable=false -field=token)
 if [ -z "$service_token" ] || [ -z "$callback_token" ] ||
    [ "$service_token" = "$callback_token" ] ||
    [ "$service_token" = "$BAO_TOKEN" ] || [ "$callback_token" = "$BAO_TOKEN" ]; then
@@ -109,6 +108,9 @@ service_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token
 callback_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/hmac/passport-bureau-callback-marty-hmac)
 callback_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/keys/passport-bureau-callback-marty-hmac)
 callback_verify_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/verify/passport-bureau-callback-marty-hmac)
+provider_verify_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/verify/passport-provider-callback-synthetic)
+provider_hmac_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/hmac/passport-provider-callback-synthetic)
+provider_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/keys/passport-provider-callback-synthetic)
 callback_sign_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/sign/cred-issuer-marty-es256)
 callback_create_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities auth/token/create)
 service_create_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities auth/token/create)
@@ -120,8 +122,14 @@ case "$callback_caps" in
     "create, update" | "update, create") ;;
     *) echo "Disposable callback token cannot MAC" >&2; exit 1 ;;
 esac
+case "$provider_verify_caps" in
+    "create, update" | "update, create") ;;
+    *) echo "Disposable callback token cannot verify provider HMAC" >&2; exit 1 ;;
+esac
 if [ "$callback_key_caps" != "deny" ] ||
    [ "$callback_verify_caps" != "deny" ] ||
+   [ "$provider_hmac_caps" != "deny" ] ||
+   [ "$provider_key_caps" != "deny" ] ||
    [ "$callback_sign_caps" != "deny" ] ||
    [ "$callback_create_caps" != "deny" ] ||
    [ "$service_create_caps" != "deny" ]; then

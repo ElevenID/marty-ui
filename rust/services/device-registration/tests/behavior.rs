@@ -1,328 +1,362 @@
+use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use marty_device_registration::{
-    challenge::{ChallengeRepository, MemoryChallengeRepository},
-    control_plane::AllowMembership,
+    control_plane::{AllowMembership, MembershipAuthorizer},
     http::{router, HttpState},
-    CreateRegistration, DeviceError, DeviceRepository, DeviceService, MemoryDeviceRepository,
-    Platform, ProofHeaders, UpdateRegistration,
+    pairing_ticket::MemoryPairingTickets,
+    CreateRegistration, DeviceError, DeviceService, MemoryDeviceRepository, Platform,
+    UpdateRegistration,
 };
-use marty_verification::device_auth::inspect_device_public_key;
-use marty_verification::device_auth::DeviceChallengeRecord;
-use rand08::rngs::OsRng;
-use rsa::{
-    pkcs1::EncodeRsaPublicKey,
-    pss::BlindedSigningKey,
-    signature::{RandomizedSigner, SignatureEncoding},
-    RsaPrivateKey,
-};
-use serde_json::Value;
-use sha2::Sha256;
+use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
 
-fn service() -> (DeviceService, Arc<MemoryDeviceRepository>) {
-    let repository = Arc::new(MemoryDeviceRepository::default());
-    let challenges: Arc<dyn ChallengeRepository> = Arc::new(MemoryChallengeRepository::new(300));
-    (
-        DeviceService::new(repository.clone(), challenges, 300).unwrap(),
-        repository,
-    )
+fn service() -> DeviceService {
+    DeviceService::new(Arc::new(MemoryDeviceRepository::default()))
 }
 
-fn key() -> (RsaPrivateKey, String, String) {
-    let private = RsaPrivateKey::new(&mut OsRng, 2048).unwrap();
-    let der = private.to_public_key().to_pkcs1_der().unwrap();
-    let encoded = URL_SAFE_NO_PAD.encode(der.as_bytes());
-    let kid = inspect_device_public_key(&encoded).unwrap().public_key_kid;
-    (private, encoded, kid)
-}
-
-fn registration(der: Option<String>, kid: Option<String>) -> CreateRegistration {
+fn registration() -> CreateRegistration {
     CreateRegistration {
         user_id: None,
-        organization_id: None,
+        organization_id: Some("org-1".into()),
         device_id: "device-1".into(),
         platform: Platform::Web,
-        fcm_token: "push-token".into(),
+        fcm_token: Some("push-token".into()),
         app_version: Some("1.0".into()),
         os_version: None,
         device_model: None,
         preferences: Default::default(),
-        public_key_der: der,
-        public_key_kid: kid,
-        key_valid_from: None,
-        key_valid_until: None,
         is_active: true,
     }
 }
 
-async fn proof(
-    service: &DeviceService,
-    private: &RsaPrivateKey,
-    der: &str,
-    kid: &str,
-    registration_id: Option<String>,
-    expected_key_version: Option<u64>,
-) -> ProofHeaders {
-    let response = service
-        .request_challenge(
-            "user-1",
-            marty_device_registration::ChallengeRequest {
-                device_id: "device-1".into(),
-                public_key_der: der.into(),
-                public_key_kid: kid.into(),
-                registration_id,
-                expected_key_version,
-            },
-        )
-        .await
-        .unwrap();
-    let message = URL_SAFE_NO_PAD.decode(response.challenge).unwrap();
-    let signature =
-        BlindedSigningKey::<Sha256>::new(private.clone()).sign_with_rng(&mut OsRng, &message);
-    ProofHeaders {
-        challenge_id: Some(response.challenge_id),
-        signature: Some(URL_SAFE_NO_PAD.encode(signature.to_bytes())),
+struct RejectMembership;
+
+#[async_trait]
+impl MembershipAuthorizer for RejectMembership {
+    async fn require_active(&self, _: &str, _: &str) -> Result<(), DeviceError> {
+        Err(DeviceError::Forbidden(
+            "Not a member of this organization".into(),
+        ))
     }
 }
 
 #[test]
-fn language_neutral_contract_covers_the_whole_surface() {
+fn contract_retires_device_private_key_challenge() {
     let contract: Value = serde_json::from_str(include_str!(
         "../../../../contracts/device-registration-service-behavior.json"
     ))
     .unwrap();
-    assert_eq!(contract["routes"].as_array().unwrap().len(), 6);
-    assert_eq!(contract["key_lifecycle"].as_array().unwrap().len(), 3);
-    assert_eq!(contract["challenge"]["algorithm"], "PS256");
-    assert!(contract["invariants"].as_array().unwrap().len() >= 7);
-}
-
-#[test]
-fn shared_challenge_golden_vectors_are_preserved() {
-    let vectors: Value =
-        serde_json::from_str(include_str!("../../../../tests/vectors/device_auth.json")).unwrap();
-    for case in vectors["challenge_cases"].as_array().unwrap() {
-        let challenge: DeviceChallengeRecord =
-            serde_json::from_value(case["challenge"].clone()).unwrap();
-        assert_eq!(
-            challenge.encoded_message().unwrap(),
-            case["expected_message_base64url"]
-        );
-    }
+    assert_eq!(contract["routes"].as_array().unwrap().len(), 12);
+    assert!(contract["challenge"].is_null());
+    assert!(contract["invariants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|value| { value.as_str().unwrap_or_default().contains("remote KMS") }));
 }
 
 #[tokio::test]
-async fn key_registration_rotation_replay_and_soft_delete_match_the_contract() {
-    let (service, repository) = service();
-    let (old_private, old_der, old_kid) = key();
-    let initial_proof = proof(&service, &old_private, &old_der, &old_kid, None, None).await;
-    let replay = initial_proof.clone();
-    let registered = service
-        .register(
-            "user-1",
-            registration(Some(old_der), Some(old_kid)),
-            initial_proof,
-        )
-        .await
-        .unwrap();
-    assert_eq!(registered.key_version, Some(1));
-    assert!(
-        matches!(service.register("user-1", registration(registered.public_key_der.clone(), registered.public_key_kid.clone()), replay).await, Err(DeviceError::BadRequest(message)) if message == "Device challenge is invalid or expired")
-    );
-
-    let (next_private, next_der, next_kid) = key();
-    let rotation_proof = proof(
-        &service,
-        &next_private,
-        &next_der,
-        &next_kid,
-        Some(registered.id.clone()),
-        Some(1),
-    )
-    .await;
-    let rotated = service
+async fn keyless_registration_metadata_and_deactivation_preserve_identity() {
+    let service = service();
+    let first = service.register("user-1", registration()).await.unwrap();
+    assert!(first.is_active);
+    assert!(serde_json::to_value(&first)
+        .unwrap()
+        .get("public_key_der")
+        .is_none());
+    let changed = service
         .update(
             "user-1",
-            &registered.id,
+            &first.id,
             UpdateRegistration {
-                public_key_der: Some(next_der),
-                public_key_kid: Some(next_kid),
-                expected_key_version: Some(1),
+                fcm_token: Some("next-push-token".into()),
                 ..Default::default()
             },
-            rotation_proof,
         )
         .await
         .unwrap();
-    assert_eq!(rotated.key_version, Some(2));
-
-    let stale = repository
-        .rotate_key(&registered.id, 1, "unused", "unused", 0)
-        .await;
-    assert!(
-        matches!(stale, Err(DeviceError::Conflict(message)) if message == "current device key version changed")
-    );
-    service.delete("user-1", &registered.id).await.unwrap();
-    service.delete("user-1", &registered.id).await.unwrap();
-    let inactive = service.get("user-1", &registered.id).await.unwrap();
-    assert!(!inactive.is_active);
-    assert!(inactive.key_version.is_none());
-    assert!(
-        matches!(service.update("user-1", &registered.id, UpdateRegistration { is_active: Some(true), ..Default::default() }, Default::default()).await, Err(DeviceError::Conflict(message)) if message == "a deactivated device must be registered with a new key")
-    );
-}
-
-#[tokio::test]
-async fn concurrent_rotation_has_one_compare_and_swap_winner() {
-    let (service, repository) = service();
-    let registered = service
-        .register("user-1", registration(None, None), Default::default())
-        .await
-        .unwrap();
-    let (private, der, kid) = key();
-    let initial = proof(
-        &service,
-        &private,
-        &der,
-        &kid,
-        Some(registered.id.clone()),
-        None,
-    )
-    .await;
-    let keyed = service
-        .update(
-            "user-1",
-            &registered.id,
-            UpdateRegistration {
-                public_key_der: Some(der),
-                public_key_kid: Some(kid),
-                ..Default::default()
-            },
-            initial,
-        )
-        .await
-        .unwrap();
-    assert_eq!(keyed.key_version, Some(1));
-    let first = repository.rotate_key(&keyed.id, 1, "first", "first", 0);
-    let second = repository.rotate_key(&keyed.id, 1, "second", "second", 0);
-    let (first, second) = tokio::join!(first, second);
-    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-}
-
-#[test]
-fn explicit_null_metadata_cannot_be_combined_with_key_rotation() {
-    let body: UpdateRegistration = serde_json::from_value(serde_json::json!({
-        "public_key_der": "replacement-key",
-        "public_key_kid": "replacement-kid",
-        "expected_key_version": 1,
-        "fcm_token": null
-    }))
-    .unwrap();
-    assert!(body.has_metadata_with_key_rotation());
-
-    let rotation_only: UpdateRegistration = serde_json::from_value(serde_json::json!({
-        "public_key_der": "replacement-key",
-        "public_key_kid": "replacement-kid",
-        "expected_key_version": 1
-    }))
-    .unwrap();
-    assert!(!rotation_only.has_metadata_with_key_rotation());
-}
-
-#[tokio::test]
-async fn invalid_signature_does_not_consume_the_challenge() {
-    let (service, _) = service();
-    let (private, der, kid) = key();
-    let valid = proof(&service, &private, &der, &kid, None, None).await;
-    let invalid = ProofHeaders {
-        challenge_id: valid.challenge_id.clone(),
-        signature: Some("invalid".into()),
-    };
-    assert!(
-        matches!(service.register("user-1", registration(Some(der.clone()), Some(kid.clone())), invalid).await, Err(DeviceError::BadRequest(message)) if message.contains("INVALID"))
-    );
-    let registered = service
-        .register("user-1", registration(Some(der), Some(kid)), valid)
-        .await
-        .unwrap();
-    assert_eq!(registered.key_version, Some(1));
-}
-
-#[tokio::test]
-async fn deactivated_reregistration_gets_a_new_identity_and_key_history() {
-    let (service, _) = service();
-    let first = service
-        .register("user-1", registration(None, None), Default::default())
-        .await
-        .unwrap();
+    assert_eq!(changed.id, first.id);
+    assert_eq!(changed.fcm_token.as_deref(), Some("next-push-token"));
     service.delete("user-1", &first.id).await.unwrap();
-    let second = service
-        .register("user-1", registration(None, None), Default::default())
-        .await
-        .unwrap();
+    service.delete("user-1", &first.id).await.unwrap();
+    assert!(!service.get("user-1", &first.id).await.unwrap().is_active);
+    assert!(matches!(
+        service
+            .update(
+                "user-1",
+                &first.id,
+                UpdateRegistration {
+                    is_active: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await,
+        Err(DeviceError::Conflict(_))
+    ));
+    let second = service.register("user-1", registration()).await.unwrap();
     assert_ne!(first.id, second.id);
-    assert!(second.is_active);
+    assert!(matches!(
+        service.get("other-user", &second.id).await,
+        Err(DeviceError::NotFound(_))
+    ));
 }
 
 #[tokio::test]
-async fn http_surface_preserves_routes_identity_and_response_shapes() {
-    let (service, _) = service();
+async fn keyless_mobile_registration_does_not_require_push_delivery() {
+    let service = service();
+    let mut input = registration();
+    input.platform = Platform::Android;
+    input.fcm_token = None;
+    let registered = service.register("user-1", input).await.unwrap();
+    assert_eq!(registered.fcm_token, None);
+}
+
+#[tokio::test]
+async fn device_held_key_inputs_are_rejected_without_generating_private_keys() {
+    let create = json!({
+        "device_id": "device-1", "platform": "web", "fcm_token": "push-token",
+        "public_key_der": "retired-public-projection"
+    });
+    assert!(serde_json::from_value::<CreateRegistration>(create).is_err());
+    assert!(serde_json::from_value::<UpdateRegistration>(json!({
+        "public_key_der": "retired-public-projection", "public_key_kid": "retired-kid"
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<CreateRegistration>(json!({
+        "device_id": "device-1", "platform": "web", "fcm_token": "push-token",
+        "preferences": {"private_key": "retired"}
+    }))
+    .is_err());
+    let service = service();
+    let mut input = registration();
+    input.preferences.quiet_hours_start = Some("-----BEGIN PRIVATE KEY-----synthetic".into());
+    assert!(matches!(
+        service.register("user-1", input).await,
+        Err(DeviceError::BadRequest(_))
+    ));
+}
+
+#[tokio::test]
+async fn http_requires_gateway_and_has_no_device_key_challenge_route() {
+    let gateway_key = "g".repeat(32);
     let app = router(HttpState {
-        service: Arc::new(service),
+        service: Arc::new(service()),
         memberships: Arc::new(AllowMembership),
+        pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        wallet_issuer_trust: None,
+        pairing_confirmations: None,
+        pairing_enrollment: None,
+        holder_signer: None,
+        holder_credential_rotator: None,
         release_version: "test".into(),
         build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
     });
-    let request = Request::builder()
-        .method("POST")
-        .uri("/v1/devices")
-        .header("content-type", "application/json")
-        .header("x-user-id", "user-1")
-        .body(Body::from(
-            r#"{"device_id":"device-1","platform":"web","fcm_token":"push-token"}"#,
-        ))
-        .unwrap();
-    let response = app.clone().oneshot(request).await.unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let body: Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
-    let id = body["id"].as_str().unwrap();
-    assert_eq!(body["user_id"], "user-1");
-    let response = app
+    for supplied in [None, Some("forged-service-token")] {
+        let mut request = Request::builder().uri("/v1/devices");
+        if let Some(token) = supplied {
+            request = request.header("x-service-token", token);
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+    let retired = app
+        .clone()
         .oneshot(
             Request::builder()
-                .uri(format!("/v1/devices/{id}"))
-                .header("x-user-id", "another-user")
+                .method("POST")
+                .uri("/v1/devices/challenge")
+                .header("x-user-id", "user-1")
+                .header("x-service-token", &gateway_key)
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    let body: Value =
-        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
-    assert_eq!(body["detail"], "Device registration not found");
+    assert_eq!(retired.status(), StatusCode::METHOD_NOT_ALLOWED);
+    let native = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/health/native-backend")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let native: Value =
+        serde_json::from_slice(&to_bytes(native.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(native["required_capability"], "keyless_registration");
+    assert_ne!(native["backend"], "marty-verification");
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/v1/devices")
+                .header("content-type", "application/json")
+                .header("x-user-id", "user-1")
+                .header("x-service-token", &gateway_key)
+                .body(Body::from(
+                    r#"{"device_id":"device-1","platform":"web","fcm_token":"push-token"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
-#[test]
-fn migration_is_irreversible_and_preserves_legacy_projection_history() {
-    let sql = include_str!("../migrations/0001_device_registration.sql");
-    for required in [
-        "device_registrations",
-        "device_registration_keys",
-        "device_key_transitions",
-        "KEY_REGISTERED",
-        "KEY_ROTATED",
-        "KEYS_REVOKED",
-        "cannot migrate incomplete legacy device key projection",
-        "ux_device_key_one_current",
-    ] {
-        assert!(sql.contains(required), "migration omitted {required}");
-    }
-    assert!(!sql.to_ascii_uppercase().contains("DROP TABLE"));
+#[tokio::test]
+async fn pairing_ticket_issuance_requires_gateway_and_active_membership() {
+    let gateway_key = "g".repeat(32);
+    let tickets = Arc::new(MemoryPairingTickets::new(300));
+    let app = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(AllowMembership),
+        pairing_tickets: tickets.clone(),
+        wallet_issuer_trust: None,
+        pairing_confirmations: None,
+        pairing_enrollment: None,
+        holder_signer: None,
+        holder_credential_rotator: None,
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    });
+    let request = |token: Option<&str>, organization_id: &str| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/devices/pairing-tickets")
+            .header("content-type", "application/json")
+            .header("x-user-id", "user-1");
+        if let Some(token) = token {
+            builder = builder.header("x-service-token", token);
+        }
+        builder
+            .body(Body::from(
+                json!({"organization_id": organization_id, "trust_profile_id": "11111111-2222-4333-8444-555555555555"}).to_string(),
+            ))
+            .unwrap()
+    };
+    let unauthenticated = app.clone().oneshot(request(None, "org-1")).await.unwrap();
+    assert_eq!(unauthenticated.status(), StatusCode::UNAUTHORIZED);
+    let response = app
+        .oneshot(request(Some(&gateway_key), "org-1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let denied = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(RejectMembership),
+        pairing_tickets: tickets,
+        wallet_issuer_trust: None,
+        pairing_confirmations: None,
+        pairing_enrollment: None,
+        holder_signer: None,
+        holder_credential_rotator: None,
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    })
+    .oneshot(request(Some(&gateway_key), "org-1"))
+    .await
+    .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn mobile_redemption_cannot_use_a_missing_remote_kms_authority() {
+    let gateway_key = "g".repeat(32);
+    let app = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(AllowMembership),
+        pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        wallet_issuer_trust: None,
+        pairing_confirmations: None,
+        pairing_enrollment: None,
+        holder_signer: None,
+        holder_credential_rotator: None,
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    });
+    let request = |token: Option<&str>| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/devices/pair")
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            builder = builder.header("x-service-token", token);
+        }
+        builder
+            .body(Body::from(
+                r#"{"pairing_code":"synthetic","platform":"android","fcm_token":"push-token"}"#,
+            ))
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(request(None)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.oneshot(request(Some(&gateway_key)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+#[tokio::test]
+async fn mobile_signing_requires_gateway_and_remote_kms_authority() {
+    let gateway_key = "g".repeat(32);
+    let app = router(HttpState {
+        service: Arc::new(service()),
+        memberships: Arc::new(AllowMembership),
+        pairing_tickets: Arc::new(MemoryPairingTickets::new(300)),
+        wallet_issuer_trust: None,
+        pairing_confirmations: None,
+        pairing_enrollment: None,
+        holder_signer: None,
+        holder_credential_rotator: None,
+        release_version: "test".into(),
+        build_revision: "fixture".into(),
+        gateway_key: gateway_key.clone(),
+    });
+    let request = |token: Option<&str>| {
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/v1/devices/holder-signatures")
+            .header("authorization", "Bearer synthetic-device-credential")
+            .header("content-type", "application/json");
+        if let Some(token) = token {
+            builder = builder.header("x-service-token", token);
+        }
+        builder
+            .body(Body::from(
+                r#"{"purpose":"holder_binding","payload_b64":"cHJvb2Y"}"#,
+            ))
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(request(None)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.oneshot(request(Some(&gateway_key)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }

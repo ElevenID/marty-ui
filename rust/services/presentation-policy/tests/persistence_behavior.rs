@@ -48,6 +48,31 @@ fn native_policy_document_round_trips_every_intended_field() {
 }
 
 #[test]
+fn policy_storage_rejects_private_material_in_current_and_legacy_json() {
+    let mut candidate = policy();
+    candidate.description = Some(r#"{"kty":"EC","d":"secret"}"#.into());
+    assert_eq!(
+        PolicyRecord::from_policy(&candidate).unwrap_err(),
+        PolicyRecordError::PrivateKeyMaterial
+    );
+
+    let mut poisoned_row = PolicyRecord::from_policy(&policy()).unwrap();
+    poisoned_row.display_metadata["protocol"]["private_key_pem"] = json!("secret");
+    assert_eq!(
+        poisoned_row.into_policy().unwrap_err(),
+        PolicyRecordError::PrivateKeyMaterial
+    );
+
+    let mut poisoned_legacy_row = PolicyRecord::from_policy(&policy()).unwrap();
+    poisoned_legacy_row.policy_document = json!({});
+    poisoned_legacy_row.credential_requirements[0]["private_jwk"] = json!("secret");
+    assert_eq!(
+        poisoned_legacy_row.into_policy().unwrap_err(),
+        PolicyRecordError::PrivateKeyMaterial
+    );
+}
+
+#[test]
 fn legacy_rows_are_upgraded_without_reimplementing_two_decoders() {
     let policy = policy();
     let mut record = PolicyRecord::from_policy(&policy).unwrap();

@@ -759,7 +759,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "provider_marker": '"/internal/compat/resolve-issuer-did",',
             "provider_handler_marker": "async fn resolve_issuer_did(",
         },
-        # Flow's request-object signer and HAIP response-key envelope use the
+        # Flow's request-object signer and remote HAIP response-key operation use the
         # same authenticated Signing Keys HTTP provider. This is source-backed
         # reachability, not proof that all service obligations are mapped.
         {
@@ -775,20 +775,20 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_marker": '"resolve-issuer-did",',
             "sign_marker": '"issuer-dids/sign",',
             "response_marker": "result.validate_binding(request)?;",
-            "wrap_marker": '"flow-key-envelopes/wrap",',
-            "unwrap_marker": '"flow-key-envelopes/unwrap",',
+            "create_marker": '"haip-response-keys/create",',
+            "decrypt_marker": '"haip-response-keys/decrypt",',
             "callsite_evidence": "rust/services/flow/src/request_object.rs",
             "callsite_marker": "let compact_jwt = sign_payload(",
             "envelope_callsite_marker": "response_encryption_key(providers, &instance).await?",
             "callback_evidence": "rust/services/flow/src/verification_submission.rs",
-            "callback_marker": ".unwrap(&FlowKeyEnvelope {",
+            "callback_marker": ".decrypt_haip_response(",
             "provider_evidence": "rust/services/signing-keys/src/http.rs",
             "provider_marker": '"/internal/compat/issuer-dids/sign"',
             "provider_handler_marker": "async fn issuer_did_sign(",
-            "provider_wrap_marker": '"/internal/flow-key-envelopes/wrap"',
-            "provider_wrap_handler_marker": "async fn wrap_flow_key(",
-            "provider_unwrap_marker": '"/internal/flow-key-envelopes/unwrap"',
-            "provider_unwrap_handler_marker": "async fn unwrap_flow_key(",
+            "provider_create_marker": '"/internal/haip-response-keys/create"',
+            "provider_create_handler_marker": "async fn create_haip_response_key(",
+            "provider_decrypt_marker": '"/internal/haip-response-keys/decrypt"',
+            "provider_decrypt_handler_marker": "async fn decrypt_haip_response(",
         },
     ],
     "marty-presentation-policy": [

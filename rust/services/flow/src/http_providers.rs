@@ -11,10 +11,10 @@ use serde_json::{json, Value};
 use url::Url;
 
 use crate::{
-    FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError,
-    FlowReference, FlowReferenceKind, FlowReferenceProvider, PhysicalDocumentOperation,
-    PhysicalDocumentProvider, PhysicalDocumentRequest, PhysicalDocumentResult,
-    PhysicalDocumentRoute, SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult,
+    FlowKeyEnvelopeProvider, FlowProviderError, FlowReference, FlowReferenceKind,
+    FlowReferenceProvider, HaipRemoteKey, PhysicalDocumentOperation, PhysicalDocumentProvider,
+    PhysicalDocumentRequest, PhysicalDocumentResult, PhysicalDocumentRoute, SigningIdentity,
+    SigningIdentityProvider, SigningRequest, SigningResult,
 };
 
 const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -341,11 +341,19 @@ impl FlowReferenceProvider for HttpFlowReferenceProvider {
 #[derive(Clone)]
 pub struct HttpSigningProvider {
     signing: BoundedHttpClient,
+    issuer_signing: BoundedHttpClient,
     envelopes: BoundedHttpClient,
 }
 
 impl HttpSigningProvider {
-    pub fn new(base_url: &str, api_key: &str) -> Result<Self, FlowProviderError> {
+    pub fn new(
+        base_url: &str,
+        api_key: &str,
+        issuer_sign_key: &str,
+    ) -> Result<Self, FlowProviderError> {
+        if api_key == issuer_sign_key {
+            return Err(invalid_config("signing_identity"));
+        }
         let envelopes = BoundedHttpClient::new(
             base_url,
             api_key,
@@ -360,6 +368,12 @@ impl HttpSigningProvider {
             signing: BoundedHttpClient::new(
                 compatibility_url.as_str(),
                 api_key,
+                "signing_identity",
+                Duration::from_secs(10),
+            )?,
+            issuer_signing: BoundedHttpClient::new(
+                compatibility_url.as_str(),
+                issuer_sign_key,
                 "signing_identity",
                 Duration::from_secs(10),
             )?,
@@ -417,7 +431,7 @@ impl SigningIdentityProvider for HttpSigningProvider {
             "algorithm": request.algorithm
         });
         let response: Value = self
-            .signing
+            .issuer_signing
             .json(
                 Method::POST,
                 "issuer-dids/sign",
@@ -443,60 +457,114 @@ impl SigningIdentityProvider for HttpSigningProvider {
 
 #[async_trait]
 impl FlowKeyEnvelopeProvider for HttpSigningProvider {
-    async fn wrap(
+    async fn resolve_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
         let response: Value = self
             .envelopes
             .json(
                 Method::POST,
-                "flow-key-envelopes/wrap",
-                &[("organization_id", &request.organization_id)],
+                "haip-response-keys/resolve",
+                &[("organization_id", organization_id)],
                 Some(json!({
-                    "flow_instance_id": request.flow_instance_id,
-                    "plaintext_b64": URL_SAFE_NO_PAD.encode(request.key_json.as_bytes())
+                    "organization_id": organization_id,
+                    "flow_instance_id": flow_instance_id,
+                    "version": version,
                 })),
             )
             .await?;
-        let envelope = response
-            .get("ciphertext")
-            .and_then(Value::as_str)
-            .filter(|value| value.starts_with("vault:"))
-            .ok_or_else(|| invalid_response("flow_key_envelope"))?;
-        Ok(FlowKeyEnvelope {
-            organization_id: request.organization_id.clone(),
-            flow_instance_id: request.flow_instance_id.clone(),
-            purpose: request.purpose.clone(),
-            envelope: envelope.into(),
-        })
+        parse_haip_key_response(&response, organization_id, flow_instance_id, Some(version))
     }
 
-    async fn unwrap(&self, envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        if !envelope.envelope.starts_with("vault:") {
-            return Err(invalid_response("flow_key_envelope"));
-        }
+    async fn create_haip_key(
+        &self,
+        organization_id: &str,
+        flow_instance_id: &str,
+    ) -> Result<HaipRemoteKey, FlowProviderError> {
         let response: Value = self
             .envelopes
             .json(
                 Method::POST,
-                "flow-key-envelopes/unwrap",
-                &[("organization_id", &envelope.organization_id)],
+                "haip-response-keys/create",
+                &[("organization_id", organization_id)],
+                Some(json!({"organization_id": organization_id, "flow_instance_id": flow_instance_id})),
+            )
+            .await?;
+        parse_haip_key_response(&response, organization_id, flow_instance_id, None)
+    }
+
+    async fn decrypt_haip_response(
+        &self,
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+        jwe: &str,
+    ) -> Result<Vec<u8>, FlowProviderError> {
+        let response: Value = self
+            .envelopes
+            .json(
+                Method::POST,
+                "haip-response-keys/decrypt",
+                &[("organization_id", organization_id)],
                 Some(json!({
-                    "flow_instance_id": envelope.flow_instance_id,
-                    "ciphertext": envelope.envelope
+                    "organization_id": organization_id,
+                    "flow_instance_id": flow_instance_id,
+                    "version": version,
+                    "jwe": jwe,
                 })),
             )
             .await?;
-        let encoded = response
-            .get("plaintext_b64")
-            .and_then(Value::as_str)
+        if response["organization_id"] != organization_id
+            || response["flow_instance_id"] != flow_instance_id
+            || response["version"] != version
+        {
+            return Err(invalid_response("flow_key_envelope"));
+        }
+        let encoded = response["plaintext_b64"]
+            .as_str()
             .ok_or_else(|| invalid_response("flow_key_envelope"))?;
-        let decoded = URL_SAFE_NO_PAD
+        let plaintext = URL_SAFE_NO_PAD
             .decode(encoded)
             .map_err(|_| invalid_response("flow_key_envelope"))?;
-        String::from_utf8(decoded).map_err(|_| invalid_response("flow_key_envelope"))
+        if plaintext.is_empty() || plaintext.len() > MAXIMUM_RESPONSE_BYTES {
+            return Err(invalid_response("flow_key_envelope"));
+        }
+        Ok(plaintext)
     }
+}
+
+fn parse_haip_key_response(
+    response: &Value,
+    organization_id: &str,
+    flow_instance_id: &str,
+    expected_version: Option<&str>,
+) -> Result<HaipRemoteKey, FlowProviderError> {
+    if response["organization_id"] != organization_id
+        || response["flow_instance_id"] != flow_instance_id
+    {
+        return Err(invalid_response("flow_key_envelope"));
+    }
+    let reference = response["key_reference"]
+        .as_str()
+        .ok_or_else(|| invalid_response("flow_key_envelope"))?;
+    let version =
+        marty_oid4vp_contract::haip_key::version_for(reference, organization_id, flow_instance_id)
+            .ok_or_else(|| invalid_response("flow_key_envelope"))?;
+    if response["version"] != version
+        || expected_version.is_some_and(|expected| expected != version)
+        || !marty_oid4vp_contract::haip_key::matches_public_jwk(&response["public_jwk"], version)
+    {
+        return Err(invalid_response("flow_key_envelope"));
+    }
+    Ok(HaipRemoteKey {
+        organization_id: organization_id.into(),
+        flow_instance_id: flow_instance_id.into(),
+        key_reference: reference.into(),
+        public_jwk: response["public_jwk"].clone(),
+    })
 }
 
 #[derive(Clone)]
@@ -742,6 +810,41 @@ mod tests {
         }))
     }
 
+    async fn haip_create_capture(
+        State(captured): State<CapturedRequest>,
+        headers: HeaderMap,
+        uri: Uri,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri, body));
+        let version = "0123456789abcdef0123456789abcdef";
+        Json(json!({
+            "organization_id":"org-1", "flow_instance_id":"flow-1",
+            "version":version,
+            "key_reference":format!("didcomm/haip/keys/org-1/flow-1/versions/{version}"),
+            "public_jwk":{
+                "kty":"EC","crv":"P-256","alg":"ECDH-ES","use":"enc",
+                "kid":format!("oid4vp-haip-{version}"),
+                "x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+                "y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"
+            }
+        }))
+    }
+
+    async fn haip_decrypt_capture(
+        State(captured): State<CapturedRequest>,
+        headers: HeaderMap,
+        uri: Uri,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        *captured.lock().unwrap() = Some((headers, uri, body));
+        Json(json!({
+            "organization_id":"org-1", "flow_instance_id":"flow-1",
+            "version":"0123456789abcdef0123456789abcdef",
+            "plaintext_b64":URL_SAFE_NO_PAD.encode(br#"{"vp_token":"fixture"}"#),
+        }))
+    }
+
     async fn reference_resolver(
         State(captured): State<CapturedRead>,
         headers: HeaderMap,
@@ -786,11 +889,18 @@ mod tests {
 
     #[test]
     fn provider_configuration_rejects_credentials_and_weak_api_keys() {
-        assert!(
-            HttpSigningProvider::new("https://user@example.com/internal/", &"a".repeat(32))
-                .is_err()
-        );
-        assert!(HttpSigningProvider::new("https://example.com/internal/", "short").is_err());
+        assert!(HttpSigningProvider::new(
+            "https://user@example.com/internal/",
+            &"a".repeat(32),
+            &"b".repeat(32)
+        )
+        .is_err());
+        assert!(HttpSigningProvider::new(
+            "https://example.com/internal/",
+            "short",
+            &"b".repeat(32)
+        )
+        .is_err());
         assert!(HttpFlowReferenceProvider::new(
             "https://issuance.example",
             &"a".repeat(32),
@@ -800,8 +910,12 @@ mod tests {
             Some("short"),
         )
         .is_err());
-        let signing =
-            HttpSigningProvider::new("https://example.com/internal/", &"a".repeat(32)).unwrap();
+        let signing = HttpSigningProvider::new(
+            "https://example.com/internal/",
+            &"a".repeat(32),
+            &"b".repeat(32),
+        )
+        .unwrap();
         assert_eq!(
             signing.signing.base_url.as_str(),
             "https://example.com/internal/compat/"
@@ -853,8 +967,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
         let identity = provider
             .resolve(
@@ -895,8 +1013,12 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider =
-            HttpSigningProvider::new(&format!("http://{address}/internal/"), api_key).unwrap();
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
 
         let result = provider
             .sign(&SigningRequest {
@@ -915,7 +1037,7 @@ mod tests {
         let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
         assert_eq!(uri.path(), "/internal/compat/issuer-dids/sign");
         assert_eq!(uri.query(), Some("organization_id=org-1"));
-        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(headers.get("x-api-key").unwrap(), &"b".repeat(32));
         assert_eq!(
             body,
             json!({
@@ -925,6 +1047,91 @@ mod tests {
                 "credential_format": "oauth-authz-req+jwt",
                 "algorithm": "ES256",
                 "payload_b64": "cGF5bG9hZA",
+            })
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn haip_adapter_sends_exact_scope_and_accepts_only_bound_public_response() {
+        let captured = CapturedRequest::default();
+        let router = Router::new()
+            .route(
+                "/internal/haip-response-keys/create",
+                post(haip_create_capture),
+            )
+            .route(
+                "/internal/haip-response-keys/resolve",
+                post(haip_create_capture),
+            )
+            .route(
+                "/internal/haip-response-keys/decrypt",
+                post(haip_decrypt_capture),
+            )
+            .with_state(captured.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let api_key = "0123456789abcdef0123456789abcdef";
+        let provider = HttpSigningProvider::new(
+            &format!("http://{address}/internal/"),
+            api_key,
+            &"b".repeat(32),
+        )
+        .unwrap();
+
+        let key = provider.create_haip_key("org-1", "flow-1").await.unwrap();
+        assert!(key.public_jwk.get("d").is_none());
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/haip-response-keys/create");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({"organization_id":"org-1","flow_instance_id":"flow-1"})
+        );
+
+        let resolved = provider
+            .resolve_haip_key("org-1", "flow-1", "0123456789abcdef0123456789abcdef")
+            .await
+            .unwrap();
+        assert_eq!(resolved.key_reference, key.key_reference);
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/haip-response-keys/resolve");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({
+                "organization_id":"org-1", "flow_instance_id":"flow-1",
+                "version":"0123456789abcdef0123456789abcdef"
+            })
+        );
+        assert!(provider
+            .resolve_haip_key("org-1", "flow-1", "0".repeat(32).as_str())
+            .await
+            .is_err());
+        captured.lock().unwrap().take();
+
+        let plaintext = provider
+            .decrypt_haip_response(
+                "org-1",
+                "flow-1",
+                "0123456789abcdef0123456789abcdef",
+                "compact.jwe",
+            )
+            .await
+            .unwrap();
+        assert_eq!(plaintext, br#"{"vp_token":"fixture"}"#);
+        let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
+        assert_eq!(uri.path(), "/internal/haip-response-keys/decrypt");
+        assert_eq!(uri.query(), Some("organization_id=org-1"));
+        assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(
+            body,
+            json!({
+                "organization_id":"org-1", "flow_instance_id":"flow-1",
+                "version":"0123456789abcdef0123456789abcdef", "jwe":"compact.jwe"
             })
         );
         server.abort();

@@ -15,6 +15,8 @@ pub enum RepositoryError {
     Database(#[from] sqlx::Error),
     #[error("ORGANIZATION.REPOSITORY_INVALID_DATA: {field}={value}")]
     InvalidData { field: &'static str, value: String },
+    #[error("ORGANIZATION.REPOSITORY_PRIVATE_KEY_MATERIAL")]
+    PrivateKeyMaterial,
 }
 
 #[derive(Debug, Clone)]
@@ -1202,6 +1204,9 @@ async fn save_organization_on(
     connection: &mut PgConnection,
     organization: &Organization,
 ) -> Result<(), RepositoryError> {
+    if marty_key_material_policy::contains_private_key_map(&organization.settings) {
+        return Err(RepositoryError::PrivateKeyMaterial);
+    }
     sqlx::query(
         "INSERT INTO organization_service.organizations (
             id,name,display_name,description,status,owner_id,slug,org_type,
@@ -1458,6 +1463,14 @@ async fn save_audit_event_on(
     connection: &mut PgConnection,
     event: &AuditEvent,
 ) -> Result<(), RepositoryError> {
+    if event
+        .changes
+        .as_ref()
+        .is_some_and(marty_key_material_policy::contains_private_key)
+        || marty_key_material_policy::contains_private_key(&event.metadata)
+    {
+        return Err(RepositoryError::PrivateKeyMaterial);
+    }
     sqlx::query(
         "INSERT INTO organization_service.audit_events (
             id,organization_id,event_type,action,category,resource_type,resource_id,
@@ -1625,6 +1638,9 @@ fn push_audit_filters(builder: &mut QueryBuilder<Postgres>, query: &AuditEventQu
 
 fn organization_from_row(row: &PgRow) -> Result<Organization, RepositoryError> {
     let settings: Value = row.try_get("settings")?;
+    if marty_key_material_policy::contains_private_key(&settings) {
+        return Err(RepositoryError::PrivateKeyMaterial);
+    }
     let settings = settings
         .as_object()
         .cloned()
@@ -1777,6 +1793,15 @@ fn policy_set_from_row(row: &PgRow) -> Result<PolicySet, RepositoryError> {
 }
 
 fn audit_event_from_row(row: &PgRow) -> Result<AuditEvent, RepositoryError> {
+    let changes: Option<Value> = row.try_get("changes")?;
+    let metadata: Value = row.try_get("metadata")?;
+    if changes
+        .as_ref()
+        .is_some_and(marty_key_material_policy::contains_private_key)
+        || marty_key_material_policy::contains_private_key(&metadata)
+    {
+        return Err(RepositoryError::PrivateKeyMaterial);
+    }
     Ok(AuditEvent {
         id: row.try_get("id")?,
         organization_id: row.try_get("organization_id")?,
@@ -1790,8 +1815,8 @@ fn audit_event_from_row(row: &PgRow) -> Result<AuditEvent, RepositoryError> {
         actor_type: row.try_get("actor_type")?,
         severity: row.try_get("severity")?,
         message: row.try_get("message")?,
-        changes: row.try_get("changes")?,
-        metadata: row.try_get("metadata")?,
+        changes,
+        metadata,
         timestamp: row.try_get("created_at")?,
     })
 }

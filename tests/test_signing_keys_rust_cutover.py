@@ -43,7 +43,6 @@ def test_signing_key_kernels_and_internal_http_surface_have_one_rust_owner() -> 
     profiles = read("rust/services/signing-keys/src/profiles.rs")
 
     for path in (
-        "/internal/kms/sign",
         "/internal/kms/public-key",
         "/internal/kms/verify",
         "/internal/config/validate",
@@ -100,7 +99,10 @@ def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
 
     assert "  signing-keys:\n" in compose
     assert "SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key" in compose
-    assert "BAO_TOKEN_FILE: /run/secrets/openbao_service_token" in compose
+    signing_keys = compose.split("\n  signing-keys:\n", 1)[1].split("\n  flow:\n", 1)[0]
+    assert "BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token" in signing_keys
+    assert "- signing_keys_openbao_token" in signing_keys
+    assert "- openbao_service_token" not in signing_keys
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
     assert 'test: ["CMD", "curl", "-f", "http://localhost:8017/health"]' in compose
 

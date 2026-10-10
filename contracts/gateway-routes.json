@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 444,
+  "route_count": 450,
   "routes": [
     {
       "include_in_schema": true,
@@ -186,15 +186,15 @@
       "status_code": 200
     },
     {
-      "include_in_schema": true,
+      "include_in_schema": false,
       "method": "POST",
-      "path": "/internal/signing-keys/flow-key-envelopes/unwrap",
+      "path": "/internal/signing-keys/integration-secrets/encrypt",
       "status_code": 200
     },
     {
-      "include_in_schema": true,
+      "include_in_schema": false,
       "method": "POST",
-      "path": "/internal/signing-keys/flow-key-envelopes/wrap",
+      "path": "/internal/signing-keys/integration-secrets/decrypt",
       "status_code": 200
     },
     {
@@ -285,12 +285,6 @@
       "include_in_schema": false,
       "method": "POST",
       "path": "/internal/signing-keys/passport-callbacks/verify",
-      "status_code": 200
-    },
-    {
-      "include_in_schema": true,
-      "method": "POST",
-      "path": "/internal/signing-keys/services/{service_id}/sign",
       "status_code": 200
     },
     {
@@ -705,6 +699,48 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/devices",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/pairing-tickets",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/pair",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/pairing-ack",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/devices/pairing-confirmations/{pairing_id}",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/holder-signatures",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/devices/holder-credential-rotations",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/devices/wallet-issuer-keys",
       "status_code": 200
     },
     {

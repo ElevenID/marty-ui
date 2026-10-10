@@ -85,7 +85,6 @@ REQUIRED_ENVIRONMENT = (
     "ISSUER_BASE_URL",
     "TOKEN_HMAC_KEY",
     "ISSUANCE_API_KEY",
-    "INTEGRATION_SECRET_MASTER_KEY",
     "SIGNING_KEYS_INTERNAL_URL",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "ORG_GRPC_TARGET",
@@ -205,6 +204,13 @@ def validate_model(
             "UNIVERSAL_RESOLVER_URL",
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         ):
+            if key == "SIGNING_KEYS_INTERNAL_URL":
+                require(
+                    env.get(key) == "http://gateway:8000/internal/signing-keys"
+                    and previous.get(key) == "http://signing-keys:8017/internal",
+                    "Native managed signing route is not bound to Gateway",
+                )
+                continue
             require(
                 env.get(key) == previous.get(key),
                 f"Native and issuance alias configuration is not paired: {key}",

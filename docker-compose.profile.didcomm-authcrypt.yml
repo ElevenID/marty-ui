@@ -7,4 +7,9 @@ services:
     environment:
       DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
     volumes:
-      - ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}:/run/secrets/didcomm-authcrypt:ro
+      - type: bind
+        source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}
+        target: /run/secrets/didcomm-authcrypt
+        read_only: true
+        bind:
+          create_host_path: false

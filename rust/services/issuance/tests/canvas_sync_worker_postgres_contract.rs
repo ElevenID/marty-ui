@@ -62,6 +62,9 @@ async fn timed_phase(name: &'static str, action: impl Future<Output = ()>) {
 #[path = "support/canvas_worker_range_oracle.rs"]
 mod canvas_worker_range_oracle;
 
+#[path = "support/remote_integration_secret.rs"]
+mod remote_integration_secret;
+
 #[path = "support/canvas_worker_lifecycle_oracle.rs"]
 mod canvas_worker_lifecycle_oracle;
 

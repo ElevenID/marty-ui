@@ -23,7 +23,6 @@ def test_every_reference_case_is_used_in_each_configuration_mode(startup):
     assert [mode["name"] for mode in spec["modes"]] == [
         "direct",
         "files_template",
-        "selected_environment",
     ]
     identities = set()
     for mode in spec["modes"]:
@@ -45,16 +44,15 @@ def test_every_reference_case_is_used_in_each_configuration_mode(startup):
                 for key in startup.SECRETS:
                     assert key not in environment
                     assert environment[f"{key}_FILE"] == f"/synthetic-secrets/{key}"
-            elif mode["name"] == "selected_environment":
-                assert "INTEGRATION_SECRET_MASTER_KEY" not in environment
-                assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in environment
-                selected = environment["INTEGRATION_SECRET_MASTER_KEY_ENV"]
-                assert environment[selected] == startup.MASTER_KEY
             else:
-                assert (
-                    environment["INTEGRATION_SECRET_MASTER_KEY"] == startup.MASTER_KEY
-                )
-    assert len(identities) == 24
+                assert environment["SIGNING_KEYS_INTERNAL_API_KEY"] == startup.SECRETS[
+                    "SIGNING_KEYS_INTERNAL_API_KEY"
+                ]
+            assert all(
+                not key.startswith("INTEGRATION_SECRET_MASTER_KEY")
+                for key in environment
+            )
+    assert len(identities) == 16
 
 
 @pytest.mark.parametrize("mutation", ["exit", "alive", "job", "heartbeat", "extra"])

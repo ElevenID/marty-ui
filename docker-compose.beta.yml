@@ -34,6 +34,7 @@ services:
       GRPC_INSECURE_ALLOWED: "true"
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
+      DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:?DEVICE_REGISTRATION_GATEWAY_KEY must be set for beta}
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
@@ -128,6 +129,7 @@ services:
 
   signing-keys:
     environment:
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:?DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be set for beta}
       SIGNING_KEYS_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/2
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
 
@@ -170,6 +172,8 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
+      DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:?DEVICE_REGISTRATION_GATEWAY_KEY must be set for beta}
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:?DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be set for beta}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/5
 
   event-stream:

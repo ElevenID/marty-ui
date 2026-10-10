@@ -65,6 +65,51 @@ async fn passport_artifact_transit_routes_require_auth_and_kms() {
 }
 
 #[tokio::test]
+async fn integration_secret_transit_routes_require_auth_and_kms() {
+    for (operation, body) in [
+        (
+            "encrypt",
+            serde_json::json!({
+                "organization_id": "org-a", "secret_id": "secret-1",
+                "provider": "canvas", "purpose": "oauth_client_secret",
+                "plaintext_b64": STANDARD.encode("secret")
+            }),
+        ),
+        (
+            "decrypt",
+            serde_json::json!({
+                "organization_id": "org-a", "secret_id": "secret-1",
+                "provider": "canvas", "purpose": "oauth_client_secret",
+                "envelope": {"schema": "marty.integration-secret-envelope/v1", "ciphertext": "vault:v1:synthetic"}
+            }),
+        ),
+    ] {
+        let path = format!("/internal/integration-secrets/{operation}");
+        let unauthorized = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path.as_str())
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let unavailable = marty_signing_keys::http::router()
+            .oneshot(
+                Request::post(path.as_str())
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "dev-signing-keys-internal-api-key")
+                    .body(Body::from(body.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+}
+
+#[tokio::test]
 async fn passport_artifact_http_round_trip_preserves_kms_and_tenant_boundary() {
     async fn kms_encrypt(Json(body): Json<Value>) -> Json<Value> {
         STANDARD
@@ -209,9 +254,6 @@ async fn csca_signing_surface_matches_the_language_neutral_contract() {
             .replace("{certificate_id}", "csca-a")
             .replace("{event_id}", "event-a");
         let body = match contract_path {
-            "/internal/kms/sign" => {
-                serde_json::json!({"service_config": {}, "payload_b64": ""})
-            }
             "/internal/kms/public-key" | "/internal/kms/verify" => {
                 serde_json::json!({"service_config": {}})
             }
@@ -388,6 +430,92 @@ async fn internal_kms_routes_require_the_service_api_key() {
         .await
         .unwrap();
     assert_eq!(authorized.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn arbitrary_provider_signing_route_is_retired() {
+    let body = serde_json::json!({
+        "service_config": {"service_type": "openbao-transit", "key_reference": "foreign-key"},
+        "payload_b64": "cGF5bG9hZA"
+    })
+    .to_string();
+    for api_key in [None, Some("dev-signing-keys-internal-api-key")] {
+        let mut request =
+            Request::post("/internal/kms/sign").header("content-type", "application/json");
+        if let Some(api_key) = api_key {
+            request = request.header("x-api-key", api_key);
+        }
+        let response = marty_signing_keys::http::router()
+            .oneshot(request.body(Body::from(body.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn shared_key_legacy_service_sign_route_is_retired() {
+    for api_key in [
+        "dev-signing-keys-internal-api-key",
+        "dedicated-service-sign-gateway-key-000001",
+    ] {
+        let response = marty_signing_keys::http::router_with_dependencies_and_sign_key(
+            "dev-signing-keys-internal-api-key".into(),
+            Some("dedicated-service-sign-gateway-key-000001".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .oneshot(
+            Request::post("/internal/compat/services/service-a/sign")
+                .header("content-type", "application/json")
+                .header("x-api-key", api_key)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
+async fn public_service_signing_requires_gateway_service_credential() {
+    let body = serde_json::json!({"payload_b64": "cGF5bG9hZA"}).to_string();
+    let dedicated_key = "dedicated-service-sign-gateway-key-000001";
+    for (api_key, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some("wrong-internal-key"), StatusCode::UNAUTHORIZED),
+        (
+            Some("dev-signing-keys-internal-api-key"),
+            StatusCode::UNAUTHORIZED,
+        ),
+        (Some(dedicated_key), StatusCode::SERVICE_UNAVAILABLE),
+    ] {
+        let mut request =
+            Request::post("/v1/signing-keys/services/service-a/sign?organization_id=org-a")
+                .header("content-type", "application/json");
+        if let Some(api_key) = api_key {
+            request = request.header("x-api-key", api_key);
+        }
+        let response = marty_signing_keys::http::router_with_dependencies_and_sign_key(
+            "dev-signing-keys-internal-api-key".into(),
+            Some(dedicated_key.into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .oneshot(request.body(Body::from(body.clone())).unwrap())
+        .await
+        .unwrap();
+        assert_eq!(response.status(), expected);
+    }
 }
 
 #[tokio::test]

@@ -47,6 +47,24 @@ mod resolved_runtime;
 #[path = "support/runtime_failure_diagnostics.rs"]
 mod runtime_failure_diagnostics;
 
+#[tokio::test]
+#[ignore = "requires the disposable Canvas OpenBao Transit backend"]
+async fn scoped_transit_signer_verifies_without_key_read_authority() {
+    let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
+    let root_token = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
+    let signer = issuance_named_peers::RemoteIssuerSigner::create(&base_url, &root_token).await;
+    let payload = b"canvas managed issuer signing proof";
+    let signature = ed25519_dalek::Signature::from_slice(&signer.sign(payload).await).unwrap();
+    signer
+        .verifying_key()
+        .verify_strict(payload, &signature)
+        .unwrap();
+    assert_eq!(
+        signer.metadata_read_status().await,
+        axum::http::StatusCode::FORBIDDEN
+    );
+}
+
 #[test]
 fn composition_source_root_matches_acceptance_package_root() {
     let root = canvas_published_database::repository_root();
@@ -395,6 +413,9 @@ mod didcomm_wallet_fixture;
 
 #[path = "../../../services/issuance/tests/support/didcomm_test_fixtures.rs"]
 mod didcomm_test_fixtures;
+
+#[path = "support/remote_didcomm_sender.rs"]
+mod remote_didcomm_sender;
 
 #[path = "support/didcomm_composed_delivery.rs"]
 mod didcomm_composed_delivery;

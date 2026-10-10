@@ -176,6 +176,25 @@ pub(super) const TRANSACTION_ID: &str = "selfhost-loader-persisted-transaction";
 pub(super) const ORGANIZATION: &str = "synthetic-selfhost-loader-org";
 pub(super) const MANAGEMENT_KEY: &str = "synthetic-selfhost-loader-management-key";
 
+pub(super) fn network_gateway(database: &PublishedDatabase) -> Result<std::net::Ipv4Addr, String> {
+    let descriptor: Value =
+        serde_json::from_str(&database.borrow_descriptor()?).map_err(|_| ERROR)?;
+    let postgres = descriptor["postgres_id"].as_str().ok_or(ERROR)?;
+    exact_id(postgres)?;
+    let info = inspect(postgres)?;
+    let networks = info["NetworkSettings"]["Networks"]
+        .as_object()
+        .ok_or(ERROR)?;
+    require(networks.len() == 1)?;
+    networks
+        .values()
+        .next()
+        .and_then(|network| network["Gateway"].as_str())
+        .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+        .filter(|value| value.is_private() && !value.is_loopback() && !value.is_unspecified())
+        .ok_or_else(|| ERROR.into())
+}
+
 fn require(condition: bool) -> Result<(), String> {
     if condition {
         Ok(())
@@ -335,7 +354,7 @@ fn checked_recovery_native(
             [
                 "marty_db_password",
                 "issuance_api_key",
-                "integration_secret_master_key",
+                "didcomm_issuance_openbao_token",
                 "token_hmac_key",
                 "canvas_credentials_shared_secret",
                 "grpc_service_token",
@@ -422,6 +441,7 @@ impl<'a> OwnedNative<'a> {
         database: &'a PublishedDatabase,
         image: &PublicImage,
         case: SecretCase,
+        kms_url: &str,
     ) -> Result<Self, String> {
         require_closed_child()?;
         let descriptor: Value =
@@ -504,6 +524,7 @@ impl<'a> OwnedNative<'a> {
             "DATABASE_URL_TEMPLATE".into(),
             json!(format!("{prefix}@{database_host}:5432/marty")),
         );
+        environment.insert("INTEGRATION_SECRET_KMS_URL".into(), json!(kms_url));
         if case == SecretCase::RawAndFile {
             environment.insert(
                 "GRPC_SERVICE_TOKEN".into(),
@@ -890,7 +911,7 @@ mod recovery_tests {
         let names = [
             "marty_db_password",
             "issuance_api_key",
-            "integration_secret_master_key",
+            "didcomm_issuance_openbao_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
             "grpc_service_token",

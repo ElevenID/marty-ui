@@ -105,6 +105,7 @@ impl MipError {
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionIdentity {
     pub user_id: String,
+    pub authentication_time_unix: Option<i64>,
     pub email: Option<String>,
     pub username: Option<String>,
     pub given_name: Option<String>,
@@ -154,12 +155,31 @@ pub enum AuthenticationSource {
 pub struct GatewayIdentity {
     pub source: AuthenticationSource,
     pub user_id: String,
+    pub authentication_time_unix: Option<i64>,
     pub user_email: Option<String>,
     pub user_domain: Option<String>,
     pub session_organization_id: Option<String>,
     pub api_key_id: Option<String>,
     pub api_key_prefix: Option<String>,
     pub api_key_scopes: Vec<String>,
+}
+
+const PAIRING_STEP_UP_MAX_AGE_SECONDS: i64 = 300;
+
+/// A pairing ticket may only be requested by a recently reauthenticated
+/// browser session. Tenant membership is checked separately for the selected
+/// organization before ticket issuance.
+#[must_use]
+pub fn permits_pairing_ticket(identity: &GatewayIdentity, now_unix: i64) -> bool {
+    if identity.source != AuthenticationSource::Session || identity.user_id.trim().is_empty() {
+        return false;
+    }
+    let Some(authenticated_at) = identity.authentication_time_unix else {
+        return false;
+    };
+    authenticated_at > 0
+        && authenticated_at <= now_unix
+        && now_unix - authenticated_at <= PAIRING_STEP_UP_MAX_AGE_SECONDS
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -262,6 +282,7 @@ fn session_context(identity: SessionIdentity) -> GatewayIdentity {
     GatewayIdentity {
         source: AuthenticationSource::Session,
         user_id: identity.user_id,
+        authentication_time_unix: identity.authentication_time_unix,
         user_email: identity.email,
         user_domain,
         session_organization_id: identity.organization_id,
@@ -280,6 +301,7 @@ fn api_key_context(identity: ApiKeyIdentity) -> GatewayIdentity {
     GatewayIdentity {
         source: AuthenticationSource::ApiKey,
         user_id: format!("api_key:{api_key_id}"),
+        authentication_time_unix: None,
         user_email: None,
         user_domain: None,
         session_organization_id: identity.organization_id,
@@ -415,6 +437,7 @@ mod tests {
             match self.behavior {
                 "session_valid" => Ok(Some(SessionIdentity {
                     user_id: "user-1".into(),
+                    authentication_time_unix: Some(1_700_000_000),
                     email: Some("user@example.com".into()),
                     organization_id: Some("org-1".into()),
                     ..SessionIdentity::default()
@@ -595,6 +618,65 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[tokio::test]
+    async fn oidc_authentication_time_is_bound_to_session_identity_only() {
+        let session = authenticate(
+            &AuthenticationInput {
+                required: true,
+                cookies: BTreeMap::from([("sessionId".into(), "session-1".into())]),
+                ..AuthenticationInput::default()
+            },
+            &ScriptedProvider {
+                behavior: "session_valid",
+            },
+        )
+        .await;
+        let AuthenticationOutcome::Authenticated(session) = session else {
+            panic!("session authentication must succeed");
+        };
+        assert_eq!(session.authentication_time_unix, Some(1_700_000_000));
+
+        let api_key = authenticate(
+            &AuthenticationInput {
+                required: true,
+                headers: BTreeMap::from([("x-api-key".into(), "mk_live_fixture".into())]),
+                ..AuthenticationInput::default()
+            },
+            &ScriptedProvider {
+                behavior: "api_key_valid",
+            },
+        )
+        .await;
+        let AuthenticationOutcome::Authenticated(api_key) = api_key else {
+            panic!("API-key authentication must succeed");
+        };
+        assert_eq!(api_key.authentication_time_unix, None);
+    }
+
+    #[test]
+    fn pairing_ticket_policy_rejects_stale_future_and_non_session_actors() {
+        let now = 1_700_000_500;
+        let session = session_context(SessionIdentity {
+            user_id: "user-1".into(),
+            authentication_time_unix: Some(now - PAIRING_STEP_UP_MAX_AGE_SECONDS),
+            ..SessionIdentity::default()
+        });
+        assert!(permits_pairing_ticket(&session, now));
+        for candidate in [
+            None,
+            Some(now - PAIRING_STEP_UP_MAX_AGE_SECONDS - 1),
+            Some(now + 1),
+            Some(0),
+        ] {
+            let mut altered = session.clone();
+            altered.authentication_time_unix = candidate;
+            assert!(!permits_pairing_ticket(&altered, now));
+        }
+        let mut api_key = session;
+        api_key.source = AuthenticationSource::ApiKey;
+        assert!(!permits_pairing_ticket(&api_key, now));
     }
 
     #[tokio::test]

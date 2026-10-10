@@ -90,7 +90,6 @@ PROTECTED_FILES = (
     "rust/services/issuance/src/migration_seed.rs",
     "rust/services/issuance/migrations/0000_issuance_service_baseline.sql",
     "rust/services/issuance/migrations/0000_issuance_service_catalog.json",
-    "rust/services/issuance/migrations/0000_merge_issuance_heads_bridge.sql",
     "scripts/probe_passport_beta_cutover_snapshot.py",
     "scripts/verify_passport_beta_protected_cutover.py",
     "scripts/collect_passport_python_deletion_cutover.py",

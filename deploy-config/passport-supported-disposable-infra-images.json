@@ -14,9 +14,9 @@
       "source_revision": "9d9b74b729d555ef784db63c1941b73d1c47a6f9"
     },
     "openbao": {
-      "reference": "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878",
-      "version": "2.5.2",
-      "source_revision": "932fcf892eba8d646a9bfc58a59ea3b2475b17fa"
+      "reference": "quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452",
+      "version": "2.5.5",
+      "source_revision": "028992583c693c4de6350b8aa52ff85e30375a99"
     },
     "edge": {
       "reference": "docker.io/library/nginx@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10",

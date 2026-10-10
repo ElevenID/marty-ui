@@ -26,6 +26,7 @@ SPEC_KEYS = {"native_rpc", "legacy_rpc", "legacy_http", "directory"}
 SECRET_VALUES = {
     "grpc_service_token": TOKEN,
     "issuance_api_key": KEY,
+    "signing_keys_issuer_sign_key": "synthetic-flow-issuer-sign-key-32-chars",
     "marty_db_password": "synthetic-flow-database-password",
     "flow_webhook_secret": "synthetic-flow-rendered-webhook-secret",
     "flow_application_event_hmac_key": "synthetic-flow-rendered-event-hmac-key",
@@ -98,6 +99,7 @@ def render(spec, command):
             ISSUANCE_API_KEY=KEY,
             SIGNING_KEYS_INTERNAL_API_KEY=KEY,
             GRPC_SERVICE_TOKEN=TOKEN,
+            DEVICE_REGISTRATION_GATEWAY_KEY="synthetic-distinct-flow-device-gateway-key-32-chars",
             PUBLIC_API_URL="https://issuer.example",
             FLOW_CALLBACK_DESTINATIONS="org-1|https://callback.example/result?nonce=__MARTY_TOKEN__",
             SELFHOST_STATE_DIR=(directory / "unused-state").as_posix(),
@@ -138,6 +140,7 @@ def render(spec, command):
             passport_consumer_additive=SELFHOST["rendered_passport_consumer_additions"](
                 inputs
             ),
+            didcomm_kms_addr=inputs["BAO_ADDR"],
         )
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {

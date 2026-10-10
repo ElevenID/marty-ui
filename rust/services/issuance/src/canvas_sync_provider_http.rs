@@ -1568,7 +1568,7 @@ mod tests {
             canvas_oauth_postgres::{
                 PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault,
             },
-            integration_secret::IntegrationSecretCipher,
+            integration_secret_kms::KmsIntegrationSecretCipher,
         };
 
         struct UnusedSigner;
@@ -1590,10 +1590,11 @@ mod tests {
             .unwrap();
         let oauth = CanvasOAuthService::new(
             Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
-            Arc::new(PostgresIntegrationSecretVault::new(
+            Arc::new(PostgresIntegrationSecretVault::new_remote(
                 pool.clone(),
-                IntegrationSecretCipher::from_base64(
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                KmsIntegrationSecretCipher::new(
+                    url::Url::parse("https://127.0.0.1:1/internal").unwrap(),
+                    "synthetic-test-key",
                 )
                 .unwrap(),
             )),

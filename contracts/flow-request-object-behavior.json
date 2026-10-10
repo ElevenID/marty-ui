@@ -20,7 +20,7 @@
   "url_query_oversize": "fail_closed",
   "haip_response_mode": "direct_post.jwt",
   "haip_jwe": {"alg": "ECDH-ES", "enc": "A256GCM"},
-  "haip_private_key_storage": "tenant_and_flow_bound_envelope_only",
+  "haip_key_custody": "remote_nonexportable_tenant_flow_version_reference",
   "identity_change": "fail_closed",
   "client_id_schemes": ["redirect_uri", "decentralized_identifier", "x509_hash"],
   "verifier_did_methods": ["did:web", "did:jwk", "did:key"],

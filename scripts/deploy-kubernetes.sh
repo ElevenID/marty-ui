@@ -149,8 +149,8 @@ apply_manifest() {
 }
 
 # No build or cluster mutation: authenticate the release and capture the exact
-# full model before any deployment write. Deploy and update-images reject a
-# disabled native selector.
+# full model before any deployment write. KMS-only deploy and update-images
+# require the native owner and reject a disabled selector.
 require_kubernetes_services_release() {
   [[ -n "${MARTY_STACK_MANIFEST:-}" ]] || { error "Set MARTY_STACK_MANIFEST to the signed Rust-only release manifest."; return 1; }
   local source_sha checked_root checked_manifests relative_manifests manifest_file relative_file
@@ -185,7 +185,7 @@ prepare_kubernetes_native_issuance() {
   K8S_NATIVE_RENDERED_MODEL=""
   K8S_ISSUANCE_NATIVE_ENABLED="${K8S_ISSUANCE_NATIVE_ENABLED-true}"
   case "$K8S_ISSUANCE_NATIVE_ENABLED" in
-    false) return 0 ;;
+    false) error "KMS-only Kubernetes deployment requires native issuance."; return 1 ;;
     true) ;;
     *) error "Kubernetes native issuance selection must be true or false."; return 1 ;;
   esac
@@ -291,9 +291,9 @@ cmd_setup_secrets() {
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
-  local issuance_api_key token_hmac_key grpc_service_token flow_webhook_secret flow_application_event_hmac_key
+  local issuance_api_key token_hmac_key grpc_service_token device_registration_gateway_key device_registration_signing_keys_key service_sign_gateway_key flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
-  local integration_secret_master_key canvas_credentials_shared_secret openbao_service_token
+  local canvas_credentials_shared_secret openbao_service_token signing_keys_openbao_token didcomm_issuance_openbao_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
   local flow_workload_client_cert flow_workload_client_key
   local flow_workload_server_cert flow_workload_server_key
@@ -318,12 +318,46 @@ cmd_setup_secrets() {
   smtp_username="$(resolve_secret_input SMTP_USERNAME)"
   smtp_password="$(resolve_secret_input SMTP_PASSWORD)"
   issuance_api_key="$(resolve_secret_input ISSUANCE_API_KEY)"
+  issuer_sign_key="$(resolve_secret_input SIGNING_KEYS_ISSUER_SIGN_KEY)"
+  require_resolved_secret SIGNING_KEYS_ISSUER_SIGN_KEY "$issuer_sign_key"
+  if (( ${#issuer_sign_key} < 32 )) || [[ "$issuer_sign_key" == "$issuance_api_key" ]]; then
+    error "SIGNING_KEYS_ISSUER_SIGN_KEY must be at least 32 characters and distinct from the shared Signing Keys credential."
+  fi
+  service_sign_gateway_key="$(resolve_secret_input SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY)"
+  require_resolved_secret SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY "$service_sign_gateway_key"
+  if (( ${#service_sign_gateway_key} < 32 )) || [[ "$service_sign_gateway_key" == "$issuance_api_key" ]]; then
+    error "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be at least 32 characters and distinct from shared Signing Keys credentials."
+  fi
+  if [[ "$issuer_sign_key" == "$service_sign_gateway_key" ]]; then
+    error "SIGNING_KEYS_ISSUER_SIGN_KEY must differ from SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY."
+  fi
   token_hmac_key="$(resolve_secret_input TOKEN_HMAC_KEY)"
   require_resolved_secret TOKEN_HMAC_KEY "$token_hmac_key"
   grpc_service_token="$(resolve_secret_input GRPC_SERVICE_TOKEN)"
+  device_registration_gateway_key="$(resolve_secret_input DEVICE_REGISTRATION_GATEWAY_KEY)"
+  require_resolved_secret DEVICE_REGISTRATION_GATEWAY_KEY "$device_registration_gateway_key"
+  if (( ${#device_registration_gateway_key} < 32 )); then
+    error "DEVICE_REGISTRATION_GATEWAY_KEY must be at least 32 characters."
+  fi
+  if [[ "$device_registration_gateway_key" == "$grpc_service_token" || "$device_registration_gateway_key" == "$issuance_api_key" ]]; then
+    error "DEVICE_REGISTRATION_GATEWAY_KEY must differ from other service credentials."
+  fi
+  device_registration_signing_keys_key="$(resolve_secret_input DEVICE_REGISTRATION_SIGNING_KEYS_KEY)"
+  require_resolved_secret DEVICE_REGISTRATION_SIGNING_KEYS_KEY "$device_registration_signing_keys_key"
+  if (( ${#device_registration_signing_keys_key} < 32 )); then
+    error "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be at least 32 characters."
+  fi
+  if [[ "$device_registration_signing_keys_key" == "$device_registration_gateway_key" || "$device_registration_signing_keys_key" == "$grpc_service_token" || "$device_registration_signing_keys_key" == "$issuance_api_key" ]]; then
+    error "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from other service credentials."
+  fi
   notification_webhook_secret="$(resolve_secret_input NOTIFICATION_WEBHOOK_SECRET)"
   notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
   workload_identity_ca_cert="$(resolve_secret_input MARTY_WORKLOAD_IDENTITY_CA_CERT)"
+  require_resolved_secret MARTY_WORKLOAD_IDENTITY_CA_CERT "$workload_identity_ca_cert"
+  signing_keys_workload_server_cert="$(resolve_secret_input SIGNING_KEYS_WORKLOAD_SERVER_CERT)"
+  signing_keys_workload_server_key="$(resolve_secret_input SIGNING_KEYS_WORKLOAD_SERVER_KEY)"
+  require_resolved_secret SIGNING_KEYS_WORKLOAD_SERVER_CERT "$signing_keys_workload_server_cert"
+  require_resolved_secret SIGNING_KEYS_WORKLOAD_SERVER_KEY "$signing_keys_workload_server_key"
   pp_workload_server_cert="$(resolve_secret_input PP_WORKLOAD_SERVER_CERT)"
   pp_workload_server_key="$(resolve_secret_input PP_WORKLOAD_SERVER_KEY)"
   flow_workload_client_cert="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_CERT)"
@@ -342,9 +376,11 @@ cmd_setup_secrets() {
   compliance_profile_workload_client_key="$(resolve_secret_input COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY)"
   flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
   flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
-  integration_secret_master_key="$(resolve_secret_input INTEGRATION_SECRET_MASTER_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
+  signing_keys_openbao_token="$(resolve_secret_input SIGNING_KEYS_OPENBAO_TOKEN)"
+  didcomm_issuance_openbao_token="$(resolve_secret_input DIDCOMM_ISSUANCE_OPENBAO_TOKEN)"
+  require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"
   notification_openbao_token="$(resolve_secret_input NOTIFICATION_OPENBAO_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 
@@ -378,17 +414,32 @@ cmd_setup_secrets() {
     --from-literal=ISSUANCE_API_KEY="$issuance_api_key" \
     --from-literal=TOKEN_HMAC_KEY="$token_hmac_key" \
     --from-literal=SIGNING_KEYS_INTERNAL_API_KEY="$issuance_api_key" \
+    --from-literal=SIGNING_KEYS_ISSUER_SIGN_KEY="$issuer_sign_key" \
+    --from-literal=SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY="$service_sign_gateway_key" \
     --from-literal=GRPC_SERVICE_TOKEN="$grpc_service_token" \
+    --from-literal=DEVICE_REGISTRATION_GATEWAY_KEY="$device_registration_gateway_key" \
+    --from-literal=DEVICE_REGISTRATION_SIGNING_KEYS_KEY="$device_registration_signing_keys_key" \
     --from-literal=NOTIFICATION_WEBHOOK_SECRET="$notification_webhook_secret" \
     --from-literal=NOTIFICATION_APPLICANT_EVENT_TOKEN="$notification_applicant_event_token" \
     --from-literal=FLOW_WEBHOOK_SECRET="$flow_webhook_secret" \
     --from-literal=FLOW_APPLICATION_EVENT_HMAC_KEY="$flow_application_event_hmac_key" \
-    --from-literal=INTEGRATION_SECRET_MASTER_KEY="$integration_secret_master_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
+    --from-literal=SIGNING_KEYS_OPENBAO_TOKEN="$signing_keys_openbao_token" \
+    --from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token" \
     --from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"
+
+  kubectl create secret generic signing-keys-integration-secret-server-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=tls.crt="$signing_keys_workload_server_cert" \
+    --from-literal=tls.key="$signing_keys_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic signing-keys-integration-secret-ca \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --dry-run=client -o yaml | kubectl apply -f -
 
   kubectl create secret generic presentation-policy-workload-tls \
     --namespace="$NAMESPACE" \

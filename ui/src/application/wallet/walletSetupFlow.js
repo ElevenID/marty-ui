@@ -5,14 +5,19 @@
 const DEFAULT_EXPIRY_SECONDS = 300;
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 
-export function createPairingCode({ random = Math.random } = {}) {
-  return random().toString(36).substring(2, 10).toUpperCase();
-}
-
-export function buildPairingState({ deepLinkProtocol, pairingCode, expiresIn = DEFAULT_EXPIRY_SECONDS }) {
+export function buildPairingState({ pairingCode, pairingId, apiOrigin, expiresAt, now = Date.now() }) {
+  const expiresIn = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
+  if (!/^[A-Za-z0-9_-]{43}$/.test(pairingCode || '') ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pairingId || '') ||
+      !Number.isFinite(expiresIn) || expiresIn <= 0 ||
+      !apiOrigin.startsWith('https://') || new URL(apiOrigin).origin !== apiOrigin) {
+    throw new Error('Invalid server-issued wallet pairing ticket');
+  }
+  const query = new URLSearchParams({ code: pairingCode, api: apiOrigin });
   return {
     pairingCode,
-    qrContent: `${deepLinkProtocol}//pair?code=${pairingCode}`,
+    pairingId,
+    qrContent: `marty://pair?${query}`,
     expiresIn,
   };
 }
@@ -23,25 +28,6 @@ export function shouldTickPairingCountdown({ expiresIn, pairingCode }) {
 
 export function shouldPollWalletStatus({ activeStep, walletConnected }) {
   return activeStep === 0 && !walletConnected;
-}
-
-export function resolveWalletStatusResponse({ activeStep, devices }) {
-  const device = devices?.[0] || null;
-  if (!device) {
-    return {
-      walletConnected: false,
-      walletDeviceId: null,
-      nextStep: null,
-      successMessage: null,
-    };
-  }
-
-  return {
-    walletConnected: true,
-    walletDeviceId: device.device_id,
-    nextStep: activeStep === 0 ? 1 : null,
-    successMessage: activeStep === 0 ? 'Wallet paired successfully!' : null,
-  };
 }
 
 export function resolveNotificationPermissionState(permission) {
@@ -121,14 +107,6 @@ export function resolveSkipNotifications() {
 export function resolveWalletSetupComplete() {
   return {
     successMessage: 'Wallet setup complete! You can now receive credentials and notifications.',
-  };
-}
-
-export function resolveSimulatedPairing() {
-  return {
-    walletConnected: true,
-    nextStep: 1,
-    successMessage: 'Wallet paired successfully!',
   };
 }
 

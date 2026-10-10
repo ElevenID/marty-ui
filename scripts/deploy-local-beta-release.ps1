@@ -764,7 +764,10 @@ $requiredFlowSecrets = @(
     "FLOW_WEBHOOK_SECRET",
     "FLOW_APPLICATION_EVENT_HMAC_KEY",
     "ISSUANCE_API_KEY",
-    "SIGNING_KEYS_INTERNAL_API_KEY"
+    "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "DEVICE_REGISTRATION_GATEWAY_KEY",
+    "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
 )
 if ($EnablePassportNative -and $EnablePassportPhysicalProvider) {
     $requiredFlowSecrets += @(
@@ -777,6 +780,11 @@ foreach ($name in $requiredFlowSecrets) {
     if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
         throw "$name must be a non-placeholder value of at least 32 characters"
     }
+}
+$deviceGatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_GATEWAY_KEY"
+$deviceSigningKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
+if ($deviceSigningKey -eq $deviceGatewayKey -or $deviceSigningKey -eq $grpcServiceToken) {
+    throw "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from device and gRPC credentials"
 }
 $operatorGatewayKeys = @{}
 if ($EnablePassportNative) {
@@ -837,6 +845,8 @@ if ($EnablePassportNative) {
 }
 $workloadIdentityPathNames = @(
     "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_KEY_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
@@ -884,6 +894,7 @@ if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
 }
 $workloadCa = $workloadIdentityPaths["MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"]
 $workloadLeafNames = @(
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
@@ -1032,6 +1043,9 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $PSScriptRoot "ensure-dev-integration-secret-tls.py")
+)
 . (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
 $legacyPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $legacyPostgres) { throw "Beta PostgreSQL container is unavailable" }

@@ -30,7 +30,7 @@ def test_every_created_container_is_reaped(entrypoint, monkeypatch, tmp_path, fa
         if operation == "logs":
             return (
                 "Starting canonical Rust service: canvas-sync-worker\n"
-                "INTEGRATION_SECRET_MASTER_KEY source is required"
+                "legacy integration-secret master-key configuration is forbidden"
             )
         return ""
 
@@ -138,9 +138,9 @@ def test_preflight_matrix_retains_aliases_and_secret_conflicts(entrypoint):
         "hyphen",
         "invalid_logging",
         "underscore",
-        "direct_key",
-        "file_key",
-        "conflicting_key_sources",
+        "invalid_database_url",
+        "raw_master_key_file",
+        "conflicting_api_key_sources",
         "missing_file",
         "unknown_service",
         "empty_service",

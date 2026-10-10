@@ -31,8 +31,10 @@ use marty_gateway::{
 use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
+    flow_envelope::OpenBaoEnvelopeProvider,
     http::{
-        router_with_dependencies as signing_router, router_with_dependencies_and_ceremony_keys,
+        router_with_all_keys, router_with_dependencies_and_ceremony_keys,
+        router_with_dependencies_and_sign_key as signing_router,
     },
     profiles::ProfileStore as SigningProfileStore,
     registry::RegistryStore as SigningRegistryStore,
@@ -44,6 +46,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const DEFAULT_MAXIMUM_BODY_BYTES: usize = 10 * 1024 * 1024;
+const ISSUER_SIGN_GATEWAY_KEY: &str = "dedicated-issuer-sign-gateway-key-000001";
 
 struct SigningIdentity {
     organization_id: String,
@@ -291,6 +294,10 @@ fn signing_gateway_state(signing_url: String) -> Arc<GatewayRuntimeState> {
         )
         .unwrap()
         .with_service_token(Some("s".repeat(32)))
+        .unwrap()
+        .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
+        .unwrap()
+        .with_issuer_sign_key(ISSUER_SIGN_GATEWAY_KEY.into())
         .unwrap(),
     )
 }
@@ -381,7 +388,9 @@ async fn gateway_transit_read(
     };
     Json(json!({"data": {
         "latest_version": 1, "type": key_type, "supports_signing": true,
-        "soft_deleted": false,
+        "soft_deleted": false, "exportable": false,
+        "allow_plaintext_backup": false, "deletion_allowed": false,
+        "imported_key": false,
         "keys": {"1": {"name": key_type, "public_key": material}}
     }}))
     .into_response()
@@ -421,7 +430,7 @@ async fn gateway_transit_sign(
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only; run alone"]
 async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
     let redis_url = disposable_signing_redis_url().await;
@@ -440,6 +449,10 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    // This exact-case acceptance process binds the mounted token to its own
+    // disposable transit stub, matching the production BAO_ADDR guard.
+    let prior_bao_addr = std::env::var_os("BAO_ADDR");
+    std::env::set_var("BAO_ADDR", &endpoint);
     let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
     let store = SigningRegistryStore::connect(&redis_url)
         .await
@@ -455,8 +468,13 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let profiles = SigningProfileStore::from_connection(store.connection());
     let documents = SigningDocumentStore::from_connection(store.connection());
     let cleanup_store = store.clone();
-    let signing = signing_router(
+    let signing = router_with_all_keys(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
+        None,
+        false,
         Some(store),
         Some(documents.clone()),
         None,
@@ -521,6 +539,44 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     );
     assert!(!created.to_string().contains("test-only"));
     assert!(!created.to_string().contains("private_key"));
+    let service_sign_path = "/v1/signing-keys/services/managed-openbao-transit/sign";
+    let service_sign_body = json!({
+        "payload_b64": "cGF5bG9hZA", "key_reference": reference,
+        "algorithm": "ES256"
+    });
+    let service_sign_request = |authenticated: bool| {
+        let mut request =
+            Request::post(service_sign_path).header("content-type", "application/json");
+        if authenticated {
+            request = request.header("cookie", "sessionId=valid");
+        }
+        request
+            .body(Body::from(service_sign_body.to_string()))
+            .unwrap()
+    };
+    let denied = gateway
+        .clone()
+        .oneshot(service_sign_request(false))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert!(fixture.signs.lock().unwrap().is_empty());
+    let signed_service = gateway
+        .clone()
+        .oneshot(service_sign_request(true))
+        .await
+        .unwrap();
+    let status = signed_service.status();
+    let signed_service: Value = serde_json::from_slice(
+        &to_bytes(signed_service.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status, StatusCode::OK, "{signed_service}");
+    assert_eq!(signed_service["ok"], true);
+    assert_eq!(fixture.signs.lock().unwrap().len(), 1);
+    fixture.signs.lock().unwrap().clear();
     let listed = gateway
         .clone()
         .oneshot(
@@ -671,13 +727,28 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .unwrap();
     assert_eq!(denied_sign.status(), StatusCode::UNAUTHORIZED);
     assert!(fixture.signs.lock().unwrap().is_empty());
-    let signed = gateway
+    let shared_key_sign = gateway
         .clone()
         .oneshot(
             Request::post(format!(
                 "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
             ))
             .header("x-api-key", "internal-signing-key")
+            .header("content-type", "application/json")
+            .body(Body::from(sign_body.to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(shared_key_sign.status(), StatusCode::UNAUTHORIZED);
+    assert!(fixture.signs.lock().unwrap().is_empty());
+    let signed = gateway
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
+            ))
+            .header("x-api-key", ISSUER_SIGN_GATEWAY_KEY)
             .header("content-type", "application/json")
             .body(Body::from(sign_body.to_string()))
             .unwrap(),
@@ -735,6 +806,11 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .unwrap();
     signing_server.abort();
     kms_server.abort();
+    if let Some(previous) = prior_bao_addr {
+        std::env::set_var("BAO_ADDR", previous);
+    } else {
+        std::env::remove_var("BAO_ADDR");
+    }
 }
 
 async fn disposable_signing_openbao() -> (String, String) {
@@ -801,6 +877,7 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
     let documents = SigningDocumentStore::from_connection(registry.connection());
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(registry),
         Some(documents),
         None,
@@ -1007,7 +1084,12 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap();
     assert!(created_key.status().is_success());
 
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(endpoint.clone(), token.clone()).unwrap(),
+        ));
     let service = json!({
         "id":service_id, "name":"Gateway dedicated CSR",
         "service_type":"openbao-transit", "endpoint":endpoint,
@@ -1021,8 +1103,17 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap()
         .push(service.clone());
     store.save(&organization_id, &registry).await.unwrap();
+    let mut raw_connection = store.connection();
+    let raw: String = redis::cmd("GET")
+        .arg(marty_signing_keys::registry::storage_key(&organization_id))
+        .query_async(&mut raw_connection)
+        .await
+        .unwrap();
+    assert!(raw.contains("auth_reference_envelope"));
+    assert!(!raw.contains(&token));
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(store.clone()),
         None,
         None,
@@ -1501,11 +1592,12 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
 }
 
 #[tokio::test]
-#[ignore = "requires a marked disposable Redis database"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     use std::sync::atomic::AtomicUsize;
 
     let redis_url = disposable_signing_redis_url().await;
+    let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let key_reference = format!("gateway-rotation-key-{}", uuid::Uuid::new_v4().simple());
     let version = Arc::new(AtomicUsize::new(1));
@@ -1559,7 +1651,12 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
     let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let mut registry = marty_signing_keys::registry::empty_registry();
     registry["services"].as_array_mut().unwrap().push(json!({
@@ -1572,6 +1669,7 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     store.save(&organization_id, &registry).await.unwrap();
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(
             store
                 .clone()
@@ -1677,11 +1775,17 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
     let redis_url = disposable_signing_redis_url().await;
+    let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-signing-{}", uuid::Uuid::new_v4().simple());
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     store
         .save(
             &organization_id,
@@ -1708,6 +1812,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
     let verify_registry = store.clone();
     let signing = signing_router(
         "test-internal-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(store),
         Some(documents),
         None,
@@ -2018,6 +2123,24 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         .find(|case| case["name"] == "gcp_pem_public_key")
         .unwrap()["provider_response"]
         .clone();
+    let metadata = Router::new().route(
+        "/computeMetadata/v1/instance/service-accounts/default/token",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(
+                headers
+                    .get("metadata-flavor")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Google")
+            );
+            Json(json!({"access_token": "internal-test-credential"}))
+        }),
+    );
+    let metadata_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let metadata_host = metadata_listener.local_addr().unwrap().to_string();
+    let prior_metadata_host = std::env::var_os("GCE_METADATA_HOST");
+    std::env::set_var("GCE_METADATA_HOST", metadata_host);
+    let metadata_server =
+        tokio::spawn(async move { axum::serve(metadata_listener, metadata).await.unwrap() });
     let kms_material = Arc::new(std::sync::Mutex::new(provider_response));
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let kms_endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
@@ -2065,7 +2188,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
                 "services": [{
                     "id": "gateway-service", "name": "Gateway mDoc Signer",
                     "service_type": "gcp-cloud-kms", "endpoint": kms_endpoint,
-                    "auth_mode": "workload_identity", "auth_reference": "internal-test-credential",
+                    "auth_mode": "workload_identity",
                     "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
                     "algorithms": ["ES256"], "key_purposes": ["mdoc_dsc"]
                 }],
@@ -2282,6 +2405,12 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         }));
     }
     kms_server.abort();
+    metadata_server.abort();
+    if let Some(previous) = prior_metadata_host {
+        std::env::set_var("GCE_METADATA_HOST", previous);
+    } else {
+        std::env::remove_var("GCE_METADATA_HOST");
+    }
     let mut connection = verify_registry.connection();
     let _: usize = redis::cmd("DEL")
         .arg(marty_signing_keys::registry::storage_key(&organization_id))

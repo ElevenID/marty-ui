@@ -13,23 +13,18 @@ use axum::{
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Duration as ChronoDuration;
 use hmac::{Hmac, Mac};
-use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
 use marty_passport_auth::PassportTenantCredentialSource;
 use num_bigint::BigUint;
-use p256::{
-    ecdsa::{signature::Signer, Signature, SigningKey},
-    pkcs8::DecodePrivateKey,
-};
-use rcgen::{
-    BasicConstraints, CertificateParams, DnType, IsCa, Issuer, KeyPair, KeyUsagePurpose,
-    PKCS_ECDSA_P256_SHA256,
-};
 use serde_json::{json, Value};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use tower::ServiceExt;
 
 use super::*;
-use crate::{migration, passport_artifact::PassportSensitiveArtifact};
+use crate::{
+    migration,
+    passport_artifact::PassportSensitiveArtifact,
+    passport_test_vectors::{certificate_pem, public_passport_vectors},
+};
 
 static RECONCILIATION_DATABASE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
@@ -230,46 +225,11 @@ async fn kms_verify_callback(Json(request): Json<Value>) -> Json<Value> {
 }
 
 fn signed_material() -> SignedMaterial {
-    let mut csca = CertificateParams::default();
-    csca.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    csca.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-    csca.distinguished_name
-        .push(DnType::CommonName, "Synthetic CSCA");
-    csca.distinguished_name.push(DnType::CountryName, "US");
-    let csca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-    let csca_cert = csca.self_signed(&csca_key).unwrap();
-    let issuer = Issuer::from_params(&csca, &csca_key);
-
-    let mut dsc = CertificateParams::default();
-    dsc.is_ca = IsCa::ExplicitNoCa;
-    dsc.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    dsc.distinguished_name
-        .push(DnType::CommonName, "Synthetic Passport DSC");
-    dsc.distinguished_name.push(DnType::CountryName, "US");
-    let dsc_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-    let dsc_cert = dsc.signed_by(&dsc_key, &issuer).unwrap();
-    let signer = SigningKey::from_pkcs8_der(dsc_key.serialized_der()).unwrap();
-    let prepared = prepare_sod(
-        &[(1, vec![1]), (2, vec![2])],
-        dsc_cert.der(),
-        SodSignatureAlgorithm::Es256,
-    )
-    .unwrap();
-    let signature: Signature = signer.sign(prepared.signing_input());
-    let certificate_pem = |der: &[u8]| {
-        let encoded = STANDARD.encode(der);
-        let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
-        for chunk in encoded.as_bytes().chunks(64) {
-            pem.push_str(std::str::from_utf8(chunk).unwrap());
-            pem.push('\n');
-        }
-        pem.push_str("-----END CERTIFICATE-----\n");
-        pem
-    };
+    let [vector, _] = public_passport_vectors();
     let signed = SignedMaterial {
-        sod_der_base64: STANDARD.encode(prepared.assemble(signature.to_der().as_bytes()).unwrap()),
-        dsc_cert_pem: certificate_pem(dsc_cert.der()),
-        csca_cert_pem: Some(certificate_pem(csca_cert.der())),
+        sod_der_base64: vector.sod_der_b64,
+        dsc_cert_pem: certificate_pem(&vector.dsc_der_b64),
+        csca_cert_pem: Some(certificate_pem(&vector.csca_der_b64)),
         issuer_profile_id: Some("issuer-profile-test".into()),
     };
     signed
@@ -444,17 +404,21 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
         )
         .unwrap();
     let kms_url = url::Url::parse(&format!("http://{kms_address}/internal/signing-keys")).unwrap();
-    let client =
-        BureauClient::new(&format!("http://{bureau_address}"), "bureau-key", None).unwrap();
+    let client = BureauClient::new(&format!("http://{bureau_address}"), "bureau-key").unwrap();
     let endpoint_sha256 = client.endpoint_sha256();
     let mut service = PassportHttpService::with_artifact_availability(
         source,
         repository.clone(),
-        ArtifactAvailability::Ready(ArtifactCryptor::Kms(
+        ArtifactAvailability::Ready(ArtifactCryptor(
             KmsPassportArtifactCipher::new(kms_url.clone(), "synthetic-kms-key").unwrap(),
         )),
         Some(PassportSigner::Managed(Box::new(
-            ManagedProfileSigner::new(kms_url, Some("synthetic-kms-key")).unwrap(),
+            ManagedProfileSigner::new(
+                kms_url,
+                Some("synthetic-kms-key"),
+                Some("synthetic-issuer-sign-key"),
+            )
+            .unwrap(),
         ))),
         Some(client),
     );
@@ -926,13 +890,18 @@ async fn run_beta_batch_http_recovery(
     let mut service = PassportHttpService::with_artifact_availability(
         source,
         repository.clone(),
-        ArtifactAvailability::Ready(ArtifactCryptor::Kms(
+        ArtifactAvailability::Ready(ArtifactCryptor(
             KmsPassportArtifactCipher::new(kms_url.clone(), "synthetic-kms-key").unwrap(),
         )),
         Some(PassportSigner::Managed(Box::new(
-            ManagedProfileSigner::new(kms_url, Some("synthetic-kms-key")).unwrap(),
+            ManagedProfileSigner::new(
+                kms_url,
+                Some("synthetic-kms-key"),
+                Some("synthetic-issuer-sign-key"),
+            )
+            .unwrap(),
         ))),
-        Some(BureauClient::new(&format!("http://{bureau_address}"), "bureau-key", None).unwrap()),
+        Some(BureauClient::new(&format!("http://{bureau_address}"), "bureau-key").unwrap()),
     );
     service.bureau_provider_profile_id = Some("passport-beta-bureau".into());
     service.beta_reconciliation_enabled = true;
@@ -1256,8 +1225,44 @@ async fn run_beta_batch_http_recovery(
     .execute(&pool)
     .await
     .unwrap();
+    let original_provenance = bound[0]
+        .submission_batch_signing_provenance
+        .clone()
+        .unwrap();
+    let mut future_provenance = original_provenance.clone();
+    future_provenance["validated_at"] =
+        json!(bound[0].submitted_at.unwrap() + ChronoDuration::seconds(31));
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET submission_batch_signing_provenance=$2 WHERE id=$1",
+    )
+    .bind(&bound[0].id)
+    .bind(future_provenance)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let future_validation = call(&app).await.unwrap();
+    assert_eq!(future_validation.status(), StatusCode::CONFLICT);
+    sqlx::query(
+        "UPDATE issuance_service.physical_document_jobs
+         SET submission_batch_signing_provenance=$2 WHERE id=$1",
+    )
+    .bind(&bound[0].id)
+    .bind(original_provenance)
+    .execute(&pool)
+    .await
+    .unwrap();
     let mixed = call(&app).await.unwrap();
-    assert_eq!(mixed.status(), StatusCode::OK);
+    let mixed_status = mixed.status();
+    let mixed_body = axum::body::to_bytes(mixed.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    assert_eq!(
+        mixed_status,
+        StatusCode::OK,
+        "{}",
+        String::from_utf8_lossy(&mixed_body)
+    );
     assert_eq!(mock.calls.load(Ordering::SeqCst), 2);
     let rebound = repository
         .beta_batch_jobs(&principal, batch_id)

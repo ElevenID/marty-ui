@@ -126,6 +126,15 @@ def modeled(tmp_path):
         "networks": {"marty-network": {}},
         "volumes": {"preserved": {}},
     }
+    baseline["services"]["openbao"] = {
+        "image": "synthetic.invalid/openbao-base",
+        "command": ["server", "-dev"],
+        "volumes": [],
+    }
+    baseline["services"]["openbao-init"] = {
+        "image": "synthetic.invalid/openbao-base",
+        "environment": {},
+    }
     baseline["services"]["issuance"]["environment"] = {
         "ALLOWED_REDIRECT_URIS": "",
         "DIDCOMM_ALLOW_PRIVATE_IPS": "false",
@@ -149,7 +158,10 @@ def modeled(tmp_path):
     options = {
         "local": True,
         "authcrypt": True,
-        "inputs": {},
+        "inputs": {
+            "MARTY_OPENBAO_DIDCOMM_IMAGE": "synthetic.invalid/openbao-didcomm@sha256:"
+            + "d" * 64
+        },
         "policy_directory": tmp_path,
     }
     actual = GATE["expected_model"](baseline, **options)

@@ -1,7 +1,7 @@
 [package]
 name = "marty-device-registration"
 version = "0.1.0"
-description = "Canonical Rust device registration, key lifecycle, and proof service"
+description = "Canonical Rust device registration and remote holder-key lifecycle service"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -18,13 +18,18 @@ async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
-marty-verification.workspace = true
+ed25519-dalek.workspace = true
+marty-holder-key-reference = { path = "../../crates/holder-key-reference" }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 prost.workspace = true
 rand.workspace = true
 redis.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
+subtle.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tonic.workspace = true
@@ -39,9 +44,8 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
-rand08.workspace = true
-rsa.workspace = true
-sha2.workspace = true
+p256.workspace = true
+marty-signing-keys = { path = "../signing-keys" }
 tower.workspace = true
 
 [lints.rust]

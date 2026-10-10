@@ -52,9 +52,8 @@ marty-ui/
 ├── config/
 ├── scripts/
 ├── tests/
-├── k8s/
-│   └── oracle/
-└── wheels/
+└── k8s/
+    └── oracle/
 ```
 
 ### Key areas

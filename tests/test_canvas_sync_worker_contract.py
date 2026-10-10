@@ -231,12 +231,18 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         for item in container["env"]
         if "valueFrom" in item
     }
-    # Retain the historical three-key artifact. The confirmed shared-key wiring
-    # repair is additive deployment coverage, not a rewritten behavior oracle.
+    # Preserve supported secret bindings while forbidding the retired local
+    # integration-secret master key in the native worker deployment.
     assert secret_environment == {
-        **kubernetes_contract["secret_environment"],
+        **{
+            key: value
+            for key, value in kubernetes_contract["secret_environment"].items()
+            if key != "INTEGRATION_SECRET_MASTER_KEY"
+        },
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "SIGNING_KEYS_ISSUER_SIGN_KEY",
     }
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in secret_environment
     literal_environment = {
         item["name"]: item["value"] for item in container["env"] if "value" in item
     }
@@ -244,7 +250,18 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         **kubernetes_contract["literal_environment"],
         "SERVICE_NAME": "canvas_sync_worker",
         "CANVAS_SYNC_PROCESSOR": "",
+        "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/integration-secret-ca/ca.crt",
     }
+    assert container["volumeMounts"] == [{
+        "name": "integration-secret-ca",
+        "mountPath": "/run/secrets/integration-secret-ca",
+        "readOnly": True,
+    }]
+    assert deployment["spec"]["template"]["spec"]["volumes"] == [{
+        "name": "integration-secret-ca",
+        "secret": {"secretName": "signing-keys-integration-secret-ca"},
+    }]
 
     migration = yaml_document("k8s/oracle/06a-issuance-migrations.yaml")
     assert migration["kind"] == "Job"

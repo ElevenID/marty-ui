@@ -1,7 +1,9 @@
 """Independent pre-change self-host model comparison; no service startup."""
 
 from copy import deepcopy
+import difflib
 import hashlib
+import json
 from pathlib import Path
 import runpy
 import re
@@ -20,6 +22,7 @@ LEGACY_ONLY = {
     "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
     "CANVAS_LTI_TOOL_ACTIVE_KID",
     "CANVAS_LTI_TOOL_PUBLIC_JWKS",
+    "INTEGRATION_SECRET_MASTER_KEY_FILE",
 }
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
@@ -50,11 +53,8 @@ NATIVE_ADDITIVE = {
     "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     "ICAO_DOCUMENT_SIGNER_URL": "${ICAO_DOCUMENT_SIGNER_URL:-}",
     "ICAO_DOCUMENT_SIGNER_API_KEY": "${ICAO_DOCUMENT_SIGNER_API_KEY:-}",
-    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}",
-    "PHYSICAL_DOCUMENT_ARTIFACT_KEY": "${PHYSICAL_DOCUMENT_ARTIFACT_KEY:-}",
     "PERSONALIZATION_BUREAU_URL": "${PERSONALIZATION_BUREAU_URL:-}",
     "PERSONALIZATION_BUREAU_API_KEY": "${PERSONALIZATION_BUREAU_API_KEY:-}",
-    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}",
     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}",
 }
 PASSPORT_CONSUMER_ADDITIVE = {
@@ -66,7 +66,7 @@ PASSPORT_CONSUMER_ADDITIVE = {
         "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     },
     "flow": {
-        "ISSUANCE_NATIVE_SERVICE_URL": "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "PASSPORT_NATIVE_FLOW_ENABLED": "${PASSPORT_NATIVE_FLOW_ENABLED:-false}",
         "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
         "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
@@ -80,13 +80,18 @@ LOADED_INPUTS = {
     "CANVAS_CREDENTIALS_SHARED_SECRET",
     "GRPC_SERVICE_TOKEN",
     "INTEGRATION_SECRET_MASTER_KEY",
+    "INTEGRATION_SECRET_MASTER_KEY_FILE",
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
     "TOKEN_HMAC_KEY",
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
-PASSPORT_BETA_ONLY_FILE_ALIASES = {
+FORBIDDEN_LOCAL_CUSTODY_INPUTS = {
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
 }
 PASSPORT_BETA_OVERLAY_ONLY = {
@@ -112,6 +117,10 @@ SHARED_SETTINGS = {
 def rendered_additions(templates, values):
     rendered = {}
     for key, template in templates.items():
+        if key == "ISSUANCE_NATIVE_SERVICE_URL":
+            assert template == "http://issuance-native:8005"
+            rendered[key] = template
+            continue
         match = re.fullmatch(rf"\$\{{{key}:-([^}}]*)\}}", template)
         assert match, f"Unsupported closed interpolation for {key}"
         rendered[key] = values.get(key) or match.group(1)
@@ -163,6 +172,9 @@ def assert_input_inventory():
     )
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(native)
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(legacy)
+    assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (
+        set(native) | set(legacy) | set(beta_native)
+    )
     assert {
         key: model["x-issuance-application-env"].get(key) for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
@@ -170,7 +182,7 @@ def assert_input_inventory():
     expected_omitted = (
         LOADED_INPUTS
         | EXPLICIT_POLICY
-        | PASSPORT_BETA_ONLY_FILE_ALIASES
+        | FORBIDDEN_LOCAL_CUSTODY_INPUTS
         | PASSPORT_BETA_OVERLAY_ONLY
         | CONFIG_META
         | UNFORWARDED
@@ -225,15 +237,117 @@ def assert_models(
     shared_additions=SHARED_ADDITIONS,
     native_additive=NATIVE_ADDITIVE,
     passport_consumer_additive=PASSPORT_CONSUMER_ADDITIVE,
+    didcomm_kms_addr="${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}",
 ):
     preserved = deepcopy(after)
+    issuer_secret = preserved["secrets"].pop("signing_keys_issuer_sign_key")
+    assert issuer_secret["file"].endswith("/signing_keys_issuer_sign_key")
+    for name in ("gateway", "signing-keys", "flow", "issuance", "issuance-native", "canvas-sync-worker"):
+        service = preserved["services"][name]
+        if "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" in service["environment"]:
+            assert service["environment"].pop("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE") == (
+                "/run/secrets/signing_keys_issuer_sign_key"
+            )
+        mount = {
+            "source": "signing_keys_issuer_sign_key",
+            "target": "/run/secrets/signing_keys_issuer_sign_key",
+        }
+        assert isinstance(service["secrets"], list)
+        assert service["secrets"].count(mount) == 1, name
+        service["secrets"].remove(mount)
     native = GATE["native_dispatcher_model"](
         preserved["services"].pop("issuance-native")
     )
+    tls_url = "https://signing-keys:8018/internal"
+    tls_ca_file = "/run/secrets/workload_identity_ca_cert"
+    tls_ca_mount = {
+        "source": "workload_identity_ca_cert",
+        "target": tls_ca_file,
+    }
+    for service in [native, preserved["services"].get("issuance"),
+                    preserved["services"].get("canvas-sync-worker")]:
+        if service is None:
+            continue
+        assert service["environment"].pop("INTEGRATION_SECRET_KMS_URL") == tls_url
+        assert service["environment"].pop("INTEGRATION_SECRET_KMS_CA_FILE") == tls_ca_file
+        assert isinstance(service["secrets"], list)
+        assert service["secrets"].count(tls_ca_mount) == 1
+        service["secrets"].remove(tls_ca_mount)
+    signer_tls = preserved["services"]["signing-keys"]
+    for suffix in ("cert", "key"):
+        name = f"signing_keys_workload_server_{suffix}"
+        assert preserved["secrets"].pop(name)["file"].endswith("/" + name)
+        assert signer_tls["environment"].pop(
+            f"SIGNING_KEYS_INTEGRATION_SECRET_TLS_{suffix.upper()}_FILE"
+        ) == f"/run/secrets/{name}"
+        mount = {"source": name, "target": f"/run/secrets/{name}"}
+        assert signer_tls["secrets"].count(mount) == 1
+        signer_tls["secrets"].remove(mount)
     shared = preserved.pop("x-issuance-application-env")
+    assert shared.pop("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE") == (
+        "/run/secrets/signing_keys_issuer_sign_key"
+    )
     assert {key: shared[key] for key in SHARED_ADDITIONS} == shared_additions
     legacy_after = preserved["services"]["issuance"]["environment"]
     assert {key: legacy_after.pop(key) for key in SHARED_ADDITIONS} == shared_additions
+    assert legacy_after.pop("DIDCOMM_DELIVERY_OWNER") == "native"
+    assert legacy_after.pop("ISSUANCE_NATIVE_SERVICE_URL") == "http://issuance-native:8005"
+    didcomm_mount = {
+        "source": "didcomm_issuance_openbao_token",
+        "target": "/run/secrets/didcomm_issuance_openbao_token",
+    }
+    for service in [native, preserved["services"]["issuance"]]:
+        assert service["environment"].pop("DIDCOMM_KMS_ADDR") == didcomm_kms_addr
+        assert service["environment"].pop("DIDCOMM_KMS_TOKEN_FILE") == (
+            "/run/secrets/didcomm_issuance_openbao_token"
+        )
+        assert isinstance(service["secrets"], list)
+        assert service["secrets"].count(didcomm_mount) == 1
+        service["secrets"].remove(didcomm_mount)
+    assert preserved["secrets"].pop("didcomm_issuance_openbao_token")["file"].endswith(
+        "/didcomm_issuance_openbao_token"
+    )
+    if "SIGNING_KEYS_INTERNAL_URL" in before["services"]["issuance"]["environment"]:
+        assert legacy_after["SIGNING_KEYS_INTERNAL_URL"] == "http://signing-keys:8017/internal"
+        legacy_after["SIGNING_KEYS_INTERNAL_URL"] = before["services"]["issuance"][
+            "environment"
+        ]["SIGNING_KEYS_INTERNAL_URL"]
+    assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in legacy_after
+    if "INTEGRATION_SECRET_MASTER_KEY_FILE" in before["services"]["issuance"]["environment"]:
+        legacy_after["INTEGRATION_SECRET_MASTER_KEY_FILE"] = before["services"]["issuance"][
+            "environment"
+        ]["INTEGRATION_SECRET_MASTER_KEY_FILE"]
+    legacy_secrets = preserved["services"]["issuance"]["secrets"]
+    assert all(item["source"] != "integration_secret_master_key" for item in legacy_secrets)
+    legacy_secrets[:] = before["services"]["issuance"]["secrets"]
+    assert preserved["services"]["issuance"]["depends_on"].pop("issuance-native") == {
+        "condition": "service_healthy",
+        "required": True,
+    }
+    # Native delivery readiness now gates the retained HTTP consumer; preserve
+    # the frozen liveness probe only for the unowned-diff comparison.
+    if "healthcheck" in preserved["services"]["issuance"]:
+        assert preserved["services"]["issuance"]["healthcheck"]["test"][-1] == (
+            "http://localhost:8005/ready"
+        )
+        preserved["services"]["issuance"]["healthcheck"] = before["services"][
+            "issuance"
+        ]["healthcheck"]
+    if "depends_on" not in before["services"]["issuance"]:
+        assert not preserved["services"]["issuance"].pop("depends_on")
+    assert "integration_secret_master_key" not in preserved.get("secrets", {})
+    if "integration_secret_master_key" in before.get("secrets", {}):
+        preserved["secrets"]["integration_secret_master_key"] = before["secrets"][
+            "integration_secret_master_key"
+        ]
+    if "haip_kms_token" in preserved.get("secrets", {}):
+        assert preserved["secrets"].pop("haip_kms_token")["file"]
+        signer = preserved["services"]["signing-keys"]
+        assert signer["environment"].pop("HAIP_KMS_TOKEN_FILE") == "/run/secrets/haip_kms_token"
+        signer["environment"]["ISSUER_BASE_URL"] = before["services"]["signing-keys"][
+            "environment"
+        ]["ISSUER_BASE_URL"]
+        assert signer["secrets"].pop()["source"] == "haip_kms_token"
     gateway = preserved["services"]["gateway"]
     # Governed repair: the native signer and readiness need the separate owner,
     # whereas the unchanged frozen model omitted it and fell back to localhost.
@@ -259,10 +373,47 @@ def assert_models(
     flow["environment"]["ISSUANCE_GRPC_TARGET"] = "issuance:9005"
     for key in ("ISSUANCE_API_KEY_FILE", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"):
         assert flow["environment"].pop(key) == "/run/secrets/issuance_api_key"
-    assert flow["secrets"].pop() == {
+    flow_issuance_secret = {
         "source": "issuance_api_key",
         "target": "/run/secrets/issuance_api_key",
     }
+    assert flow["secrets"].count(flow_issuance_secret) == 1
+    flow["secrets"].remove(flow_issuance_secret)
+    if "canvas-sync-worker" in preserved["services"]:
+        worker_after = preserved["services"]["canvas-sync-worker"]
+        worker_before = before["services"]["canvas-sync-worker"]
+        assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in worker_after["environment"]
+        assert all(
+            item["source"] != "integration_secret_master_key"
+            for item in worker_after["secrets"]
+        )
+        worker_after["environment"]["INTEGRATION_SECRET_MASTER_KEY_FILE"] = (
+            worker_before["environment"]["INTEGRATION_SECRET_MASTER_KEY_FILE"]
+        )
+        worker_after["secrets"] = worker_before["secrets"]
+    # Dedicated Signing Keys KMS custody replaces the shared OpenBao token.
+    token_secret = preserved["secrets"].pop("signing_keys_openbao_token")
+    assert token_secret["file"].endswith("/signing_keys_openbao_token")
+    signer_after = preserved["services"]["signing-keys"]
+    signer_before = before["services"]["signing-keys"]
+    assert signer_after["environment"]["BAO_TOKEN_FILE"] == (
+        "/run/secrets/signing_keys_openbao_token"
+    )
+    signer_after["environment"]["BAO_TOKEN_FILE"] = signer_before["environment"][
+        "BAO_TOKEN_FILE"
+    ]
+    token_mount = {
+        "source": "signing_keys_openbao_token",
+        "target": "/run/secrets/signing_keys_openbao_token",
+    }
+    assert signer_after["secrets"].count(token_mount) == 1
+    signer_after["secrets"].remove(token_mount)
+    signer_after["secrets"].append(
+        {
+            "source": "openbao_service_token",
+            "target": "/run/secrets/openbao_service_token",
+        }
+    )
     migration = preserved["services"]["db-migrate"]
     assert migration["environment"].pop("NOTIFICATION_OPENBAO_TOKEN_FILE") == (
         "/run/secrets/notification_openbao_token"
@@ -296,15 +447,61 @@ def assert_models(
                 assert retired["depends_on"].pop(dependency) == {
                     "condition": "service_healthy", "required": True,
                 }
-    if preserved != before:
-        changed = {
-            name: sorted(
-                key for key in preserved["services"][name].keys() | before["services"][name].keys()
-                if preserved["services"][name].get(key) != before["services"][name].get(key)
-            ) for name in preserved["services"].keys() & before["services"].keys()
-            if preserved["services"][name] != before["services"][name]
+    # Both sides of the newly authenticated device API share one dedicated
+    # secret; no other self-host service may receive it.
+    gateway_secret = preserved["secrets"].pop("device_registration_gateway_key")
+    assert gateway_secret["file"].endswith("/device_registration_gateway_key")
+    for name in ("gateway", "device-registration"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("DEVICE_REGISTRATION_GATEWAY_KEY_FILE") == (
+            "/run/secrets/device_registration_gateway_key"
+        )
+        mount = {
+            "source": "device_registration_gateway_key",
+            "target": "/run/secrets/device_registration_gateway_key",
         }
-        raise AssertionError(f"Unowned self-host model change: {changed}")
+        assert service["secrets"].count(mount) == 1, name
+        service["secrets"].remove(mount)
+    holder_secret = preserved["secrets"].pop("device_registration_signing_keys_key")
+    assert holder_secret["file"].endswith("/device_registration_signing_keys_key")
+    for name in ("device-registration", "signing-keys"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE") == (
+            "/run/secrets/device_registration_signing_keys_key"
+        )
+        mount = {
+            "source": "device_registration_signing_keys_key",
+            "target": "/run/secrets/device_registration_signing_keys_key",
+        }
+        assert service["secrets"].count(mount) == 1
+        service["secrets"].remove(mount)
+    assert preserved["services"]["device-registration"]["environment"].pop(
+        "SIGNING_KEYS_HOLDER_ORIGIN"
+    ) == "http://signing-keys:8017"
+    assert preserved["services"]["device-registration"]["environment"].pop(
+        "TRUST_PROFILE_SERVICE_URL"
+    ) == "http://trust-profile:8004"
+    signing_secret = preserved["secrets"].pop("signing_keys_service_sign_gateway_key")
+    assert signing_secret["file"].endswith("/signing_keys_service_sign_gateway_key")
+    for name in ("gateway", "signing-keys"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE") == (
+            "/run/secrets/signing_keys_service_sign_gateway_key"
+        )
+        mount = {
+            "source": "signing_keys_service_sign_gateway_key",
+            "target": "/run/secrets/signing_keys_service_sign_gateway_key",
+        }
+        assert service["secrets"].count(mount) == 1
+        service["secrets"].remove(mount)
+    assert preserved == before, "Unowned self-host model change:\n" + "".join(
+        difflib.unified_diff(
+            json.dumps(before, sort_keys=True, indent=2).splitlines(keepends=True),
+            json.dumps(preserved, sort_keys=True, indent=2).splitlines(keepends=True),
+            fromfile="frozen",
+            tofile="current after owned changes",
+        )
+    )
     legacy = before["services"]["issuance"]
     environment = {
         key: value
@@ -333,7 +530,7 @@ def assert_models(
         "secrets": [
             item
             for item in legacy["secrets"]
-            if item["source"] != "openbao_service_token"
+            if item["source"] not in {"openbao_service_token", "integration_secret_master_key"}
         ],
         "depends_on": {
             name: {"condition": condition, "required": True}
@@ -368,7 +565,7 @@ def interpolated_models():
     required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", original))
     current_required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
     assert required - current_required == {"MARTY_ISSUANCE_IMAGE"}
-    assert current_required - required == set()
+    assert current_required - required == {"BAO_ADDR"}
     environment = yaml.safe_load(original)["services"]["issuance"]["environment"]
     variables = (
         set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
@@ -379,12 +576,13 @@ def interpolated_models():
             for additions in PASSPORT_CONSUMER_ADDITIVE.values()
             for key in additions
         }
-    ) - required
+    ) - required - {"BAO_ADDR"}
 
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
         directory = Path(temporary)
         inputs = dict.fromkeys(required, "https://synthetic.example")
         inputs.update(
+            BAO_ADDR="http://synthetic-bao:8200",
             SELFHOST_STATE_DIR=(directory / "state").as_posix(),
             SELFHOST_SECRET_DIR=(directory / "secrets").as_posix(),
             KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
@@ -431,6 +629,7 @@ def interpolated_models():
                 shared_additions=rendered_additions(SHARED_ADDITIONS, values),
                 native_additive=rendered_additions(NATIVE_ADDITIVE, values),
                 passport_consumer_additive=rendered_passport_consumer_additions(values),
+                didcomm_kms_addr=values["BAO_ADDR"],
             )
             assert_signing_binding(after)
             print(f"PASS: self-host {mode} interpolated whole model")
@@ -452,6 +651,18 @@ def interpolated_models():
                         raise AssertionError(
                             f"Required self-host input accepted: {name}"
                         )
+        for value in (None, ""):
+            values = dict(inputs)
+            if value is None:
+                values.pop("BAO_ADDR")
+            else:
+                values["BAO_ADDR"] = value
+            try:
+                render(GATE["BASE"], values)
+            except subprocess.CalledProcessError as error:
+                assert "required variable BAO_ADDR" in error.stderr
+            else:
+                raise AssertionError("Required native DIDComm KMS address accepted")
         print(
             f"PASS: {len(current_required)} current required inputs reject missing/empty; "
             "retired Python image input is absent"

@@ -171,8 +171,10 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
     let directory = tempfile::tempdir().expect("owned synthetic policy directory");
     let ca = directory.path().join("ca.pem");
     let policy = directory.path().join("didcomm-encryption-policy.json");
+    let token = directory.path().join("openbao-token");
     std::fs::write(&ca, b"synthetic CA fixture").unwrap();
     std::fs::write(&policy, b"{}").unwrap();
+    std::fs::write(&token, b"synthetic token fixture").unwrap();
     let ca = ca.to_str().unwrap();
     let policy = policy.to_str().unwrap();
 
@@ -187,8 +189,8 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
                 "ISSUANCE_API_KEY": super::issuance_named_peers::API_KEY,
                 "GRPC_SERVICE_TOKEN": super::issuance_named_peers::TOKEN,
                 "SIGNING_KEYS_INTERNAL_API_KEY": super::issuance_named_peers::SIGNING_KEY,
+                "SIGNING_KEYS_ISSUER_SIGN_KEY": super::issuance_named_peers::ISSUER_SIGN_KEY,
                 "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
-                "INTEGRATION_SECRET_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                 "PUBLIC_API_URL": "https://issuer.example",
                 "UI_BASE_URL": "http://localhost:3000",
                 "ISSUANCE_OFFER_TTL_MINUTES": "10080",
@@ -205,6 +207,10 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             "legacy_origin": "http://127.0.0.1:18002",
             "ca_file": ca,
             "policy_directory": directory.path(),
+            "kms_url": "http://127.0.0.1:18200",
+            "kms_token_file": token,
+            "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
+            "integration_secret_kms_ca_file": ca,
             "authcrypt": authenticated,
             "allow_private_ips": allow_private_ips
         });
@@ -217,6 +223,24 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
         );
         assert_eq!(
             native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
+            Some(ca)
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
+            Some("http://127.0.0.1:18200")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
+            Some("https://127.0.0.1:18201/internal")
+        );
+        assert_eq!(
+            native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str),
             Some(ca)
         );
         assert_eq!(

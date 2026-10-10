@@ -10,6 +10,9 @@ use std::{
 
 use serde_json::Value;
 
+#[path = "remote_integration_secret.rs"]
+pub(super) mod remote_integration_secret;
+
 pub(super) struct ChildGuard(pub(super) Child);
 
 impl Drop for ChildGuard {
@@ -57,6 +60,9 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
                     | "INTEGRATION_SECRET_MASTER_KEY"
                     | "INTEGRATION_SECRET_MASTER_KEY_ENV"
                     | "INTEGRATION_SECRET_MASTER_KEY_FILE"
+                    | "SIGNING_KEYS_INTERNAL_URL"
+                    | "SIGNING_KEYS_INTERNAL_API_KEY"
+                    | "SIGNING_KEYS_ISSUER_SIGN_KEY"
                     | "MARTY_RELEASE_VERSION"
                     | "MARTY_UI_SHA"
                     | "ISSUER_BASE_URL"
@@ -76,8 +82,24 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
             format!("executable-smoke-{}", uuid::Uuid::new_v4()),
         )
         .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            "SIGNING_KEYS_INTERNAL_URL",
+            remote_integration_secret::base_url().as_str(),
+        )
+        .env(
+            "INTEGRATION_SECRET_KMS_URL",
+            remote_integration_secret::base_url().as_str(),
+        )
+        .env(
+            "INTEGRATION_SECRET_KMS_CA_FILE",
+            remote_integration_secret::ca_file(),
+        )
+        .env(
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+            remote_integration_secret::API_KEY,
+        )
+        .env(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY",
+            "synthetic-issuance-issuer-sign-key-32-chars",
         )
         .env("MARTY_RELEASE_VERSION", "9.8.7")
         .env("MARTY_UI_SHA", "smoke-revision")

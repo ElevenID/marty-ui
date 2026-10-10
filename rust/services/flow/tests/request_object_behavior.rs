@@ -8,11 +8,12 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
     build_profiled_request_object, build_standard_request_object, build_unsigned_url_query,
-    FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest,
-    FlowProviderError, FlowProviderRegistry, Oid4vpClientIdScheme, RequestObjectCompatibility,
-    RequestObjectOptions, RequestObjectTransport, SigningIdentity, SigningIdentityProvider,
-    SigningRequest, SigningResult, VerifierDidMethod,
+    FlowInstanceRecord, FlowKeyEnvelopeProvider, FlowProviderError, FlowProviderRegistry,
+    Oid4vpClientIdScheme, RequestObjectCompatibility, RequestObjectOptions, RequestObjectTransport,
+    SigningIdentity, SigningIdentityProvider, SigningRequest, SigningResult, VerifierDidMethod,
 };
+#[path = "support/haip_remote_fixture.rs"]
+mod haip_remote_fixture;
 use marty_oid4vci::presentation_request::PresentationRequestArtifacts;
 use marty_verification::flow::FlowInstanceStatus;
 use serde::Deserialize;
@@ -35,7 +36,7 @@ struct Contract {
     url_query_oversize: String,
     haip_response_mode: String,
     haip_jwe: BTreeMap<String, String>,
-    haip_private_key_storage: String,
+    haip_key_custody: String,
     identity_change: String,
     client_id_schemes: Vec<String>,
     verifier_did_methods: Vec<String>,
@@ -57,27 +58,102 @@ struct DcApi {
 
 #[derive(Clone, Default)]
 struct Envelopes {
-    requests: Arc<Mutex<Vec<FlowKeyEnvelopeRequest>>>,
+    requests: Arc<Mutex<Vec<(String, String)>>>,
+    resolutions: Arc<Mutex<Vec<(String, String, String)>>>,
+    missing_remote_key: bool,
 }
 
 #[async_trait]
 impl FlowKeyEnvelopeProvider for Envelopes {
-    async fn wrap(
+    async fn resolve_haip_key(
         &self,
-        request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
-        self.requests.lock().unwrap().push(request.clone());
-        Ok(FlowKeyEnvelope {
-            organization_id: request.organization_id.clone(),
-            flow_instance_id: request.flow_instance_id.clone(),
-            purpose: request.purpose.clone(),
-            envelope: "vault:encrypted-private-jwk".into(),
-        })
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+    ) -> Result<marty_flow::HaipRemoteKey, FlowProviderError> {
+        self.resolutions.lock().unwrap().push((
+            organization_id.into(),
+            flow_instance_id.into(),
+            version.into(),
+        ));
+        if self.missing_remote_key {
+            return Err(FlowProviderError::Unavailable {
+                provider: "flow_key_envelope",
+            });
+        }
+        Ok(haip_remote_fixture::key(organization_id, flow_instance_id))
     }
 
-    async fn unwrap(&self, _envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        unreachable!("request construction only wraps keys")
+    async fn create_haip_key(
+        &self,
+        organization_id: &str,
+        flow_instance_id: &str,
+    ) -> Result<marty_flow::HaipRemoteKey, FlowProviderError> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push((organization_id.into(), flow_instance_id.into()));
+        Ok(haip_remote_fixture::key(organization_id, flow_instance_id))
     }
+}
+
+#[tokio::test]
+async fn reissuing_haip_request_requires_the_stored_remote_key_version() {
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
+    };
+    let mut flow = instance("verification");
+    flow.context["oid4vp_profile"] = json!("haip");
+    let remote = haip_remote_fixture::key(&flow.organization_id, &flow.id);
+    flow.context["haip_response_encryption_key_reference"] = json!(remote.key_reference);
+    flow.context["haip_response_encryption_public_jwk"] = remote.public_jwk;
+    let envelopes = Envelopes::default();
+    let providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(Signing::default())),
+        flow_key_envelope: Some(Arc::new(envelopes.clone())),
+        ..Default::default()
+    };
+    build_standard_request_object(
+        &providers,
+        flow.clone(),
+        Some(&artifacts),
+        "https://verifier.example",
+        None,
+        None,
+        now(),
+    )
+    .await
+    .unwrap();
+    assert!(envelopes.requests.lock().unwrap().is_empty());
+    assert_eq!(
+        *envelopes.resolutions.lock().unwrap(),
+        vec![(
+            "org-1".into(),
+            "instance-1".into(),
+            haip_remote_fixture::VERSION.into()
+        )]
+    );
+
+    let missing = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(Signing::default())),
+        flow_key_envelope: Some(Arc::new(Envelopes {
+            missing_remote_key: true,
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+    assert!(build_standard_request_object(
+        &missing,
+        flow,
+        Some(&artifacts),
+        "https://verifier.example",
+        None,
+        None,
+        now(),
+    )
+    .await
+    .is_err());
 }
 
 #[derive(Clone, Default)]
@@ -199,8 +275,8 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
     assert_eq!(contract.haip_jwe["alg"], "ECDH-ES");
     assert_eq!(contract.haip_jwe["enc"], "A256GCM");
     assert_eq!(
-        contract.haip_private_key_storage,
-        "tenant_and_flow_bound_envelope_only"
+        contract.haip_key_custody,
+        "remote_nonexportable_tenant_flow_version_reference"
     );
     assert_eq!(contract.identity_change, "fail_closed");
     assert_eq!(
@@ -314,7 +390,7 @@ fn unsigned_url_query_is_bounded_and_records_the_same_dcql_request() {
 }
 
 #[tokio::test]
-async fn haip_keys_are_native_and_only_the_envelope_is_persisted() {
+async fn haip_keys_are_remote_and_only_the_reference_is_persisted() {
     let signing = Signing::default();
     let envelopes = Envelopes::default();
     let providers = FlowProviderRegistry {
@@ -349,13 +425,63 @@ async fn haip_keys_are_native_and_only_the_envelope_is_persisted() {
         .get("d")
         .is_none());
     assert_eq!(
-        result.instance.context["haip_response_encryption_key_envelope"],
-        "vault:encrypted-private-jwk"
+        result.instance.context["haip_response_encryption_key_reference"],
+        format!(
+            "didcomm/haip/keys/org-1/instance-1/versions/{}",
+            haip_remote_fixture::VERSION
+        )
     );
     assert!(result.instance.context.to_string().find("\"d\"").is_none());
-    let wrapped = envelopes.requests.lock().unwrap();
-    assert_eq!(wrapped.len(), 1);
-    assert!(serde_json::from_str::<Value>(&wrapped[0].key_json).unwrap()["d"].is_string());
+    let remote = envelopes.requests.lock().unwrap();
+    assert_eq!(*remote, vec![("org-1".into(), "instance-1".into())]);
+    assert!(result
+        .instance
+        .context
+        .get("haip_response_encryption_key_envelope")
+        .is_none());
+}
+
+#[tokio::test]
+async fn old_haip_envelope_cannot_be_reissued_or_combined_with_remote_reference() {
+    let envelopes = Envelopes::default();
+    let providers = FlowProviderRegistry {
+        signing_identity: Some(Arc::new(Signing::default())),
+        flow_key_envelope: Some(Arc::new(envelopes.clone())),
+        ..Default::default()
+    };
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
+    };
+    let mut flow = instance("verification");
+    flow.context["oid4vp_profile"] = json!("haip");
+    flow.context["haip_response_encryption_key_envelope"] = json!("vault:old-key");
+    assert!(build_standard_request_object(
+        &providers,
+        flow.clone(),
+        Some(&artifacts),
+        "https://verifier.example",
+        None,
+        None,
+        now(),
+    )
+    .await
+    .is_err());
+    let remote = haip_remote_fixture::key(&flow.organization_id, &flow.id);
+    flow.context["haip_response_encryption_key_reference"] = json!(remote.key_reference);
+    flow.context["haip_response_encryption_public_jwk"] = remote.public_jwk;
+    assert!(build_standard_request_object(
+        &providers,
+        flow,
+        Some(&artifacts),
+        "https://verifier.example",
+        None,
+        None,
+        now(),
+    )
+    .await
+    .is_err());
+    assert!(envelopes.requests.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

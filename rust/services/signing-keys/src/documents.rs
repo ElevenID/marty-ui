@@ -15,7 +15,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::registry::RotationLease;
+use crate::{private_material::contains_private_key, registry::RotationLease};
 
 const PRIVATE_JWK_FIELDS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"];
 
@@ -57,6 +57,11 @@ impl DocumentStore {
                         value.as_object().ok_or_else(|| {
                             DocumentError::Corrupt("document must be a JSON object".to_string())
                         })?;
+                        if contains_private_key(&value) {
+                            return Err(DocumentError::Corrupt(
+                                "document contains private key material".to_string(),
+                            ));
+                        }
                         Ok(value)
                     })
             })
@@ -64,6 +69,11 @@ impl DocumentStore {
     }
 
     async fn save(&self, key: &str, value: &Value) -> Result<(), DocumentError> {
+        if contains_private_key(value) {
+            return Err(DocumentError::Invalid(
+                "document contains private key material".to_string(),
+            ));
+        }
         let payload = serde_json::to_string(value)
             .map_err(|error| DocumentError::Invalid(error.to_string()))?;
         let mut connection = self.connection.clone();
@@ -103,6 +113,11 @@ impl DocumentStore {
                             "JWKS document must be a JSON object".to_string(),
                         ));
                     }
+                    if contains_private_key(&document) {
+                        return Err(DocumentError::Corrupt(
+                            "JWKS document contains private key material".to_string(),
+                        ));
+                    }
                     document
                 }
                 None => json!({
@@ -112,6 +127,11 @@ impl DocumentStore {
                 }),
             };
             let (document, response) = mutation(document)?;
+            if contains_private_key(&document) {
+                return Err(DocumentError::Invalid(
+                    "JWKS document contains private key material".to_string(),
+                ));
+            }
             let replacement = serde_json::to_string(&document)
                 .map_err(|error| DocumentError::Invalid(error.to_string()))?;
             let saved: i32 = redis::Script::new(
@@ -222,6 +242,11 @@ impl DocumentStore {
                             "certificate document must be a JSON object".into(),
                         ));
                     }
+                    if contains_private_key(&value) {
+                        return Err(DocumentError::Corrupt(
+                            "certificate document contains private key material".into(),
+                        ));
+                    }
                     value
                 }
                 None => json!({"services": {}}),
@@ -234,6 +259,11 @@ impl DocumentStore {
                 }
             }
             let (document, result) = mutation(document)?;
+            if contains_private_key(&document) {
+                return Err(DocumentError::Invalid(
+                    "certificate document contains private key material".into(),
+                ));
+            }
             let replacement = serde_json::to_string(&document)
                 .map_err(|error| DocumentError::Invalid(error.to_string()))?;
             let saved: i32 = redis::Script::new(
@@ -920,6 +950,11 @@ pub fn sanitize_public_jwk(
     candidate: &Value,
     key_reference_hint: Option<&str>,
 ) -> Result<Value, DocumentError> {
+    if contains_private_key(candidate) {
+        return Err(DocumentError::Invalid(
+            "provider response contains private key material".to_string(),
+        ));
+    }
     let object = candidate.as_object().ok_or_else(|| {
         DocumentError::Invalid("provider did not return a public JWK".to_string())
     })?;
@@ -932,9 +967,17 @@ pub fn sanitize_public_jwk(
             "provider did not return a usable public JWK".to_string(),
         ));
     }
+    if PRIVATE_JWK_FIELDS
+        .iter()
+        .any(|field| nested.get(*field).is_some_and(|value| !value.is_null()))
+    {
+        return Err(DocumentError::Invalid(
+            "provider response contains private key material".to_string(),
+        ));
+    }
     let mut sanitized = nested
         .iter()
-        .filter(|(key, value)| !PRIVATE_JWK_FIELDS.contains(&key.as_str()) && !value.is_null())
+        .filter(|(_, value)| !value.is_null())
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect::<Map<_, _>>();
     if sanitized.get("kid").and_then(Value::as_str).is_none() {
@@ -1113,6 +1156,15 @@ pub fn update_jwks_document(
         .updates
         .as_object()
         .ok_or_else(|| DocumentError::Invalid("updates must be a JSON object".to_string()))?;
+    if PRIVATE_JWK_FIELDS
+        .iter()
+        .any(|field| updates.get(*field).is_some_and(|value| !value.is_null()))
+        || contains_private_key(&request.updates)
+    {
+        return Err(DocumentError::Invalid(
+            "JWKS update contains private key material".to_string(),
+        ));
+    }
     let allowed = ["aliases", "key_aliases", "name", "status"];
     let mut updated = Vec::new();
     for field in allowed {
@@ -1376,7 +1428,17 @@ fn build_prepared_did_document(
     existing: Option<Value>,
     prepared: PreparedDidPublication,
 ) -> Result<PublishDidResponse, DocumentError> {
+    if existing.as_ref().is_some_and(contains_private_key) {
+        return Err(DocumentError::Corrupt(
+            "stored DID document contains private key material".to_string(),
+        ));
+    }
     let document = upsert_did_document(existing, &prepared)?;
+    if contains_private_key(&document) {
+        return Err(DocumentError::Invalid(
+            "DID publication contains private key material".to_string(),
+        ));
+    }
     Ok(PublishDidResponse {
         verification_method: prepared.verification_method,
         verification_method_count: document["verificationMethod"]
@@ -1672,33 +1734,35 @@ mod tests {
     }
 
     #[test]
-    fn holder_read_redacts_legacy_private_fields() {
-        let listed = project_holder_keys(
-            json!({"keys": [{
-                "id": "holder:device-a:credential-a:holder_binding",
-                "device_id": "device-a", "credential_id": "credential-a",
-                "key_purpose": "holder_binding", "created_at": "now",
-                "public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public", "d": "private"},
-                "private_key": "legacy-private"
-            }]}),
-            "org-a",
-            None,
-        )
-        .unwrap();
-        let serialized = listed.to_string();
-        assert!(!serialized.contains("private"));
+    fn holder_read_requires_public_keys() {
+        let public = json!({"keys": [{
+            "id": "holder:device-a:credential-a:holder_binding",
+            "device_id": "device-a", "credential_id": "credential-a",
+            "key_purpose": "holder_binding", "created_at": "now",
+            "public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}
+        }]});
+        let listed = project_holder_keys(public.clone(), "org-a", None).unwrap();
         assert_eq!(listed["keys"][0]["public_jwk"]["x"], "public");
+        let mut private = public;
+        private["keys"][0]["public_jwk"]["d"] = json!("private");
+        assert!(project_holder_keys(private, "org-a", None).is_err());
     }
 
     #[test]
-    fn private_jwk_material_is_removed() {
+    fn private_jwk_material_is_rejected() {
+        for private in [
+            json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "secret"}),
+            json!({"public_jwk": {"kty": "RSA", "n": "n", "e": "AQAB", "rsa_d": "secret"}}),
+            json!({"public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}, "private_key_pem": "secret"}),
+        ] {
+            assert!(sanitize_public_jwk(&private, Some("key-1")).is_err());
+        }
         let sanitized = sanitize_public_jwk(
-            &json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "secret"}),
+            &json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
             Some("key-1"),
         )
         .unwrap();
         assert_eq!(sanitized["kid"], "key-1");
-        assert!(sanitized.get("d").is_none());
     }
 
     #[test]
@@ -1731,6 +1795,35 @@ mod tests {
     }
 
     #[test]
+    fn did_publication_rejects_private_material_in_existing_document() {
+        let did = "did:web:issuer.example:orgs:acme";
+        let public_jwk = json!({
+            "kty": "OKP", "crv": "X25519", "x": URL_SAFE_NO_PAD.encode([7_u8; 32]),
+        });
+        let request = PublishDidRequest {
+            jwk: public_jwk.clone(),
+            public_domain: "issuer.example".to_string(),
+            did_id: Some(did.to_string()),
+            org_slug: Some("acme".to_string()),
+            fragment: Some("didcomm-authcrypt-x25519".to_string()),
+            key_reference: None,
+            cert_pem: None,
+            cert_chain_pem: None,
+            relationship: DidVerificationRelationship::KeyAgreement,
+        };
+        let public = json!({"id": did, "verificationMethod": [{"publicKeyJwk": public_jwk} ]});
+        assert!(
+            build_did_document(Some(public.clone()), "didcomm-authcrypt", request.clone()).is_ok()
+        );
+        let mut private = public;
+        private["verificationMethod"][0]["publicKeyJwk"]["d"] = json!("secret");
+        assert!(matches!(
+            build_did_document(Some(private), "didcomm-authcrypt", request),
+            Err(DocumentError::Corrupt(_))
+        ));
+    }
+
+    #[test]
     fn key_agreement_rejects_noncanonical_or_private_jwks() {
         for jwk in [
             json!({"kty": "OKP", "crv": "X25519", "x": "AA=="}),
@@ -1758,5 +1851,54 @@ mod tests {
             )
             .is_err());
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable MARTY_TEST_REDIS_URL on loopback DB >= 13"]
+    async fn document_storage_refuses_private_material_on_read_and_write() {
+        let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
+        let parsed = reqwest::Url::parse(&url).expect("Redis URL");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        assert!(parsed
+            .path()
+            .trim_start_matches('/')
+            .parse::<u8>()
+            .is_ok_and(|db| db >= 13));
+        let registry = crate::registry::RegistryStore::connect(&url).await.unwrap();
+        let store = DocumentStore::from_connection(registry.connection());
+        let key = format!("test-public-document-{}", uuid::Uuid::new_v4().simple());
+        let public = json!({"public_jwk": {"kty": "OKP", "x": "public"}});
+        let private = json!({"public_jwk": {"kty": "OKP", "x": "public", "d": "private"}});
+        assert!(matches!(
+            store.save(&key, &private).await,
+            Err(DocumentError::Invalid(_))
+        ));
+        store.save(&key, &public).await.unwrap();
+        assert_eq!(store.load_optional(&key).await.unwrap(), Some(public));
+        let mut connection = registry.connection();
+        connection
+            .set::<_, _, ()>(&key, private.to_string())
+            .await
+            .unwrap();
+        assert!(matches!(
+            store.load_optional(&key).await,
+            Err(DocumentError::Corrupt(_))
+        ));
+        let organization_id = format!("test-private-doc-{}", uuid::Uuid::new_v4().simple());
+        assert!(matches!(
+            store
+                .mutate_jwks(&organization_id, None, |_| Ok((private.clone(), ())))
+                .await,
+            Err(DocumentError::Invalid(_))
+        ));
+        assert!(matches!(
+            store
+                .mutate_certificates(&organization_id, |_| Ok((private.clone(), ())))
+                .await,
+            Err(DocumentError::Invalid(_))
+        ));
     }
 }

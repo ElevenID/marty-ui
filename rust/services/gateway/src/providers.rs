@@ -411,6 +411,7 @@ impl GatewayIdentityProvider for GrpcIdentityProvider {
         }
         Ok(Some(SessionIdentity {
             user_id: user.user_id,
+            authentication_time_unix: response.authentication_time_unix,
             email: optional_string(user.email),
             username: optional_string(user.username),
             given_name: optional_string(user.given_name),

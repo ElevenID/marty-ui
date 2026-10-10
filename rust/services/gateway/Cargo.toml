@@ -45,6 +45,8 @@ uuid.workspace = true
 [dev-dependencies]
 hex.workspace = true
 hmac.workspace = true
+marty-signing-keys = { path = "../signing-keys" }
+redis.workspace = true
 sqlx.workspace = true
 tower.workspace = true
 

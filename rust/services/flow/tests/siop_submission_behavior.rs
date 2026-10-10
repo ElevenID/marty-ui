@@ -1,16 +1,14 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{Duration, TimeZone, Utc};
-use ed25519_dalek::SigningKey;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use marty_flow::{
     prepare_siop_submission, FlowInstanceRecord, FlowSiopSubmissionError, PreparedSiopSubmission,
     SiopSubmissionOptions,
 };
-use marty_oid4vci::siop::JWK_THUMBPRINT_SUBJECT_PREFIX;
+use marty_key_material_policy::contains_private_key;
 use marty_verification::flow::FlowInstanceStatus;
-use p256::{elliptic_curve::sec1::ToEncodedPoint, pkcs8::EncodePrivateKey, SecretKey};
+use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 
 fn now() -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap()
@@ -44,59 +42,41 @@ fn instance() -> FlowInstanceRecord {
     }
 }
 
-fn signed_token(overrides: Value) -> (String, String) {
-    let secret = SecretKey::from_slice(&[7_u8; 32]).unwrap();
-    let public = secret.public_key().to_encoded_point(false);
-    let x = URL_SAFE_NO_PAD.encode(public.x().unwrap());
-    let y = URL_SAFE_NO_PAD.encode(public.y().unwrap());
-    let canonical = format!(r#"{{"crv":"P-256","kty":"EC","x":"{x}","y":"{y}"}}"#);
-    let thumbprint = URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()));
-    let subject = format!("{JWK_THUMBPRINT_SUBJECT_PREFIX}:sha-256:{thumbprint}");
-    let mut claims = json!({
-        "iss": subject,
-        "sub": subject,
-        "sub_jwk": {"kty":"EC", "crv":"P-256", "alg":"ES256", "x":x, "y":y},
-        "aud": "https://verifier.example/verifier",
-        "nonce": "nonce-with-at-least-32-bytes-1234567890",
-        "iat": now().timestamp(),
-        "exp": (now() + Duration::minutes(5)).timestamp()
-    });
-    for (name, value) in overrides.as_object().unwrap() {
-        claims[name] = value.clone();
-    }
-    let der = secret.to_pkcs8_der().unwrap();
-    let token = encode(
-        &Header::new(Algorithm::ES256),
-        &claims,
-        &EncodingKey::from_ec_der(der.as_bytes()),
-    )
-    .unwrap();
-    (token, subject)
+#[derive(Deserialize)]
+struct SignedVectors {
+    schema_version: u8,
+    es256_subject: String,
+    eddsa_subject: String,
+    tokens: BTreeMap<String, String>,
 }
 
-fn signed_ed25519_token() -> (String, String) {
-    let secret = SigningKey::from_bytes(&[9_u8; 32]);
-    let x = URL_SAFE_NO_PAD.encode(secret.verifying_key().as_bytes());
-    let canonical = format!(r#"{{"crv":"Ed25519","kty":"OKP","x":"{x}"}}"#);
-    let thumbprint = URL_SAFE_NO_PAD.encode(Sha256::digest(canonical.as_bytes()));
-    let subject = format!("{JWK_THUMBPRINT_SUBJECT_PREFIX}:sha-256:{thumbprint}");
-    let claims = json!({
-        "iss": subject,
-        "sub": subject,
-        "sub_jwk": {"kty":"OKP", "crv":"Ed25519", "alg":"EdDSA", "x":x},
-        "aud": "https://verifier.example/verifier",
-        "nonce": "nonce-with-at-least-32-bytes-1234567890",
-        "iat": now().timestamp(),
-        "exp": (now() + Duration::minutes(5)).timestamp()
-    });
-    let der = secret.to_pkcs8_der().unwrap();
-    let token = encode(
-        &Header::new(Algorithm::EdDSA),
-        &claims,
-        &EncodingKey::from_ed_der(der.as_bytes()),
-    )
-    .unwrap();
-    (token, subject)
+fn public_vector(case: &str) -> (String, String) {
+    let vectors: SignedVectors =
+        serde_json::from_str(include_str!("fixtures/siop_public_tokens.json")).unwrap();
+    assert_eq!(vectors.schema_version, 1);
+    let subject = if case == "eddsa_default" {
+        vectors.eddsa_subject
+    } else {
+        vectors.es256_subject
+    };
+    (vectors.tokens[case].clone(), subject)
+}
+
+#[test]
+fn signed_public_vectors_contain_no_private_key_material() {
+    let vectors: SignedVectors =
+        serde_json::from_str(include_str!("fixtures/siop_public_tokens.json")).unwrap();
+    assert_eq!(vectors.schema_version, 1);
+    assert_eq!(vectors.tokens.len(), 12);
+    for (case, token) in vectors.tokens {
+        let segments: Vec<_> = token.split('.').collect();
+        assert_eq!(segments.len(), 3, "{case}");
+        for segment in &segments[..2] {
+            let decoded = URL_SAFE_NO_PAD.decode(segment).unwrap();
+            let value: Value = serde_json::from_slice(&decoded).unwrap();
+            assert!(!contains_private_key(&value), "{case}");
+        }
+    }
 }
 
 #[test]
@@ -113,9 +93,7 @@ fn language_neutral_siop_contract_completes_and_preserves_only_safe_result_state
     assert_eq!(contract["clock_skew_seconds"], 60);
     assert_eq!(contract["signing_algorithms"], json!(["ES256", "EdDSA"]));
 
-    let (token, subject) = signed_token(json!({
-        "aud": ["another-client", "https://verifier.example/verifier"]
-    }));
+    let (token, subject) = public_vector("audience_array");
     let PreparedSiopSubmission::Final(prepared) =
         prepare_siop_submission(instance(), &token, &SiopSubmissionOptions::default(), now())
             .unwrap()
@@ -154,7 +132,7 @@ fn language_neutral_siop_contract_completes_and_preserves_only_safe_result_state
     );
     assert_eq!(prepared.finalization.instance.state_history.len(), 2);
 
-    let (ed_token, ed_subject) = signed_ed25519_token();
+    let (ed_token, ed_subject) = public_vector("eddsa_default");
     let PreparedSiopSubmission::Final(ed_prepared) = prepare_siop_submission(
         instance(),
         &ed_token,
@@ -173,7 +151,7 @@ fn language_neutral_siop_contract_completes_and_preserves_only_safe_result_state
 
 #[test]
 fn issuer_audience_nonce_and_native_signature_validation_fail_closed() {
-    let (issuer_mismatch, _) = signed_token(json!({"iss": "different"}));
+    let (issuer_mismatch, _) = public_vector("issuer_mismatch");
     assert!(matches!(
         prepare_siop_submission(
             instance(),
@@ -184,7 +162,7 @@ fn issuer_audience_nonce_and_native_signature_validation_fail_closed() {
         Err(FlowSiopSubmissionError::IssuerSubjectMismatch)
     ));
 
-    let (audience_mismatch, _) = signed_token(json!({"aud": "different"}));
+    let (audience_mismatch, _) = public_vector("audience_mismatch");
     assert!(matches!(
         prepare_siop_submission(
             instance(),
@@ -195,7 +173,7 @@ fn issuer_audience_nonce_and_native_signature_validation_fail_closed() {
         Err(FlowSiopSubmissionError::AudienceMismatch)
     ));
 
-    let (nonce_mismatch, _) = signed_token(json!({"nonce": "different"}));
+    let (nonce_mismatch, _) = public_vector("nonce_mismatch");
     assert!(matches!(
         prepare_siop_submission(
             instance(),
@@ -216,7 +194,7 @@ fn issuer_audience_nonce_and_native_signature_validation_fail_closed() {
         Err(FlowSiopSubmissionError::InvalidIdToken(_))
     ));
 
-    let (mut tampered, _) = signed_token(json!({}));
+    let (mut tampered, _) = public_vector("default");
     tampered.push('x');
     assert!(matches!(
         prepare_siop_submission(
@@ -231,36 +209,21 @@ fn issuer_audience_nonce_and_native_signature_validation_fail_closed() {
 
 #[test]
 fn numeric_validity_and_transaction_time_boundaries_fail_closed() {
-    for (overrides, expected) in [
-        (
-            json!({"iat": (now() + Duration::seconds(61)).timestamp()}),
-            "FLOW.SIOP_IAT_IN_FUTURE",
-        ),
-        (
-            json!({"exp": (now() - Duration::seconds(60)).timestamp()}),
-            "FLOW.SIOP_TOKEN_EXPIRED",
-        ),
-        (
-            json!({"iat": (now() + Duration::minutes(5)).timestamp(), "exp": (now() + Duration::minutes(5)).timestamp()}),
-            "FLOW.SIOP_IAT_IN_FUTURE",
-        ),
-        (
-            json!({"iat": (now() - Duration::minutes(2)).timestamp()}),
-            "FLOW.SIOP_TOKEN_PREDATES_TRANSACTION",
-        ),
-        (json!({"iat": true}), "FLOW.SIOP_INVALID_TIME_CLAIMS"),
+    for (case, expected) in [
+        ("iat_future_61", "FLOW.SIOP_IAT_IN_FUTURE"),
+        ("exp_past_60", "FLOW.SIOP_TOKEN_EXPIRED"),
+        ("iat_exp_future_5m", "FLOW.SIOP_IAT_IN_FUTURE"),
+        ("iat_before_tx_2m", "FLOW.SIOP_TOKEN_PREDATES_TRANSACTION"),
+        ("iat_bool", "FLOW.SIOP_INVALID_TIME_CLAIMS"),
     ] {
-        let (token, _) = signed_token(overrides);
+        let (token, _) = public_vector(case);
         let error =
             prepare_siop_submission(instance(), &token, &SiopSubmissionOptions::default(), now())
                 .unwrap_err();
         assert!(error.to_string().starts_with(expected), "{error}");
     }
 
-    let (invalid_window, _) = signed_token(json!({
-        "iat": now().timestamp(),
-        "exp": now().timestamp()
-    }));
+    let (invalid_window, _) = public_vector("invalid_window");
     assert!(matches!(
         prepare_siop_submission(
             instance(),
@@ -274,7 +237,7 @@ fn numeric_validity_and_transaction_time_boundaries_fail_closed() {
 
 #[test]
 fn expiry_flow_binding_and_terminal_replay_are_deterministic() {
-    let (token, _) = signed_token(json!({}));
+    let (token, _) = public_vector("default");
     let mut wrong_flow = instance();
     wrong_flow.context["flow_type"] = json!("verification");
     assert!(matches!(
@@ -307,7 +270,7 @@ fn expiry_flow_binding_and_terminal_replay_are_deterministic() {
     .unwrap();
     assert!(matches!(same, PreparedSiopSubmission::SameTerminal(_)));
 
-    let (different, _) = signed_token(json!({"nonce": "different"}));
+    let (different, _) = public_vector("nonce_mismatch");
     let replay = prepare_siop_submission(
         prepared.finalization.instance,
         &different,

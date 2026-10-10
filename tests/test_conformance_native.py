@@ -171,6 +171,9 @@ def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
         )
         previous["services"]["issuance-native"]["environment"].pop(setting, None)
     actual = deepcopy(previous)
+    actual["services"]["issuance-native"]["environment"].pop(
+        "INTEGRATION_SECRET_MASTER_KEY"
+    )
     actual["services"]["issuance-native"]["environment"]["DATABASE_URL"] = (
         "postgresql://marty:synthetic@postgres:5432/marty"
     )
@@ -266,6 +269,12 @@ def model(*, local=False, authcrypt=False):
             "postgres": {"condition": "service_healthy"},
         },
     }
+    legacy["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://signing-keys:8017/internal"
+    )
+    candidate["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://gateway:8000/internal/signing-keys"
+    )
     if local:
         candidate["build"] = {
             "dockerfile": "services/Dockerfile",

@@ -37,7 +37,11 @@
       ]
     },
     "request": {
-      "jwk": {"public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"}},
+      "jwk": {"public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}},
+      "key_reference": "key-a"
+    },
+    "private_request": {
+      "jwk": {"public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "reject-marker"}},
       "key_reference": "key-a"
     },
     "expected_jwk": {
@@ -54,7 +58,13 @@
   "did": {
     "service_id": "svc-a",
     "request": {
-      "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"},
+      "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
+      "public_domain": "Issuer.Example:8443",
+      "org_slug": "Acme",
+      "key_reference": "issuer key"
+    },
+    "private_request": {
+      "jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "reject-marker"},
       "public_domain": "Issuer.Example:8443",
       "org_slug": "Acme",
       "key_reference": "issuer key"

@@ -45,10 +45,10 @@ x-issuance-application-env: &issuance-application-env
   MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
   ISSUANCE_GRPC_PORT: "9005"
   ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
-  INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
   TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
   SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
   SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+  SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
   CANVAS_CREDENTIALS_SHARED_SECRET_FILE: /run/secrets/canvas_credentials_shared_secret
   CANVAS_CREDENTIALS_PROVIDER: ${CANVAS_CREDENTIALS_PROVIDER:-bridge}
   CANVAS_CREDENTIALS_PUBLISH_URL: ${CANVAS_CREDENTIALS_PUBLISH_URL:-}
@@ -321,6 +321,7 @@ services:
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
       FLOW_SERVICE_URL: http://flow:8011
       DEVICE_REGISTRATION_SERVICE_URL: http://device-registration:8014
+      DEVICE_REGISTRATION_GATEWAY_KEY_FILE: /run/secrets/device_registration_gateway_key
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_GATEWAY_ENABLED: ${PASSPORT_NATIVE_GATEWAY_ENABLED:-false}
@@ -343,10 +344,15 @@ services:
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
     secrets:
       - issuance_api_key
+      - signing_keys_service_sign_gateway_key
+      - signing_keys_issuer_sign_key
       - openbao_service_token
       - grpc_service_token
+      - device_registration_gateway_key
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -570,16 +576,25 @@ services:
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
       CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
+      DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
+      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
     secrets:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
-      - integration_secret_master_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
+      - didcomm_issuance_openbao_token
+      - workload_identity_ca_cert
     volumes:
       - ./scripts/load-openbao-token-and-start.sh:/app/load-openbao-token-and-start.sh:ro
     depends_on:
@@ -587,8 +602,11 @@ services:
         condition: service_completed_successfully
       issuance-migrations:
         condition: service_completed_successfully
+      issuance-native:
+        condition: service_healthy
+        required: true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8005/ready"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -605,6 +623,10 @@ services:
     environment:
       <<: *issuance-application-env
       SERVICE_NAME: issuance_native
+      DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
+      DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUANCE_GRPC_ENABLED: "true"
@@ -629,19 +651,18 @@ services:
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       ICAO_DOCUMENT_SIGNER_API_KEY: ${ICAO_DOCUMENT_SIGNER_API_KEY:-}
-      PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: ${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY: ${PHYSICAL_DOCUMENT_ARTIFACT_KEY:-}
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       PERSONALIZATION_BUREAU_API_KEY: ${PERSONALIZATION_BUREAU_API_KEY:-}
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}
     secrets:
       - marty_db_password
       - issuance_api_key
-      - integration_secret_master_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
+      - didcomm_issuance_openbao_token
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -664,13 +685,15 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      INTEGRATION_SECRET_MASTER_KEY_FILE: /run/secrets/integration_secret_master_key
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       TOKEN_HMAC_KEY_FILE: /run/secrets/token_hmac_key
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
@@ -694,9 +717,10 @@ services:
       CANVAS_SYNC_WORKER_POLL_SECONDS: ${CANVAS_SYNC_WORKER_POLL_SECONDS:-5}
     secrets:
       - marty_db_password
-      - integration_secret_master_key
       - issuance_api_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -911,14 +935,27 @@ services:
     environment:
       <<: *runtime-env
       SIGNING_KEYS_SERVICE_PORT: "8017"
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE: /run/secrets/device_registration_signing_keys_key
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
+      ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       BAO_ADDR: ${BAO_ADDR:-}
-      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
+      HAIP_KMS_TOKEN_FILE: /run/secrets/haip_kms_token
       RUST_LOG: info
     secrets:
       - issuance_api_key
-      - openbao_service_token
+      - signing_keys_service_sign_gateway_key
+      - signing_keys_issuer_sign_key
+      - device_registration_signing_keys_key
+      - signing_keys_openbao_token
+      - haip_kms_token
+      - signing_keys_workload_server_cert
+      - signing_keys_workload_server_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -954,13 +991,14 @@ services:
       CT_GRPC_TARGET: credential-template:9003
       ISSUANCE_GRPC_TARGET: issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
-      ISSUANCE_NATIVE_SERVICE_URL: ${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}
+      ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_FLOW_ENABLED: ${PASSPORT_NATIVE_FLOW_ENABLED:-false}
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: ${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}
       PASSPORT_TENANT_API_KEYS: ${PASSPORT_TENANT_API_KEYS:-}
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
+      SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -984,6 +1022,7 @@ services:
       - flow_webhook_secret
       - flow_application_event_hmac_key
       - issuance_api_key
+      - signing_keys_issuer_sign_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1085,6 +1124,10 @@ services:
     environment:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
+      DEVICE_REGISTRATION_GATEWAY_KEY_FILE: /run/secrets/device_registration_gateway_key
+      DEVICE_REGISTRATION_SIGNING_KEYS_KEY_FILE: /run/secrets/device_registration_signing_keys_key
+      SIGNING_KEYS_HOLDER_ORIGIN: http://signing-keys:8017
+      TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEVICE_REGISTRATION_SERVICE_PORT: "8014"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -1093,6 +1136,8 @@ services:
     secrets:
       - marty_db_password
       - grpc_service_token
+      - device_registration_gateway_key
+      - device_registration_signing_keys_key
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1241,14 +1286,26 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_api_client_secret
   issuance_api_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_api_key
+  signing_keys_service_sign_gateway_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_service_sign_gateway_key
+  signing_keys_issuer_sign_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_issuer_sign_key
   grpc_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/grpc_service_token
+  device_registration_gateway_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/device_registration_gateway_key
+  device_registration_signing_keys_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/device_registration_signing_keys_key
   notification_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_webhook_secret
   notification_applicant_event_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_applicant_event_token
   workload_identity_ca_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/workload_identity_ca_cert
+  signing_keys_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_workload_server_cert
+  signing_keys_workload_server_key:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_workload_server_key
   pp_workload_server_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_cert
   pp_workload_server_key:
@@ -1285,14 +1342,18 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   flow_application_event_hmac_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_application_event_hmac_key
-  integration_secret_master_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/integration_secret_master_key
   token_hmac_key:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/token_hmac_key
   canvas_credentials_shared_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_shared_secret
   openbao_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_service_token
+  signing_keys_openbao_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_openbao_token
+  didcomm_issuance_openbao_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/didcomm_issuance_openbao_token
+  haip_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/haip_kms_token
   notification_openbao_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_openbao_token
   cloudflare_tunnel_token:

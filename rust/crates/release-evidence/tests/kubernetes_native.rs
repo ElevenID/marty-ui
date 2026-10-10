@@ -172,11 +172,16 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         entries.pop().unwrap()["name"],
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
-                    assert_eq!(owner(native_owner)["volumeMounts"], mounts);
-                    assert_eq!(
-                        native_owner.pointer("/spec/template/spec/volumes").unwrap(),
-                        &volumes
-                    );
+                    let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
+                    assert_eq!(native_mounts.len(), 4);
+                    assert_eq!(native_mounts[2..], mounts.as_array().unwrap()[..]);
+                    let native_volumes = native_owner
+                        .pointer("/spec/template/spec/volumes")
+                        .unwrap()
+                        .as_array()
+                        .unwrap();
+                    assert_eq!(native_volumes.len(), 4);
+                    assert_eq!(native_volumes[2..], volumes.as_array().unwrap()[..]);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -217,7 +222,7 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     .find(|entry| entry["name"] == "ISSUANCE_GRPC_TARGET")
                     .unwrap();
                 assert_eq!(grpc["value"], "issuance-native:9005");
-                grpc["value"] = json!("issuance:9005");
+                grpc["value"] = json!("issuance-native:9005");
             }
         }
         assert_eq!(
@@ -235,7 +240,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     assert_eq!(common.len(), 1);
     assert_eq!(
         common[0]["data"]["ISSUANCE_NATIVE_SERVICE_URL"],
-        "http://issuance:8005"
+        "http://issuance-native:8005"
     );
     let recovery_ref = json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"ISSUANCE_NATIVE_SERVICE_URL"}}});
     for name in ["auth", "applicant", "presentation-policy"] {
@@ -252,7 +257,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     );
     assert_eq!(
         recovery_flow["ISSUANCE_GRPC_TARGET"]["value"],
-        "issuance:9005"
+        "issuance-native:9005"
     );
 
     let expected = native::compose(&baseline, &template, &ready, &values).unwrap();
@@ -491,9 +496,8 @@ fn parser_environment_and_new_canonical_image_policy_fail_closed() {
     let captured = native::capture_environment(|name| {
         names.push(name.to_owned());
         (name == "K8S_ISSUANCE_NATIVE_ENABLED").then(|| "false".into())
-    })
-    .unwrap();
-    assert!(!native::selected(&captured).unwrap());
+    });
+    assert!(captured.is_err());
     assert_eq!(names, ["K8S_ISSUANCE_NATIVE_ENABLED"]);
     let (_, _, _, mut values) = fixtures();
     for &name in native::OPTIONAL_SETTINGS {
@@ -524,6 +528,22 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
     let (baseline, template, ready, values) = fixtures();
     let deployment = index(&template, "Deployment", "issuance-native");
     for (path, value) in [
+        (
+            "/spec/template/spec/volumes/0/secret/items/0/key",
+            json!("OPENBAO_SERVICE_TOKEN"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/mountPath",
+            json!("/run/secrets/shared"),
+        ),
+        (
+            "/spec/template/spec/volumes/1/secret/secretName",
+            json!("untrusted-ca"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/1/readOnly",
+            json!(false),
+        ),
         (
             "/spec/template/spec/initContainers",
             json!([{"name":"extra"}]),
@@ -587,6 +607,29 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
         native::compose(&changed, &template, &ready, &values),
         Err(REFUSAL)
     );
+    let signer = index(&template, "Deployment", "signing-keys");
+    for (path, value) in [
+        (
+            "/spec/template/spec/volumes/0/secret/secretName",
+            json!("untrusted-server-tls"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/readOnly",
+            json!(false),
+        ),
+        (
+            "/spec/template/spec/containers/0/ports/1/containerPort",
+            json!(8017),
+        ),
+    ] {
+        let mut changed = template.clone();
+        set_path(&mut changed[signer], path, value);
+        assert_eq!(
+            native::compose(&baseline, &changed, &ready, &values),
+            Err(REFUSAL),
+            "{path}"
+        );
+    }
 }
 
 fn api_defaults(model: &Value) -> Value {
@@ -1040,7 +1083,6 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "RP_GRPC_TARGET",
-        "SIGNING_KEYS_INTERNAL_URL",
     ] {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -1055,13 +1097,27 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         let entries = owner_mut(&mut baseline[i])["env"].as_array_mut().unwrap();
         entries.retain(|entry| entry["name"] != name);
         entries.push(custom.clone());
-        let model = native::compose(&baseline, &template, &ready, &values).unwrap();
+        let model = native::compose(&baseline, &template, &ready, &values)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         let rows = model["items"].as_array().unwrap();
         let selected = index(rows, "Deployment", "issuance-native");
         assert_eq!(env(&rows[i])[name], custom);
         assert_eq!(env(&rows[selected])[name], custom);
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
     }
+    let mut legacy_with_custom_signer = baseline.clone();
+    let legacy = index(&legacy_with_custom_signer, "Deployment", "issuance");
+    let signer = owner_mut(&mut legacy_with_custom_signer[legacy])["env"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["name"] == "SIGNING_KEYS_INTERNAL_URL")
+        .unwrap();
+    *signer = json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"https://custom-signer.example/internal"});
+    assert_eq!(
+        native::compose(&legacy_with_custom_signer, &template, &ready, &values),
+        Err(REFUSAL),
+    );
     for &name in native::SECRET_SETTINGS {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -1133,7 +1189,7 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
         );
         assert_eq!(
             signing["OPENBAO_SERVICE_TOKEN"],
-            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"OPENBAO_SERVICE_TOKEN"}}})
+            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}})
         );
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
         for fault in [
@@ -1703,5 +1759,7 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
     cmd.arg("validate")
         .env("MARTY_SERVICES_IMAGE", "ignored-private-image");
     let (passed, output, errors) = execute(cmd, b"");
-    assert!(passed && output.is_empty() && errors.is_empty());
+    // Native issuance is selected by default. A missing or mutable image
+    // must fail preflight even when no explicit enable flag was supplied.
+    assert!(!passed && output.is_empty() && errors == format!("{REFUSAL}\n").as_bytes());
 }

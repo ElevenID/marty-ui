@@ -19,10 +19,16 @@ Required files:
 - `keycloak_admin_password`
 - `marty_api_client_secret`
 - `issuance_api_key`
+- `signing_keys_service_sign_gateway_key` (Gateway and Signing Keys only; distinct random value, at least 32 characters)
+- `signing_keys_issuer_sign_key` (Gateway, Signing Keys, Flow, Issuance, and Canvas sync worker; distinct random value, at least 32 characters)
 - `grpc_service_token`
+- `device_registration_gateway_key` (distinct random value, at least 32 characters)
+- `device_registration_signing_keys_key` (a different random value, at least 32 characters)
 - `notification_webhook_secret`
 - `notification_applicant_event_token`
 - `workload_identity_ca_cert`
+- `signing_keys_workload_server_cert`
+- `signing_keys_workload_server_key`
 - `pp_workload_server_cert`
 - `pp_workload_server_key`
 - `flow_workload_client_cert`
@@ -40,24 +46,33 @@ Required files:
 - `compliance_profile_workload_client_cert`
 - `compliance_profile_workload_client_key`
 - `flow_application_event_hmac_key`
-- `integration_secret_master_key`
 - `flow_webhook_secret`
 - `token_hmac_key`
 - `openbao_service_token`
+- `signing_keys_openbao_token`
+- `didcomm_issuance_openbao_token`
 - `notification_openbao_token`
+- `haip_kms_token`
 - `cloudflare_tunnel_token`
 
 `flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
 
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
 
+`signing_keys_openbao_token` is a distinct token with `credential-service` and `signing-keys-managed` policies, issued without the default policy. Only signing-keys receives managed key create/rotate access. The bootstrap scripts mint it; an external OpenBao operator must supply an equivalent scoped token.
+
+The Signing Keys TLS certificate must chain to `workload_identity_ca_cert` and
+contain the `signing-keys` DNS name. Its key terminates the private
+integration-secret transport and is distinct from every non-exportable KMS
+application key. Rotate it with the CA/trust file and restart Signing Keys,
+native Issuance, and the Canvas worker together so cached TLS clients adopt
+the new trust root.
+
+`didcomm_issuance_openbao_token` is a separate token with only the `didcomm-issuance` policy and no default policy. Native Issuance uses it to read public sender versions and request complete authcrypt envelopes; key creation and rotation remain operator operations. The self-host OpenBao bootstrap mints it after mounting the DIDComm plugin. An external operator must provide the equivalent policy and token.
+
 `notification_openbao_token` is the narrower `notification-webhook-service` token. Only the Notification workload receives it; other services and the migration job must not mount it.
 
-`integration_secret_master_key` is a base64-encoded 32-byte AES key used by issuance to encrypt organization-managed integration secrets, such as Canvas Credentials API tokens. Generate it with:
-
-```bash
-python -c "import os, base64; print(base64.b64encode(os.urandom(32)).decode())"
-```
+`haip_kms_token` is the dedicated OpenBao plugin token for HAIP response-key creation and decryption. The self-host OpenBao bootstrap mints it without the default policy from `docker/openbao-haip-workload-policy.hcl`; only signing-keys receives it. An external OpenBao operator must provision an equivalent token and policy before starting the stack.
 
 `flow_application_event_hmac_key` is a distinct random value of at least 32
 bytes shared only by the Applicant and Flow services. It authenticates approval
@@ -75,7 +90,7 @@ Optional files may be left empty when the related integration is disabled:
 
 `canvas_credentials_shared_secret` signs Canvas credential-sync callbacks between the Canvas integration surface and issuance service. Leave it empty when Canvas integration is disabled.
 
-Canvas Credentials API tokens are configured by organization administrators from the Canvas integration wizard. Issuance stores them as encrypted integration secrets using `integration_secret_master_key`; do not put institution-specific Canvas Credentials bearer tokens in self-host deployment secret files.
+Canvas Credentials API tokens are configured by organization administrators from the Canvas integration wizard. Issuance stores them in purpose-bound envelopes encrypted by the remote KMS through signing-keys; do not put institution-specific Canvas Credentials bearer tokens in self-host deployment secret files.
 
 The standalone read-only Canvas Credentials contract checker can still read `CANVAS_CREDENTIALS_API_TOKEN` or `CANVAS_CREDENTIALS_API_TOKEN_FILE` from an operator shell for one-off vendor sandbox validation.
 

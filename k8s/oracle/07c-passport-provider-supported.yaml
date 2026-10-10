@@ -166,8 +166,11 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
-            - name: PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE
-              value: /run/secrets/provider-webhook/secret
+            - name: PASSPORT_PROVIDER_HMAC_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PASSPORT_PROVIDER_HMAC_KEY_VERSION
             - name: PASSPORT_PROVIDER_SIGNER_API_KEY_FILE
               value: /run/secrets/signer-api/api_key
             - name: PASSPORT_PROVIDER_SIGNER_URL
@@ -183,9 +186,6 @@ spec:
             - name: http
               containerPort: 8021
           volumeMounts:
-            - name: provider-webhook
-              mountPath: /run/secrets/provider-webhook
-              readOnly: true
             - name: signer-api
               mountPath: /run/secrets/signer-api
               readOnly: true
@@ -207,13 +207,6 @@ spec:
               cpu: 400m
               memory: 512Mi
       volumes:
-        - name: provider-webhook
-          secret:
-            secretName: passport-provider-webhook
-            defaultMode: 288
-            items:
-              - key: secret
-                path: secret
         - name: signer-api
           secret:
             secretName: passport-callback-signer-api

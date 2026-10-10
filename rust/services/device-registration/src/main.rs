@@ -1,9 +1,19 @@
 use marty_device_registration::{
-    challenge::{ChallengeRepository, MemoryChallengeRepository, RedisChallengeRepository},
     control_plane::{MembershipAuthorizer, OrganizationMembershipClient},
+    holder_credential_repository::PostgresHolderCredentialRepository,
+    holder_credential_rotation::HolderCredentialRotator,
+    holder_key_cleanup::HolderKeyCleanup,
+    holder_key_client::HolderKeyClient,
+    holder_key_provisioner::HolderKeyProvisioner,
+    holder_key_repository::PostgresHolderKeyRepository,
+    holder_signer::HolderSigner,
     http::{router, HttpState},
-    migration::migrate,
+    migration::{migrate, validate},
+    pairing_confirmation::PostgresPairingConfirmations,
+    pairing_enrollment::PairingEnrollment,
+    pairing_ticket::RedisPairingTickets,
     postgres::PostgresDeviceRepository,
+    wallet_issuer_trust::WalletIssuerTrustClient,
     DeviceRepository, DeviceService,
 };
 use sqlx::postgres::PgPoolOptions;
@@ -25,6 +35,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    if let [command] = arguments.as_slice() {
+        if command == "migrate" || command == "verify-owned-schema" {
+            let database_url =
+                required("DATABASE_URL")?.replacen("postgresql+asyncpg://", "postgresql://", 1);
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            if command == "migrate" {
+                migrate(&pool).await?;
+            } else {
+                validate(&pool).await?;
+            }
+            pool.close().await;
+            return Ok(());
+        }
+    }
+    if !arguments.is_empty() {
+        return Err("unsupported Device Registration command".into());
+    }
     let environment = env_value("ENVIRONMENT", "development").to_ascii_lowercase();
     let deployed = !matches!(
         environment.as_str(),
@@ -37,29 +68,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
     migrate(&pool).await?;
-    let repository: Arc<dyn DeviceRepository> = Arc::new(PostgresDeviceRepository::new(pool));
-    let challenge_ttl: u64 = env_value("DEVICE_CHALLENGE_TTL", "300").parse()?;
-    if challenge_ttl == 0 || challenge_ttl > 3600 {
-        return Err("DEVICE_CHALLENGE_TTL must be between 1 and 3600".into());
-    }
-    let challenges: Arc<dyn ChallengeRepository> = match env::var("REDIS_URL")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-    {
-        Some(url) => Arc::new(RedisChallengeRepository::connect(&url, challenge_ttl).await?),
-        None if deployed => {
-            return Err(
-                "REDIS_URL is required for atomic device challenges in deployed environments"
-                    .into(),
-            )
-        }
-        None => Arc::new(MemoryChallengeRepository::new(challenge_ttl)),
-    };
-    let rotation_grace = env_value("DEVICE_KEY_ROTATION_GRACE_SECONDS", "300").parse()?;
-    let service = Arc::new(DeviceService::new(repository, challenges, rotation_grace)?);
+    let repository: Arc<dyn DeviceRepository> =
+        Arc::new(PostgresDeviceRepository::new(pool.clone()));
+    let service = Arc::new(DeviceService::new(repository.clone()));
     let token = optional_secret("GRPC_SERVICE_TOKEN")?;
     if deployed && token.is_none() {
         return Err("GRPC_SERVICE_TOKEN is required in deployed environments".into());
+    }
+    let gateway_key = optional_secret("DEVICE_REGISTRATION_GATEWAY_KEY")?
+        .or_else(|| (!deployed).then(|| "dev-device-registration-gateway-key-change-me".into()))
+        .ok_or("DEVICE_REGISTRATION_GATEWAY_KEY is required in deployed environments")?;
+    if gateway_key.len() < 32 {
+        return Err("DEVICE_REGISTRATION_GATEWAY_KEY must contain at least 32 bytes".into());
+    }
+    if token.as_deref() == Some(gateway_key.as_str()) {
+        return Err("DEVICE_REGISTRATION_GATEWAY_KEY must differ from GRPC_SERVICE_TOKEN".into());
+    }
+    let holder_service_key = optional_secret("DEVICE_REGISTRATION_SIGNING_KEYS_KEY")?;
+    let holder_origin = env::var("SIGNING_KEYS_HOLDER_ORIGIN")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if holder_service_key.is_some() != holder_origin.is_some() {
+        return Err(
+            "holder Signing Keys origin and service credential must be configured together".into(),
+        );
+    }
+    if deployed && holder_service_key.is_none() {
+        return Err("remote holder Signing Keys authority is required".into());
     }
     let target = env_value("ORG_GRPC_TARGET", "organization:9002");
     let target = if target.contains("://") {
@@ -73,19 +108,71 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             token.as_deref(),
             Duration::from_secs(env_value("ORG_GRPC_TIMEOUT_SECONDS", "5").parse()?),
         )?);
+    let pairing_tickets =
+        Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
+    let wallet_issuer_trust = match token.as_ref() {
+        Some(token) => Some(Arc::new(WalletIssuerTrustClient::new(
+            &env_value("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004"),
+            token.clone(),
+        )?)),
+        None => None,
+    };
+    let pairing_confirmations = Arc::new(PostgresPairingConfirmations::new(pool.clone()));
+    let holder_credential_rotator = Arc::new(HolderCredentialRotator::new(
+        pool.clone(),
+        memberships.clone(),
+    ));
+    tokio::spawn(
+        (*pairing_confirmations)
+            .clone()
+            .expire_forever(repository.clone()),
+    );
+    let (pairing_enrollment, holder_signer) =
+        if let (Some(origin), Some(key)) = (holder_origin, holder_service_key) {
+            if key == gateway_key || token.as_deref() == Some(key.as_str()) {
+                return Err("holder Signing Keys credential must be dedicated".into());
+            }
+            let client = HolderKeyClient::new(&origin, key)?;
+            let keys = PostgresHolderKeyRepository::new(pool.clone());
+            let cleanup = HolderKeyCleanup::new(keys.clone(), client.clone());
+            tokio::spawn(cleanup.run_forever());
+            let signer = Arc::new(HolderSigner::new(
+                pool.clone(),
+                client.clone(),
+                memberships.clone(),
+            ));
+            let enrollment = Arc::new(PairingEnrollment::new(
+                pairing_tickets.clone(),
+                memberships.clone(),
+                service.clone(),
+                HolderKeyProvisioner::new(repository, keys, client),
+                PostgresHolderCredentialRepository::new(pool.clone()),
+                (*pairing_confirmations).clone(),
+            ));
+            (Some(enrollment), Some(signer))
+        } else {
+            (None, None)
+        };
     let port = env_value("DEVICE_REGISTRATION_SERVICE_PORT", "8014").parse()?;
     let address = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let listener = TcpListener::bind(address).await?;
     let release_version = env_value("MARTY_RELEASE_VERSION", env!("CARGO_PKG_VERSION"));
     let build_revision = env_value("MARTY_UI_SHA", "unknown");
-    info!(backend="rust", native_kernel="marty-verification::device_auth", version=%release_version, revision=%build_revision, %address, "device registration native backend ready");
+    info!(backend="rust", native_kernel="marty-device-registration::repository", version=%release_version, revision=%build_revision, %address, "device registration native backend ready");
     axum::serve(
         listener,
         router(HttpState {
             service,
             memberships,
+            pairing_tickets,
+            wallet_issuer_trust,
+            pairing_confirmations: Some(pairing_confirmations),
+            pairing_enrollment,
+            holder_signer,
+            holder_credential_rotator: Some(holder_credential_rotator),
             release_version,
             build_revision,
+            gateway_key,
         }),
     )
     .with_graceful_shutdown(shutdown())

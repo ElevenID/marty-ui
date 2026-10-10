@@ -23,8 +23,6 @@ sys.path.insert(0, str(REPO_ROOT / "packages"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from canvas_worker_runtime import classify_worker_launch  # noqa: E402
-from marty_common.migration_profile import normalize_migration_profile  # noqa: E402
-from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID  # noqa: E402
 from marty_devops import DeploymentCatalog  # noqa: E402
 
 
@@ -37,6 +35,13 @@ def is_placeholder_value(value: str) -> bool:
     return not normalized or normalized.startswith("change-me") or normalized in {"changeme", "placeholder"}
 
 
+def validate_openbao_plugin_image(env_values: dict[str, str]) -> str:
+    reference = env_values.get("MARTY_OPENBAO_DIDCOMM_IMAGE", "").strip()
+    if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", reference):
+        raise CheckError("MARTY_OPENBAO_DIDCOMM_IMAGE must be a reviewed immutable image digest.")
+    return reference
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Prevent urllib from following redirects outside our control."""
 
@@ -44,7 +49,7 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OPEN_BADGE_LOGIN_POLICY_ID = MARTY_OPEN_BADGE_LOGIN_POLICY_ID
+OPEN_BADGE_LOGIN_POLICY_ID = "50000000-0000-0000-0000-000000000004"
 TEXT_BUNDLE_SUFFIXES = {".css", ".html", ".js", ".json", ".map", ".txt"}
 ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d+)?")
 
@@ -148,6 +153,59 @@ def validate_required_secret_files(secret_dir: Path, catalog: DeploymentCatalog,
     return "files=" + ",".join(checked)
 
 
+def validate_holder_service_credential(secret_dir: Path) -> str:
+    holder = read_required_secret(
+        secret_dir / "device_registration_signing_keys_key",
+        "Device Registration-to-Signing Keys credential",
+    )
+    if len(holder.encode("utf-8")) < 32:
+        raise CheckError("Device Registration-to-Signing Keys credential must contain at least 32 bytes.")
+    for name in (
+        "device_registration_gateway_key",
+        "grpc_service_token",
+        "issuance_api_key",
+    ):
+        if holder == read_required_secret(secret_dir / name, name):
+            raise CheckError(
+                "Device Registration-to-Signing Keys credential must be dedicated."
+            )
+    return "dedicated credential length and separation verified"
+
+
+def validate_service_sign_gateway_credential(secret_dir: Path) -> str:
+    key = read_required_secret(
+        secret_dir / "signing_keys_service_sign_gateway_key",
+        "Gateway-to-Signing Keys service signing credential",
+    )
+    if len(key.encode("utf-8")) < 32:
+        raise CheckError("Gateway-to-Signing Keys service signing credential must contain at least 32 bytes.")
+    for name in (
+        "issuance_api_key",
+        "grpc_service_token",
+        "device_registration_gateway_key",
+        "device_registration_signing_keys_key",
+    ):
+        if key == read_required_secret(secret_dir / name, name):
+            raise CheckError("Gateway-to-Signing Keys service signing credential must be dedicated.")
+    return "dedicated service signing credential length and separation verified"
+
+
+def validate_issuer_sign_credential(secret_dir: Path) -> str:
+    key = read_required_secret(
+        secret_dir / "signing_keys_issuer_sign_key", "Issuer DID signing credential",
+    )
+    if len(key.encode("utf-8")) < 32:
+        raise CheckError("Issuer DID signing credential must contain at least 32 bytes.")
+    for name in (
+        "issuance_api_key", "signing_keys_service_sign_gateway_key",
+        "grpc_service_token", "device_registration_gateway_key",
+        "device_registration_signing_keys_key",
+    ):
+        if key == read_required_secret(secret_dir / name, name):
+            raise CheckError("Issuer DID signing credential must be dedicated.")
+    return "dedicated issuer signing credential length and separation verified"
+
+
 def validate_tunnel_token(secret_dir: Path) -> str:
     token = read_required_secret(secret_dir / "cloudflare_tunnel_token", "Cloudflare tunnel token")
     return f"token_length={len(token)}"
@@ -198,10 +256,10 @@ def validate_google_social_login(env_values: dict[str, str], secret_dir: Path) -
 
 
 def validate_migration_profile(env_values: dict[str, str]) -> str:
-    profile = normalize_migration_profile(env_values.get("MARTY_MIGRATION_PROFILE"))
+    profile = (env_values.get("MARTY_MIGRATION_PROFILE") or "").strip()
     if profile != "selfhost-production":
         raise CheckError(
-            "MARTY_MIGRATION_PROFILE must resolve to selfhost-production for the self-host stack; "
+            "MARTY_MIGRATION_PROFILE must be selfhost-production for the self-host stack; "
             f"current={profile}"
         )
     return f"profile={profile}"
@@ -1077,6 +1135,9 @@ def validate_protocol_routes_do_not_spa_fallback(env_values: dict[str, str]) -> 
 
 def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Path, compose_file: Path) -> str:
     read_required_secret(secret_dir / "openbao_service_token", "OpenBao service token")
+    read_required_secret(secret_dir / "signing_keys_openbao_token", "signing-keys OpenBao token")
+    read_required_secret(secret_dir / "didcomm_issuance_openbao_token", "DIDComm Issuance OpenBao token")
+    read_required_secret(secret_dir / "haip_kms_token", "HAIP OpenBao workload token")
     read_required_secret(
         secret_dir / "notification_openbao_token",
         "Notification OpenBao workload token",
@@ -1198,11 +1259,15 @@ def main() -> int:
     catalog = DeploymentCatalog.load(REPO_ROOT)
 
     compose_config_results = [
+        run_check("openbao-plugin-image", lambda: validate_openbao_plugin_image(env_values)),
         run_check("openbao-compose-config", lambda: (ensure_compose_config(env_file, openbao_compose_file) or openbao_compose_file.name)),
         run_check("prod-compose-config", lambda: (ensure_compose_config(env_file, prod_compose_file) or prod_compose_file.name)),
     ]
     validation_results = [
         run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, catalog, "selfhost-production")),
+        run_check("holder-service-credential", lambda: validate_holder_service_credential(secret_dir)),
+        run_check("service-sign-gateway-credential", lambda: validate_service_sign_gateway_credential(secret_dir)),
+        run_check("issuer-sign-credential", lambda: validate_issuer_sign_credential(secret_dir)),
         run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),

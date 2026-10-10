@@ -72,8 +72,6 @@ def safe_model(root: Path) -> dict:
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
-        "INTEGRATION_SECRET_MASTER_KEY_FILE":
-            "/run/secrets/integration_secret_master_key",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "RP_GRPC_TARGET": "revocation-profile:9013",
     })
@@ -97,6 +95,8 @@ def safe_model(root: Path) -> dict:
         "ORG_GRPC_TARGET": "organization:9002",
         "ES_GRPC_TARGET": "event-stream:9015",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "DEVICE_REGISTRATION_GATEWAY_KEY_FILE":
+            "/run/secrets/device_registration_gateway_key",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
         "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
@@ -140,11 +140,12 @@ def safe_model(root: Path) -> dict:
             {"source": "issuance_api_key"},
             {"source": "signing_keys_internal_api_key"},
         ]
+    services["gateway"]["secrets"].append(
+        {"source": "device_registration_gateway_key"})
     services["flow"]["secrets"].append(
         {"source": "flow_application_event_hmac_key"})
     services["issuance-native"]["secrets"].extend([
         {"source": "token_hmac_key"},
-        {"source": "integration_secret_master_key"},
         {"source": "passport_beta_reconciliation_operator_token"},
     ])
     services["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
@@ -333,6 +334,12 @@ def safe_model(root: Path) -> dict:
             "deployment-profile", "issuance-native", "signing-keys")}
     services["issuance-native"]["healthcheck"] = {
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"]}
+    services["issuance-native"]["environment"].update({
+        "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["issuance-native"]["secrets"].append({
+        "source": "workload_identity_ca_cert"})
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -345,11 +352,20 @@ def safe_model(root: Path) -> dict:
                             "/run/secrets/csca_issue_gateway_key",
                         "PUBLIC_DOMAIN": "localhost:29876",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
-                            "/run/secrets/signing_keys_internal_api_key"},
-        "secrets": [{"source": "signing_keys_internal_api_key"}],
+                            "/run/secrets/signing_keys_internal_api_key",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
+                            "/run/secrets/signing_keys_workload_server_cert",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
+                            "/run/secrets/signing_keys_workload_server_key"},
+        "secrets": [{"source": "signing_keys_internal_api_key"},
+                    {"source": "signing_keys_workload_server_cert"},
+                    {"source": "signing_keys_workload_server_key"},
+                    {"source": "workload_identity_ca_cert"}],
         "depends_on": {"redis": {"condition": "service_healthy"}},
-        "healthcheck": {"test": ["CMD", "curl", "--fail",
-                                 "http://localhost:8017/health"]},
+        "healthcheck": {"test": ["CMD-SHELL",
+                                 "curl --fail http://localhost:8017/health && "
+                                 "curl --fail --cacert /run/secrets/workload_identity_ca_cert "
+                                 "https://signing-keys:8018/health"]},
     }
     services["db-migrate"] = {
         "image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
@@ -418,6 +434,8 @@ def safe_model(root: Path) -> dict:
                 "db": {"file": str(root / "secrets/db")},
                 "marty_db_password": {"file": str(root / "secrets/marty_db_password")},
                 "grpc_service_token": {"file": str(root / "secrets/grpc_service_token")},
+                "device_registration_gateway_key": {
+                    "file": str(root / "secrets/device_registration_gateway_key")},
                 "passport_beta_reconciliation_operator_token": {
                     "file": str(root / "secrets/passport_beta_reconciliation_operator_token")},
                 "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
@@ -430,14 +448,18 @@ def safe_model(root: Path) -> dict:
                 "csca_issue_gateway_key": {
                     "file": str(root / "secrets/csca_issue_gateway_key")},
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
-                "integration_secret_master_key": {
-                    "file": str(root / "secrets/integration_secret_master_key")},
                 "flow_application_event_hmac_key": {
                     "file": str(root / "secrets/flow_application_event_hmac_key")},
                 "passport_edge_tls_cert": {
                     "file": str(root / "secrets/passport_edge_tls_cert")},
                 "passport_edge_tls_key": {
                     "file": str(root / "secrets/passport_edge_tls_key")},
+                "workload_identity_ca_cert": {
+                    "file": str(root / "secrets/workload_identity_ca_cert")},
+                "signing_keys_workload_server_cert": {
+                    "file": str(root / "secrets/signing_keys_workload_server_cert")},
+                "signing_keys_workload_server_key": {
+                    "file": str(root / "secrets/signing_keys_workload_server_key")},
             },
             "configs": {"passport_supported_openbao_start": {
                 "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
@@ -662,8 +684,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
     (lambda model, root: model["secrets"]["db"].update(
         file="/etc/marty-selfhost-prod/secrets/db"), "secret"),
     (lambda model, root: model["secrets"]["token_hmac_key"].update(
-        file=str(root / "secrets/bao_root_token")), "secret"),
-    (lambda model, root: model["secrets"]["integration_secret_master_key"].update(
         file=str(root / "secrets/bao_root_token")), "secret"),
     (lambda model, root: next(secret for secret in
         model["services"]["issuance-native"]["secrets"]

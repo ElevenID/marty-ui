@@ -115,6 +115,32 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
 
     migration::migrate(&pool).await.unwrap();
     migration::migrate(&pool).await.unwrap();
+    let private_key_tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'issuance_service' AND table_type = 'BASE TABLE'
+           AND (table_name = 'issuer_signing_keys' OR table_name LIKE '%private_key%')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        private_key_tables.is_empty(),
+        "Issuance must not create private-key tables: {private_key_tables:?}"
+    );
+    let private_key_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name || '.' || column_name FROM information_schema.columns
+         WHERE table_schema = 'issuance_service'
+           AND (column_name LIKE '%private_key%'
+                OR column_name LIKE '%private_jwk%'
+                OR column_name LIKE '%encrypted_jwk%')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert!(
+        private_key_columns.is_empty(),
+        "Issuance must not create private-key columns: {private_key_columns:?}"
+    );
     let read_only_pool = PgPoolOptions::new()
         .max_connections(1)
         .connect(&database_url)
@@ -149,7 +175,10 @@ async fn migration_bounds_legacy_tokens_and_backfills_notification_audit_identit
     .await
     .unwrap();
     for remaining in [transaction_remaining, session_remaining] {
-        assert!((1798.0..=1800.0).contains(&remaining));
+        assert!(
+            (1798.0..=1800.0).contains(&remaining),
+            "legacy token expiry remaining seconds: {remaining}"
+        );
     }
     let linked_expiry_count: i64 = sqlx::query_scalar(
         "SELECT count(DISTINCT access_token_expires_at)

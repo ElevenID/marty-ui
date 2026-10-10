@@ -48,6 +48,7 @@ FAST_MODE_SKIPS = [
 ]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
 SELFHOST_CASES = (
+    "packaged_remote_secret_fixture_requires_verified_https",
     "selfhost_public_image_loader_isolated",
     "selfhost_public_image_loader_child",
     "selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values",
@@ -56,6 +57,7 @@ SELFHOST_CASES = (
     "selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery",
     "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure",
     "selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch",
+    "selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts",
     "selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed",
     "selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts",
 )
@@ -192,6 +194,10 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     worker_full = '"$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4'
     json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
     composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
+    scoped_kms = (
+        'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
+        'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
+    )
     assert (
         sum(
             line.strip() == 'timed canvas_serial "$mode" ' + preflight
@@ -221,7 +227,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         )
     assert (
         sum(
-            line.strip() == "timed canvas_serial json_consumer " + json_serial
+            line.strip() == "timed canvas_serial json_consumer env " + scoped_kms + json_serial
             for line in script.splitlines()
         )
         == 1
@@ -230,7 +236,9 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         "[[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
         in script
     )
-    assert script.count(composition_full + ' >"$composition_log" 2>&1 &') == 1
+    assert script.count(scoped_kms + composition_full + ' >"$composition_log" 2>&1 &') == 1
+    assert script.count('trap cleanup_canvas_kms EXIT') == 1
+    assert script.count('trap cleanup_target_logs EXIT') == 1
     assert (
         script.count(
             'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
@@ -420,12 +428,22 @@ def shell_case(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     doubles = {
-        "python3": f'#!/usr/bin/env bash\nexec "{Path(sys.executable).as_posix()}" "$@"\n',
+        "python3": f'''#!/usr/bin/env bash
+if [[ "${{1:-}}" == */start-canvas-didcomm-openbao.py ]]; then
+  printf 'kms-start|%s\\n' "$1" >> "$TEST_LOG"
+  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"http://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+  exit 0
+fi
+exec "{Path(sys.executable).as_posix()}" "$@"
+''',
         "docker": r"""#!/usr/bin/env bash
 set -euo pipefail
 record=docker
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
+if [[ $# == 3 && "$1" == rm && "$2" == -f && "$3" == canvas-kms-aaaaaaaaaaaa ]]; then
+  exit 0
+fi
 if [[ $# == 3 && "$1" == image && "$2" == inspect ]]; then exit 1; fi
 [[ $# == 2 && "$1" == pull ]] || exit 90
 [[ "$TEST_FAILURE" != docker ]] || exit 13
@@ -434,6 +452,18 @@ if [[ $# == 3 && "$1" == image && "$2" == inspect ]]; then exit 1; fi
 set -euo pipefail
 printf 'jq|%s\n' "$1" >> "$TEST_LOG"
 if [[ "$1" == -er ]]; then
+  if [[ "$#" == 3 && "$2" == .container && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'canvas-kms-aaaaaaaaaaaa\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .url && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'http://127.0.0.1:8200\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .root_token && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+    exit 0
+  fi
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
   [[ "$TEST_FAILURE" != images ]] || exit 17
   printf '%s\n' "$TEST_POSTGRES_IMAGE" "$TEST_PYTHON_IMAGE"
@@ -513,7 +543,9 @@ fi
 record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
-if [[ "$#" == 1 && "$1" == --list ]]; then
+if [[ "$#" == 2 && "$1" == --list && "$2" == --ignored ]]; then
+  printf '%s\n' 'scoped_transit_signer_verifies_without_key_read_authority: test'
+elif [[ "$#" == 1 && "$1" == --list ]]; then
   [[ "$TEST_FAILURE" != list ]] || exit 19
   while IFS= read -r registration; do printf '%s\n' "$registration"; done < "registrations-$name"
 elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
@@ -1234,9 +1266,10 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         f"{DEADLINE_TARGET}: test",
         f"{json_serial}: test",
         *(f"{target}: test" for target in HISTORICAL_SERIAL),
+        "scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:11] == [
+    assert children[:13] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "selfhost-contract", "1", "--list"],
@@ -1265,6 +1298,17 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             ["child", "worker-contract", "1", target, "--exact", "--nocapture", "--test-threads=1"]
             for target in HISTORICAL_SERIAL
         ],
+        ["child", "contract", "1", "--list", "--ignored"],
+        [
+            "child",
+            "contract",
+            "1",
+            "scoped_transit_signer_verifies_without_key_read_authority",
+            "--ignored",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
         [
             "child",
             "contract",
@@ -1275,7 +1319,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[11:]) == sorted(
+    assert sorted(children[13:]) == sorted(
         [
             [
                 "child",
@@ -1319,7 +1363,9 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         ["docker", "image", "inspect", "mirror.gcr.io/library/" + PINS[0]],
         ["docker", "pull", "mirror.gcr.io/library/" + PINS[0]],
         ["docker", "pull", PINS[1]],
+        ["docker", "rm", "-f", "canvas-kms-aaaaaaaaaaaa"],
     ]
+    assert len([call for call in calls if call[0] == "kms-start"]) == 1
 
 
 def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
@@ -1820,7 +1866,7 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
     preflight = names.index("Preflight published worker parity in two isolated groups")
     image = names.index("Build public selfhost image")
     loader = names.index("Prepare public selfhost image loader acceptance")
-    passport = names.index("Verify default passport test-mode boundary")
+    passport = names.index("Verify local passport signing is forbidden")
     prepare = names.index("Prepare database contract executables")
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
@@ -1836,6 +1882,24 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
     assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert steps[full]["run"] == (
         "set -euo pipefail\n"
+        'if [[ "${{ matrix.lane }}" == contracts ]]; then\n'
+        '  nonce="$(openssl rand -hex 16)"\n'
+        '  docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET '
+        'marty:tests:disposable-guard "$nonce" >/dev/null\n'
+        '  export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"\n'
+        '  bao_nonce="$(openssl rand -hex 16)"\n'
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        '    --data "{\\"data\\":{\\"nonce\\":\\"$bao_nonce\\"}}" \\\n'
+        "    http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \\\n"
+        "    | jq -e '.data.exportable == false' >/dev/null\n"
+        "  export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200\n"
+        "  export MARTY_TEST_OPENBAO_TOKEN=test-only\n"
+        '  export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"\n'
+        "  export BAO_TOKEN=test-only\n"
+        "fi\n"
         'if [[ "${{ matrix.lane }}" == worker ]]; then\n'
         "  python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
         "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas\n"

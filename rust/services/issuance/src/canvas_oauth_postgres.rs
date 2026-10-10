@@ -14,9 +14,10 @@ use crate::{
         CanvasOAuthPlatformPatch, CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
     integration_secret::{
-        integration_secret_hint, IntegrationSecretCipher, IntegrationSecretMetadata,
-        ManagedIntegrationSecret, NewIntegrationSecret,
+        integration_secret_hint, IntegrationSecretMetadata, ManagedIntegrationSecret,
+        NewIntegrationSecret,
     },
+    integration_secret_kms::KmsIntegrationSecretCipher,
 };
 
 #[async_trait]
@@ -113,22 +114,25 @@ pub(crate) async fn queue_canvas_oauth_revocation_in_transaction(
 #[derive(Clone)]
 pub struct PostgresIntegrationSecretVault {
     pool: PgPool,
-    cipher: IntegrationSecretCipher,
+    storage: KmsIntegrationSecretCipher,
 }
 
 impl std::fmt::Debug for PostgresIntegrationSecretVault {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PostgresIntegrationSecretVault")
-            .field("cipher", &self.cipher)
+            .field("storage", &"remote")
             .finish_non_exhaustive()
     }
 }
 
 impl PostgresIntegrationSecretVault {
     #[must_use]
-    pub fn new(pool: PgPool, cipher: IntegrationSecretCipher) -> Self {
-        Self { pool, cipher }
+    pub fn new_remote(pool: PgPool, cipher: KmsIntegrationSecretCipher) -> Self {
+        Self {
+            pool,
+            storage: cipher,
+        }
     }
 }
 
@@ -730,9 +734,10 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
     ) -> Result<Option<String>, CanvasOAuthError> {
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
         let row = sqlx::query(
-            "SELECT encrypted_secret_value
+            "SELECT provider, purpose, encrypted_secret_value
              FROM issuance_service.organization_integration_secrets
-             WHERE id = $1 AND organization_id = $2 AND enabled = true",
+             WHERE id = $1 AND organization_id = $2 AND enabled = true
+             FOR UPDATE",
         )
         .bind(secret_id)
         .bind(organization_id)
@@ -743,26 +748,42 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
             transaction.rollback().await.map_err(repository_error)?;
             return Ok(None);
         };
+        let encrypted: String = row
+            .try_get("encrypted_secret_value")
+            .map_err(repository_error)?;
+        let provider: String = row.try_get("provider").map_err(repository_error)?;
+        let purpose: String = row.try_get("purpose").map_err(repository_error)?;
+        let plaintext = self
+            .storage
+            .decrypt(organization_id, secret_id, &provider, &purpose, &encrypted)
+            .await
+            .map_err(|_| CanvasOAuthError::SecretUnavailable)?;
         sqlx::query(
             "UPDATE issuance_service.organization_integration_secrets
-             SET last_used_at = clock_timestamp() WHERE id = $1",
+             SET last_used_at = clock_timestamp()
+             WHERE id = $1 AND organization_id = $2 AND enabled = true",
         )
         .bind(secret_id)
+        .bind(organization_id)
         .execute(&mut *transaction)
         .await
         .map_err(repository_error)?;
         transaction.commit().await.map_err(repository_error)?;
-        let encrypted: String = row
-            .try_get("encrypted_secret_value")
-            .map_err(repository_error)?;
-        self.cipher
-            .decrypt(&encrypted)
-            .map(Some)
-            .map_err(Into::into)
+        Ok(Some(plaintext))
     }
 
     async fn save(&self, secret: NewIntegrationSecret) -> Result<(), CanvasOAuthError> {
-        let encrypted = self.cipher.encrypt(&secret.value)?;
+        let encrypted = self
+            .storage
+            .encrypt(
+                &secret.organization_id,
+                &secret.id,
+                &secret.provider,
+                &secret.purpose,
+                &secret.value,
+            )
+            .await
+            .map_err(|_| CanvasOAuthError::SecretUnavailable)?;
         let hint = integration_secret_hint(&secret.value).unwrap_or_else(|| "...".to_owned());
         sqlx::query(
             "INSERT INTO issuance_service.organization_integration_secrets
@@ -808,8 +829,15 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
         plaintext: &str,
     ) -> Result<ManagedIntegrationSecret, CanvasManagementRepositoryError> {
         let encrypted = self
-            .cipher
-            .encrypt(plaintext)
+            .storage
+            .encrypt(
+                &secret.organization_id,
+                &secret.id,
+                &secret.provider,
+                &secret.purpose,
+                plaintext,
+            )
+            .await
             .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
         let row = sqlx::query(
             "INSERT INTO issuance_service.organization_integration_secrets
@@ -885,10 +913,21 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
         plaintext: Option<&str>,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
-        let encrypted = plaintext
-            .map(|value| self.cipher.encrypt(value))
-            .transpose()
-            .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+        let encrypted = match plaintext {
+            Some(value) => Some(
+                self.storage
+                    .encrypt(
+                        &secret.organization_id,
+                        &secret.id,
+                        &secret.provider,
+                        &secret.purpose,
+                        value,
+                    )
+                    .await
+                    .map_err(|_| CanvasManagementRepositoryError::Unavailable)?,
+            ),
+            None => None,
+        };
         sqlx::query(
             "UPDATE issuance_service.organization_integration_secrets
              SET name = $4, encrypted_secret_value = COALESCE($5, encrypted_secret_value),

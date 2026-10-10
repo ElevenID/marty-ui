@@ -112,6 +112,7 @@ async fn connect_providers(
     let signing = Arc::new(HttpSigningProvider::new(
         &config.signing_keys_url,
         required_secret(&config.signing_keys_api_key, "signing keys API key")?,
+        required_secret(&config.issuer_sign_key, "issuer signing API key")?,
     )?);
     signing.health_check().await?;
     runtime.mark_healthy(FlowDependency::SigningKeys)?;

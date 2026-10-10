@@ -2,7 +2,7 @@ name: marty-selfhost-openbao
 
 services:
   openbao:
-    image: quay.io/openbao/openbao:2
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     command:
       - server
       - -config=/bao/config/openbao.hcl
@@ -22,7 +22,7 @@ services:
     restart: unless-stopped
 
   openbao-bootstrap:
-    image: quay.io/openbao/openbao:2
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]
     environment:
       BAO_ADDR: http://openbao:8200
@@ -30,7 +30,12 @@ services:
       BAO_ROOT_TOKEN_FILE: /bao/data/root.token
       BAO_UNSEAL_KEY_FILE: /bao/data/unseal.key
       BAO_SERVICE_TOKEN_FILE: /bao/runtime/openbao_service_token
+      BAO_SIGNING_KEYS_TOKEN_FILE: /bao/runtime/signing_keys_openbao_token
+      BAO_DIDCOMM_ISSUANCE_TOKEN_FILE: /bao/runtime/didcomm_issuance_openbao_token
       BAO_NOTIFICATION_TOKEN_FILE: /bao/runtime/notification_openbao_token
+      BAO_HAIP_TOKEN_FILE: /bao/runtime/haip_kms_token
+      BAO_HAIP_POLICY_FILE: /scripts/openbao-haip-workload-policy.hcl
+      DIDCOMM_KMS_PLUGIN_REQUIRED: "true"
     volumes:
       - type: bind
         source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
@@ -39,6 +44,7 @@ services:
         source: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}
         target: /bao/runtime
       - ./docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+      - ./docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro
       - ./docker/openbao-selfhost-init.sh:/scripts/openbao-selfhost-init.sh:ro
     depends_on:
       openbao:

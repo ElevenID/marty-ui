@@ -58,7 +58,6 @@ def model(tmp_path, enabled=True):
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
-            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
             "ICAO_DOCUMENT_SIGNER_URL": "",
             "PERSONALIZATION_BUREAU_URL": VALIDATOR["PRIVATE_BUREAU_URL"],
             "PERSONALIZATION_BUREAU_API_KEY": TOKEN,
@@ -883,6 +882,12 @@ def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
 
 
 def synthetic_beta_compose_env(tmp_path):
+    # Base Compose mounts the generated, CA-pinned integration-secret TLS
+    # identity. Provision it on clean CI checkouts before validating every
+    # mounted source, just as the local beta deploy runner does.
+    runpy.run_path(str(ROOT / "scripts/ensure-dev-integration-secret-tls.py"))[
+        "ensure_tls"
+    ]()
     required = set()
     for file in ROOT.glob("docker-compose*.yml"):
         required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", file.read_text()))

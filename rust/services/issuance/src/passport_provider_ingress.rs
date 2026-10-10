@@ -15,8 +15,8 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 
 use crate::{
-    passport_bureau::{verify_webhook_signature, ProductionStatus},
-    passport_callback_handoff::sign_and_deliver,
+    passport_bureau::ProductionStatus,
+    passport_callback_handoff::{sign_and_deliver, verify_provider_callback},
     passport_repository::{PassportWebhookRepositoryError, PostgresPassportRepository},
 };
 
@@ -25,7 +25,7 @@ const MAX_BODY_BYTES: usize = 64 * 1024;
 #[derive(Clone)]
 pub struct ProviderIngressState {
     pub provider_profile_id: String,
-    pub webhook_secret: Vec<u8>,
+    pub provider_hmac_key_version: u32,
     pub repository: PostgresPassportRepository,
     pub signing_base_url: Url,
     pub signing_api_key: String,
@@ -94,8 +94,25 @@ async fn provider_webhook(
         .ok_or(IngressError::InvalidSignature)?;
     if body.is_empty()
         || body.len() > MAX_BODY_BYTES
-        || !verify_webhook_signature(Some(&state.webhook_secret), &body, signature)
+        || signature.len() != 64
+        || !signature
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     {
+        return Err(IngressError::InvalidSignature);
+    }
+    let valid = verify_provider_callback(
+        &state.http,
+        &state.signing_base_url,
+        &state.signing_api_key,
+        &state.provider_profile_id,
+        state.provider_hmac_key_version,
+        &body,
+        signature,
+    )
+    .await
+    .map_err(|_| IngressError::Unavailable)?;
+    if !valid {
         return Err(IngressError::InvalidSignature);
     }
     let mut event: Map<String, Value> =

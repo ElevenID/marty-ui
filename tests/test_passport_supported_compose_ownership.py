@@ -45,7 +45,10 @@ SECRETS = {
     "db-migrate": ("marty_db_password", "bao_token"),
     "issuance-migrations": ("marty_db_password",),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
-                     "dsc_issue_gateway_key", "csca_issue_gateway_key"),
+                     "signing_keys_service_sign_gateway_key", "signing_keys_issuer_sign_key",
+                     "dsc_issue_gateway_key", "csca_issue_gateway_key",
+                     "signing_keys_workload_server_cert", "signing_keys_workload_server_key",
+                     "workload_identity_ca_cert"),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
     "event-stream": (),
@@ -59,16 +62,18 @@ SECRETS = {
                             "issuance_api_key"),
     "deployment-profile": ("marty_db_password", "grpc_service_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+                        "signing_keys_issuer_sign_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
-                        "integration_secret_master_key",
-                        "passport_beta_reconciliation_operator_token"),
-    "flow": ("marty_db_password", "signing_keys_internal_api_key", "issuance_api_key",
+                        "passport_beta_reconciliation_operator_token",
+                        "workload_identity_ca_cert"),
+    "flow": ("marty_db_password", "signing_keys_internal_api_key", "signing_keys_issuer_sign_key", "issuance_api_key",
              "grpc_service_token", "flow_application_event_hmac_key"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
-    "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
-                "grpc_service_token", "dsc_issue_gateway_key", "csca_issue_gateway_key"),
+    "gateway": ("bao_token", "signing_keys_internal_api_key", "signing_keys_service_sign_gateway_key", "signing_keys_issuer_sign_key", "issuance_api_key",
+                "grpc_service_token", "device_registration_gateway_key",
+                "dsc_issue_gateway_key", "csca_issue_gateway_key"),
 }
 DATA = {
     "postgres": ("postgres_data", "/var/lib/postgresql/data"),
@@ -182,15 +187,24 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                 "/run/secrets/csca_issue_gateway_key",
         }
         gateway_env = {**ceremony_env, "GRPC_INSECURE_ALLOWED": "true",
+                       "DEVICE_REGISTRATION_GATEWAY_KEY_FILE":
+                           "/run/secrets/device_registration_gateway_key",
                        "PUBLIC_DOMAIN": "localhost:29876",
                        "ISSUER_BASE_URL": "https://localhost:29876"}
         native_env = {"ISSUER_BASE_URL": "https://localhost:29876",
                       "ENVIRONMENT": "beta",
+                      "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+                      "INTEGRATION_SECRET_KMS_CA_FILE":
+                          "/run/secrets/workload_identity_ca_cert",
                       "PASSPORT_BETA_RECONCILIATION_ENABLED": "true",
                       "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN_FILE":
                           "/run/secrets/passport_beta_reconciliation_operator_token"}
         signing_env = {**ceremony_env,
-                       "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true"}
+                       "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
+                           "/run/secrets/signing_keys_workload_server_cert",
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
+                           "/run/secrets/signing_keys_workload_server_key"}
         support_common = {
             "ENVIRONMENT": "development",
             "DATABASE_URL_TEMPLATE": (
@@ -408,6 +422,26 @@ def test_live_ceremony_secret_binding_is_exact(
     item[0]["Config"]["Env"].append(f"{key}={value}")
     calls[inspect_key] = json.dumps(item)
     with pytest.raises(OwnershipError, match="certificate ceremony runtime"):
+        run(record, calls)
+
+
+@pytest.mark.parametrize("service,key,reason", [
+    ("signing-keys", "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+     "remote-secret TLS listener"),
+    ("issuance-native", "INTEGRATION_SECRET_KMS_URL",
+     "remote-secret KMS binding"),
+])
+def test_live_remote_secret_custody_binding_is_exact(
+    service: str, key: str, reason: str,
+) -> None:
+    record, calls = fixture()
+    identifier = record["containers"][service]
+    inspect_key = ("container", "inspect", identifier)
+    item = json.loads(calls[inspect_key])
+    item[0]["Config"]["Env"] = [entry for entry in item[0]["Config"]["Env"]
+                               if not entry.startswith(key + "=")]
+    calls[inspect_key] = json.dumps(item)
+    with pytest.raises(OwnershipError, match=reason):
         run(record, calls)
 
 

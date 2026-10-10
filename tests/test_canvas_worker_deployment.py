@@ -218,8 +218,8 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     }
     assert secret_names == {
         "DATABASE_URL": "DATABASE_URL",
-        "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "SIGNING_KEYS_ISSUER_SIGN_KEY",
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
     issuance = next(
@@ -313,7 +313,7 @@ def test_bundle_worker_comparison_preserves_every_field(compose_worker_gate, fie
     elif field == "environment":
         worker[field]["SERVICE_NAME"] = "issuance_native"
     elif field == "secrets":
-        worker[field].remove("integration_secret_master_key")
+        worker[field].remove("issuance_api_key")
     elif field == "depends_on":
         worker[field]["issuance-migrations"]["condition"] = "service_started"
     elif field is not None:

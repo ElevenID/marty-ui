@@ -11,7 +11,85 @@ use marty_signing_keys::kms::{self, ProviderRequest, SignRequest};
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::net::TcpListener;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, OnceCell};
+
+static AZURE_IDENTITY: OnceCell<()> = OnceCell::const_new();
+static GCP_METADATA: OnceCell<()> = OnceCell::const_new();
+
+async fn setup_azure_identity() {
+    AZURE_IDENTITY
+        .get_or_init(|| async {
+            async fn token(request: Request<Body>) -> axum::Json<Value> {
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("x-identity-header")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("fixture-identity-header")
+                );
+                let query = request.uri().query().unwrap_or_default();
+                assert!(query.contains("api-version=2019-08-01"));
+                assert!(query.contains("resource="));
+                axum::Json(serde_json::json!({"access_token": "azure-token"}))
+            }
+            let app = Router::new().route("/identity/token", axum::routing::get(token));
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            std::env::set_var(
+                "IDENTITY_ENDPOINT",
+                format!("http://{}/identity/token", listener.local_addr().unwrap()),
+            );
+            std::env::set_var("IDENTITY_HEADER", "fixture-identity-header");
+            std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                        axum::serve(listener, app).await.unwrap();
+                    });
+            });
+        })
+        .await;
+}
+
+async fn setup_gcp_metadata() {
+    GCP_METADATA
+        .get_or_init(|| async {
+            async fn token(request: Request<Body>) -> axum::Json<Value> {
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("metadata-flavor")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("Google")
+                );
+                axum::Json(serde_json::json!({"access_token": "gcp-token"}))
+            }
+            let app = Router::new().route(
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                axum::routing::get(token),
+            );
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            std::env::set_var(
+                "GCE_METADATA_HOST",
+                listener.local_addr().unwrap().to_string(),
+            );
+            std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                        axum::serve(listener, app).await.unwrap();
+                    });
+            });
+        })
+        .await;
+}
 
 #[derive(Debug, Deserialize)]
 struct Fixture {
@@ -80,13 +158,24 @@ struct ManagedTransitState {
 }
 
 fn fixture() -> Fixture {
-    // Fixed process-local credentials keep the official AWS client offline and
-    // make its signed HTTP request observable by the same provider stub.
-    std::env::set_var("AWS_ACCESS_KEY_ID", "test-access-key");
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "test-secret-key");
+    // Process credentials deliberately differ from the tenant credential.
+    // AWS requests must use the selected auth mode, not the ambient chain.
+    std::env::set_var("AWS_ACCESS_KEY_ID", "wrong-process-key");
+    std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-process-secret");
     std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
     serde_json::from_str(include_str!("fixtures/kms_provider_vectors.json"))
         .expect("valid KMS provider vectors")
+}
+
+fn assert_selected_aws_credential(name: &str, headers: &BTreeMap<String, String>) {
+    if name.starts_with("aws_") {
+        assert!(
+            headers
+                .get("authorization")
+                .is_some_and(|value| value.contains("Credential=test-access-key/")),
+            "{name} must use the tenant-selected access key"
+        );
+    }
 }
 
 async fn capture(State(state): State<StubState>, request: Request<Body>) -> Response {
@@ -208,9 +297,11 @@ async fn managed_transit_stub(
             StatusCode::NOT_FOUND,
             r#"{"errors":["no handler for route"]}"#.to_string(),
         ),
-        ("/v1/sys/mounts/transit", 0) | ("/v1/transit/keys/issuer-key", 1) => {
-            (StatusCode::NO_CONTENT, String::new())
-        }
+        ("/v1/transit/keys/issuer-key", 1) => (
+            StatusCode::NOT_FOUND,
+            r#"{"errors":["no handler for route"]}"#.to_string(),
+        ),
+        ("/v1/sys/mounts/transit", 0) => (StatusCode::NO_CONTENT, String::new()),
         ("/v1/transit/sign/issuer-key", 1) => (
             StatusCode::OK,
             r#"{"data":{"signature":"vault:v1:c2lnbmF0dXJl"}}"#.to_string(),
@@ -248,7 +339,7 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
 
     let service_config = serde_json::json!({
         "id": "managed-openbao-transit",
-        "service_type": "custom-transit-compatible",
+        "service_type": "openbao-transit",
         "endpoint": format!("http://{address}"),
         "mount": "transit",
         "auth_mode": "token",
@@ -275,12 +366,9 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
             .iter()
             .map(|request| request.path_query.as_str())
             .collect::<Vec<_>>(),
-        ["/v1/transit/sign/issuer-key", "/v1/transit/keys/issuer-key"]
+        ["/v1/transit/keys/issuer-key", "/v1/transit/keys/issuer-key"]
     );
-    assert!(requests
-        .iter()
-        .all(|request| request.method != "POST"
-            || request.path_query == "/v1/transit/sign/issuer-key"));
+    assert!(requests.iter().all(|request| request.method == "GET"));
     assert!(requests.iter().all(|request| {
         request.headers.get("x-vault-token").map(String::as_str) == Some("service-token")
     }));
@@ -288,12 +376,20 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
 
 #[tokio::test]
 async fn provider_signing_matches_language_neutral_http_vectors() {
+    setup_azure_identity().await;
+    setup_gcp_metadata().await;
     let fixture = fixture();
     assert_eq!(fixture.schema_version, 1);
 
     for mut case in fixture.sign_cases {
         let (endpoint, captured, shutdown) =
             spawn_stub(StatusCode::OK, case.provider_response).await;
+        if let Some(reference) = case.service_config["key_reference"].as_str() {
+            if reference.starts_with("$STUB/") {
+                case.service_config["key_reference"] =
+                    Value::String(reference.replacen("$STUB", &endpoint, 1));
+            }
+        }
         case.service_config["endpoint"] = Value::String(endpoint);
         let response = kms::sign(SignRequest {
             service_config: case.service_config,
@@ -313,6 +409,7 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
             .await
             .take()
             .unwrap_or_else(|| panic!("{} did not call the provider", case.name));
+        assert_selected_aws_credential(&case.name, &captured.headers);
         assert_eq!(
             captured.method, case.expected_request.method,
             "{} method",
@@ -343,6 +440,8 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
 
 #[tokio::test]
 async fn public_key_discovery_matches_language_neutral_http_vectors() {
+    setup_azure_identity().await;
+    setup_gcp_metadata().await;
     for mut case in fixture().public_key_cases {
         let (endpoint, captured, shutdown) =
             spawn_stub(StatusCode::OK, case.provider_response).await;
@@ -359,6 +458,7 @@ async fn public_key_discovery_matches_language_neutral_http_vectors() {
             .await
             .take()
             .unwrap_or_else(|| panic!("{} did not call the provider", case.name));
+        assert_selected_aws_credential(&case.name, &captured.headers);
         assert_eq!(
             captured.method, case.expected_request.method,
             "{} method",
@@ -388,6 +488,8 @@ async fn public_key_discovery_matches_language_neutral_http_vectors() {
 
 #[tokio::test]
 async fn connectivity_probes_match_language_neutral_http_vectors() {
+    setup_azure_identity().await;
+    setup_gcp_metadata().await;
     for mut case in fixture().verify_cases {
         let status = StatusCode::from_u16(case.provider_status).expect("fixture HTTP status");
         let (endpoint, captured, shutdown) = spawn_stub(status, case.provider_response).await;

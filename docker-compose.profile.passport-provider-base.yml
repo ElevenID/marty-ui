@@ -40,14 +40,13 @@ services:
       SERVICE_NAME: passport_provider_ingress
       PASSPORT_PROVIDER_INGRESS_ENABLED: "true"
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:?select a registered physical provider profile}
-      PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE: /run/secrets/passport_provider_webhook_secret
+      PASSPORT_PROVIDER_HMAC_KEY_VERSION: ${PASSPORT_PROVIDER_HMAC_KEY_VERSION:?set imported provider HMAC key version}
       PASSPORT_PROVIDER_SIGNER_API_KEY_FILE: /run/secrets/passport_callback_signer_api_key
       PASSPORT_PROVIDER_SIGNER_URL: http://passport-callback-signer-supported:8018/internal/documents
       PASSPORT_PROVIDER_NATIVE_CALLBACK_URL: http://issuance-native:8005/v1/passport/webhooks/personalization
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       DATABASE_URL_TEMPLATE: postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
     secrets:
-      - passport_provider_webhook_secret
       - passport_callback_signer_api_key
       - marty_db_password
     depends_on:
@@ -66,8 +65,6 @@ services:
     restart: unless-stopped
 
 secrets:
-  passport_provider_webhook_secret:
-    file: ${PASSPORT_PROVIDER_SECRET_DIR:?set PASSPORT_PROVIDER_SECRET_DIR}/passport_provider_webhook_secret
   passport_callback_signer_api_key:
     file: ${PASSPORT_PROVIDER_SECRET_DIR:?set PASSPORT_PROVIDER_SECRET_DIR}/passport_callback_signer_api_key
   passport_callback_signer_bao_token:

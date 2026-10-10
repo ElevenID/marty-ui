@@ -42,7 +42,6 @@ def test_dispatcher_and_exact_loader_resolve_database_template_but_direct_does_n
     [
         "ISSUANCE_API_KEY_FILE",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
-        "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "SSL_CERT_FILE",
         "TOKEN_HMAC_KEY_FILE",
     ],
@@ -74,17 +73,13 @@ def test_native_secret_file_support_is_bound_to_actual_startup_readers():
     file_reader = source.split("fn optional_secret(", 1)[1].split("\nfn ", 1)[0]
     assert 'format!("{name}_FILE")' in file_reader
     assert "fs::read_to_string(path)?" in file_reader
-    master_reader = source.split("fn integration_master_key(", 1)[1].split("\nfn ", 1)[
-        0
-    ]
-    assert 'env::var("INTEGRATION_SECRET_MASTER_KEY_FILE")' in master_reader
-    assert "fs::read_to_string(path.trim())?" in master_reader
+    assert "fn integration_master_key(" not in source
+    assert "legacy integration-secret master-key configuration is forbidden" in source
     env = {
         f"{name}_FILE": "/synthetic/file"
         for name in (
             "ISSUANCE_API_KEY",
             "SIGNING_KEYS_INTERNAL_API_KEY",
-            "INTEGRATION_SECRET_MASTER_KEY",
         )
     }
     env.update(

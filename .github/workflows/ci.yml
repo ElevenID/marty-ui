@@ -40,6 +40,7 @@ jobs:
       rust: ${{ steps.classify.outputs.rust }}
       rust_runtime: ${{ steps.classify.outputs.rust_runtime }}
       rust_matrix: ${{ steps.classify.outputs.rust_matrix }}
+      openbao: ${{ steps.classify.outputs.openbao }}
       planner_only: ${{ steps.classify.outputs.planner_only }}
       rollback_test_only: ${{ steps.classify.outputs.rollback_test_only }}
       k8s_policy_test_only: ${{ steps.classify.outputs.k8s_policy_test_only }}
@@ -66,6 +67,7 @@ jobs:
           rust=false
           rust_runtime=false
           rust_matrix='["canvas","contracts"]'
+          openbao=false
           planner_only=false
           rollback_test_only=false
           k8s_policy_test_only=false
@@ -363,8 +365,20 @@ jobs:
                   # remain conservatively broad.
                   release=true
                   ;;
+                rust/services/flow/src/request_object.rs|rust/services/flow/src/verification_submission.rs|rust/services/flow/src/http_verification.rs|rust/services/flow/src/http_providers.rs|rust/services/flow/src/providers.rs|rust/services/flow/src/connections.rs|rust/services/flow/src/config.rs|rust/services/flow/tests/haip_*|rust/services/signing-keys/src/flow_envelope.rs|rust/services/signing-keys/src/http.rs|rust/services/signing-keys/src/config.rs|rust/services/signing-keys/src/main.rs|rust/crates/oid4vp-contract/src/haip_key.rs)
+                  # These owners can change the live HAIP custody path even
+                  # when the OpenBao plugin source is untouched.
+                  rust=true
+                  openbao=true
+                  security=true
+                  ;;
                 rust/*|proto/*|contracts/*)
                   rust=true
+                  ;;
+                openbao/*|docker/openbao-*)
+                  openbao=true
+                  rust=true
+                  security=true
                   ;;
                 release/stack-lock.json|.github/workflows/ci.yml|.github/actions/*|docker-compose*.yml|k8s/*)
                   all=true
@@ -458,6 +472,7 @@ jobs:
             ui=true
             python=true
             rust=true
+            openbao=true
             release=true
             verification=true
             security=true
@@ -491,6 +506,7 @@ jobs:
             printf 'rust=%s\n' "$rust"
             printf 'rust_runtime=%s\n' "$rust_runtime"
             printf 'rust_matrix=%s\n' "$rust_matrix"
+            printf 'openbao=%s\n' "$openbao"
             printf 'planner_only=%s\n' "$planner_only"
             printf 'rollback_test_only=%s\n' "$rollback_test_only"
             printf 'k8s_policy_test_only=%s\n' "$k8s_policy_test_only"
@@ -798,35 +814,6 @@ jobs:
         working-directory: services
         run: python -m pytest -v --tb=short -x
 
-  test-passport-fence-postgres:
-    name: Passport Fence PostgreSQL
-    needs: changes
-    if: needs.changes.outputs.rust_runtime == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - name: Prefer cached Docker Hub images without restarting the runner daemon
-        run: bash scripts/ci/configure-dockerhub-mirror.sh
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-      - run: python -m pip install pytest==8.4.2 PyYAML==6.0.3
-      - name: Pull the exact disposable PostgreSQL image with a safe registry fallback
-        shell: bash
-        run: |
-          set -euo pipefail
-          image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh \
-            postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c)
-          echo "BETA_FENCE_POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"
-      - name: Exercise atomic beta passport fence in disposable PostgreSQL
-        env:
-          BETA_FENCE_DISPOSABLE_DOCKER: "1"
-        run: python -m pytest -q tests/test_passport_beta_scoped_fence_postgres.py tests/test_probe_passport_beta_fence_target.py tests/test_check_passport_beta_fence_authority.py
-
   test-rust-feature-probe:
     name: Rust Feature Regression Probe
     needs: changes
@@ -862,14 +849,12 @@ jobs:
           target_budget_bytes=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["metadata"]["elevenid-feature-regression"]["target-budget-bytes"])' "$manifest")
           test "$target_bytes" -le "$target_budget_bytes"
 
-  test-rust-passport-image:
-    name: Rust Passport Test-mode Image
+  test-openbao-didcomm-plugin:
+    name: Test OpenBao DIDComm plugin image
     needs: changes
-    if: needs.changes.outputs.rust_runtime == 'true'
+    if: needs.changes.outputs.openbao == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -897,38 +882,38 @@ jobs:
             core.exportVariable('SCCACHE_GHA_RUNTIME_TOKEN', token);
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
-      - name: Build opt-in passport test-mode image
+      - name: Test and build the pinned OpenBao plugin image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
-          file: services/Dockerfile
+          file: openbao/didcomm-authcrypt/Dockerfile
           load: true
           push: false
-          tags: marty-passport-self-signed:contract
+          tags: marty-openbao-didcomm:ci
           provenance: false
-          build-args: |
-            PASSPORT_SELF_SIGNED_TEST=true
-            MARTY_RELEASE_VERSION=ci
-            MARTY_UI_SHA=${{ github.event.pull_request.head.sha || github.sha }}
-            SERVICE_NAME=issuance_native
-          cache-from: type=gha,scope=marty-ui-public-services
-          secret-envs: |
-            sccache_token=SCCACHE_GHA_RUNTIME_TOKEN
-            sccache_url=SCCACHE_GHA_CACHE_URL
-            sccache_mode=SCCACHE_GHA_RW_MODE
-      - name: Verify opt-in passport test-mode image boundary
-        shell: bash
+      - name: Verify packaged plugin binary
+        run: docker run --rm --entrypoint /bin/sh marty-openbao-didcomm:ci -ec 'test -x /plugins/openbao-didcomm-authcrypt'
+      - name: Qualify packaged plugin storage and self-host Raft behavior
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
         run: |
-          set -euo pipefail
-          if test_output="$(docker run --rm --network none \
-            --env PASSPORT_NATIVE_HTTP_ENABLED=true \
-            --env PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true \
-            --entrypoint /usr/local/bin/marty-issuance-service \
-            marty-passport-self-signed:contract 2>&1)"; then
-            echo "Test-mode image unexpectedly started without tenant keys" >&2
-            exit 1
-          fi
-          grep -Fq 'PASSPORT_TENANT_API_KEYS is required when PASSPORT_NATIVE_HTTP_ENABLED is true' <<<"$test_output"
+          python3 scripts/probe_didcomm_openbao_file_storage.py
+          python3 scripts/probe_selfhost_openbao_raft_bootstrap.py
+          python3 scripts/probe_didcomm_openbao_ha.py
+      - name: Qualify live Raft snapshot export and recovery
+        shell: pwsh
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+        run: ./scripts/test_openbao_raft_recovery.ps1
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+          CARGO_INCREMENTAL: 0
+          CARGO_PROFILE_TEST_DEBUG: 0
+        run: python3 scripts/probe_integration_secret_coordinated_restore.py
 
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})
@@ -1227,8 +1212,10 @@ jobs:
                   --test canvas_oauth_behavior --test issuance-behavior \
                   --no-run --timings --message-format=json
                 # Retain package-specific feature resolution for each binary.
-                 run_cargo_phase issuance_binaries cargo build --locked --offline -p marty-issuance-service \
+                 run_cargo_phase issuance_binaries cargo build --locked --offline \
+                  -p marty-issuance-service -p marty-organization -p marty-credential-template \
                   --bin marty-issuance-service --bin marty-canvas-sync-worker \
+                  --bin marty-organization --bin marty-credential-template \
                   --message-format=json
                  run_cargo_phase gateway_binary cargo build --locked --offline -p marty-gateway --bin marty-gateway \
                   --message-format=json
@@ -1435,7 +1422,7 @@ jobs:
           printf 'MARTY_SELFHOST_TEST_PACKAGER_BINARY=%s\n' "$PWD/rust/target/debug/package-selfhost-bundle" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_IMAGE=%s\n' "$selfhost_image_id" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_REVISION=%s\n' "$selfhost_revision" >> "$GITHUB_ENV"
-      - name: Verify default passport test-mode boundary
+      - name: Verify local passport signing is forbidden
         if: matrix.lane == 'canvas'
         shell: bash
         run: |
@@ -1448,7 +1435,7 @@ jobs:
             echo "Default public image unexpectedly enabled passport test mode" >&2
             exit 1
           fi
-          grep -Fq 'self-signed passport test mode requires the passport-self-signed-test build feature' <<<"$default_output"
+          grep -Fq 'self-signed passport signing is forbidden' <<<"$default_output"
       - name: Prepare database contract executables
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1680,15 +1667,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_packaged_test marty_passport_bureau_test marty_passport_gateway_test; do
+          for database in marty_verification_contract marty_db_contracts_test marty_issuance_executable_smoke_test marty_retention_contract_test marty_passport_contract_test marty_passport_reconciliation_test marty_passport_bureau_test marty_passport_gateway_test; do
             docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres "$database"
           done
-          docker exec --interactive "$MARTY_RUST_CI_POSTGRES_ID" \
-            psql --username postgres --dbname marty_issuance_executable_smoke_test \
-            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
-          docker exec --interactive "$MARTY_RUST_CI_POSTGRES_ID" \
-            psql --username postgres --dbname marty_passport_packaged_test \
-            < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
+          # Use the real upstream Rust schema owners. The former hand-made
+          # fixture used a text Organization ID and hid a UUID/text mismatch
+          # in Issuance's fresh application-template seed.
+          for owner in marty-organization marty-credential-template; do
+            test -x "rust/target/debug/$owner"
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+              "rust/target/debug/$owner" migrate
+          done
+          test -x rust/target/debug/marty-issuance-service
+          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+            rust/target/debug/marty-issuance-service migrate
+          for owner in marty-organization marty-credential-template; do
+            DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+              "rust/target/debug/$owner" verify-owned-schema
+          done
+          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_issuance_executable_smoke_test \
+            rust/target/debug/marty-issuance-service verify-owned-schema
+          python3 scripts/verify_fresh_kms_issuance_schema.py \
+            --container "$MARTY_RUST_CI_POSTGRES_ID" \
+            --database marty_issuance_executable_smoke_test
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1780,17 +1781,9 @@ jobs:
           nonce="$(openssl rand -hex 16)"
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
-          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-                authenticated_gateway_reaches_remaining_rust_signing_handlers \
-              -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
               cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 authenticated_gateway_reaches_rust_managed_key_route_without_custody \
-              -- --ignored --exact
-          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-                authenticated_gateway_rotates_only_a_dedicated_signing_service \
               -- --ignored --exact
       - name: Exercise live Signing Keys public contracts on disposable Redis
         if: matrix.lane == 'contracts'
@@ -1803,23 +1796,22 @@ jobs:
             docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n "$db" SET marty:tests:disposable-guard "$nonce" >/dev/null
           done
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
+          export BAO_ADDR=http://127.0.0.1:8200
           export BAO_TOKEN=test-only
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14
-          for entry in public_config_resolve_live_contract:2 public_key_metadata_live_contract:2; do
-            suite="${entry%%:*}"
-            expected="${entry##*:}"
-            cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
-              | tee "$RUNNER_TEMP/signing-$suite.log"
-            grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
-          done
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5; do
+          for entry in managed_key_create_live_contract:5 document_storage_contract:1; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
               | tee "$RUNNER_TEMP/signing-$suite.log"
             grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
           done
+          cargo test --locked -p marty-signing-keys --lib \
+            document_storage_refuses_private_material_on_read_and_write -- --ignored
+      - name: Qualify scoped provider callback verification against disposable OpenBao
+        if: matrix.lane == 'contracts'
+        run: python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter
       - name: Exercise Gateway CSR and managed passport chain with disposable OpenBao
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1847,7 +1839,51 @@ jobs:
           export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200
           export MARTY_TEST_OPENBAO_TOKEN=test-only
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
+          export BAO_ADDR=http://127.0.0.1:8200
           export BAO_TOKEN=test-only
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
+            http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null
+          cargo test --locked -p marty-signing-keys --test vdsnc_registration_live_contract \
+            -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/signing-vdsnc_registration_live_contract.log"
+          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/signing-vdsnc_registration_live_contract.log"
+          cargo test --locked -p marty-signing-keys --test service_rotation_live_contract \
+            -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
+          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
+          cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+            authenticated_gateway_reaches_remaining_rust_signing_handlers -- --ignored --exact
+          cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+            authenticated_gateway_rotates_only_a_dedicated_signing_service -- --ignored --exact
+          cargo test --locked -p marty-signing-keys --test public_config_resolve_live_contract \
+            -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
+          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
+          cargo test --locked -p marty-signing-keys --test public_key_metadata_live_contract \
+            -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
+          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
+          cargo test --locked -p marty-signing-keys --lib \
+            registry::tests::persisted_registry_credentials_use_real_openbao_ciphertext -- --ignored --exact
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request PUT \
+            --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"list\"] }"}' \
+            http://127.0.0.1:8200/v1/sys/policies/acl/kms-lti-test-signer >/dev/null
+          lti_token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data '{"policies":["kms-lti-test-signer"],"ttl":"20m"}' \
+            http://127.0.0.1:8200/v1/auth/token/create \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
+          [[ -n "$lti_token" && "$lti_token" != test-only ]]
+          MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
+            cargo test --locked -p marty-signing-keys --test public_service_sign_live_kms \
+              managed_openbao_rs256_signature_matches_jose_pkcs1_profile -- --ignored --exact
             cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
               authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
             -- --ignored --exact
@@ -1862,6 +1898,37 @@ jobs:
             -- --list | grep -Fx "$chain_test: test"
           cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
             "$chain_test" -- --ignored --exact
+      - name: Prove remote holder lifecycle with scoped OpenBao and fresh PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres marty_holder_kms_test
+          nonce="$(openssl rand -hex 16)"
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
+            http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request PUT \
+            --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"] }"}' \
+            http://127.0.0.1:8200/v1/sys/policies/acl/kms-holder-test >/dev/null
+          scoped_token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data '{"policies":["kms-holder-test"],"ttl":"20m"}' \
+            http://127.0.0.1:8200/v1/auth/token/create \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
+          [[ -n "$scoped_token" && "$scoped_token" != test-only ]]
+          MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200 \
+            MARTY_TEST_OPENBAO_TOKEN="$scoped_token" \
+            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only \
+            MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce" \
+            DEVICE_REGISTRATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_holder_kms_test \
+            BAO_ADDR=http://127.0.0.1:8200 \
+            BAO_TOKEN="$scoped_token" \
+            cargo test --locked -p marty-device-registration --test holder_remote_live_kms \
+              registration_provision_sign_and_deactivate_delete_remote_key -- --ignored --exact
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite
@@ -1882,11 +1949,45 @@ jobs:
           (set -o noclobber; printf '%s' "$owner" > "$diagnostics/.owner")
           printf 'MARTY_RUNTIME_DIAGNOSTICS=%s\n' "$diagnostics" >> "$GITHUB_ENV"
           printf 'MARTY_RUNTIME_DIAGNOSTICS_OWNER=%s\n' "$owner" >> "$GITHUB_ENV"
+      - name: Build disposable Canvas DIDComm KMS backend
+        if: matrix.lane == 'canvas'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: openbao/didcomm-authcrypt/Dockerfile
+          load: true
+          push: false
+          tags: marty-openbao-didcomm:canvas
+          provenance: false
+      - name: Probe Canvas host and namespace KMS fixtures
+        if: matrix.lane == 'canvas'
+        env:
+          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:canvas
+        run: python3 scripts/probe_canvas_didcomm_sidecar.py
       - name: Run isolated database contract suites concurrently
         working-directory: rust
         shell: bash
+        env:
+          MARTY_CANVAS_OPENBAO_IMAGE: marty-openbao-didcomm:canvas
         run: |
           set -euo pipefail
+          if [[ "${{ matrix.lane }}" == contracts ]]; then
+            nonce="$(openssl rand -hex 16)"
+            docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
+            export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
+            bao_nonce="$(openssl rand -hex 16)"
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
+              --data "{\"data\":{\"nonce\":\"$bao_nonce\"}}" \
+              http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \
+              | jq -e '.data.exportable == false' >/dev/null
+            export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200
+            export MARTY_TEST_OPENBAO_TOKEN=test-only
+            export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"
+            export BAO_TOKEN=test-only
+          fi
           if [[ "${{ matrix.lane }}" == worker ]]; then
             python3 ../scripts/ci/run-db-contract-groups.py worker-preflights
             python3 ../scripts/ci/run-db-contract-groups.py worker-canvas
@@ -1897,13 +1998,6 @@ jobs:
           else
             python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
           fi
-      - name: Test packaged passport self-signed mode
-        if: matrix.lane == 'contracts'
-        working-directory: rust
-        env:
-          MARTY_PASSPORT_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_contract_test
-          MARTY_PASSPORT_PACKAGED_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_packaged_test
-        run: cargo test --locked -p marty-issuance-service --features passport-self-signed-test --test passport_postgres_contract
       - name: Test beta passport reconciliation and native batch on PostgreSQL
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -2034,12 +2128,15 @@ jobs:
       - name: Check formatting
         working-directory: rust
         run: cargo fmt --all -- --check
-      - name: Keep MMF security on its focused UI feature set
+      - name: Keep MMF security and Marty Core on reviewed feature sets
         working-directory: rust
         shell: bash
         run: |
           set -euo pipefail
-          cargo metadata --locked --format-version 1 | python3 ../scripts/ci/check_mmf_security_features.py
+          metadata="$RUNNER_TEMP/rust-cargo-metadata.json"
+          cargo metadata --locked --format-version 1 > "$metadata"
+          python3 ../scripts/ci/check_mmf_security_features.py < "$metadata"
+          python3 ../scripts/ci/check_marty_core_kms_boundary.py < "$metadata"
       - name: Lint Rust services
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -2069,13 +2166,16 @@ jobs:
           MARTY_MIGRATIONS_IMAGE: example.invalid/migrations@sha256:7777777777777777777777777777777777777777777777777777777777777777
           MARTY_UI_IMAGE: example.invalid/ui@sha256:8888888888888888888888888888888888888888888888888888888888888888
           GRPC_SERVICE_TOKEN: ci-only-token-with-at-least-32-characters
+          DEVICE_REGISTRATION_GATEWAY_KEY: ci-only-dedicated-device-gateway-key-32-chars
+          DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ci-only-dedicated-device-signing-service-key-32-chars
           ISSUANCE_API_KEY: ci-only-issuance-api-key-with-32-characters
           SIGNING_KEYS_INTERNAL_API_KEY: ci-only-signing-key-api-key-32-characters
+          SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ci-only-dedicated-service-sign-key-32-characters
+          SIGNING_KEYS_ISSUER_SIGN_KEY: ci-only-dedicated-issuer-sign-key-32-characters
           VERIFICATION_GOVERNANCE_JSON: '{"ci_compose_render_only":true}'
           FLOW_WEBHOOK_SECRET: ci-only-flow-webhook-secret-32-characters
           FLOW_APPLICATION_EVENT_HMAC_KEY: ci-only-flow-application-event-key-32-chars
           TOKEN_HMAC_KEY: ci-only-token-hmac-key-with-at-least-32-characters
-          INTEGRATION_SECRET_MASTER_KEY: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=
           MARTY_DB_PASSWORD: ci-only-database-password
           CORS_ORIGINS: https://beta.example.test
           REDIS_PASSWORD: ci-only-redis-password
@@ -3001,7 +3101,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-passport-fence-postgres, test-rust-feature-probe, test-rust-passport-image, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -3013,6 +3113,7 @@ jobs:
       RUST_SELECTED: ${{ needs.changes.outputs.rust }}
       RUST_RUNTIME_SELECTED: ${{ needs.changes.outputs.rust_runtime }}
       RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}
+      OPENBAO_SELECTED: ${{ needs.changes.outputs.openbao }}
       RELEASE_SELECTED: ${{ needs.changes.outputs.release }}
       ROLLBACK_TEST_ONLY: ${{ needs.changes.outputs.rollback_test_only }}
       VERIFICATION_SELECTED: ${{ needs.changes.outputs.verification }}
@@ -3024,10 +3125,9 @@ jobs:
       CRAWLER_NGINX_RESULT: ${{ needs.test-ui-crawler-nginx.result }}
       UI_RESULT: ${{ needs.test-ui.result }}
       SERVICES_RESULT: ${{ needs.test-services.result }}
-      PASSPORT_FENCE_RESULT: ${{ needs.test-passport-fence-postgres.result }}
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
-      RUST_PASSPORT_RESULT: ${{ needs.test-rust-passport-image.result }}
       RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
+      OPENBAO_RESULT: ${{ needs.test-openbao-didcomm-plugin.result }}
       RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
       RUST_IMAGES_RESULT: ${{ needs.test-rust-service-images.result }}
       PUBLIC_PROTOCOL_RESULT: ${{ needs.public-protocol-contract.result }}
@@ -3043,7 +3143,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 18 ]]
+          [[ "${#results[@]}" -eq 17 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3059,7 +3159,7 @@ jobs:
               *) echo "Missing or invalid selection for $name" >&2; return 1 ;;
             esac
           }
-          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY"; do
+          for selected in "$UI_SELECTED" "$PYTHON_SELECTED" "$RUST_SELECTED" "$RUST_RUNTIME_SELECTED" "$OPENBAO_SELECTED" "$RELEASE_SELECTED" "$VERIFICATION_SELECTED" "$SECURITY_SELECTED" "$ROLLBACK_TEST_ONLY"; do
             [[ "$selected" == true || "$selected" == false ]]
           done
           if [[ "$ROLLBACK_TEST_ONLY" == true ]]; then
@@ -3093,10 +3193,9 @@ jobs:
             require_selected test-ui "$UI_RESULT" "$UI_SELECTED"
             require_selected test-credential-lifecycle-browser "$LIFECYCLE_BROWSER_RESULT" "$UI_SELECTED"
             require_selected test-services "$SERVICES_RESULT" "$PYTHON_SELECTED"
-            require_selected test-passport-fence-postgres "$PASSPORT_FENCE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
-            require_selected test-rust-passport-image "$RUST_PASSPORT_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
+            require_selected test-openbao-didcomm-plugin "$OPENBAO_RESULT" "$OPENBAO_SELECTED"
             require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
             require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"

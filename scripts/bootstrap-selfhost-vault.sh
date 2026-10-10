@@ -21,6 +21,8 @@ BAO_TOKEN="${BAO_TOKEN:-}"
 BAO_TOKEN_FILE="${BAO_TOKEN_FILE:-}"
 SELFHOST_SECRET_DIR="${SELFHOST_SECRET_DIR:-${REPO_ROOT}/docker/secrets/selfhost.example}"
 SERVICE_TOKEN_OUTPUT_FILE="${SERVICE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/openbao_service_token}"
+SIGNING_KEYS_TOKEN_OUTPUT_FILE="${SIGNING_KEYS_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/signing_keys_openbao_token}"
+DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/didcomm_issuance_openbao_token}"
 NOTIFICATION_TOKEN_OUTPUT_FILE="${NOTIFICATION_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/notification_openbao_token}"
 PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/passport_callback_signer_bao_token}"
 
@@ -49,23 +51,32 @@ fi
 
 SERVICE_TOKEN_OUTPUT_DIR=$(dirname "${SERVICE_TOKEN_OUTPUT_FILE}")
 SERVICE_TOKEN_OUTPUT_BASENAME=$(basename "${SERVICE_TOKEN_OUTPUT_FILE}")
+SIGNING_KEYS_TOKEN_OUTPUT_DIR=$(dirname "${SIGNING_KEYS_TOKEN_OUTPUT_FILE}")
+SIGNING_KEYS_TOKEN_OUTPUT_BASENAME=$(basename "${SIGNING_KEYS_TOKEN_OUTPUT_FILE}")
+DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR=$(dirname "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE}")
+DIDCOMM_ISSUANCE_TOKEN_OUTPUT_BASENAME=$(basename "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE}")
 NOTIFICATION_TOKEN_OUTPUT_DIR=$(dirname "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
 NOTIFICATION_TOKEN_OUTPUT_BASENAME=$(basename "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
 PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR=$(dirname "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME=$(basename "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 
-mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
+mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
 
 echo "Configuring external Vault/OpenBao at ${BAO_ADDR}..."
 
 docker run --rm \
     -e BAO_ADDR="${BAO_ADDR}" \
     -e BAO_TOKEN="${BAO_TOKEN}" \
+    -e DIDCOMM_KMS_POLICY_ONLY=true \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
+    -e SIGNING_KEYS_TOKEN_OUTPUT_FILE="/work-signing/${SIGNING_KEYS_TOKEN_OUTPUT_BASENAME}" \
+    -e DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="/work-didcomm/${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
     -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
+    -v "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}:/work-signing" \
+    -v "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}:/work-didcomm" \
     -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
     -v "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}:/work-callback" \
     quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf \
@@ -93,6 +104,30 @@ fi
 printf "%s" "$service_token" > "$SERVICE_TOKEN_OUTPUT_FILE"
 chmod 0600 "$SERVICE_TOKEN_OUTPUT_FILE"
 
+signing_token_json="$(bao token create -address="$BAO_ADDR" -policy=credential-service -policy=signing-keys-managed -no-default-policy -orphan -format=json)"
+signing_token="$(json_field "$signing_token_json" client_token)"
+if [ -z "$signing_token" ]; then
+    echo "Failed to mint signing-keys OpenBao token." >&2
+    exit 1
+fi
+if [ -e "$SIGNING_KEYS_TOKEN_OUTPUT_FILE" ]; then
+    chmod u+w "$SIGNING_KEYS_TOKEN_OUTPUT_FILE" 2>/dev/null || true
+fi
+printf "%s" "$signing_token" > "$SIGNING_KEYS_TOKEN_OUTPUT_FILE"
+chmod 0600 "$SIGNING_KEYS_TOKEN_OUTPUT_FILE"
+
+didcomm_token_json="$(bao token create -address="$BAO_ADDR" -policy=didcomm-issuance -no-default-policy -orphan -format=json)"
+didcomm_token="$(json_field "$didcomm_token_json" client_token)"
+if [ -z "$didcomm_token" ]; then
+    echo "Failed to mint DIDComm Issuance OpenBao token." >&2
+    exit 1
+fi
+if [ -e "$DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE" ]; then
+    chmod u+w "$DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE" 2>/dev/null || true
+fi
+printf "%s" "$didcomm_token" > "$DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE"
+chmod 0600 "$DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE"
+
 notification_token_json="$(bao token create -address="$BAO_ADDR" -policy=notification-webhook-service -orphan -format=json)"
 notification_token="$(json_field "$notification_token_json" client_token)"
 
@@ -107,7 +142,7 @@ fi
 printf "%s" "$notification_token" > "$NOTIFICATION_TOKEN_OUTPUT_FILE"
 chmod 0600 "$NOTIFICATION_TOKEN_OUTPUT_FILE"
 
-callback_token_json="$(bao token create -address="$BAO_ADDR" -policy=passport-callback-hmac-service -orphan -format=json)"
+callback_token_json="$(bao token create -address="$BAO_ADDR" -policy=passport-provider-callback-service -orphan -format=json)"
 callback_token="$(json_field "$callback_token_json" client_token)"
 if [ -z "$callback_token" ]; then
     echo "Failed to mint passport callback HMAC token." >&2
@@ -122,6 +157,8 @@ chmod 0600 "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE"
 
 echo "Wrote scoped credential-service token to ${SERVICE_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the openbao_service_token secret in the self-host stack."
+echo "Wrote scoped signing-keys token to ${SIGNING_KEYS_TOKEN_OUTPUT_FILE}"
+echo "Wrote scoped DIDComm Issuance token to ${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the notification_openbao_token secret in the self-host stack."
 echo "Wrote scoped passport callback HMAC token to ${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}"

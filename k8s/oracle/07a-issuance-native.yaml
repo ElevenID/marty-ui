@@ -226,6 +226,17 @@ spec:
               value: revocation-profile:9013
             - name: SIGNING_KEYS_INTERNAL_URL
               value: http://gateway:8000/internal/signing-keys
+            - name: INTEGRATION_SECRET_KMS_URL
+              value: https://signing-keys:8018/internal
+            - name: INTEGRATION_SECRET_KMS_CA_FILE
+              value: /run/secrets/integration-secret-ca/ca.crt
+            - name: DIDCOMM_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: BAO_ADDR
+            - name: DIDCOMM_KMS_TOKEN_FILE
+              value: /run/secrets/didcomm-kms/token
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
@@ -246,16 +257,16 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: TOKEN_HMAC_KEY
-            - name: INTEGRATION_SECRET_MASTER_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: marty-secrets
-                  key: INTEGRATION_SECRET_MASTER_KEY
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
             - name: PERSONALIZATION_BUREAU_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -278,6 +289,13 @@ spec:
                   name: marty-secrets
                   key: CANVAS_CREDENTIALS_API_TOKEN
                   optional: true
+          volumeMounts:
+            - name: didcomm-kms-token
+              mountPath: /run/secrets/didcomm-kms
+              readOnly: true
+            - name: integration-secret-ca
+              mountPath: /run/secrets/integration-secret-ca
+              readOnly: true
           ports:
             - name: http
               containerPort: 8005
@@ -302,6 +320,16 @@ spec:
               port: 8005
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: didcomm-kms-token
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: DIDCOMM_ISSUANCE_OPENBAO_TOKEN
+                path: token
+        - name: integration-secret-ca
+          secret:
+            secretName: signing-keys-integration-secret-ca
 ---
 apiVersion: v1
 kind: Service

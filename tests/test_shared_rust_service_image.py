@@ -51,17 +51,7 @@ def test_shared_service_image_builds_all_rust_binaries_once() -> None:
         dockerfile.count("run-public-rust-build build-rust-service-binaries default")
         == 1
     )
-    assert dockerfile.index("ARG PASSPORT_SELF_SIGNED_TEST=false") < dockerfile.index(
-        "run-public-rust-build build-rust-service-binaries default"
-    )
-    assert (
-        "false) run-public-rust-build build-rust-service-binaries default ;;"
-        in dockerfile
-    )
-    assert (
-        "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
-        in dockerfile
-    )
+    assert "PASSPORT_SELF_SIGNED_TEST" not in dockerfile
     assert dockerfile.count("COPY --from=rust-service-builder") == len(
         ALL_RUST_BINARIES
     )
@@ -90,7 +80,7 @@ def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
         "cargo chef cook --locked --release --workspace"
     ) < dependencies.index("FROM rust-service-dependencies AS rust-service-builder")
     assert builder.index("COPY rust /build/rust") < builder.index(
-        "ARG PASSPORT_SELF_SIGNED_TEST=false"
+        "run-public-rust-build build-rust-service-binaries default"
     )
     assert (
         builder.count("run-public-rust-build build-rust-service-binaries default") == 1
@@ -155,14 +145,12 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         (ROOT / ".github/workflows/warm-ci-caches.yml").read_text(encoding="utf-8")
     )
     ci_steps = ci["jobs"]["test-rust-services"]["steps"]
-    passport_steps = ci["jobs"]["test-rust-passport-image"]["steps"]
     public = [
         step
-        for step in ci_steps + passport_steps
-        if step.get("name")
-        in ("Build public selfhost image", "Build opt-in passport test-mode image")
+        for step in ci_steps
+        if step.get("name") == "Build public selfhost image"
     ]
-    assert len(public) == 2
+    assert len(public) == 1
     for step in public:
         config = step["with"]
         assert config["file"] == "services/Dockerfile"
@@ -179,12 +167,6 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         if step.get("name") == "Expose public image compiler cache credentials"
     )
     assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in ci_credential["with"]["script"]
-    passport_credential = next(
-        step
-        for step in passport_steps
-        if step.get("name") == "Expose public image compiler cache credentials"
-    )
-    assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in passport_credential["with"]["script"]
     release = cd["jobs"]["build-services"]
     release_steps = release["steps"]
     release_credential = next(

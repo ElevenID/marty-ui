@@ -6,8 +6,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    FlowInstanceRecord, FlowKeyEnvelope, FlowKeyEnvelopeRequest, FlowProviderError,
-    FlowProviderRegistry, SigningIdentity, SigningRequest,
+    FlowInstanceRecord, FlowProviderError, FlowProviderRegistry, SigningIdentity, SigningRequest,
 };
 
 pub(crate) const REQUEST_FORMAT: &str = "oauth-authz-req+jwt";
@@ -454,14 +453,14 @@ pub async fn build_profiled_request_object(
             context.insert("verification_audience".into(), json!(client_id));
         }
         context.insert("oid4vp_verifier_context".into(), json!(true));
-        if let Some((public_jwk, envelope)) = response_encryption {
+        if let Some((public_jwk, key_reference)) = response_encryption {
             context.insert(
                 "haip_response_encryption_public_jwk".into(),
                 public_jwk.clone(),
             );
             context.insert(
-                "haip_response_encryption_key_envelope".into(),
-                json!(envelope.envelope),
+                "haip_response_encryption_key_reference".into(),
+                json!(key_reference),
             );
             context.insert("oid4vp_response_encryption_jwk".into(), public_jwk);
             if dc_api {
@@ -503,31 +502,56 @@ pub async fn build_profiled_request_object(
 async fn response_encryption_key(
     providers: &FlowProviderRegistry,
     instance: &FlowInstanceRecord,
-) -> Result<(Value, FlowKeyEnvelope), FlowRequestObjectError> {
+) -> Result<(Value, String), FlowRequestObjectError> {
     let context = instance
         .context
         .as_object()
         .ok_or(FlowRequestObjectError::InvalidInstance(
             "context must be an object",
         ))?;
-    if let (Some(public), Some(envelope)) = (
-        context
-            .get("haip_response_encryption_public_jwk")
-            .filter(|value| value.is_object()),
-        context
-            .get("haip_response_encryption_key_envelope")
-            .and_then(Value::as_str)
-            .filter(|value| value.starts_with("vault:")),
-    ) {
-        return Ok((
-            public.clone(),
-            FlowKeyEnvelope {
-                organization_id: instance.organization_id.clone(),
-                flow_instance_id: instance.id.clone(),
-                purpose: "oid4vp_response_decryption".into(),
-                envelope: envelope.into(),
-            },
-        ));
+    let public = context.get("haip_response_encryption_public_jwk");
+    if context.contains_key("haip_response_encryption_key_envelope") {
+        return Err(FlowRequestObjectError::Serialization);
+    }
+    if let Some(reference) = context
+        .get("haip_response_encryption_key_reference")
+        .and_then(Value::as_str)
+    {
+        let version = marty_oid4vp_contract::haip_key::version_for(
+            reference,
+            &instance.organization_id,
+            &instance.id,
+        )
+        .ok_or(FlowRequestObjectError::Serialization)?;
+        let public = public.ok_or(FlowRequestObjectError::Serialization)?;
+        if !marty_oid4vp_contract::haip_key::matches_public_jwk(public, version) {
+            return Err(FlowRequestObjectError::Serialization);
+        }
+        let provider =
+            providers
+                .flow_key_envelope
+                .as_ref()
+                .ok_or(FlowProviderError::Unavailable {
+                    provider: "flow_key_envelope",
+                })?;
+        let remote = provider
+            .resolve_haip_key(&instance.organization_id, &instance.id, version)
+            .await?;
+        if remote.organization_id != instance.organization_id
+            || remote.flow_instance_id != instance.id
+            || remote.key_reference != reference
+            || remote.public_jwk != *public
+        {
+            return Err(FlowProviderError::InvalidResponse {
+                provider: "flow_key_envelope",
+                message: "stored response encryption key differs from remote custody".into(),
+            }
+            .into());
+        }
+        return Ok((public.clone(), reference.into()));
+    }
+    if public.is_some() {
+        return Err(FlowRequestObjectError::Serialization);
     }
     let provider = providers
         .flow_key_envelope
@@ -535,43 +559,27 @@ async fn response_encryption_key(
         .ok_or(FlowProviderError::Unavailable {
             provider: "flow_key_envelope",
         })?;
-    let (public_json, private_json) =
-        marty_verification::jwk::generate_haip_response_encryption_jwk_pair().map_err(|error| {
-            FlowRequestObjectError::Provider(FlowProviderError::Rejected {
-                provider: "flow_key_envelope",
-                message: error.to_string(),
-            })
-        })?;
-    let public: Value =
-        serde_json::from_str(&public_json).map_err(|_| FlowRequestObjectError::Serialization)?;
-    let private: Value =
-        serde_json::from_str(&private_json).map_err(|_| FlowRequestObjectError::Serialization)?;
-    if !public.is_object()
-        || public.get("d").is_some()
-        || private.get("d").and_then(Value::as_str).is_none()
-    {
-        return Err(FlowRequestObjectError::Serialization);
-    }
-    let envelope = provider
-        .wrap(&FlowKeyEnvelopeRequest {
-            organization_id: instance.organization_id.clone(),
-            flow_instance_id: instance.id.clone(),
-            purpose: "oid4vp_response_decryption".into(),
-            key_json: private_json,
-        })
+    let remote = provider
+        .create_haip_key(&instance.organization_id, &instance.id)
         .await?;
-    if envelope.organization_id != instance.organization_id
-        || envelope.flow_instance_id != instance.id
-        || envelope.purpose != "oid4vp_response_decryption"
-        || !envelope.envelope.starts_with("vault:")
+    let version = marty_oid4vp_contract::haip_key::version_for(
+        &remote.key_reference,
+        &instance.organization_id,
+        &instance.id,
+    );
+    if remote.organization_id != instance.organization_id
+        || remote.flow_instance_id != instance.id
+        || !version.is_some_and(|version| {
+            marty_oid4vp_contract::haip_key::matches_public_jwk(&remote.public_jwk, version)
+        })
     {
         return Err(FlowProviderError::InvalidResponse {
             provider: "flow_key_envelope",
-            message: "response encryption envelope binding mismatch".into(),
+            message: "remote response encryption key binding mismatch".into(),
         }
         .into());
     }
-    Ok((public, envelope))
+    Ok((remote.public_jwk, remote.key_reference))
 }
 
 fn verifier_did(

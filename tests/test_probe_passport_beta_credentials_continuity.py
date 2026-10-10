@@ -310,10 +310,3 @@ def test_pretransition_receipt_check_rejects_changed_plan(monkeypatch):
         proof.verify_pretransition_receipt(
             changed, json.dumps(receipt).encode(),
             render_verifier=lambda _plan: {"verified": True})
-
-
-def test_signed_dependency_probe_precedes_one_way_owner_transition():
-    operator = (ROOT / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(
-        encoding="utf-8")
-    assert operator.index("probe-dependencies") < operator.index(
-        "$owner = Invoke-RustOwnerTransition")

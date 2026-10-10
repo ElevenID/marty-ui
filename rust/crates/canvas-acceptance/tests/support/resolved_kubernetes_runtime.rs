@@ -1,7 +1,7 @@
 //! Test-only Kubernetes reference resolution over actual envsubst/composer output.
 //! No Kubernetes client, secret discovery, DNS or production input is used here.
 use super::{
-    issuance_named_peers::{API_KEY, SIGNING_KEY, TOKEN},
+    issuance_named_peers::{API_KEY, ISSUER_SIGN_KEY, SIGNING_KEY, TOKEN},
     resolved_runtime::{Isolation, ResolvedRuntime},
 };
 use marty_release_evidence::kubernetes_native as native;
@@ -313,6 +313,10 @@ struct Spec {
     legacy_origin: String,
     ca_file: PathBuf,
     policy_directory: PathBuf,
+    kms_url: String,
+    kms_token_file: PathBuf,
+    integration_secret_kms_url: String,
+    integration_secret_kms_ca_file: PathBuf,
     authcrypt: bool,
     allow_private_ips: bool,
 }
@@ -437,11 +441,11 @@ fn checked_spec(value: &Value) -> Result<Spec> {
                 ("ISSUANCE_API_KEY".into(), API_KEY.into()),
                 ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
                 ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
-                ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
                 (
-                    "INTEGRATION_SECRET_MASTER_KEY".into(),
-                    "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=".into(),
+                    "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                    ISSUER_SIGN_KEY.into(),
                 ),
+                ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
                 ("PUBLIC_API_URL".into(), "https://issuer.example".into()),
                 ("UI_BASE_URL".into(), "http://localhost:3000".into()),
                 ("ISSUANCE_OFFER_TTL_MINUTES".into(), "10080".into()),
@@ -464,11 +468,20 @@ fn checked_spec(value: &Value) -> Result<Spec> {
     owned_url(&spec.redis_url, &["redis"])?;
     owned_url(&spec.peer_origin, &["http"])?;
     owned_url(&spec.legacy_origin, &["http"])?;
+    owned_url(&spec.kms_url, &["http"])?;
+    owned_url(&spec.integration_secret_kms_url, &["https"])?;
+    let secret_url = url::Url::parse(&spec.integration_secret_kms_url).map_err(|_| ERROR)?;
     require(
         spec.peer_origin != spec.legacy_origin
+            && secret_url.path() == "/internal"
+            && secret_url.username().is_empty()
+            && secret_url.password().is_none()
             && spec.ca_file.is_file()
+            && spec.integration_secret_kms_ca_file.is_file()
             && spec.policy_directory.is_dir()
-            && spec.ca_file.parent() == Some(spec.policy_directory.as_path()),
+            && spec.ca_file.parent() == Some(spec.policy_directory.as_path())
+            && spec.kms_token_file.is_file()
+            && spec.kms_token_file.parent() == Some(spec.policy_directory.as_path()),
     )?;
     Ok(spec)
 }
@@ -545,27 +558,43 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
         ),
         ("ISSUANCE_API_KEY".into(), API_KEY.into()),
         ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
-        ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
-        ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (
-            "INTEGRATION_SECRET_MASTER_KEY".into(),
-            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=".into(),
+            "DEVICE_REGISTRATION_GATEWAY_KEY".into(),
+            "synthetic-distinct-kubernetes-device-gateway-key-32-chars".into(),
         ),
+        (
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "synthetic-distinct-kubernetes-device-signing-key-32-chars".into(),
+        ),
+        ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
+        (
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "synthetic-kubernetes-service-sign-gateway-key-32-chars".into(),
+        ),
+        (
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            ISSUER_SIGN_KEY.into(),
+        ),
+        ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (
             "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
             "synthetic-kubernetes-canvas-shared-secret".into(),
         ),
         (
-            "OPENBAO_SERVICE_TOKEN".into(),
+            "SIGNING_KEYS_OPENBAO_TOKEN".into(),
             "synthetic-not-an-openbao-capability".into(),
+        ),
+        (
+            "DIDCOMM_ISSUANCE_OPENBAO_TOKEN".into(),
+            "synthetic-token-mounted-as-file-only".into(),
         ),
     ]);
     for name in [
         "ISSUANCE_API_KEY",
         "GRPC_SERVICE_TOKEN",
         "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
         "TOKEN_HMAC_KEY",
-        "INTEGRATION_SECRET_MASTER_KEY",
     ] {
         require(spec.inputs.get(name) == secret_values.get(name))?;
     }
@@ -573,6 +602,15 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
     let native = environment(owner(rows, "issuance-native")?, &maps, &secrets)?;
     let gateway = environment(owner(rows, "gateway")?, &maps, &secrets)?;
     let signing = environment(owner(rows, "signing-keys")?, &maps, &secrets)?;
+    let device_registration = environment(owner(rows, "device-registration")?, &maps, &secrets)?;
+    require(
+        signing["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+            == device_registration["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+            && signing["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+                != gateway["DEVICE_REGISTRATION_GATEWAY_KEY"]
+            && !gateway.contains_key("DEVICE_REGISTRATION_SIGNING_KEYS_KEY")
+            && device_registration["SIGNING_KEYS_HOLDER_ORIGIN"] == "http://signing-keys:8017",
+    )?;
     require(
         signing["SIGNING_KEYS_INTERNAL_API_KEY"] == native["SIGNING_KEYS_INTERNAL_API_KEY"]
             && signing["SIGNING_KEYS_INTERNAL_API_KEY"] == gateway["SIGNING_KEYS_INTERNAL_API_KEY"],
@@ -661,10 +699,28 @@ fn overlay(
     native.insert("DATABASE_URL".into(), spec.database_url.clone());
     native.insert("ISSUANCE_SERVICE_PORT".into(), spec.http_port.to_string());
     native.insert("ISSUANCE_GRPC_PORT".into(), spec.grpc_port.to_string());
+    require(native["DIDCOMM_KMS_ADDR"] == "https://vault.example.com")?;
+    require(native["DIDCOMM_KMS_TOKEN_FILE"] == "/run/secrets/didcomm-kms/token")?;
+    native.insert("DIDCOMM_KMS_ADDR".into(), spec.kms_url.clone());
+    native.insert(
+        "DIDCOMM_KMS_TOKEN_FILE".into(),
+        spec.kms_token_file.to_str().ok_or(ERROR)?.into(),
+    );
     require(native["DIDCOMM_TLS_CA_FILE"] == "/run/marty-didcomm-ca/ca.pem")?;
     native.insert(
         "DIDCOMM_TLS_CA_FILE".into(),
         spec.ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    native.insert(
+        "INTEGRATION_SECRET_KMS_URL".into(),
+        spec.integration_secret_kms_url.clone(),
+    );
+    native.insert(
+        "INTEGRATION_SECRET_KMS_CA_FILE".into(),
+        spec.integration_secret_kms_ca_file
+            .to_str()
+            .ok_or(ERROR)?
+            .into(),
     );
     if spec.authcrypt {
         require(
@@ -853,8 +909,10 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
     let directory = tempfile::tempdir().expect("owned synthetic policy directory");
     let ca = directory.path().join("ca.pem");
     let policy = directory.path().join("didcomm-encryption-policy.json");
+    let token = directory.path().join("openbao-token");
     fs::write(&ca, b"synthetic CA fixture").unwrap();
     fs::write(&policy, b"{}").unwrap();
+    fs::write(&token, b"synthetic token fixture").unwrap();
     let ca_path = ca.to_str().unwrap();
     let policy_path = policy.to_str().unwrap();
     let mut input = json!({
@@ -862,8 +920,8 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
             "ISSUANCE_API_KEY": API_KEY,
             "GRPC_SERVICE_TOKEN": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING_KEY,
+            "SIGNING_KEYS_ISSUER_SIGN_KEY": ISSUER_SIGN_KEY,
             "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
-            "INTEGRATION_SECRET_MASTER_KEY": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
             "PUBLIC_API_URL": "https://issuer.example",
             "UI_BASE_URL": "http://localhost:3000",
             "ISSUANCE_OFFER_TTL_MINUTES": "10080",
@@ -880,6 +938,10 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         "legacy_origin": "http://127.0.0.1:18002",
         "ca_file": ca_path,
         "policy_directory": directory.path(),
+        "kms_url": "http://127.0.0.1:18200",
+        "kms_token_file": token,
+        "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
+        "integration_secret_kms_ca_file": ca,
         "authcrypt": false,
         "allow_private_ips": false
     });
@@ -915,6 +977,24 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         );
         assert_eq!(
             native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
+            Some(ca_path)
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
+            Some("http://127.0.0.1:18200")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
+            Some("https://127.0.0.1:18201/internal")
+        );
+        assert_eq!(
+            native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str),
             Some(ca_path)
         );
         assert_eq!(

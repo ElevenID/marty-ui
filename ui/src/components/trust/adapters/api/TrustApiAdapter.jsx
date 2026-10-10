@@ -11,6 +11,8 @@ import {
   createDefaultTrustProfile,
   createDefaultHealthStatus,
 } from '../../ports/types';
+import { storeIssuerIdentityCertificate } from '../../../../services/signingKeysApi';
+import { managedIssuerCertificateRequest } from '../../ports/managedIssuerCertificate';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 
@@ -87,23 +89,15 @@ class TrustApiAdapter {
   }
 
   /**
-   * Upload BYOK (Bring Your Own Key) certificates.
+   * Attach public certificates to an existing managed issuer identity.
+   * The signing service resolves the identity's remote key and verifies the
+   * certificate public key against it before storing the chain.
    * @param {string} orgId - Organization ID
    * @param {import('../ports/types').BYOKCertificateUpload} certificates - Certificate data
    * @returns {Promise<Object>}
    */
   async uploadBYOKCertificates(orgId, certificates) {
-    const payload = {
-      root_ca_certificate: certificates.rootCaCertificate,
-      intermediate_certificates: certificates.intermediateCertificates || null,
-      issuer_certificate: certificates.issuerCertificate,
-      private_key_pem: certificates.privateKeyPem,
-    };
-
-    return this._request(`/v1/organizations/${orgId}/trust-config/byok`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+    return storeIssuerIdentityCertificate(managedIssuerCertificateRequest(orgId, certificates));
   }
 
   /**
@@ -196,7 +190,7 @@ class TrustApiAdapter {
       // Try to get config and derive health from it
       const config = await this.getTrustConfig(orgId);
       return this._deriveHealthFromConfig(config);
-    } catch (error) {
+    } catch {
       // Return default unchecked health
       return createDefaultHealthStatus();
     }

@@ -93,6 +93,10 @@ pub fn trust_profile_router(state: TrustProfileHttpState) -> Router {
             get(internal_profile),
         )
         .route(
+            "/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",
+            get(wallet_issuer_keys),
+        )
+        .route(
             "/internal/v1/resource-owners/trust-profiles/{profile_id}",
             get(profile_owner),
         )
@@ -1156,6 +1160,180 @@ async fn internal_profile(
         .insert("issuer_relationships".into(), Value::Array(decisions));
     append_imported_sources(&profile, &mut response)?;
     Ok(Json(strip_nulls(response)))
+}
+
+async fn wallet_issuer_keys(
+    State(state): State<TrustProfileHttpState>,
+    headers: HeaderMap,
+    Path(profile_id): Path<String>,
+) -> Result<Response, TrustProfileHttpError> {
+    let Json(decision) = internal_profile(State(state), headers, Path(profile_id)).await?;
+    let mut response = Json(project_wallet_issuer_keys(&decision, Utc::now())?).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+fn project_wallet_issuer_keys(
+    decision: &Value,
+    now: DateTime<Utc>,
+) -> Result<Value, TrustProfileHttpError> {
+    if decision.get("status").and_then(Value::as_str) != Some("active")
+        || decision.get("compliance_status").and_then(Value::as_str) != Some("COMPLIANT")
+        || !decision
+            .get("trust_purposes")
+            .and_then(Value::as_array)
+            .is_some_and(|purposes| {
+                purposes
+                    .iter()
+                    .any(|purpose| purpose.as_str() == Some("CREDENTIAL_ISSUER"))
+            })
+        || !decision
+            .get("supported_formats")
+            .and_then(Value::as_array)
+            .is_some_and(|formats| {
+                formats
+                    .iter()
+                    .any(|format| format.as_str() == Some("SD_JWT_VC"))
+            })
+        || decision
+            .get("trusted_assertion_formats")
+            .and_then(Value::as_array)
+            .is_some_and(|formats| !formats.iter().any(|format| format.as_str() == Some("JWT")))
+    {
+        return Err(forbidden(
+            "Trust Profile is not active for wallet SD-JWT issuer trust",
+        ));
+    }
+    let organization_id = decision
+        .get("organization_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| unavailable("Trust Profile organization is invalid"))?;
+    let profile_id = decision
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| Uuid::parse_str(id).is_ok())
+        .ok_or_else(|| unavailable("Trust Profile identifier is invalid"))?;
+    let issuers = decision
+        .get("issuer_relationships")
+        .and_then(Value::as_array)
+        .ok_or_else(|| unavailable("Trust Profile issuer decisions are invalid"))?;
+    let allowed = decision.get("allowed_issuers").and_then(Value::as_array);
+    let denied = decision.get("denied_issuers").and_then(Value::as_array);
+    let allowed_algorithms = decision
+        .get("allowed_algorithms")
+        .and_then(Value::as_array)
+        .ok_or_else(|| unavailable("Trust Profile algorithms are invalid"))?;
+    let mut keys = Vec::new();
+    let mut identities = std::collections::BTreeSet::new();
+    for issuer in issuers {
+        let issuer_id = issuer
+            .get("issuer_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| unavailable("Trust Profile issuer identity is invalid"))?;
+        if issuer.get("relationship_status").and_then(Value::as_str) != Some("TRUSTED")
+            || !matches!(
+                issuer.get("compliance_status").and_then(Value::as_str),
+                Some("ACCREDITED" | "COMPLIANT")
+            )
+            || issuer
+                .get("revoked_at")
+                .is_some_and(|value| !value.is_null())
+            || issuer
+                .get("trust_level")
+                .and_then(Value::as_u64)
+                .is_none_or(|level| level == 0)
+            || denied
+                .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(issuer_id)))
+            || allowed
+                .is_some_and(|values| !values.iter().any(|value| value.as_str() == Some(issuer_id)))
+        {
+            continue;
+        }
+        let valid_from = issuer
+            .get("valid_from")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .ok_or_else(|| unavailable("Trust Profile issuer validity is invalid"))?;
+        let valid_until = issuer
+            .get("valid_until")
+            .and_then(Value::as_str)
+            .map(DateTime::parse_from_rfc3339)
+            .transpose()
+            .map_err(|_| unavailable("Trust Profile issuer validity is invalid"))?;
+        if valid_from > now || valid_until.is_some_and(|until| until <= now) {
+            continue;
+        }
+        let verification_keys = issuer
+            .get("verification_keys")
+            .and_then(Value::as_array)
+            .ok_or_else(|| unavailable("Trust Profile issuer verification keys are invalid"))?;
+        for jwk in verification_keys {
+            let object = jwk
+                .as_object()
+                .ok_or_else(|| unavailable("Trust Profile issuer verification key is invalid"))?;
+            let algorithm = match (
+                object.get("kty").and_then(Value::as_str),
+                object.get("crv").and_then(Value::as_str),
+            ) {
+                (Some("EC"), Some("P-256")) => "ES256",
+                (Some("EC"), Some("P-384")) => "ES384",
+                (Some("OKP"), Some("Ed25519")) => "EdDSA",
+                (Some("RSA"), _) => "RS256",
+                _ => {
+                    return Err(unavailable(
+                        "Trust Profile issuer key algorithm is unsupported",
+                    ))
+                }
+            };
+            if object
+                .get("alg")
+                .is_some_and(|value| value.as_str() != Some(algorithm))
+            {
+                return Err(unavailable(
+                    "Trust Profile issuer key algorithm is inconsistent",
+                ));
+            }
+            if !allowed_algorithms
+                .iter()
+                .any(|allowed| allowed.as_str() == Some(algorithm))
+            {
+                continue;
+            }
+            let key_id = object.get("kid").and_then(Value::as_str);
+            if object.contains_key("kid") && key_id.is_none_or(str::is_empty) {
+                return Err(unavailable("Trust Profile issuer key ID is invalid"));
+            }
+            if !identities.insert((issuer_id, key_id, algorithm)) {
+                return Err(unavailable(
+                    "Trust Profile issuer key identity is ambiguous",
+                ));
+            }
+            keys.push(json!({
+                "issuer": issuer_id,
+                "key_id": key_id,
+                "algorithm": algorithm,
+                "public_jwk": jwk,
+            }));
+            if keys.len() > 256 {
+                return Err(unavailable("Trust Profile has too many wallet issuer keys"));
+            }
+        }
+    }
+    if keys.is_empty() {
+        return Err(forbidden("Trust Profile has no current wallet issuer keys"));
+    }
+    Ok(json!({
+        "organization_id": organization_id,
+        "trust_profile_id": profile_id,
+        "generated_at": now,
+        "expires_at": now + chrono::Duration::minutes(1),
+        "issuer_keys": keys,
+    }))
 }
 
 async fn profile_owner(

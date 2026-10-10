@@ -98,8 +98,8 @@ pub const SECRET_SETTINGS: &[&str] = &[
     "DATABASE_URL",
     "ISSUANCE_API_KEY",
     "TOKEN_HMAC_KEY",
-    "INTEGRATION_SECRET_MASTER_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
     "GRPC_SERVICE_TOKEN",
     "CANVAS_CREDENTIALS_SHARED_SECRET",
 ];
@@ -110,7 +110,6 @@ pub const SHARED_BINDINGS: &[&str] = &[
     "ORG_GRPC_TARGET",
     "CT_GRPC_TARGET",
     "RP_GRPC_TARGET",
-    "SIGNING_KEYS_INTERNAL_URL",
 ];
 const MOUNTS: [(&str, &str, &str, &str, &str); 2] = [
     (
@@ -141,9 +140,9 @@ pub fn selected(values: &Environment) -> Result<bool> {
     match values
         .get("K8S_ISSUANCE_NATIVE_ENABLED")
         .map(String::as_str)
-        .unwrap_or("false")
+        .unwrap_or("true")
     {
-        "false" => Ok(false),
+        "false" => Err(REFUSAL),
         "true" => Ok(true),
         _ => Err(REFUSAL),
     }
@@ -403,7 +402,7 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
         require(
             flow.get("ISSUANCE_GRPC_TARGET")
-                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance:9005"})),
+                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"})),
         )?;
     }
     let gateway = environment(container(
@@ -474,7 +473,7 @@ fn native_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"issuance-native"})),
     )?;
     let owner = container(deployment, "issuance-native")?;
-    closed_runtime_pod(deployment, owner)?;
+    closed_runtime_pod(deployment, owner, true)?;
     require(owner["envFrom"] == json!([{"configMapRef":{"name":"issuance-native-config"}}]))?;
     let env = environment(owner)?;
     let mut expected = BTreeMap::new();
@@ -487,6 +486,14 @@ fn native_template(resources: &[Value]) -> Result<()> {
     expected.insert(
         "ISSUER_BASE_URL",
         config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
+    );
+    expected.insert(
+        "DIDCOMM_KMS_ADDR",
+        config_ref("DIDCOMM_KMS_ADDR", "BAO_ADDR"),
+    );
+    expected.insert(
+        "DIDCOMM_KMS_TOKEN_FILE",
+        json!({"name":"DIDCOMM_KMS_TOKEN_FILE","value":"/run/secrets/didcomm-kms/token"}),
     );
     expected.insert("CANVAS_CREDENTIALS_API_TOKEN",json!({"name":"CANVAS_CREDENTIALS_API_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"CANVAS_CREDENTIALS_API_TOKEN","optional":true}}}));
     expected.insert("PERSONALIZATION_BUREAU_API_KEY",json!({"name":"PERSONALIZATION_BUREAU_API_KEY","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"PERSONALIZATION_BUREAU_API_KEY","optional":true}}}));
@@ -501,6 +508,14 @@ fn native_template(resources: &[Value]) -> Result<()> {
         (
             "SIGNING_KEYS_INTERNAL_URL",
             "http://gateway:8000/internal/signing-keys",
+        ),
+        (
+            "INTEGRATION_SECRET_KMS_URL",
+            "https://signing-keys:8018/internal",
+        ),
+        (
+            "INTEGRATION_SECRET_KMS_CA_FILE",
+            "/run/secrets/integration-secret-ca/ca.crt",
         ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
@@ -520,24 +535,23 @@ fn native_template(resources: &[Value]) -> Result<()> {
     Ok(())
 }
 
-fn closed_runtime_pod(deployment: &Value, owner: &Value) -> Result<()> {
+fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) -> Result<()> {
     require(deployment["apiVersion"] == "apps/v1")?;
-    require_keys(
-        owner,
-        &[
-            "name",
-            "image",
-            "imagePullPolicy",
-            "command",
-            "args",
-            "envFrom",
-            "env",
-            "ports",
-            "resources",
-            "livenessProbe",
-            "readinessProbe",
-        ],
-    )?;
+    let mut owner_keys = vec![
+        "name",
+        "image",
+        "imagePullPolicy",
+        "command",
+        "args",
+        "envFrom",
+        "env",
+        "ports",
+        "resources",
+        "livenessProbe",
+        "readinessProbe",
+    ];
+    owner_keys.push("volumeMounts");
+    require_keys(owner, &owner_keys)?;
     require(
         owner["command"] == json!(["/app/services/entrypoint.sh"])
             && owner["args"] == json!([])
@@ -555,24 +569,38 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value) -> Result<()> {
         pod["serviceAccountName"] == "marty-app"
             && pod["imagePullSecrets"] == json!([{"name":"ocir-secret"}]),
     )?;
-    require_keys(
-        pod,
-        &[
-            "serviceAccountName",
-            "automountServiceAccountToken",
-            "imagePullSecrets",
-            "containers",
-        ],
-    )?;
+    let mut pod_keys = vec![
+        "serviceAccountName",
+        "automountServiceAccountToken",
+        "imagePullSecrets",
+        "containers",
+    ];
+    pod_keys.push("volumes");
+    require_keys(pod, &pod_keys)?;
     require(
         pod["automountServiceAccountToken"] == false
             && pod["containers"].as_array().is_some_and(|v| v.len() == 1),
     )?;
-    require(
-        pod.get("volumes").is_none()
-            && owner.get("volumeMounts").is_none()
-            && pod.get("hostNetwork").is_none(),
-    )?;
+    require(pod.get("hostNetwork").is_none())?;
+    if didcomm_token {
+        require(
+            owner["volumeMounts"]
+                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true}]),
+        )?;
+        require(
+            pod["volumes"]
+                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}}]),
+        )?;
+    } else {
+        require(
+            owner["volumeMounts"]
+                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true}]),
+        )?;
+        require(
+            pod["volumes"]
+                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}}]),
+        )?;
+    }
     Ok(())
 }
 
@@ -587,31 +615,60 @@ fn signing_template(resources: &[Value]) -> Result<()> {
                 == Some(&json!({"app":"signing-keys"})),
     )?;
     let owner = container(deployment, "signing-keys")?;
-    closed_runtime_pod(deployment, owner)?;
+    closed_runtime_pod(deployment, owner, false)?;
     require(owner["envFrom"] == json!([]))?;
     let mut expected = BTreeMap::new();
     for (name, value) in [
         ("SERVICE_NAME", "signing-keys"),
         ("SIGNING_KEYS_SERVICE_PORT", "8017"),
         ("SIGNING_KEYS_REDIS_URL", "redis://redis:6379/2"),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+            "/run/secrets/integration-secret-tls/tls.crt",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
+            "/run/secrets/integration-secret-tls/tls.key",
+        ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));
     }
-    for name in ["SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"] {
+    expected.insert(
+        "SIGNING_KEYS_INTERNAL_API_KEY",
+        secret_ref("SIGNING_KEYS_INTERNAL_API_KEY"),
+    );
+    for name in [
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    ] {
         expected.insert(name, secret_ref(name));
     }
+    // Dedicated Device Registration -> Signing Keys service authorization for
+    // holder-key cleanup; this is not private signing material.
+    expected.insert(
+        "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+        secret_ref("DEVICE_REGISTRATION_SIGNING_KEYS_KEY"),
+    );
+    expected.insert("OPENBAO_SERVICE_TOKEN", json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}}));
     for name in ["BAO_ADDR", "PUBLIC_DOMAIN"] {
         expected.insert(name, config_ref(name, name));
     }
+    expected.insert(
+        "ISSUER_BASE_URL",
+        config_ref("ISSUER_BASE_URL", "PUBLIC_API_URL"),
+    );
     let env = environment(owner)?;
     require(env.len() == expected.len() && expected.iter().all(|(k, v)| env.get(k) == Some(&v)))?;
-    require(owner["ports"] == json!([{"name":"http","containerPort":8017}]))?;
+    require(
+        owner["ports"]
+            == json!([{"name":"http","containerPort":8017},{"name":"secret-tls","containerPort":8018}]),
+    )?;
     for probe in ["livenessProbe", "readinessProbe"] {
         require(owner[probe]["httpGet"] == json!({"path":"/health","port":8017}))?;
     }
     require(
         service["spec"]
-            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017}]}),
+            == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017},{"name":"secret-tls","port":8018,"targetPort":8018}]}),
     )?;
     Ok(())
 }
@@ -632,6 +689,16 @@ fn pair_settings(legacy: &mut Value, native: &mut Value, values: &Environment) -
     for &name in SECRET_SETTINGS {
         require(explicit.contains_key(name))?;
     }
+    require(
+        explicit.get("SIGNING_KEYS_INTERNAL_URL")
+            == Some(
+                &json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://signing-keys:8017/internal"}),
+            )
+            && environment(native)?.get("SIGNING_KEYS_INTERNAL_URL")
+                == Some(
+                    &&json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://gateway:8000/internal/signing-keys"}),
+                ),
+    )?;
     for &name in INHERITED_SETTINGS
         .iter()
         .chain(SECRET_SETTINGS)

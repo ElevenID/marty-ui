@@ -336,13 +336,23 @@ impl IssuerContextResolver for SigningHarness {
             .unwrap()
             .remote_formats
             .push(credential_format.to_owned());
+        let public_jwk = if transaction.issuer_algorithm.as_deref() == Some("EdDSA") {
+            // The Ed25519 base point is public key material; this fixture never
+            // holds a private key or signs locally.
+            json!({"kty": "OKP", "crv": "Ed25519", "x": "WGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY"})
+        } else {
+            let proofs: Value =
+                serde_json::from_str(include_str!("fixtures/dpop_public_proofs.json"))
+                    .expect("public DPoP fixture");
+            proofs["es256"]["jwk"].clone()
+        };
         Ok(IssuerContext {
             issuer_profile_id: "issuer-profile-contract".to_owned(),
             issuer_did: "did:web:issuer.example".to_owned(),
             signing_service_id: "managed-custody-contract".to_owned(),
             algorithm: transaction.issuer_algorithm.clone().unwrap(),
             verification_method_id: Some("did:web:issuer.example#contract-key".to_owned()),
-            public_jwk: Some(json!({"kty": "OKP", "crv": "Ed25519", "x": "issuer-x"})),
+            public_jwk: Some(public_jwk),
             certificate_chain: vec![],
             raw_context: json!({}),
         })

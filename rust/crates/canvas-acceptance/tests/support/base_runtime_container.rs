@@ -16,6 +16,7 @@ use std::{
     fs::File,
     io::Read,
     path::{Path, PathBuf},
+    process::Command,
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -28,6 +29,7 @@ const KUBERNETES_CHILD: &str = "kubernetes_profile_gateway_composition_child";
 const COMPOSE_SHA256: &str = "837fd1d35bf6a494f41b5b5988269a7be79de337cf1a1a6ff0e45ab51bb4e9be";
 const COMPAT_TEST_EXECUTABLE: &str = "MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE";
 const ASSETS: &[&str] = &[
+    "docker/openbao-didcomm-dev.hcl",
     "docker-compose.base.yml",
     "docker-compose.profile.issuance-native.yml",
     "docker-compose.profile.issuance-native-authcrypt.yml",
@@ -259,6 +261,7 @@ struct OwnedContainer {
     creation_attempted: bool,
     child: &'static str,
     prepared: Option<(String, String)>,
+    kms: Option<(String, String)>,
 }
 
 impl OwnedContainer {
@@ -334,6 +337,27 @@ impl OwnedContainer {
             require(
                 values == [expected],
                 "Base runtime child configuration differs",
+            )?;
+        }
+        for (name, expected) in [
+            (
+                "MARTY_CANVAS_OPENBAO_URL",
+                self.kms.as_ref().map(|v| v.0.as_str()),
+            ),
+            (
+                "MARTY_CANVAS_OPENBAO_ROOT_TOKEN",
+                self.kms.as_ref().map(|v| v.1.as_str()),
+            ),
+        ] {
+            let prefix = format!("{name}=");
+            let found: Vec<_> = env
+                .iter()
+                .filter_map(Value::as_str)
+                .filter_map(|value| value.strip_prefix(&prefix))
+                .collect();
+            require(
+                found == expected.into_iter().collect::<Vec<_>>(),
+                "Canvas KMS child identity differs",
             )?;
         }
         for (name, expected) in [
@@ -443,6 +467,110 @@ pub(super) async fn run_kubernetes(
 
 pub(super) use super::owned_cleanup::retain_failure;
 
+struct KmsSidecar {
+    name: String,
+    postgres: String,
+    image: String,
+    url: String,
+    root_token: String,
+}
+
+impl KmsSidecar {
+    fn start(root: &Path, postgres: &str) -> Result<Self, String> {
+        exact_id(postgres)?;
+        let python = std::env::var_os("MARTY_DIDCOMM_TEST_PYTHON")
+            .ok_or("Canvas KMS requires selected Python")?;
+        let image = std::env::var("MARTY_CANVAS_OPENBAO_IMAGE")
+            .map_err(|_| "Canvas KMS plugin image is missing")?;
+        require(!image.is_empty(), "Canvas KMS plugin image is empty")?;
+        let mut command = Command::new(python);
+        command.env_clear();
+        for name in ["PATH", "SystemRoot", "WINDIR"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
+        command
+            .env("MARTY_CANVAS_OPENBAO_IMAGE", &image)
+            .arg(root.join("scripts/ci/start-canvas-didcomm-openbao.py"))
+            .arg("--namespace-postgres-id")
+            .arg(postgres);
+        let output = super::bounded_fixture_command::run(
+            &mut command,
+            None,
+            Duration::from_secs(120),
+            4_096,
+        )
+        .map_err(|_| "Disposable Canvas KMS startup failed")?;
+        require(
+            output.status.success(),
+            "Disposable Canvas KMS startup failed",
+        )?;
+        let value: Value = serde_json::from_slice(&output.stdout)
+            .map_err(|_| "Disposable Canvas KMS response is invalid")?;
+        let name = value["container"]
+            .as_str()
+            .ok_or("Disposable Canvas KMS name is missing")?;
+        require(
+            name.starts_with("canvas-kms-")
+                && name.len() == "canvas-kms-".len() + 12
+                && name["canvas-kms-".len()..]
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit()),
+            "Disposable Canvas KMS name is invalid",
+        )?;
+        let url = value["url"]
+            .as_str()
+            .ok_or("Disposable Canvas KMS URL is missing")?;
+        require(
+            url == "http://127.0.0.1:8200",
+            "Canvas KMS namespace URL differs",
+        )?;
+        let root_token = value["root_token"]
+            .as_str()
+            .ok_or("Disposable Canvas KMS token is missing")?;
+        require(
+            root_token.len() == 32 && root_token.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "Disposable Canvas KMS token is invalid",
+        )?;
+        Ok(Self {
+            name: name.into(),
+            postgres: postgres.into(),
+            image,
+            url: url.into(),
+            root_token: root_token.into(),
+        })
+    }
+
+    fn close(self) -> Result<(), String> {
+        let found = docker(&[
+            "ps",
+            "--all",
+            "--quiet",
+            "--no-trunc",
+            "--filter",
+            &format!("name=^/{}$", self.name),
+        ])?;
+        if found.is_empty() {
+            return Ok(());
+        }
+        require(
+            found.lines().count() == 1,
+            "Canvas KMS identity is ambiguous",
+        )?;
+        let info = inspect(&found)?;
+        require(
+            info["Name"] == format!("/{}", self.name)
+                && info["Config"]["Labels"]["marty.disposable"] == "canvas-renewal-kms"
+                && info["Config"]["Image"] == self.image
+                && info["HostConfig"]["NetworkMode"] == format!("container:{}", self.postgres),
+            "Refusing cleanup of non-owned Canvas KMS",
+        )?;
+        docker(&["rm", "--force", &found])?;
+        Ok(())
+    }
+}
+
 async fn run_child(
     owned: &PublishedDatabase,
     redis: &OwnedRedis,
@@ -498,6 +626,9 @@ async fn run_child(
     if let Some(prepared) = &prepared {
         paths.push(regular_file(&prepared.path)?);
     }
+    paths.push(regular_file(
+        &root.join("scripts/ci/start-canvas-didcomm-openbao.py"),
+    )?);
     paths.extend([test_executable.clone(), issuance, gateway, renderer.clone()]);
     let mut hashes = BTreeMap::new();
     for path in paths {
@@ -544,6 +675,7 @@ async fn run_child(
         prepared: prepared
             .as_ref()
             .map(|v| (v.path.to_str().unwrap().to_owned(), v.hash.clone())),
+        kms: None,
     };
     // All Linux executable, renderer, asset and image preconditions above are
     // checked before creating the optional sidecar. The separate image-only
@@ -556,8 +688,20 @@ async fn run_child(
             Err(error) => return retain_failure(Err(error), envoy[0].close_verified()),
         }
     }
+    let kms = match KmsSidecar::start(&root, postgres) {
+        Ok(kms) => kms,
+        Err(error) => {
+            let mut result = Err(error);
+            for envoy in &mut envoy {
+                result = retain_failure(result, envoy.close_verified());
+            }
+            return result;
+        }
+    };
+    container.kms = Some((kms.url.clone(), kms.root_token.clone()));
     let result = execute(&mut container).await;
     let cleanup = container.cleanup();
+    let kms_cleanup = kms.close();
     // Never short-circuit cleanup of the second owner after the first fails.
     let mut envoy_cleanup = Ok(());
     for envoy in &mut envoy {
@@ -574,7 +718,10 @@ async fn run_child(
         redis.verify_published_namespace(owned)
     })();
     let result = retain_failure(
-        retain_failure(retain_failure(result, cleanup), envoy_cleanup),
+        retain_failure(
+            retain_failure(retain_failure(result, cleanup), kms_cleanup),
+            envoy_cleanup,
+        ),
         verification,
     );
     let cleanup = prepared
@@ -606,6 +753,12 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
     let label = format!("{LABEL}={}", container.scope);
     let renderer_env = format!("MARTY_BASE_COMPOSE_BINARY={}", container.renderer);
     let issuance_env = format!("MARTY_ISSUANCE_TEST_BINARY={}", container.issuance_binary);
+    let kms = container
+        .kms
+        .as_ref()
+        .ok_or("Canvas KMS sidecar is missing")?;
+    let kms_url_env = format!("MARTY_CANVAS_OPENBAO_URL={}", kms.0);
+    let kms_token_env = format!("MARTY_CANVAS_OPENBAO_ROOT_TOKEN={}", kms.1);
     let mounts: Vec<_> = container
         .mounts
         .iter()
@@ -635,6 +788,10 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         &issuance_env,
         "--env",
         &renderer_env,
+        "--env",
+        &kms_url_env,
+        "--env",
+        &kms_token_env,
         "--env",
         "PYTHONDONTWRITEBYTECODE=1",
     ];
@@ -771,6 +928,7 @@ mod tests {
             id: None,
             creation_attempted: false,
             prepared: None,
+            kms: None,
         };
         let info = json!({
             "Id":id,"Config":{"Labels":{LABEL:container.scope},"Image":container.image,
@@ -814,6 +972,25 @@ mod tests {
             *changed.pointer_mut(pointer).unwrap() = value;
             assert!(container.checked(&changed, &id).is_err(), "{pointer}");
         }
+        container.kms = Some(("http://127.0.0.1:8200".into(), "a".repeat(32)));
+        let mut kms_info = info.clone();
+        kms_info["Config"]["Env"].as_array_mut().unwrap().extend([
+            json!("MARTY_CANVAS_OPENBAO_URL=http://127.0.0.1:8200"),
+            json!(format!(
+                "MARTY_CANVAS_OPENBAO_ROOT_TOKEN={}",
+                "a".repeat(32)
+            )),
+        ]);
+        container.checked(&kms_info, &id).unwrap();
+        for (index, value) in [
+            (6, json!("MARTY_CANVAS_OPENBAO_URL=http://foreign:8200")),
+            (7, json!("MARTY_CANVAS_OPENBAO_ROOT_TOKEN=wrong")),
+        ] {
+            let mut changed = kms_info.clone();
+            changed["Config"]["Env"][index] = value;
+            assert!(container.checked(&changed, &id).is_err());
+        }
+        container.kms = None;
         container.child = KUBERNETES_CHILD;
         container.prepared = Some(("/synthetic/prepared.json".into(), "a".repeat(64)));
         container.mounts.insert("/synthetic/prepared.json".into());
@@ -881,8 +1058,8 @@ mod tests {
         ] {
             assert!(completed(&status, SENTINEL).is_err());
         }
-        assert_eq!(ASSETS.len(), 19);
-        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 19);
+        assert_eq!(ASSETS.len(), 20);
+        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 20);
         assert_eq!(kubernetes_source_assets().unwrap().len(), 7);
     }
 }

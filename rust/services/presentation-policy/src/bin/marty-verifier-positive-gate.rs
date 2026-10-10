@@ -1,15 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{io::Read, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::Utc;
-use marty_oid4vci::{
-    formats::sd_jwt::sign_sd_jwt,
-    types::{
-        CredentialClaims, CredentialPayloadFormat, IssuerKey, SignedCredential, SigningAlgorithm,
-    },
-    Oid4vciResult, ResolvedSdJwtIssuerKey, SdJwtIssuerKeyResolver, WalletEngine,
-};
 use marty_presentation_policy::{
     evaluate_verified_facts_for_policy, CredentialRequirement, CredentialStatusEvidence,
     CredentialStatusResolver, DisplayMetadata, EvaluatePresentationRequest, FreshnessPolicy,
@@ -17,30 +10,80 @@ use marty_presentation_policy::{
     PresentationTrustResolver, PresentationVerificationOrchestrator, RequestPurpose,
     RequestedClaim, ResolvedTrustProfile, RustCredentialKernel, VerifiedFactsOrchestrator,
 };
-use p256::ecdsa::SigningKey;
-use p256::elliptic_curve::rand_core::OsRng;
+use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use uuid::Uuid;
 
 const ISSUER: &str = "did:example:verifier-runtime-gate-issuer";
+const ISSUER_KID: &str = "did:example:verifier-runtime-gate-issuer#key-1";
 const EMAIL: &str = "runtime-gate@example.invalid";
 const NONCE: &str = "runtime-gate-nonce-with-at-least-32-bytes";
 const AUDIENCE: &str = "https://verifier.runtime-gate.invalid";
 
-#[derive(Clone)]
-struct StaticIssuerResolver {
-    key: ResolvedSdJwtIssuerKey,
+// The shipping probe verifies public input produced by the KMS and test wallet.
+const MAX_INPUT_BYTES: usize = 128 * 1024;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GateInput {
+    presentation: String,
+    issuer_public_jwk: Value,
 }
 
-impl SdJwtIssuerKeyResolver for StaticIssuerResolver {
-    fn resolve(
-        &self,
-        _issuer: &str,
-        _key_id: Option<&str>,
-        _algorithm: SigningAlgorithm,
-    ) -> Oid4vciResult<ResolvedSdJwtIssuerKey> {
-        Ok(self.key.clone())
+impl GateInput {
+    fn validate(&self) -> Result<(), String> {
+        require(
+            !self.presentation.is_empty() && self.presentation.len() <= MAX_INPUT_BYTES,
+            "runtime gate presentation size rejected",
+        )?;
+        let jwk = self
+            .issuer_public_jwk
+            .as_object()
+            .ok_or("runtime gate requires a public JWK")?;
+        require(
+            jwk.len() == 6
+                && ["kty", "crv", "x", "y", "kid", "alg"]
+                    .iter()
+                    .all(|name| jwk.contains_key(*name)),
+            "runtime gate requires only public JWK fields",
+        )?;
+        require(
+            jwk["kty"] == "EC"
+                && jwk["crv"] == "P-256"
+                && jwk["kid"] == ISSUER_KID
+                && jwk["alg"] == "ES256",
+            "runtime gate issuer key identity rejected",
+        )?;
+        for coordinate in ["x", "y"] {
+            let value = jwk[coordinate]
+                .as_str()
+                .ok_or("runtime gate public coordinate rejected")?;
+            let decoded = URL_SAFE_NO_PAD
+                .decode(value)
+                .map_err(|_| "runtime gate public coordinate rejected")?;
+            require(
+                decoded.len() == 32,
+                "runtime gate public coordinate rejected",
+            )?;
+        }
+        Ok(())
     }
+}
+
+fn read_input(reader: impl Read) -> Result<GateInput, String> {
+    let mut encoded = Vec::new();
+    reader
+        .take((MAX_INPUT_BYTES + 1) as u64)
+        .read_to_end(&mut encoded)
+        .map_err(|_| "runtime gate input unavailable")?;
+    require(
+        encoded.len() <= MAX_INPUT_BYTES,
+        "runtime gate input too large",
+    )?;
+    let input: GateInput =
+        serde_json::from_slice(&encoded).map_err(|_| "runtime gate input rejected")?;
+    input.validate()?;
+    Ok(input)
 }
 
 #[derive(Clone)]
@@ -120,79 +163,6 @@ impl CredentialStatusResolver for GateStatus {
             warnings: Vec::new(),
         })
     }
-}
-
-fn p256_jwk(key: &SigningKey, include_private: bool) -> Value {
-    let point = key.verifying_key().to_encoded_point(false);
-    let mut value = json!({
-        "kty": "EC",
-        "crv": "P-256",
-        "x": URL_SAFE_NO_PAD.encode(point.x().expect("P-256 x coordinate")),
-        "y": URL_SAFE_NO_PAD.encode(point.y().expect("P-256 y coordinate")),
-    });
-    if include_private {
-        value["d"] = json!(URL_SAFE_NO_PAD.encode(key.to_bytes()));
-    }
-    value
-}
-
-fn signed_presentation() -> Result<(String, Value), String> {
-    let issuer_key = SigningKey::random(&mut OsRng);
-    let holder_key = SigningKey::random(&mut OsRng);
-    let issuer_private = p256_jwk(&issuer_key, true);
-    let mut issuer_public = p256_jwk(&issuer_key, false);
-    issuer_public["kid"] = json!(ISSUER);
-    issuer_public["alg"] = json!("ES256");
-    let holder_private = p256_jwk(&holder_key, true);
-    let holder_public = p256_jwk(&holder_key, false);
-    let claims = CredentialClaims {
-        subject_id: Some("did:example:runtime-gate-holder".into()),
-        credential_type: "RuntimeGateCredential".into(),
-        claims: HashMap::from([
-            ("email".into(), json!(EMAIL)),
-            ("cnf".into(), json!({"jwk": holder_public})),
-        ]),
-        expiration_seconds: Some(600),
-        selective_disclosure_claims: vec!["email".into()],
-        mdoc_namespace: None,
-        mdoc_doctype: None,
-        zk_predicate_claims: Vec::new(),
-        credential_payload_format: CredentialPayloadFormat::IetfSdJwt,
-        w3c_context: Vec::new(),
-        w3c_types: Vec::new(),
-    };
-    let signed = sign_sd_jwt(
-        &IssuerKey {
-            issuer_id: ISSUER.into(),
-            jwk_json: issuer_private.to_string(),
-            algorithm: SigningAlgorithm::ES256,
-        },
-        &claims,
-    )
-    .map_err(|_| "SD-JWT issuance failed")?;
-    let credential = match signed {
-        SignedCredential::SdJwt { compact, .. } => compact,
-        _ => return Err("SD-JWT issuance returned another format".into()),
-    };
-    let resolver = StaticIssuerResolver {
-        key: ResolvedSdJwtIssuerKey::new(
-            ISSUER,
-            Some(ISSUER.into()),
-            SigningAlgorithm::ES256,
-            issuer_public.to_string(),
-        ),
-    };
-    let presentation = WalletEngine::new()
-        .create_verified_sd_jwt_presentation(
-            &credential,
-            &["email".into()],
-            NONCE,
-            AUDIENCE,
-            &holder_private.to_string(),
-            &resolver,
-        )
-        .map_err(|_| "verified SD-JWT presentation creation failed")?;
-    Ok((presentation, issuer_public))
 }
 
 fn gate_policy(organization_id: Uuid, trust_profile_id: Uuid) -> PresentationPolicy {
@@ -275,8 +245,12 @@ fn require(condition: bool, message: &str) -> Result<(), String> {
     condition.then_some(()).ok_or_else(|| message.into())
 }
 
-async fn execute() -> Result<Value, String> {
-    let (presentation, issuer_public_jwk) = signed_presentation()?;
+async fn execute(input: GateInput) -> Result<Value, String> {
+    input.validate()?;
+    let GateInput {
+        presentation,
+        issuer_public_jwk,
+    } = input;
     let organization_id = Uuid::from_u128(1);
     let trust_profile_id = Uuid::from_u128(2);
     let now = u64::try_from(Utc::now().timestamp()).map_err(|_| "runtime clock rejected")?;
@@ -397,7 +371,11 @@ async fn execute() -> Result<Value, String> {
 
 #[tokio::main]
 async fn main() {
-    match execute().await {
+    let result = match read_input(std::io::stdin().lock()) {
+        Ok(input) => execute(input).await,
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(evidence) => println!("{evidence}"),
         Err(error) => {
             eprintln!("positive OID4VP runtime gate failed: {error}");
@@ -410,29 +388,38 @@ async fn main() {
 mod tests {
     use super::*;
 
+    fn public_fixture() -> Value {
+        // Parser-only data. This is deliberately not a signed acceptance fixture.
+        json!({
+            "presentation": "invalid.unsigned.presentation",
+            "issuer_public_jwk": {
+                "kty": "EC", "crv": "P-256", "alg": "ES256", "kid": ISSUER_KID,
+                "x": URL_SAFE_NO_PAD.encode([0u8; 32]),
+                "y": URL_SAFE_NO_PAD.encode([0u8; 32]),
+            }
+        })
+    }
+
+    #[test]
+    fn fixture_input_rejects_private_material_unknown_fields_and_oversized_streams() {
+        let input = public_fixture();
+        assert!(read_input(input.to_string().as_bytes()).is_ok());
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
+            let mut private = input.clone();
+            private["issuer_public_jwk"][member] = json!("private-fixture");
+            assert!(read_input(private.to_string().as_bytes()).is_err());
+        }
+        let mut unknown = input;
+        unknown["unchecked"] = json!(true);
+        assert!(read_input(unknown.to_string().as_bytes()).is_err());
+        assert!(read_input(std::io::repeat(b' ')).is_err());
+        assert!(read_input(&b""[..]).is_err());
+    }
+
     #[tokio::test]
-    async fn exact_runtime_gate_exercises_all_positive_oid4vp_checks() {
-        let evidence = execute().await.expect("positive runtime evidence");
-        assert_eq!(evidence["status"], "passed");
-        assert_eq!(evidence["decision"], "PASS");
-        assert_eq!(evidence["verified_claims"]["email"], EMAIL);
-        assert_eq!(
-            evidence["checks"]
-                .as_array()
-                .expect("check inventory")
-                .iter()
-                .map(|check| check["check_id"].as_str().expect("check ID"))
-                .collect::<Vec<_>>(),
-            vec![
-                "presentation.structure",
-                "presentation.proof",
-                "credential.proof",
-                "issuer.trust",
-                "credential.status",
-                "holder.binding",
-                "transaction.binding",
-                "claim.constraints",
-            ]
-        );
+    async fn public_input_cannot_claim_success_without_valid_signatures() {
+        let encoded = public_fixture().to_string();
+        let input = read_input(encoded.as_bytes()).expect("parser-only fixture");
+        assert!(execute(input).await.is_err());
     }
 }

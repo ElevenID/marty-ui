@@ -497,7 +497,9 @@ impl OidcProvider for KeycloakOidcProvider {
                 .append_pair("code_challenge", &request.code_challenge)
                 .append_pair("code_challenge_method", "S256");
             if !request.registration {
-                query.append_pair("prompt", "consent login");
+                query
+                    .append_pair("prompt", "consent login")
+                    .append_pair("max_age", "0");
             }
         }
         Ok(url.into())

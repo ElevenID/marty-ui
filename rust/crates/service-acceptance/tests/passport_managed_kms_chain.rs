@@ -17,12 +17,13 @@ use base64::{
     Engine,
 };
 use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
+use marty_crypto::jwk::certificate_pem_to_jwk;
 use marty_issuance_service::passport_signer::{ManagedProfileSigner, SignerError};
 use marty_signing_keys::{
     certificate_issuance::{prepare_csca, prepare_dsc, VerifiedDscSubject},
     csca_lifecycle::CscaLifecycleStore,
     documents::DocumentStore,
-    http::router_with_dependencies_and_dsc_key,
+    http::router_with_all_keys,
     kms::{self, ProviderRequest, SignRequest},
     profiles::{FindProfilesRequest, ProfileStore},
     registry::RegistryStore,
@@ -33,6 +34,7 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 const INTERNAL_KEY: &str = "disposable-passport-chain-internal-key";
 const DSC_GATEWAY_KEY: &str = "disposable-passport-dsc-gateway-key-32-characters";
+const ISSUER_SIGN_KEY: &str = "disposable-passport-issuer-sign-key-32-chars";
 
 async fn route(app: &Router, method: Method, path: &str, body: Value) -> Value {
     let response = app
@@ -91,14 +93,18 @@ fn signing_config(service: &Value, profile: &Value) -> Value {
 
 // The test uses the same certificate builder as the managed runtime; only
 // the signature operation is delegated to its disposable Transit key.
-async fn issue_csca_with_shared_builder(csr_pem: &str, signer_config: Value) -> String {
+async fn issue_csca_with_shared_builder(
+    csr_pem: &str,
+    signer_config: Value,
+    serial: &[u8],
+) -> String {
     let public = kms::public_key_existing(ProviderRequest {
         service_config: signer_config.clone(),
     })
     .await
     .unwrap();
     let subject = VerifiedDscSubject::from_csr_pem(csr_pem, &public).unwrap();
-    let prepared = prepare_csca(&subject, &[1], 365, SystemTime::now()).unwrap();
+    let prepared = prepare_csca(&subject, serial, 365, SystemTime::now()).unwrap();
     let signed = kms::sign(SignRequest {
         service_config: signer_config,
         payload_b64: URL_SAFE_NO_PAD.encode(prepared.signing_bytes()),
@@ -237,7 +243,14 @@ async fn forward(app: &Router, method: Method, path: &str, body: Value) -> Respo
             Request::builder()
                 .method(method)
                 .uri(path)
-                .header("x-api-key", INTERNAL_KEY)
+                .header(
+                    "x-api-key",
+                    if path == "/internal/compat/issuer-dids/sign" {
+                        ISSUER_SIGN_KEY
+                    } else {
+                        INTERNAL_KEY
+                    },
+                )
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -358,9 +371,13 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let documents = DocumentStore::from_connection(registry.connection());
     let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
     let profiles = ProfileStore::from_connection(registry.connection());
-    let signing = router_with_dependencies_and_dsc_key(
+    let signing = router_with_all_keys(
         INTERNAL_KEY.into(),
+        None,
+        Some(ISSUER_SIGN_KEY.into()),
         Some(DSC_GATEWAY_KEY.into()),
+        None,
+        false,
         Some(registry),
         Some(documents),
         Some(lifecycle),
@@ -438,6 +455,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let csca_pem = issue_csca_with_shared_builder(
         csca_csr["csr_pem"].as_str().unwrap(),
         signing_config(&service, &csca_profile),
+        &[1],
     )
     .await;
     let fixture_dsc_pem = issue_dsc_with_shared_builder(
@@ -464,6 +482,144 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     )
     .await;
     assert_eq!(enrolled["status"], "VALID");
+    let public_jwk = serde_json::to_value(certificate_pem_to_jwk(&csca_pem).unwrap()).unwrap();
+    let forged_import = forward(
+        &signing,
+        Method::PUT,
+        &format!("/internal/documents/{organization_id}/csca-certificates/csca-forged-{suffix}"),
+        json!({
+            "cert_pem": csca_pem,
+            "key_reference": "unbound-csca-key",
+            "expected_public_jwk": public_jwk,
+            "metadata": {"issuer_did": issuer_did}
+        }),
+    )
+    .await;
+    assert_eq!(forged_import.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        forward(
+            &signing,
+            Method::GET,
+            &format!(
+                "/internal/documents/{organization_id}/csca-certificates/csca-forged-{suffix}"
+            ),
+            Value::Null,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let forged_renewal = forward(
+        &signing,
+        Method::POST,
+        &format!("/internal/documents/{organization_id}/csca-certificates/csca-{suffix}/renew"),
+        json!({
+            "replacement_certificate_id": format!("csca-forged-renewal-{suffix}"),
+            "cert_pem": csca_pem,
+            "key_reference": "unbound-csca-key",
+            "expected_public_jwk": public_jwk,
+            "reuse_key": true,
+            "metadata": {"issuer_did": issuer_did}
+        }),
+    )
+    .await;
+    assert_eq!(forged_renewal.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        forward(
+            &signing,
+            Method::GET,
+            &format!(
+                "/internal/documents/{organization_id}/csca-certificates/csca-forged-renewal-{suffix}"
+            ),
+            Value::Null,
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let managed_copy_path = format!(
+        "/internal/documents/{organization_id}/csca-certificates/csca-managed-copy-{suffix}"
+    );
+    let managed_copy_body = json!({
+        "cert_pem": csca_pem,
+        "key_reference": csca_profile["signing_key_reference"],
+        "expected_public_jwk": public_jwk,
+        "metadata": {"issuer_did": issuer_did}
+    });
+    let rotation_store = RegistryStore::connect(&redis_url).await.unwrap();
+    let held_rotation = rotation_store
+        .acquire_rotation_lease(&organization_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let concurrent_import = forward(
+        &signing,
+        Method::PUT,
+        &managed_copy_path,
+        managed_copy_body.clone(),
+    )
+    .await;
+    assert_eq!(concurrent_import.status(), StatusCode::CONFLICT);
+    held_rotation.release().await.unwrap();
+    let managed_copy = forward(&signing, Method::PUT, &managed_copy_path, managed_copy_body).await;
+    assert_eq!(managed_copy.status(), StatusCode::OK);
+    let renewed_csca_pem = issue_csca_with_shared_builder(
+        csca_csr["csr_pem"].as_str().unwrap(),
+        signing_config(&service, &csca_profile),
+        &[3],
+    )
+    .await;
+    assert_ne!(renewed_csca_pem, csca_pem);
+    let renewed_public_jwk =
+        serde_json::to_value(certificate_pem_to_jwk(&renewed_csca_pem).unwrap()).unwrap();
+    assert_eq!(renewed_public_jwk, public_jwk);
+    let managed_renewed_path = format!(
+        "/internal/documents/{organization_id}/csca-certificates/csca-managed-renewed-{suffix}"
+    );
+    let renewal_body = json!({
+        "replacement_certificate_id": format!("csca-managed-renewed-{suffix}"),
+        "cert_pem": renewed_csca_pem,
+        "key_reference": csca_profile["signing_key_reference"],
+        "expected_public_jwk": renewed_public_jwk,
+        "reuse_key": true,
+        "metadata": {"issuer_did": issuer_did}
+    });
+    let mut wrong_reuse_body = renewal_body.clone();
+    wrong_reuse_body["reuse_key"] = json!(false);
+    let wrong_reuse = forward(
+        &signing,
+        Method::POST,
+        &format!("{managed_copy_path}/renew"),
+        wrong_reuse_body,
+    )
+    .await;
+    assert_eq!(wrong_reuse.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let renewed = forward(
+        &signing,
+        Method::POST,
+        &format!("{managed_copy_path}/renew"),
+        renewal_body,
+    )
+    .await;
+    assert_eq!(renewed.status(), StatusCode::OK);
+    let renewed: Value =
+        serde_json::from_slice(&to_bytes(renewed.into_body(), 1_048_576).await.unwrap()).unwrap();
+    assert_eq!(
+        renewed["renewed_from"],
+        format!("csca-managed-copy-{suffix}")
+    );
+    assert_eq!(renewed["public_jwk"], public_jwk);
+    assert_eq!(
+        forward(
+            &signing,
+            Method::POST,
+            &format!("{managed_renewed_path}/revoke"),
+            json!({"reason": "disposable binding proof completed"}),
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
     let issue_request = json!({
         "organization_id": organization_id,
         "dsc_issuer_did": issuer_did,
@@ -493,6 +649,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
             .parse()
             .unwrap(),
         Some(INTERNAL_KEY),
+        Some(ISSUER_SIGN_KEY),
     )
     .unwrap();
     let groups = BTreeMap::from([(BigUint::from(1u8), STANDARD.encode(b"disposable DG1"))]);
@@ -606,6 +763,36 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     assert!(
         String::from_utf8_lossy(&rotated_body).contains("current managed KMS key"),
         "rotation must be rejected by the KMS/public identity binding"
+    );
+    let csca_reference = csca_profile["signing_key_reference"].as_str().unwrap();
+    let rotated_csca = kms_client
+        .post(format!("{bao_url}/v1/transit/keys/{csca_reference}/rotate"))
+        .header("X-Vault-Token", &bao_token)
+        .send()
+        .await
+        .expect("disposable CSCA key rotation request");
+    assert!(rotated_csca.status().is_success());
+    let stale_csca_path = format!(
+        "/internal/documents/{organization_id}/csca-certificates/csca-stale-after-rotation-{suffix}"
+    );
+    let stale_csca = forward(
+        &signing,
+        Method::PUT,
+        &stale_csca_path,
+        json!({
+            "cert_pem": csca_pem,
+            "key_reference": csca_reference,
+            "expected_public_jwk": public_jwk,
+            "metadata": {"issuer_did": issuer_did}
+        }),
+    )
+    .await;
+    assert_eq!(stale_csca.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        forward(&signing, Method::GET, &stale_csca_path, Value::Null)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
     );
     server.abort();
 }

@@ -900,8 +900,69 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  native-schema-image-qualification:
+    needs: [resolve-transaction, build-services, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify and qualify exact released Rust schema images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SERVICES_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$MIGRATIONS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          services_image="$SERVICES_IMAGE@$SERVICES_DIGEST"
+          migrations_image="$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST"
+          for image in "$services_image" "$migrations_image"; do
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+          done
+          infra=deploy-config/passport-supported-disposable-infra-images.json
+          test "$(jq -er '.schema' "$infra")" = marty.passport-supported-disposable-infra-images/v1
+          postgres_image="$(jq -er '.images.postgres.reference' "$infra")"
+          redis_image="$(jq -er '.images.redis.reference' "$infra")"
+          openbao_image="$(jq -er '.images.openbao.reference' "$infra")"
+          python scripts/qualify_selfhost_migrations.py \
+            --migrations-image "$migrations_image" \
+            --services-image "$services_image" \
+            --postgres-image "$postgres_image" \
+            --redis-image "$redis_image" \
+            --openbao-image "$openbao_image" > native-schema.json
+          jq -e --arg migrations "$migrations_image" --arg services "$services_image" '
+            .schema == "marty.selfhost-migrations-qualification/v2" and
+            .migrations_image == $migrations and .services_image == $services and
+            .native_schemas == "verified" and .private_key_storage == "absent" and
+            .profile == "selfhost-production" and .runs == "2"
+          ' native-schema.json >/dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-native-schema-gate-${{ github.run_id }}
+          path: native-schema.json
+          if-no-files-found: error
+          retention-days: 90
+
   qualify-release:
-    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential]
+    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential, native-schema-image-qualification]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -924,6 +985,10 @@ jobs:
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: gates/verifier
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-native-schema-gate-${{ github.run_id }}
+          path: gates/native
       - name: Persist exact gate evidence
         shell: bash
         run: |
@@ -933,10 +998,12 @@ jobs:
           else
             public_digest="sha256:$(sha256sum gates/public/public-stack.json | cut -d' ' -f1)"
             verifier_digest="sha256:$(sha256sum gates/verifier/verifier-differential.json | cut -d' ' -f1)"
+            native_digest="sha256:$(sha256sum gates/native/native-schema.json | cut -d' ' -f1)"
             python scripts/release_transaction.py qualify \
               --input transaction/release-transaction.json \
               --gate "public_stack=$GITHUB_RUN_ID:$public_digest" \
               --gate "verifier_differential=$GITHUB_RUN_ID:$verifier_digest" \
+              --gate "native_schema=$GITHUB_RUN_ID:$native_digest" \
               --output release-transaction.json
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

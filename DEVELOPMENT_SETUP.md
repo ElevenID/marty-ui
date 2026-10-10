@@ -116,16 +116,12 @@ This is the usual fast feedback loop for frontend and gateway work.
 | `make grpc-health` | Probe gRPC-enabled services |
 | `make help` | Show all supported targets |
 
-## Native Rust wheel workflow
+## Native Rust package workflow
 
-If you need local native wheels for Rust-backed packages:
-
-```bash
-make build-wheels
-```
-
-That script writes wheels into `wheels/` using the sibling `marty-credentials`
-and `marty-core` repositories.
+Build UI-owned Rust services with `make services-build`. Python extension wheels
+are owned and published by `ElevenID/marty-core`; use its build and release
+workflow, then update the digest-pinned artifacts in `release/stack-lock.json`.
+The UI repository does not build or check in local copies of those wheels.
 
 ## Open Badges FFI
 
@@ -166,7 +162,7 @@ make grpc-health
 ### Rust-backed package changes
 
 ```bash
-make build-wheels
+make services-build
 make services-restart
 ```
 

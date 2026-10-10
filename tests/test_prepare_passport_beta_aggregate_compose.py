@@ -33,20 +33,6 @@ def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
         assert environment["GRPC_INSECURE_ALLOWED"] == "true"
 
 
-def test_live_operator_binds_all_signed_image_interpolation_inputs():
-    source = (Path(__file__).resolve().parents[1]
-              / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(
-                  encoding="utf-8")
-    for variable, field in (
-        ("MARTY_SERVICES_IMAGE", "services_image"),
-        ("MARTY_UI_RELEASE_IMAGE", "ui_image"),
-    ):
-        binding = f"$env:{variable} = [string]$script:plan.{field}"
-        assert source.count(binding) == 1
-        assert source.index(binding) < source.index("Invoke-SignedIssuanceMigration\n")
-
-
-
 def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
     head = "a" * 40
     docs_id = "b" * 64
@@ -303,6 +289,9 @@ def test_rendered_compose_rejects_external_provider_profile():
     ("issuance-native", "PERSONALIZATION_BUREAU_URL", "https://external.example"),
     ("issuance-native", "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID", "external"),
     ("issuance-native", "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", "/run/old-key"),
+    ("issuance-native", "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false"),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET", ""),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE", ""),
 ])
 def test_rendered_compose_rejects_external_or_legacy_passport_binding(service, key, value):
     handoff, intent, rendered, ui = candidate()
