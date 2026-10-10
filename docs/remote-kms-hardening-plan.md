@@ -11488,3 +11488,10 @@ qualification. The crate also has local Ed25519 PEM issuance for
 software license tokens, a separate key class from credential issuer/holder
 keys; do not treat this Core repin as KMS custody for license signing or claim
 the subscription service has no local private keys.
+
+UI branch was one upstream release-fence commit behind `main`.
+`git merge-tree` found no conflicts, and local merge `e28b6146a` incorporates
+that release lock without touching KMS source. The affected stack release
+contract suite passed 38 tests under Python 3.12. Keep this merge and the
+current tracker commits local until the running UI head `f0239db18` has
+finished; any Canvas finding can then be batched into one final push/CI run.
