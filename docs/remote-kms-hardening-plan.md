@@ -13096,3 +13096,19 @@ and [Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38082985035)
 started at 2026-10-10 20:14 UTC. The packaging secret fixture test passes
 locally under Rust 1.95, along with targeted formatting and diff checks. The
 run is active; no hosted success is inferred yet.
+
+K8 renewal test-custody retirement candidate (held for the next grouped UI
+head): removed the executable Python credential-renewal capture and its
+capture-dependent frozen-reference test. The capture injected a fixed local X25519
+sender private key; the checked-in renewal corpus has no such key and remains
+an immutable input to Rust's 29-case native HTTP admission replay. The two
+ordinary-then-direct cases are exercised by the native composed PostgreSQL,
+HTTPS wallet and DIDComm gate in both anoncrypt and remote-KMS authcrypt modes.
+The key-free corpus integrity test retains unique-case, reference-resolution,
+and lossless snapshot-hash assertions formerly owned by the Python test.
+Also removed the unreferenced historical DIDComm policy Python corpus, which
+contained accepted raw-key authcrypt vectors and had no current consumer.
+`docs/rust-migrations/credential-renewal-retirement.md` now marks capture
+provenance as historical and names the native test owners. Verify the affected
+Rust and Python contract suites, review for any lost behavior coverage, and
+keep this removal local until it can join a substantive CI batch.
