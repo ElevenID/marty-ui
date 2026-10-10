@@ -13450,3 +13450,14 @@ propagate the replacement without leaking it, reject wrong-policy/wrong-tenant
 tokens, and prove signing and DIDComm authcrypt continue across expiry,
 restart and OpenBao failover. Keep this as an availability and custody gate;
 do not paper over expiry with a local-key fallback.
+
+OpenBao's [Agent auto-auth documentation](https://openbao.org/docs/agent-and-proxy/autoauth/)
+states that it renews acquired tokens and reauthenticates when renewal fails.
+Its [token-file method documentation](https://openbao.org/docs/agent-and-proxy/autoauth/methods/token_file/)
+explicitly excludes that method from production use; wrapping the current
+static token files in a token-file Agent is therefore not the release design.
+Use a workload identity authentication method (Kubernetes identity in that
+deployment, and a supported non-static-token identity in self-host) with
+scoped policies and a protected file sink or local Agent proxy. Verify the
+actual service reads replacement credentials or uses the proxy after
+reauthentication, including a short-lease expiry and Raft failover probe.
