@@ -289,10 +289,26 @@ fn append_provider_auth(payload: &Value, checks: &mut Vec<ValidationCheck>) {
         }
         return;
     }
+    if provider == "azure" {
+        match kms::validate_azure_auth_config(payload) {
+            Ok(()) => add(
+                checks,
+                "Provider auth policy",
+                "pass",
+                "Azure credential configuration matches the selected auth mode.",
+                "provider",
+            ),
+            Err(error) => add(
+                checks,
+                "Provider auth policy",
+                "fail",
+                error.to_string(),
+                "provider",
+            ),
+        }
+        return;
+    }
     let result = match (provider, auth_mode, has_reference) {
-        ("azure", "managed_identity", _) => Some(("pass", "Managed identity mode selected; ensure Key Vault sign permissions are granted.")),
-        ("azure", "client_secret" | "certificate", true) => Some(("pass", "Credential reference provided for Azure auth mode.")),
-        ("azure", "client_secret" | "certificate", false) => Some(("warning", "Provide an auth reference for client_secret/certificate modes.")),
         ("gcp", "workload_identity", _) => Some(("pass", "Workload identity selected; ensure cloudkms.cryptoKeyVersions.useToSign permission is granted.")),
         ("gcp", "service_account", true) => Some(("pass", "Service account reference provided for GCP auth mode.")),
         ("gcp", "service_account", false) => Some(("warning", "Provide a service account reference for GCP auth mode.")),
@@ -832,6 +848,33 @@ mod tests {
                 "auth_mode": mode,
                 "auth_reference": reference,
                 "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test",
+                "algorithms": ["ES256"]
+            });
+            let result = validate(ValidationRequest {
+                service_config: config.as_object().unwrap().clone(),
+                live_probe: false,
+            })
+            .await;
+            assert!(!result.ok, "{mode} must fail");
+            assert!(result
+                .checks
+                .iter()
+                .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_validation_rejects_literal_tokens_and_local_certificate_keys() {
+        for (mode, reference) in [
+            ("managed_identity", "literal-bearer-token"),
+            ("client_secret", "literal-bearer-token"),
+            ("certificate", r#"{"private_key":"local-key"}"#),
+        ] {
+            let config = json!({
+                "service_type": "azure-key-vault",
+                "auth_mode": mode,
+                "auth_reference": reference,
+                "key_reference": "https://vault.azure.net/keys/test",
                 "algorithms": ["ES256"]
             });
             let result = validate(ValidationRequest {

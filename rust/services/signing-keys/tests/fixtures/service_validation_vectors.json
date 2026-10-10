@@ -50,7 +50,7 @@
       {"name": "Authentication reference", "status": "warning", "detail": "Provide a credential or secret reference for this auth mode.", "source": "baseline"},
       {"name": "Key reference", "status": "fail", "detail": "Key reference is required.", "source": "baseline"},
       {"name": "Algorithm coverage", "status": "fail", "detail": "Select at least one supported signing algorithm.", "source": "baseline"},
-      {"name": "Provider auth policy", "status": "warning", "detail": "Provide an auth reference for client_secret/certificate modes.", "source": "provider"}
+      {"name": "Provider auth policy", "status": "fail", "detail": "Azure client credential is invalid.", "source": "provider"}
     ]
   },
   {

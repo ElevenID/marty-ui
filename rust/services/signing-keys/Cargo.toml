@@ -45,7 +45,7 @@ marty-passport-auth = { path = "../../crates/passport-auth" }
 p256.workspace = true
 percent-encoding.workspace = true
 regex.workspace = true
-reqwest = { workspace = true, features = ["query"] }
+reqwest = { workspace = true, features = ["query", "form"] }
 rustls.workspace = true
 redis.workspace = true
 serde.workspace = true

@@ -133,7 +133,7 @@
         "endpoint": "$STUB",
         "key_reference": "issuer-key",
         "key_version": "version-1",
-        "auth_reference": "azure-token",
+        "auth_mode": "managed_identity",
         "algorithm": "ES256",
         "azure_signing_algorithm": "ES256"
       },
@@ -226,7 +226,7 @@
     },
     {
       "name": "azure_embedded_public_jwk",
-      "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "azure-token" },
+      "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_mode": "managed_identity" },
       "expected_request": { "method": "GET", "path_query": "/keys/issuer-key?api-version=7.4", "headers": { "authorization": "Bearer azure-token" } },
       "provider_response": { "key": { "kty": "EC-HSM", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "d": "must-not-cross-boundary" } },
       "expected_response": { "provider": "azure", "key_reference": "issuer-key", "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "issuer-key" }
@@ -258,8 +258,8 @@
     },
     {
       "name": "azure_authentication_rejected",
-      "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "bad" },
-      "expected_request": { "method": "GET", "path_query": "/keys?api-version=7.4", "headers": { "authorization": "Bearer bad" } },
+      "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_mode": "managed_identity" },
+      "expected_request": { "method": "GET", "path_query": "/keys?api-version=7.4", "headers": { "authorization": "Bearer azure-token" } },
       "provider_status": 401,
       "provider_response": { "error": "unauthorized" },
       "expected_response": { "ok": false, "checks": [{ "name": "Authentication", "status": "fail", "detail": "Azure token is invalid or unauthorized.", "source": "adapter" }] }

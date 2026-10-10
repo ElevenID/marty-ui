@@ -11732,3 +11732,27 @@ The wizard also needs mode-specific credential fields and precise wording;
 `access_key` currently expects JSON rather than an opaque reference. Those
 provider authentication credentials remain separate from KMS-held issuer
 private keys and are encrypted at rest by the registry envelope.
+
+2026-10-10 K6 Azure auth selection, local UI batch: the Rust Azure adapter now
+gets a Key Vault-scoped access token for the selected mode before sign,
+public-key read, and verification. `managed_identity` uses the platform's
+local `IDENTITY_ENDPOINT`/`IDENTITY_HEADER` pair or the fixed IMDS endpoint,
+with optional user-assigned client ID. `client_secret` validates a bounded
+tenant/client/secret document and uses the Microsoft Entra client-credentials
+form for `https://vault.azure.net/.default`. It no longer treats
+`auth_reference` as a literal bearer token. The token endpoint is fixed to
+Microsoft Entra for production; the managed-identity URL is limited to local
+metadata hosts, and token-acquisition errors hide provider response bodies
+that could echo credentials. `certificate` now fails registration/runtime
+validation until a KMS-held client-assertion signer is implemented; the old
+literal-bearer behavior did not implement certificate authentication. The
+provider boundary also rejects nested private-key material in direct service
+configs. A managed-identity HTTP stub checks the token request and downstream
+bearer use, while a client-secret form test checks the scoped OAuth request.
+The complete Signing Keys library suite passed 149 tests with nine expected
+opt-in ignores, provider vectors passed five, service validation vector
+passed, all-target warnings-denied Clippy and Rustfmt passed. Real Azure
+managed identity/client-secret enrollment and certificate binding remain
+unproved. Sources: [Azure managed identity REST endpoint](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity),
+[Microsoft Entra client credentials](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow),
+[Key Vault token resource](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc).

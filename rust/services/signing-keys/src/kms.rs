@@ -124,6 +124,11 @@ enum Provider {
 
 impl Provider {
     fn from_config(config: &Value) -> Result<Self, KmsError> {
+        if crate::private_material::contains_private_key(config) {
+            return Err(KmsError::InvalidConfig(
+                "Provider configuration must not contain private key material.".into(),
+            ));
+        }
         match string(config, "service_type").unwrap_or_default() {
             "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible" => {
                 Ok(Self::OpenBao)
@@ -890,6 +895,210 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
     result
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AzureManagedIdentity {
+    client_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AzureClientSecret {
+    tenant_id: String,
+    client_id: String,
+    client_secret: String,
+}
+
+enum AzureAuth {
+    ManagedIdentity(Option<String>),
+    ClientSecret(AzureClientSecret),
+}
+
+fn valid_azure_tenant(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.contains("..")
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(u8::is_ascii_alphanumeric)
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+}
+
+fn parse_azure_auth(config: &Value) -> Result<AzureAuth, KmsError> {
+    let reference = string(config, "auth_reference").unwrap_or_default();
+    match string(config, "auth_mode").unwrap_or("managed_identity") {
+        "managed_identity" => {
+            if reference.is_empty() {
+                return Ok(AzureAuth::ManagedIdentity(None));
+            }
+            let identity: AzureManagedIdentity = serde_json::from_str(reference).map_err(|_| {
+                KmsError::InvalidConfig("Azure managed identity reference is invalid.".into())
+            })?;
+            if uuid::Uuid::parse_str(&identity.client_id).is_err() {
+                return Err(KmsError::InvalidConfig(
+                    "Azure managed identity client ID is invalid.".into(),
+                ));
+            }
+            Ok(AzureAuth::ManagedIdentity(Some(identity.client_id)))
+        }
+        "client_secret" => {
+            if reference.len() > 16_384 {
+                return Err(KmsError::InvalidConfig(
+                    "Azure client credential is invalid.".into(),
+                ));
+            }
+            let credential: AzureClientSecret = serde_json::from_str(reference).map_err(|_| {
+                KmsError::InvalidConfig("Azure client credential is invalid.".into())
+            })?;
+            if !valid_azure_tenant(&credential.tenant_id)
+                || uuid::Uuid::parse_str(&credential.client_id).is_err()
+                || credential.client_secret.is_empty()
+            {
+                return Err(KmsError::InvalidConfig(
+                    "Azure client credential is invalid.".into(),
+                ));
+            }
+            Ok(AzureAuth::ClientSecret(credential))
+        }
+        "certificate" => Err(KmsError::InvalidConfig(
+            "Azure certificate authentication requires a remote client-assertion signer.".into(),
+        )),
+        _ => Err(KmsError::InvalidConfig(
+            "Azure authentication mode is unsupported.".into(),
+        )),
+    }
+}
+
+pub(crate) fn validate_azure_auth_config(config: &Value) -> Result<(), KmsError> {
+    parse_azure_auth(config).map(|_| ())
+}
+
+async fn azure_access_token(config: &Value) -> Result<String, KmsError> {
+    match parse_azure_auth(config)? {
+        AzureAuth::ManagedIdentity(client_id) => {
+            let endpoint = env::var("IDENTITY_ENDPOINT")
+                .ok()
+                .filter(|value| !value.is_empty());
+            let header = env::var("IDENTITY_HEADER")
+                .ok()
+                .filter(|value| !value.is_empty());
+            match (endpoint, header) {
+                (Some(endpoint), Some(header)) => {
+                    let parsed = reqwest::Url::parse(&endpoint).map_err(|_| {
+                        KmsError::InvalidConfig(
+                            "Azure managed identity endpoint is invalid.".into(),
+                        )
+                    })?;
+                    if parsed.scheme() != "http"
+                        || !matches!(
+                            parsed.host_str(),
+                            Some("127.0.0.1" | "localhost" | "::1" | "169.254.169.254")
+                        )
+                        || !parsed.username().is_empty()
+                        || parsed.password().is_some()
+                        || parsed.query().is_some()
+                        || parsed.fragment().is_some()
+                    {
+                        return Err(KmsError::InvalidConfig(
+                            "Azure managed identity endpoint is invalid.".into(),
+                        ));
+                    }
+                    azure_managed_token(&endpoint, Some(&header), client_id.as_deref()).await
+                }
+                (None, None) => {
+                    azure_managed_token(
+                        "http://169.254.169.254/metadata/identity/oauth2/token",
+                        None,
+                        client_id.as_deref(),
+                    )
+                    .await
+                }
+                _ => Err(KmsError::InvalidConfig(
+                    "Azure managed identity environment is incomplete.".into(),
+                )),
+            }
+        }
+        AzureAuth::ClientSecret(credential) => {
+            let endpoint = format!(
+                "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
+                credential.tenant_id
+            );
+            azure_client_secret_token(&endpoint, &credential).await
+        }
+    }
+}
+
+async fn azure_managed_token(
+    endpoint: &str,
+    header: Option<&str>,
+    client_id: Option<&str>,
+) -> Result<String, KmsError> {
+    let client = Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|_| KmsError::Provider("Azure identity HTTP client is unavailable.".into()))?;
+    let version = if header.is_some() {
+        "2019-08-01"
+    } else {
+        "2018-02-01"
+    };
+    let mut request = client.get(endpoint).timeout(HTTP_TIMEOUT).query(&[
+        ("api-version", version),
+        ("resource", "https://vault.azure.net"),
+    ]);
+    if let Some(header) = header {
+        request = request.header("X-IDENTITY-HEADER", header);
+    } else {
+        request = request.header("Metadata", "true");
+    }
+    if let Some(client_id) = client_id {
+        request = request.query(&[("client_id", client_id)]);
+    }
+    azure_token_value(send_json(request).await.map_err(|_| {
+        KmsError::Provider("Azure managed identity token acquisition failed.".into())
+    })?)
+}
+
+async fn azure_client_secret_token(
+    endpoint: &str,
+    credential: &AzureClientSecret,
+) -> Result<String, KmsError> {
+    let response = send_json(Client::new().post(endpoint).timeout(HTTP_TIMEOUT).form(&[
+        ("grant_type", "client_credentials"),
+        ("client_id", credential.client_id.as_str()),
+        ("client_secret", credential.client_secret.as_str()),
+        ("scope", "https://vault.azure.net/.default"),
+    ]))
+    .await
+    .map_err(|_| KmsError::Provider("Azure client token acquisition failed.".into()))?;
+    azure_token_value(response)
+}
+
+fn azure_token_value(response: Value) -> Result<String, KmsError> {
+    response
+        .get("access_token")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            KmsError::InvalidResponse("Azure identity response omitted access token.".into())
+        })
+}
+
+async fn azure_bearer(
+    builder: reqwest::RequestBuilder,
+    config: &Value,
+) -> Result<reqwest::RequestBuilder, KmsError> {
+    Ok(builder.bearer_auth(azure_access_token(config).await?))
+}
+
 async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
     let endpoint = required(
         config,
@@ -907,13 +1116,14 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
         .unwrap_or("ES256");
     let (_, digest) = signing_digest(algorithm, payload)?;
     let response = send_json(
-        bearer(
+        azure_bearer(
             Client::new().post(format!(
                 "{}/keys/{key_path}/sign?api-version=7.4",
                 endpoint.trim_end_matches('/')
             )),
             config,
         )
+        .await?
         .timeout(HTTP_TIMEOUT)
         .json(&json!({
             "alg": algorithm,
@@ -946,13 +1156,14 @@ async fn public_key_azure(config: &Value) -> Result<Value, KmsError> {
     )?;
     let key_path = key_path(key_reference, string(config, "key_version"));
     let response = send_json(
-        bearer(
+        azure_bearer(
             Client::new().get(format!(
                 "{}/keys/{key_path}?api-version=7.4",
                 endpoint.trim_end_matches('/')
             )),
             config,
         )
+        .await?
         .timeout(HTTP_TIMEOUT),
     )
     .await?;
@@ -976,15 +1187,20 @@ async fn verify_azure(config: &Value) -> CapabilityResult {
         Some(value) => value,
         None => return CapabilityResult::fail("Endpoint", "endpoint is required"),
     };
+    let builder = match azure_bearer(
+        Client::new().get(format!(
+            "{}/keys?api-version=7.4",
+            endpoint.trim_end_matches('/')
+        )),
+        config,
+    )
+    .await
+    {
+        Ok(builder) => builder,
+        Err(error) => return CapabilityResult::fail("Authentication", error.to_string()),
+    };
     verify_http_status(
-        bearer(
-            Client::new().get(format!(
-                "{}/keys?api-version=7.4",
-                endpoint.trim_end_matches('/')
-            )),
-            config,
-        )
-        .timeout(PROBE_TIMEOUT),
+        builder.timeout(PROBE_TIMEOUT),
         "Azure Key Vault",
         |status| match status {
             StatusCode::OK => (
@@ -1670,6 +1886,54 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_operations_reject_nested_private_material() {
+        for config in [
+            json!({"service_type": "aws-kms", "auth_reference": "{\"private_key\":\"test\"}"}),
+            json!({"service_type": "azure-key-vault", "auth_reference": "-----BEGIN PRIVATE KEY-----\\ntest"}),
+            json!({"service_type": "gcp-cloud-kms", "metadata": {"privateKeyJwk": "test"}}),
+        ] {
+            assert!(matches!(
+                Provider::from_config(&config),
+                Err(KmsError::InvalidConfig(_))
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn azure_client_secret_uses_scoped_oauth_form() {
+        async fn token(request: axum::extract::Request) -> axum::Json<Value> {
+            assert_eq!(request.method(), reqwest::Method::POST);
+            let body = axum::body::to_bytes(request.into_body(), 4096)
+                .await
+                .unwrap();
+            let form = String::from_utf8(body.to_vec()).unwrap();
+            assert!(form.contains("grant_type=client_credentials"));
+            assert!(form.contains("scope=https%3A%2F%2Fvault.azure.net%2F.default"));
+            assert!(form.contains("client_secret=fixture-secret"));
+            axum::Json(json!({"access_token": "scoped-azure-token"}))
+        }
+        let app = axum::Router::new().route("/token", axum::routing::post(token));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let config = json!({
+            "auth_mode": "client_secret",
+            "auth_reference": r#"{"tenant_id":"11111111-1111-1111-1111-111111111111","client_id":"22222222-2222-2222-2222-222222222222","client_secret":"fixture-secret"}"#
+        });
+        assert!(validate_azure_auth_config(&config).is_ok());
+        let AzureAuth::ClientSecret(credential) = parse_azure_auth(&config).unwrap() else {
+            panic!("client-secret mode was not selected")
+        };
+        assert_eq!(
+            azure_client_secret_token(&endpoint, &credential)
+                .await
+                .unwrap(),
+            "scoped-azure-token"
+        );
+        server.abort();
+    }
 
     #[tokio::test]
     async fn pinned_openbao_version_selects_matching_public_key_and_signing_version() {
