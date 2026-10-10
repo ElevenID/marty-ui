@@ -12888,3 +12888,16 @@ Before coding the verifier, trace and bind Flow's persisted flow ownership,
 Issuance's authenticated API/job owner, and Canvas's configured tenant to an
 operation-specific proof. Signing Keys must validate that proof and payload
 binding directly, including direct-listener calls that bypass Gateway.
+
+Historical test-only key inventory refinement: two `tests/fixtures/*before*`
+Compose snapshots still contain `INTEGRATION_SECRET_MASTER_KEY` or its file
+variant. They are read only by
+`scripts/test_conformance_native_compose.py` and
+`scripts/test_selfhost_native_owner_compose.py` to compare the current model
+with pre-extraction deployments. Since there is no compatibility release
+requirement, replace those historical deltas with direct assertions on the
+current clean-install model, then remove both snapshots and any stale
+positive assertions about the old key. Keep the negative startup tests that
+prove the old key is rejected; those tests do not restore private-key use.
+This is separate from retiring the Python Canvas worker oracle graph, whose
+startup/REST fixtures still *execute* with raw master-key configuration.
