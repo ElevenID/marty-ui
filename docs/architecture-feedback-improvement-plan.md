@@ -2875,6 +2875,33 @@ Python timing/selector tests, Ruff, rustfmt, and targeted Rust package
 stale-comment nit was fixed. Real published-container execution and protected
 CI are still required before any phase attribution or speed claim.
 
+Exact-head [UI #1220 PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38010182064)
+passed the real Canvas suite and final gate. Its JSON-depth oracle emitted
+four successful, bounded phase rows: setup 4 ms, validation 29,556 ms,
+provider 90,435 ms, and encoding 195 ms. The enclosing published probe took
+126,817 ms and the concurrently executed database group 678,172 ms. This is
+one run, not an attributable before/after improvement. The provider oracle
+iterates 64 depth/shape/status cases, each exercising suspend, reinstate,
+and revoke through a real app with isolated row resets. It currently creates
+an app for each route (192 constructions). A network-disabled local run of
+20 `create_app()` calls in the exact pinned published image took 1,753 ms
+after import, suggesting avoidable repeated setup but not proving CI savings.
+The next local candidate reuses one app only within each case, preserving
+fresh app identity between cases, mutable database resets, the three route
+assertions, and the frozen full observation. Its 55 focused tests and Ruff
+pass; independent review found no P1–P3 issue after adding a three-route
+wiring guard. It is folded into the timing PR so one subsequent exact-head
+hosted run can check pinned-image parity and compare phase timing. That run
+is still required before merge; no speedup is claimed from the local probe.
+
+The same exact-head compile artifact separates the 599-second pinned-Bookworm
+container phase into test targets 253 seconds, issuance binaries 206 seconds,
+Gateway binary 109 seconds, and Flow binary 29 seconds. The three binary
+commands therefore account for 344 seconds in this run. They deliberately
+retain package-specific feature resolution; combining them is not yet a
+qualified optimization. The host `sccache` counters do not measure this
+network-disabled container, so they cannot justify a cache-hit claim.
+
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
 self-host image, and 459 seconds in database contracts. #1212's combined-head

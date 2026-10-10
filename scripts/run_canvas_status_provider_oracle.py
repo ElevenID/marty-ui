@@ -19,6 +19,15 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 
+def case_route_app(holder, factory, repository_port, repository):
+    """Keep one app per oracle case, never one shared across mutable cases."""
+    if holder[0] is None:
+        app = factory()
+        app.dependency_overrides[repository_port] = lambda: repository
+        holder[0] = app
+    return holder[0]
+
+
 async def observe(
     cases=None,
     *,
@@ -92,7 +101,9 @@ async def observe(
                 )
             ).scalar_one()
 
-    async def observe_credential_route(route_action, case, requests, sequence):
+    async def observe_credential_route(
+        route_action, case, requests, sequence, app_holder
+    ):
         from issuance import main
         from issuance.domain.ports import IIssuanceRepository
         from issuance.infrastructure.adapters.postgres_repository import (
@@ -162,8 +173,9 @@ async def observe(
             patch.object(repo, "save_credential", observed_save_credential),
             patch.object(repo, "save_delivery_record", observed_save_delivery),
         ):
-            app = main.create_app()
-            app.dependency_overrides[IIssuanceRepository] = lambda: repo
+            # The three actions are requests to one published app for this
+            # case, under the same per-request observers and environment.
+            app = case_route_app(app_holder, main.create_app, IIssuanceRepository, repo)
 
             async def observed_app(scope, receive, send):
                 try:
@@ -452,9 +464,10 @@ async def observe(
                     )
                     outcome["delivery_lifecycle"] = lifecycle
                 if credential_routes:
+                    app_holder = [None]
                     outcome["credential_routes"] = [
                         await observe_credential_route(
-                            route_action, case, requests, sequence
+                            route_action, case, requests, sequence, app_holder
                         )
                         for route_action in ("suspend", "reinstate", "revoke")
                     ]

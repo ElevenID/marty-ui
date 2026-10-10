@@ -13,7 +13,7 @@
     "scripts/canvas_observation_values.py": "91a6193ee484e128a8f992ec9072b26cb488caaf5a7adb7991edd29162afa609",
     "scripts/prepare_canvas_published_schema.py": "01c4c2e944d641578b58a8fe4d33cf260cac7a8f48a2df4f5ebff975e89b75dc",
     "scripts/run_canvas_json_depth_oracle.py": "fa2bb5a9194e88db82620f794d09748dfcc9b8d8eb317ba06519877e12821cab",
-    "scripts/run_canvas_status_provider_oracle.py": "be5cfe551983405e8e7294d0c1bb3a8bf665e0adc995c5c881c3043f301e2c1c",
+    "scripts/run_canvas_status_provider_oracle.py": "6a12abe6aa5e2f4b28da0a67dc07f6a881c96d93434151ee221745b4aa735ddb",
     "scripts/run_canvas_validation_boundary_oracle.py": "856e978e39d89415b15858171cc863283814646176efeb7086a4b4efa76a7c30"
   }
 }
