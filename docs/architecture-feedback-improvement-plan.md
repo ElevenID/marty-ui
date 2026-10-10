@@ -2864,6 +2864,17 @@ Next measure its internal validation/provider phases and the target's
 critical-path overlap before proposing a fixture or qualification change;
 keep the current required case inventory and exact-owned cleanup meanwhile.
 
+The next local A0/A6 candidate records four bounded JSON-depth oracle
+subphases—setup, published validation, published provider, and observation
+encoding—beside the unchanged frozen observation. The Rust fixture admits
+only the ordered payload-free rows and relays fixed labels to the existing
+CI timing artifact. The current-checkout input hashes are refreshed after
+source review; historical captures are untouched. Fifty-three focused
+Python timing/selector tests, Ruff, rustfmt, and targeted Rust package
+`cargo check` pass locally; independent review found no P1–P3 issue and its
+stale-comment nit was fixed. Real published-container execution and protected
+CI are still required before any phase attribution or speed claim.
+
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
 self-host image, and 459 seconds in database contracts. #1212's combined-head

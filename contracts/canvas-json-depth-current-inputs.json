@@ -8,11 +8,11 @@
     "contracts/canvas-review-recovery-migration.json": "6b616575cf990ce82c4ac2591361343d296624b3ccf05787acd32f7be2b5a087",
     "contracts/canvas-worker-consumer-range-oracle.json": "3ecab9d897261d5f28375a07919c6f522571168fbe48178a57e458f66e921327",
     "contracts/fixtures/canvas_review_recovery_claim.py": "b2bde4ce51071bcd8c33f044c66c9bf963243c13a5dec6bfcea951086aee5361",
-    "rust/services/issuance/tests/support/canvas_published_database.rs": "c72170437e29a45db3ab361063d602f145e0e49a83525a86b7d99e9122e9c5b2",
+    "rust/services/issuance/tests/support/canvas_published_database.rs": "34154fcd751faa64837814218363fc61ae7e47aa394b6b1ee1fc228af50ac33a",
     "scripts/canvas_json_tree_observation.py": "bd80063c57350d3535e5655db8bfca6b04dfbed92909bdea888e6ebfbbe76ae8",
     "scripts/canvas_observation_values.py": "91a6193ee484e128a8f992ec9072b26cb488caaf5a7adb7991edd29162afa609",
     "scripts/prepare_canvas_published_schema.py": "01c4c2e944d641578b58a8fe4d33cf260cac7a8f48a2df4f5ebff975e89b75dc",
-    "scripts/run_canvas_json_depth_oracle.py": "1067b969099b7b5963f501ff915a3d10867cfb5a4ac3f4105ba53fe4cd8f86b4",
+    "scripts/run_canvas_json_depth_oracle.py": "fa2bb5a9194e88db82620f794d09748dfcc9b8d8eb317ba06519877e12821cab",
     "scripts/run_canvas_status_provider_oracle.py": "be5cfe551983405e8e7294d0c1bb3a8bf665e0adc995c5c881c3043f301e2c1c",
     "scripts/run_canvas_validation_boundary_oracle.py": "856e978e39d89415b15858171cc863283814646176efeb7086a4b4efa76a7c30"
   }

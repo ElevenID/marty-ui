@@ -108,6 +108,54 @@ mod diagnostic_tests {
         }
     }
 
+    #[test]
+    fn json_depth_phase_timing_accepts_only_fixed_payload_free_rows() {
+        let report = json!({"ci_phase_timing": [
+            {"name": "json_depth.setup", "duration_ms": 1},
+            {"name": "json_depth.validation", "duration_ms": 2},
+            {"name": "json_depth.provider", "duration_ms": 3},
+            {"name": "json_depth.encoding", "duration_ms": 4},
+        ]});
+        assert_eq!(
+            json_depth_phase_timings(&report).unwrap(),
+            [
+                ("json_depth.setup", 1),
+                ("json_depth.validation", 2),
+                ("json_depth.provider", 3),
+                ("json_depth.encoding", 4),
+            ]
+        );
+        for changed in [
+            {
+                let mut changed = report.clone();
+                changed["ci_phase_timing"][0]["name"] = json!("secret-url");
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_phase_timing"][0]["duration_ms"] = json!(-1);
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_phase_timing"][0]["duration_ms"] = json!(180_001);
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_phase_timing"][0]["payload"] = json!("secret");
+                changed
+            },
+            {
+                let mut changed = report.clone();
+                changed["ci_phase_timing"].as_array_mut().unwrap().pop();
+                changed
+            },
+        ] {
+            assert!(json_depth_phase_timings(&changed).is_err());
+        }
+    }
+
     fn recovery_rows() -> (Uuid, Vec<(String, Value)>) {
         let (mut database, id, scope) = borrow_fixture();
         database["HostConfig"]["Privileged"] = json!(false);
