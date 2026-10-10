@@ -12662,3 +12662,19 @@ It does not cover the full 510-file UI PR diff or replace live holder,
 multi-tenant authorization and release-artifact acceptance. Local Go tooling
 is unavailable on this Windows host; the exact-head packaged plugin and
 Canvas lanes passed hosted CI.
+
+2026-10-10 historical Canvas oracle retirement inventory: the current
+acceptance source has 26 `run_canvas_worker_*_oracle.py` scripts, with the
+startup and REST seed helpers still injecting synthetic
+`INTEGRATION_SECRET_MASTER_KEY` into the frozen Python worker. The native
+Issuance tests have 28 `canvas_worker_*` support modules covering many of the
+same startup, REST, lease, timeout, provider and OAuth cases, but the names
+are not a one-to-one proof of full behavioral parity. The normal PR Canvas
+lane runs with `MARTY_CANVAS_FULL_QUALIFICATION=0`; scheduled/dispatch
+qualification can still invoke the frozen oracle graph. To meet the requested
+no-legacy-test boundary, compare each historical outcome to an actual Rust
+worker test, add missing native cases, then remove the Python oracle runners,
+their raw-master-key fixtures and frozen result contracts together. Preserve
+the regression assertions in Rust rather than dropping coverage. Product
+`services/Dockerfile` does not copy these scripts, but that packaging fact
+does not satisfy the test-retirement requirement.
