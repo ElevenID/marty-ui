@@ -10910,3 +10910,18 @@ or live OpenBao acceptance. Dart analysis passed; the default Flutter suite
 passed 199 tests with four skips. Non-generated coverage reached 88.84%
 (1,791/2,016), still below the 90% gate. The tests remain local in the
 grouped mobile PR batch.
+
+2026-10-09 mobile protected coverage gate: local Authenticator commit
+`4a3d8aa` adds behavioral tests for the default Flutter secure-storage
+pairing and opaque token-rotation path, verified receipt display and deletion
+provenance, malformed native presentation routes and query constraints,
+exact disclosure approval, and eviction of the oldest unused approval after
+the bounded 16-session limit. Dart analysis, the mobile custody source guard,
+and `git diff --check` passed. The full Flutter suite passed 204 tests with
+four skips. Non-generated line coverage reached **90.23% (1,819/2,016)**,
+above the protected 90% gate under the existing exclusion rules for
+generated bridge/localization code. This is a local test result, not hosted
+CI or real KMS/device acceptance. The native liveness signing export,
+extended unsupported SDK surface, server-backed challenge/submission, and
+release-device checks remain open; the grouped Authenticator batch has not
+been pushed yet.
