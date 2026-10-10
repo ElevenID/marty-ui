@@ -3016,7 +3016,9 @@ disposable, isolated published-schema databases. Retain the one full oracle
 and its frozen comparison; do not switch constructors based on source reading
 alone.
 
-Local native-seed pilot (2026-10-09, unpublished): a new constructor retains
+Local native-seed pilot (2026-10-09,
+[UI #1223](https://github.com/ElevenID/marty-ui/pull/1223), awaiting Linux CI):
+a new constructor retains
 the pinned published migrations, review-recovery overlay, isolated PostgreSQL
 container and owned cleanup, then executes the nine existing issued-review
 seed statements plus the delivery row without the provider oracle. Thirteen
