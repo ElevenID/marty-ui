@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 17:33 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-10 00:26 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -62,6 +62,11 @@ guarded its parsed ConfigMap/container environment. Both passed full PR and
 protected queue checks and merged; main's one-reviewer rule was restored and
 verified. These are reliability and deployment-correctness changes, not
 measured CI speedups.
+UI #1216 and #1217 have now merged the bounded Kubernetes policy test-source
+lane and its first exact-source pilot. UI #1218 merged exact-digest Docker Hub
+mirror/cache fallback with all required PR and protected checks; it addresses
+registry-throttling reliability, not a measured CI speedup. The protected
+one-reviewer rule was restored after the merges.
 
 ## Objective and scope
 
@@ -2776,8 +2781,8 @@ unrelated Rust/image/browser/UI matrices, executed all 273 selected cases
 release job took 2m14s. This observed gate is 5m09s shorter than #1214's
 9m17s source-only gate, but the heads, runners, and changes differ; it is a
 scoped feedback observation, not a controlled attribution or whole-pipeline
-average. #1217's full protected merge-group validation and main merge are
-still pending at this checkpoint.
+average. Full protected merge-group validation was still pending at that
+checkpoint; it later passed and #1217 merged.
 
 The first #1217 protected
 [run 37987570280](https://github.com/ElevenID/marty-ui/actions/runs/37987570280)
@@ -2792,7 +2797,7 @@ unchanged PostgreSQL service, cargo-deny action, and several image builds;
 Nginx integration also failed during its Docker build, though its helper did
 not expose the underlying registry error. The required gate failed and GitHub
 removed the entry. This is an external registry failure, not a test regression or
-permission to bypass the image proof; #1217 remains open and unmerged.
+permission to bypass the image proof; #1217 remained open at that checkpoint.
 
 The initial [mirror PR #1218](https://github.com/ElevenID/marty-ui/pull/1218)
 preserves canonical digest-pinned service references and configures a Docker
@@ -2805,10 +2810,41 @@ Passport Fence PostgreSQL tests hit 429 after the daemon mirror step, and the
 Docker-based cargo-deny action hit 429 for its pinned Rust base. The separate
 organization Workflow Quality job also failed pulling its pinned Python
 runtime image. Nginx integration passed, but that alone cannot attribute a
-cache improvement. #1218 was marked draft; do not merge or claim a speedup
-until the required hosted and protected gates pass. Next work must cover
-pre-step services and repository/organization runtime-image pulls with
-digest-preserving, fallback-safe distribution; maintain the full checks.
+cache improvement. #1218 was marked draft at that checkpoint. The follow-up
+revisions covered pre-step services and repository/organization runtime-image
+pulls with digest-preserving, fallback-safe distribution while retaining the
+full checks.
+
+Final October 10 UTC reconciliation: #1217 passed full protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38006523302)
+and merged at 00:16:56 UTC. #1218's exact-head
+[PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38004610964)
+passed, including Canvas (23m20s), and its post-#1217
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38006633615)
+passed all required jobs before merge at 00:25:52 UTC. The implementation
+preserves oracle-pinned OCI digests and canonical fallback, carries the
+selected PostgreSQL image into the isolated self-host child, and pins the
+rendered-base Redis pull; independent review found no P1-P3 issue. The first
+#1218 queue attempt was invalidated by a subsequent source push, causing a
+CodeQL upload to fail against the deleted queue ref; the final queue run
+passed. Main's one-reviewer rule is restored. No attributable pipeline-wide
+speedup is claimed from #1218 without comparable before/after runs.
+
+The final #1218 [Canvas timing artifact](https://github.com/ElevenID/marty-ui/actions/runs/38006633615)
+records 600 seconds compiling reusable Rust test executables, 387 seconds
+building the public self-host image, and 581 seconds in database contracts.
+The database phase started 106 exact-owned PostgreSQL containers, with 330
+seconds of aggregate readiness and 783 seconds of aggregate migration/seed
+time across concurrently executed cases. These sums are not critical-path
+durations: worker, composition, self-host, and Flow targets overlap. The
+three stages remain the largest observed Canvas contributors. Compared with
+#1212's 618/375/647 seconds, this different combined head gives no clean
+attribution for the change; investigate fixture/setup reuse with isolation
+proof before changing the required case inventory.
+The artifact's host `sccache` counters show zero hits and misses, but the
+Bookworm compile runs inside a separate network-disabled container without
+the host `RUSTC_WRAPPER`; these counters do not measure its compilations.
+Do not claim a cache regression or add a new cache layer from that artifact.
 
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
