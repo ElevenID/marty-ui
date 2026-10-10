@@ -11693,6 +11693,21 @@ credential-envelope and redacted-config round-trip tests, all-target
 warnings-denied Clippy, and Rustfmt check passed.
 This removes plaintext registry persistence for new writes but is not K6
 completion: the UI still accepts literal tokens for some modes, cloud-native
-identity resolution is absent, and real Redis/OpenBao/cloud-provider acceptance
-has not yet run. No legacy Redis credential migration is planned for the
+identity resolution is absent, and live cloud-provider acceptance has not yet
+run. No legacy Redis credential migration is planned for the
 unreleased cutover; existing plaintext rows fail closed and must be cleared.
+
+2026-10-10 K6 local live custody checkpoint: added an opt-in Signing Keys
+registry test guarded by disposable Redis and OpenBao sentinels. It saves a
+synthetic tenant provider credential through `RegistryStore`, reads the raw
+Redis JSON to prove the token is absent and the OpenBao `vault:v` envelope is
+present, then reloads the exact credential through the real Transit decrypt
+path. Ran it successfully against newly created isolated Redis 7 Alpine and
+OpenBao 2.5.2 dev containers with a freshly created non-exportable
+`integration-secret-envelope-marty-aes256` key; both containers were removed
+afterward. This strengthens the storage-path evidence but does not prove live
+cloud provider authentication, provider-specific credential resolution, or a
+released image.
+The existing hosted contracts lane now provisions that non-exportable Transit
+key and runs the guarded Rust test after its disposable Redis/OpenBao sentinels
+are set. Hosted evidence is pending the next grouped UI push and CI run.

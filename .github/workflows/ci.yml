@@ -1793,6 +1793,12 @@ jobs:
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
           export BAO_TOKEN=test-only
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request POST \
+            --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
+            http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null
+          cargo test --locked -p marty-signing-keys --lib \
+            registry::tests::persisted_registry_credentials_use_real_openbao_ciphertext -- --ignored --exact
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
             --header 'Content-Type: application/json' --request PUT \
             --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"list\"] }"}' \
             http://127.0.0.1:8200/v1/sys/policies/acl/kms-lti-test-signer >/dev/null

@@ -2234,6 +2234,66 @@ mod tests {
         url
     }
 
+    #[tokio::test]
+    #[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
+    async fn persisted_registry_credentials_use_real_openbao_ciphertext() {
+        let redis_url = disposable_redis_url().await;
+        let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let parsed = reqwest::Url::parse(&bao_url).expect("disposable OpenBao URL syntax");
+        assert!(matches!(
+            parsed.host_str(),
+            Some("127.0.0.1" | "localhost" | "::1")
+        ));
+        let token = std::env::var("BAO_TOKEN").expect("disposable OpenBao token");
+        let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+            .expect("disposable OpenBao sentinel value");
+        assert!(nonce.len() >= 16);
+        let marker = reqwest::Client::new()
+            .get(format!(
+                "{bao_url}/v1/secret/data/marty-test-disposable-guard"
+            ))
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(
+            marker.pointer("/data/data/nonce").and_then(Value::as_str),
+            Some(nonce.as_str())
+        );
+        let organization_id = format!("registry-auth-{}", Uuid::new_v4().simple());
+        let secret = format!("test-token-{}", Uuid::new_v4().simple());
+        let provider = OpenBaoEnvelopeProvider::new(bao_url, token).unwrap();
+        let store = RegistryStore::connect(&redis_url)
+            .await
+            .unwrap()
+            .with_auth_envelopes(Some(provider));
+        let config = json!({"services": [{
+            "id": "provider-a", "service_type": "openbao-transit",
+            "endpoint": "https://external.example", "auth_mode": "token",
+            "auth_reference": secret, "key_reference": "issuer-a",
+            "algorithms": ["ES256"]
+        }]});
+        store.save(&organization_id, &config).await.unwrap();
+        let mut connection = store.connection();
+        let stored: String = connection.get(storage_key(&organization_id)).await.unwrap();
+        assert!(!stored.contains(&secret));
+        let stored: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(stored["services"][0]["auth_reference"], "");
+        assert!(stored["services"][0][AUTH_ENVELOPE_FIELD]["ciphertext"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("vault:v")));
+        assert_eq!(
+            store.load(&organization_id).await.unwrap()["services"][0]["auth_reference"],
+            secret
+        );
+        let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
+    }
+
     #[test]
     fn public_config_resolve_frozen_selection_cases() {
         let contract: Value = serde_json::from_str(include_str!(
