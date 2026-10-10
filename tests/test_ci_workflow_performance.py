@@ -3346,7 +3346,7 @@ GATEWAY_REGISTRATIONS = [
     (
         "operations_gateway_candidate_preserves_review_lifecycle",
         "canvas_gateway_lifecycle_replay",
-        "start_with_status_provider",
+        "start_with_status_native_seed",
         5,
         "gateway lifecycle replay must not deadlock",
     ),
@@ -3489,7 +3489,7 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
             "wrong-specialized-database": (
                 f"{database}()",
                 "start_with_review_recovery()"
-                if database == "start_with_status_provider"
+                if database == "start_with_status_native_seed"
                 else "start_with_status_provider()",
             ),
             "cleanup": ("    owned.close().unwrap();", ""),

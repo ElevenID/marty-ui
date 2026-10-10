@@ -858,6 +858,19 @@ Windows. A7 remains deferred until a post-#355 representative run and a
 no-duplicate-compilation split design show an actual critical-path benefit;
 all security, feature, benchmark, and platform obligations remain required.
 
+The later exact-head [#355 PR run 38001294613](https://github.com/ElevenID/marty-core/actions/runs/38001294613)
+passed. Preflight took 726 seconds, affected Rust tests 472 seconds, and the
+parallel Native ZKP Security Boundary 757 seconds. The latter spent 473
+seconds on the disposable OpenBao issuance proof, 110 seconds on vendored
+Longfellow regressions, and 64 seconds on a real prove/verify round trip.
+Security started earlier and took longer, but preflight finished 32 seconds
+later and was the last required job before the gate. Thus this run still puts
+preflight at the PR tail, with only a 32-second observed tail to remove before
+security becomes limiting; it does not establish a beneficial no-duplicate
+split. A7 remains deferred. The current Core main selector includes deleted and
+renamed files, package-owned non-Rust fixtures, and unknown-input fallback;
+an older local checkout must not be used to reimplement those fixes.
+
 ## Next renewal decomposition: bounded obligations (unpublished)
 
 The additive library owner is
@@ -2903,6 +2916,22 @@ wiring guard. It is folded into the timing PR so one subsequent exact-head
 hosted run can check pinned-image parity and compare phase timing. That run
 is still required before merge; no speedup is claimed from the local probe.
 
+The new exact-head [#1220 run 38013171013](https://github.com/ElevenID/marty-ui/actions/runs/38013171013)
+passed all required jobs and the final gate. The published JSON-depth and
+status-provider frozen-oracle tests are explicitly `ok` in the Canvas log.
+Provider time was 29,887 ms versus 90,435 ms on the preceding passing head
+(60,548 ms, 67% lower); the enclosing JSON-depth probe was 56,664 versus
+126,817 ms. Canvas job wall time was 29m05s versus 32m27s, but compilation,
+image-build, scheduling, and overlapping database work vary; do not attribute
+that whole-job difference solely to app reuse. Fourteen status-provider
+database probes summed 81,644 versus 97,658 ms, also across different runs.
+The provider oracle seeds `credential-review` and related rows consumed by
+native status tests. Removing its repeated execution without separately
+preserving those seed and final-state effects would change the tests; defer
+that proposed deduplication until the fixture boundary is independently
+proved. [Protected run 38029895146](https://github.com/ElevenID/marty-ui/actions/runs/38029895146)
+passed and #1220 merged into main as `ae7cfc797` on 2026-10-10.
+
 The same exact-head compile artifact separates the 599-second pinned-Bookworm
 container phase into test targets 253 seconds, issuance binaries 206 seconds,
 Gateway binary 109 seconds, and Flow binary 29 seconds. The three binary
@@ -2910,6 +2939,17 @@ commands therefore account for 344 seconds in this run. They deliberately
 retain package-specific feature resolution; combining them is not yet a
 qualified optimization. The host `sccache` counters do not measure this
 network-disabled container, so they cannot justify a cache-hit claim.
+
+The public self-host image is a distinct release-profile build of the complete
+service binary list in `services/Dockerfile` and
+`scripts/build-rust-service-binaries.sh`; the Canvas acceptance executables
+and helper binaries are test/development-profile artifacts from a host-mounted
+target directory. Copying those binaries into the production image would
+change the qualified artifact, so the 402-second image build cannot be
+eliminated by that reuse. The image
+already uses a cargo-chef dependency stage, BuildKit cache scope, and the
+repository's filtered Docker context. A narrower image or changed cache mode
+needs its own runtime/packaging equivalence proof and comparable timing.
 
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
@@ -2920,6 +2960,90 @@ slowed together; #1211 also changed the combined head. These are different
 load/code conditions, not an attributable regression or a reason to delete
 one named case. A further fixture-reuse change needs case ownership and
 isolation proof under comparable runs.
+
+The #1220 timing artifact puts `json_consumer` at 27,853 ms for migration/seed
+and 29,491 ms for its serial probe. Its 66 validation cases sum to 12,466 ms;
+its 66 provider cases sum to 12,350 ms. Provider routes already reuse one app
+within each case. Validation constructs an app per case while patching
+case-specific environment, repository, file, and HTTP boundaries; cross-case
+reuse is not safe without proving app configuration does not capture those
+inputs. `worker_startup` took 21,902 ms in migration/seed; its oracle starts
+real child processes and checks their heartbeat, which remains its purpose.
+Neither is a
+justified next coverage reduction or a measured end-to-end speedup.
+
+[UI #1222](https://github.com/ElevenID/marty-ui/pull/1222) records the
+source-backed Gateway-to-Credential-Template issuer-resolution consumer in
+the fail-closed shadow planner. Its exact-head [PR run
+38016397675](https://github.com/ElevenID/marty-ui/actions/runs/38016397675)
+passed the planner-owned release tests, including the new named regression,
+and the final gate in 2m08s from workflow start to gate completion. This
+planner-only input legitimately selected the narrow PR lane; the protected
+merge group remains full. It is one scoped observation, not a pipeline-wide
+average or a speedup caused by the added edge.
+[Protected run 38029925495](https://github.com/ElevenID/marty-ui/actions/runs/38029925495)
+passed and #1222 merged into main as `ab721eee6` on 2026-10-10.
+
+The same #1220 Canvas artifact has 83 default `published_probe`
+`migration_seed` rows totaling 361,983 ms across concurrently run tests.
+`PublishedDatabase::start_probe_with_scope` gives each probe its own
+tmpfs-backed PostgreSQL container and fixed
+`canvas_published_schema_test` database; the pinned Python oracles use that
+same fixed name inside the container network namespace. A shared-server
+template would need a new namespace/database and cleanup contract, not just
+`CREATE DATABASE ... TEMPLATE`, and would alter the current isolation proof.
+The 107,223 ms timeout and 111,803 ms lease-expiry preflights retain live
+deadline/lease behavior. Neither aggregate sum is a sequential CI saving.
+
+There are 14 `start_with_status_provider()` call sites in the Canvas
+composition target. Only `status_provider_matches_published_python` directly
+compares its oracle to the frozen reference; the other 13 use the resulting
+database for native Gateway/status assertions. The constructor also applies
+the review-recovery migration, and the Python oracle seeds issued/delivery
+rows before exercising mutable provider and credential-route cases. A future
+seed-only fixture could reuse the existing checked-in scenario SQL while
+retaining the one full independent oracle, but it must prove the native
+tests' exact required initial/final rows, recovery migration, pinned-input
+closure, and cleanup before replacing any call. No skip or saving is claimed.
+
+Source follow-up: a bare replay of `shared.seed` is **not** equivalent to the
+current fixture. The published status oracle additionally inserts
+`delivery-provider`, iterates provider cases, and can persist credential and
+delivery changes (including credential-route writes). Native runtime setup
+updates those same rows, while review tests snapshot the initial delivery row
+and compare unaffected rows across cases. Therefore first compare the
+post-oracle and seed-only database states for the columns each native case
+reads, then test any narrower initializer against all 13 native cases on
+disposable, isolated published-schema databases. Retain the one full oracle
+and its frozen comparison; do not switch constructors based on source reading
+alone.
+
+Native-seed pilot (2026-10-09,
+[UI #1223](https://github.com/ElevenID/marty-ui/pull/1223)):
+a new constructor retains the pinned published migrations, review-recovery
+overlay, isolated PostgreSQL
+container and owned cleanup, then executes the nine existing issued-review
+seed statements plus the delivery row without the provider oracle. Thirteen
+native composition cases use it; the independent published-Python/frozen
+comparison still runs once and now checks the seeded and published resulting
+rows across all ten fixture tables, ignoring generated timestamps only.
+Twelve available native cases passed on Windows, including the two packaged
+process cases. The exact-head [Linux PR run 38019790357](https://github.com/ElevenID/marty-ui/actions/runs/38019790357)
+passed the Unix-only mirror-worker lifecycle, independent published/frozen
+oracle, Release Contract Tests, Canvas, Analyze Rust/Actions, and final gate. The comparison
+and the 22 current-input hash tests also passed locally.
+Separate fixed `migration_seed` and `fixture_seed` labels now cover the new
+constructor; the timing collector accepts only those exact labels. Its 53
+targeted policy/current-input tests and Docker-backed parity test passed
+locally. The Linux timing artifact recorded one full status-provider migration
+(6,810 ms), 14 native-seed migrations (69,336 ms total, including parity),
+and 14 native fixture seeds (3,769 ms total). The #1220 baseline had 14 full
+provider migrations totaling 81,644 ms. This proves less repeated oracle
+work, not a wall-clock saving: the Canvas job was 30m48s versus 29m05s and
+composition target 469s versus 350s. Unchanged scenario durations were also
+1.36x higher on the new run, so runner variation prevents causal attribution.
+The PR was rebased after #1220 and #1222 merged; its rewritten head still
+requires fresh exact-head validation and protected queue qualification.
 
 ## Design references
 

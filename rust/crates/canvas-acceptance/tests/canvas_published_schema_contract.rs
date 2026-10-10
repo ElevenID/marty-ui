@@ -528,7 +528,7 @@ async fn operations_gateway_candidate_preserves_review_lifecycle() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -936,7 +936,7 @@ async fn status_runtime_preserves_credential_and_delivery_effects() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -949,6 +949,88 @@ async fn status_runtime_preserves_credential_and_delivery_effects() {
     owned.close().unwrap();
 }
 
+async fn assert_status_native_seed_matches_published(
+    published: &canvas_published_database::PublishedDatabase,
+) {
+    // The independent oracle remains the only published-behavior capture.
+    // Check that its resulting native-test rows can be initialized without
+    // replaying the whole provider matrix in every separate database.
+    let seeded = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
+        .await
+        .unwrap();
+    let first = PgPoolOptions::new().connect(&published.url).await.unwrap();
+    let second = PgPoolOptions::new().connect(&seeded.url).await.unwrap();
+    for (table, query) in [
+        (
+            "organizations",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM organization_service.organizations t",
+        ),
+        (
+            "application_templates",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.application_templates t",
+        ),
+        (
+            "issued_credentials",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.issued_credentials t",
+        ),
+        (
+            "credential_delivery_records",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.credential_delivery_records t",
+        ),
+        (
+            "canvas_program_bindings",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_program_bindings t",
+        ),
+        (
+            "canvas_platforms",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_platforms t",
+        ),
+        (
+            "issuance_transactions",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.issuance_transactions t",
+        ),
+        (
+            "applications",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.applications t",
+        ),
+        (
+            "canvas_learner_identities",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_learner_identities t",
+        ),
+        (
+            "canvas_evidence_sync_targets",
+            "SELECT COALESCE(jsonb_agg(to_jsonb(t) ORDER BY id), '[]'::jsonb) FROM issuance_service.canvas_evidence_sync_targets t",
+        ),
+    ] {
+        let mut left: serde_json::Value = sqlx::query_scalar(query)
+            .fetch_one(&first)
+            .await
+            .unwrap();
+        let mut right: serde_json::Value = sqlx::query_scalar(query)
+            .fetch_one(&second)
+            .await
+            .unwrap();
+        for rows in [&mut left, &mut right] {
+            for row in rows.as_array_mut().unwrap() {
+                for timestamp in [
+                    "created_at", "updated_at", "issued_at", "status_updated_at",
+                    "activated_at", "expires_at", "submitted_at", "verified_at",
+                    "next_run_at",
+                ] {
+                    row.as_object_mut().unwrap().remove(timestamp);
+                }
+            }
+        }
+        assert_eq!(
+            left, right,
+            "native status seed differs from published {table}"
+        );
+    }
+    first.close().await;
+    second.close().await;
+    seeded.close().unwrap();
+}
+
 #[tokio::test]
 async fn status_provider_matches_frozen_protocol() {
     canvas_status_provider_replay::replay(&canvas_status_provider_replay::frozen()).await;
@@ -959,7 +1041,7 @@ async fn status_runtime_composes_review_resolution_with_configured_http() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -977,7 +1059,7 @@ async fn status_main_process_resolves_reviews_with_real_http_publication_and_mir
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -996,7 +1078,7 @@ async fn canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly(
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1015,7 +1097,7 @@ async fn status_runtime_preserves_unicode_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1033,7 +1115,7 @@ async fn status_runtime_preserves_charset_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1055,6 +1137,7 @@ async fn status_provider_matches_published_python() {
         .await
         .unwrap();
     let oracle = owned.oracle.clone().unwrap();
+    assert_status_native_seed_matches_published(&owned).await;
     owned.close().unwrap();
     assert_eq!(oracle, canvas_status_provider_replay::frozen());
     canvas_status_provider_replay::replay(&oracle).await;
@@ -1065,7 +1148,7 @@ async fn status_runtime_preserves_iso2022_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1083,7 +1166,7 @@ async fn status_runtime_preserves_ordinal_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1101,7 +1184,7 @@ async fn status_runtime_preserves_utf7_label_failures_and_recovery() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1120,7 +1203,7 @@ async fn status_runtime_matches_utf7_full_credential_routes() {
         return;
     }
     canvas_status_provider_replay::replay_utf7().await;
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1143,7 +1226,7 @@ async fn status_runtime_matches_json_full_credential_routes() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
@@ -1161,7 +1244,7 @@ async fn status_runtime_matches_json_depth_full_credential_routes() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_status_provider()
+    let owned = canvas_published_database::PublishedDatabase::start_with_status_native_seed()
         .await
         .unwrap();
     let pool = PgPoolOptions::new()
