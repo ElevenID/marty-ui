@@ -2,14 +2,14 @@
   "schema_version": 1,
   "sign_cases": [
     {
-      "name": "aws_kms_raw_message",
+      "name": "aws_kms_prehashed_message",
       "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "algorithm": "ES256", "aws_signing_algorithm": "ECDSA_SHA_256" },
       "payload_b64": "cGF5bG9hZA",
       "expected_request": {
         "method": "POST",
         "path_query": "/",
         "headers": { "x-amz-target": "TrentService.Sign" },
-        "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test", "Message": "cGF5bG9hZA==", "MessageType": "RAW", "SigningAlgorithm": "ECDSA_SHA_256" }
+        "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test", "Message": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU=", "MessageType": "DIGEST", "SigningAlgorithm": "ECDSA_SHA_256" }
       },
       "provider_response": { "Signature": "MAYCAQECAQI=" },
       "expected_response": { "signature_b64": "MAYCAQECAQI", "signature_encoding": "der", "transcoded_signature_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg" }
@@ -225,7 +225,7 @@
       "expected_response": { "kty": "OKP", "crv": "Ed448", "x": "2pGLo-V_3KAyb0bH7IQ7qPyw1X-hXyWIpXuunfVYIQNR5-FVgbJEWcCnzeHoNVgtcXwGmepy6MkA", "kid": "ed448-key" }
     },
     {
-      "name": "azure_hsm_embedded_public_jwk",
+      "name": "azure_embedded_public_jwk",
       "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "azure-token" },
       "expected_request": { "method": "GET", "path_query": "/keys/issuer-key?api-version=7.4", "headers": { "authorization": "Bearer azure-token" } },
       "provider_response": { "key": { "kty": "EC-HSM", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "d": "must-not-cross-boundary" } },

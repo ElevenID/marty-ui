@@ -5626,13 +5626,9 @@ fn discovered_key_matches_algorithm(response: &Value, algorithm: &str) -> Result
                 .get("key_usage")
                 .and_then(Value::as_str)
                 .ok_or(())?;
-            let native = match algorithm {
-                "ES256" => "ECDSA_SHA_256",
-                "ES384" => "ECDSA_SHA_384",
-                "ES512" => "ECDSA_SHA_512",
-                "RS256" => "RSASSA_PKCS1_V1_5_SHA_256",
-                "PS256" => "RSASSA_PSS_SHA_256",
-                _ => return Ok(false),
+            let native = match kms::aws_signing_algorithm(algorithm) {
+                Ok(native) => native,
+                Err(_) => return Ok(false),
             };
             let supported = response
                 .get("signing_algorithms")

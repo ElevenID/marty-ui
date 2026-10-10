@@ -11610,3 +11610,33 @@ sign and certificate flow is still required before claiming provider support.
 The provider-neutral HTTP golden vector now supplies an Azure `EC-HSM` Get
 Key response and expects a public `EC` JWK; its full public-key-discovery
 test passed, covering the request, response and private-member stripping.
+
+K6 AWS signing self-review found a payload-size and algorithm-binding gap.
+[AWS KMS Sign](https://docs.aws.amazon.com/kms/latest/APIReference/API_Sign.html)
+limits RAW messages to 4096 bytes and documents DIGEST mode for larger
+pre-hashed input. The local adapter now hashes the supported JOSE RSA/ECDSA
+payload once, sends `MessageType=DIGEST`, maps the JOSE algorithm to the
+matching AWS signing algorithm in one Rust function shared with public-key
+discovery, and rejects conflicting native overrides before network I/O.
+The provider HTTP golden vector now expects the digest request; its signing
+test passed. A mismatched-algorithm negative and an 8-KiB digest boundary
+test passed. The complete Signing Keys library suite passed 144 tests with
+eight expected opt-in ignores; warnings-denied library Clippy and Rustfmt
+passed. This is local and should join the Azure correction in one UI push.
+Real AWS KMS enrollment, long-input signing and certificate binding still
+need credentials and live acceptance before K6 can close.
+
+K6 cloud-auth scope remains larger than the two crypto fixes. The service
+catalog advertises AWS `iam_role`/`access_key`/`assume_role`, Azure
+`managed_identity`/`client_secret`/`certificate`, and GCP
+`workload_identity`/`service_account`. Current AWS signing uses the SDK
+default credential chain regardless of the registered `auth_mode` and
+`auth_reference`; Azure/GCP request builders only attach `auth_reference`
+as a literal bearer token and do not acquire an identity token. The
+validation policy can report managed/workload identity modes as selected
+before those adapters actually authenticate. This is a real supported-path
+gap, not a reason to remove the advertised modes. Implement provider-native
+credential resolution and tenant-scoped reference handling in Rust, then
+exercise the selected auth modes and sign/public-key/certificate flows with
+live provider identities. Until then, K6 and cloud-provider release claims
+remain open even if HTTP stubs and OpenBao live tests pass.

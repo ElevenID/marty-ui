@@ -1138,13 +1138,22 @@ async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
         "key_reference",
         "aws-kms adapter requires 'key_reference' in service_config",
     )?;
-    let algorithm = string(config, "aws_signing_algorithm").unwrap_or("ECDSA_SHA_256");
+    let jose_algorithm = string(config, "algorithm").unwrap_or("ES256");
+    let algorithm = aws_signing_algorithm(jose_algorithm)?;
+    if string(config, "aws_signing_algorithm").is_some_and(|configured| configured != algorithm) {
+        return Err(KmsError::InvalidConfig(format!(
+            "AWS signing algorithm must be {algorithm} for {jose_algorithm}."
+        )));
+    }
+    // AWS KMS caps RAW messages at 4096 bytes. Its DIGEST mode signs the
+    // pre-hashed input without hashing it a second time.
+    let (_, digest) = signing_digest(jose_algorithm, payload)?;
     let output = aws_client(config)
         .await
         .sign()
         .key_id(key_id)
-        .message(Blob::new(payload))
-        .message_type(MessageType::Raw)
+        .message(Blob::new(digest))
+        .message_type(MessageType::Digest)
         .signing_algorithm(SigningAlgorithmSpec::from(algorithm))
         .send()
         .await
@@ -1157,6 +1166,23 @@ async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
                 "AWS KMS sign response did not include binary Signature".to_string(),
             )
         })
+}
+
+pub(crate) fn aws_signing_algorithm(algorithm: &str) -> Result<&'static str, KmsError> {
+    match algorithm {
+        "ES256" => Ok("ECDSA_SHA_256"),
+        "ES384" => Ok("ECDSA_SHA_384"),
+        "ES512" => Ok("ECDSA_SHA_512"),
+        "RS256" => Ok("RSASSA_PKCS1_V1_5_SHA_256"),
+        "RS384" => Ok("RSASSA_PKCS1_V1_5_SHA_384"),
+        "RS512" => Ok("RSASSA_PKCS1_V1_5_SHA_512"),
+        "PS256" => Ok("RSASSA_PSS_SHA_256"),
+        "PS384" => Ok("RSASSA_PSS_SHA_384"),
+        "PS512" => Ok("RSASSA_PSS_SHA_512"),
+        other => Err(KmsError::InvalidConfig(format!(
+            "Unsupported AWS signing algorithm '{other}'."
+        ))),
+    }
 }
 
 async fn public_key_aws(config: &Value) -> Result<Value, KmsError> {
@@ -1986,6 +2012,28 @@ mod tests {
         }
         assert!(signing_digest("unsupported", b"payload").is_err());
         assert!(openbao_key_type("unsupported").is_err());
+        assert_eq!(aws_signing_algorithm("ES384").unwrap(), "ECDSA_SHA_384");
+        assert_eq!(
+            aws_signing_algorithm("RS256").unwrap(),
+            "RSASSA_PKCS1_V1_5_SHA_256"
+        );
+        assert!(aws_signing_algorithm("EdDSA").is_err());
+        assert_eq!(signing_digest("ES256", &[42; 8192]).unwrap().1.len(), 32);
+    }
+
+    #[tokio::test]
+    async fn aws_signing_rejects_conflicting_provider_algorithm_before_network_io() {
+        let result = sign(SignRequest {
+            service_config: json!({
+                "service_type": "aws-kms",
+                "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test",
+                "algorithm": "RS256",
+                "aws_signing_algorithm": "ECDSA_SHA_256"
+            }),
+            payload_b64: "cGF5bG9hZA".into(),
+        })
+        .await;
+        assert!(matches!(result, Err(KmsError::InvalidConfig(_))));
     }
 
     #[test]
