@@ -410,4 +410,37 @@ mod diagnostic_tests {
         wrong_class["error_class"] = json!("UnrelatedError");
         assert!(safe_timing_diagnostics(&wrong_class).is_none());
     }
+
+    #[test]
+    fn lease_observation_forwarding_accepts_only_closed_boolean_flags() {
+        let valid = json!({
+            "error_class": "LeaseObservationChanged",
+            "lease_observation_diagnostics": {
+                "jobs": true, "facts": false, "oauth": false,
+                "snapshot": false, "heartbeat": false, "target": false,
+                "shape": false,
+            },
+        });
+        assert_eq!(
+            safe_lease_observation_diagnostics(&valid),
+            valid.get("lease_observation_diagnostics")
+        );
+        for rejected in [json!("synthetic-secret"), json!(1), Value::Null, json!({})] {
+            let mut report = valid.clone();
+            report["lease_observation_diagnostics"]["jobs"] = rejected;
+            assert!(safe_lease_observation_diagnostics(&report).is_none());
+        }
+        let mut extra = valid.clone();
+        extra["lease_observation_diagnostics"]["unexpected"] = json!("synthetic-secret");
+        assert!(safe_lease_observation_diagnostics(&extra).is_none());
+        let mut missing = valid.clone();
+        missing["lease_observation_diagnostics"]
+            .as_object_mut()
+            .unwrap()
+            .remove("heartbeat");
+        assert!(safe_lease_observation_diagnostics(&missing).is_none());
+        let mut wrong_class = valid;
+        wrong_class["error_class"] = json!("UnrelatedError");
+        assert!(safe_lease_observation_diagnostics(&wrong_class).is_none());
+    }
 }
