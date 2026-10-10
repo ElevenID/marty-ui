@@ -10925,3 +10925,19 @@ CI or real KMS/device acceptance. The native liveness signing export,
 extended unsupported SDK surface, server-backed challenge/submission, and
 release-device checks remain open; the grouped Authenticator batch has not
 been pushed yet.
+
+2026-10-09 native mobile liveness custody retirement: local Authenticator
+commit `6aa57cf` removes the Rust liveness challenge signer/verifier and
+their Flutter Rust Bridge, Freezed, and iOS/macOS generated exports. The
+shared fixture no longer carries local signing-secret vectors. The mobile
+custody source guard now rejects reintroducing this API at either the Rust
+source or generated binding layer. Pinned Flutter Rust Bridge 2.13.0 full
+codegen succeeded in a disposable Linux environment; Rust formatting and
+`cargo check --locked --all-targets` passed. Flutter analysis found no issues
+and the full Flutter suite passed 204 tests with four skips. Native `cargo
+test --lib` compiled but did not link because the disposable container's
+vendored ONNX archive references unavailable glibc `__isoc23_strto*` symbols;
+this is an environment qualification gap, not a passing native test. The
+local Authenticator PR batch remains unpushed. Real server-issued KMS-backed
+liveness challenge and authenticated submission, extended SDK API cleanup,
+native release/device evidence, and final grouped hosted checks remain open.
