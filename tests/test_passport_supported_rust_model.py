@@ -337,9 +337,12 @@ def safe_model(root: Path) -> dict:
     services["issuance-native"]["environment"].update({
         "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
         "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/workload_identity_ca_cert",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE": "/run/secrets/signing_keys_integration_secret_key",
     })
     services["issuance-native"]["secrets"].append({
         "source": "workload_identity_ca_cert"})
+    services["issuance-native"]["secrets"].append({
+        "source": "signing_keys_integration_secret_key"})
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -353,11 +356,14 @@ def safe_model(root: Path) -> dict:
                         "PUBLIC_DOMAIN": "localhost:29876",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                             "/run/secrets/signing_keys_internal_api_key",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE":
+                            "/run/secrets/signing_keys_integration_secret_key",
                         "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
                             "/run/secrets/signing_keys_workload_server_cert",
                         "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
                             "/run/secrets/signing_keys_workload_server_key"},
         "secrets": [{"source": "signing_keys_internal_api_key"},
+                    {"source": "signing_keys_integration_secret_key"},
                     {"source": "signing_keys_workload_server_cert"},
                     {"source": "signing_keys_workload_server_key"},
                     {"source": "workload_identity_ca_cert"}],
@@ -443,6 +449,8 @@ def safe_model(root: Path) -> dict:
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
                 "signing_keys_internal_api_key": {
                     "file": str(root / "secrets/signing_keys_internal_api_key")},
+                "signing_keys_integration_secret_key": {
+                    "file": str(root / "secrets/signing_keys_integration_secret_key")},
                 "dsc_issue_gateway_key": {
                     "file": str(root / "secrets/dsc_issue_gateway_key")},
                 "csca_issue_gateway_key": {
@@ -777,8 +785,12 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "TOKEN_HMAC_KEY_FILE"), "native issuance startup secrets"),
     (lambda model, root: model["services"]["issuance-native"]["environment"].update(
         INTEGRATION_SECRET_MASTER_KEY="raw-secret"), "native issuance startup secrets"),
-    (lambda model, root: model["services"]["issuance-native"]["secrets"].pop(),
+    (lambda model, root: model["services"]["issuance-native"]["secrets"].remove(
+        {"source": "token_hmac_key"}),
      "native issuance startup secrets"),
+    (lambda model, root: model["services"]["issuance-native"]["secrets"].remove(
+        {"source": "signing_keys_integration_secret_key"}),
+     "integration-secret credential escaped"),
     (lambda model, root: model["services"]["organization"]["environment"].update(
         ES_GRPC_TARGET="production-events:9015"), "endpoint"),
     (lambda model, root: model["services"]["organization"]["environment"].update(

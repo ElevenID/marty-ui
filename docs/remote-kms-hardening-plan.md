@@ -12742,9 +12742,23 @@ The same `b1540254c` run's Rust Contracts lane failed while compiling
 `router_with_all_keys` lacked the newly required integration-secret credential
 slot. Both now pass an explicit absent credential, preserving their signing
 scope. `cargo check --locked -p marty-service-acceptance --tests` and format
-checks for service, Canvas and Flow acceptance crates pass locally. This fix
+checks for service, Canvas and Flow acceptance crates pass locally. The two
+affected service-acceptance test executables also built locally with
+`cargo test --locked --no-run`. This fix
 is part of the held follow-up; the failed hosted job remains immutable.
 The same head's [production Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38073205041)
 completed successfully. The hosted CI run is still active in its Canvas,
 service-image, release-contract and live coordinated OpenBao/PostgreSQL/Raft
 recovery lanes; do not infer their outcome from the successful local compile.
+The `b1540254c` Release Contract Tests lane also failed after 6,178 passing
+tests because frozen Kubernetes/disposable configuration inventories omitted
+the new credential. The follow-up now classifies that secret in the Rust
+release-evidence renderer and Kubernetes template, updates the Canvas worker
+and native Issuance ownership fixtures, and keeps the dedicated credential
+scoped to Signing Keys and native Issuance in disposable acceptance. Focused
+affected Python suites pass 236 tests; release-evidence Rust test-target
+compilation and format checks pass. The separate Canvas deployment Python
+suite could not be collected locally because this host lacks `marty_devops`;
+the hosted failure identified its exact static expectation, which is updated
+but still needs hosted requalification. The currently running OpenBao recovery,
+Canvas and image lanes are not yet terminal.

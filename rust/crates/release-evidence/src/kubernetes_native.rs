@@ -100,6 +100,7 @@ pub const SECRET_SETTINGS: &[&str] = &[
     "TOKEN_HMAC_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     "GRPC_SERVICE_TOKEN",
     "CANVAS_CREDENTIALS_SHARED_SECRET",
 ];
@@ -640,6 +641,7 @@ fn signing_template(resources: &[Value]) -> Result<()> {
     for name in [
         "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
         "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     ] {
         expected.insert(name, secret_ref(name));
     }

@@ -241,6 +241,7 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         },
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
         "SIGNING_KEYS_ISSUER_SIGN_KEY": "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     }
     assert "INTEGRATION_SECRET_MASTER_KEY" not in secret_environment
     literal_environment = {

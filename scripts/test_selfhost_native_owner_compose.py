@@ -260,6 +260,7 @@ def assert_models(
     assert envelope_secret["file"].endswith("/signing_keys_integration_secret_key")
     for name in ("signing-keys", "issuance-native", "canvas-sync-worker"):
         service = preserved["services"][name]
+        assert isinstance(service["environment"], dict)
         assert service["environment"].pop("SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE") == (
             "/run/secrets/signing_keys_integration_secret_key"
         )
