@@ -858,6 +858,19 @@ Windows. A7 remains deferred until a post-#355 representative run and a
 no-duplicate-compilation split design show an actual critical-path benefit;
 all security, feature, benchmark, and platform obligations remain required.
 
+The later exact-head [#355 PR run 38001294613](https://github.com/ElevenID/marty-core/actions/runs/38001294613)
+passed. Preflight took 726 seconds, affected Rust tests 472 seconds, and the
+parallel Native ZKP Security Boundary 757 seconds. The latter spent 473
+seconds on the disposable OpenBao issuance proof, 110 seconds on vendored
+Longfellow regressions, and 64 seconds on a real prove/verify round trip.
+Security started earlier and took longer, but preflight finished 32 seconds
+later and was the last required job before the gate. Thus this run still puts
+preflight at the PR tail, with only a 32-second observed tail to remove before
+security becomes limiting; it does not establish a beneficial no-duplicate
+split. A7 remains deferred. The current Core main selector includes deleted and
+renamed files, package-owned non-Rust fixtures, and unknown-input fallback;
+an older local checkout must not be used to reimplement those fixes.
+
 ## Next renewal decomposition: bounded obligations (unpublished)
 
 The additive library owner is
@@ -2903,6 +2916,21 @@ wiring guard. It is folded into the timing PR so one subsequent exact-head
 hosted run can check pinned-image parity and compare phase timing. That run
 is still required before merge; no speedup is claimed from the local probe.
 
+The new exact-head [#1220 run 38013171013](https://github.com/ElevenID/marty-ui/actions/runs/38013171013)
+passed all required jobs and the final gate. The published JSON-depth and
+status-provider frozen-oracle tests are explicitly `ok` in the Canvas log.
+Provider time was 29,887 ms versus 90,435 ms on the preceding passing head
+(60,548 ms, 67% lower); the enclosing JSON-depth probe was 56,664 versus
+126,817 ms. Canvas job wall time was 29m05s versus 32m27s, but compilation,
+image-build, scheduling, and overlapping database work vary; do not attribute
+that whole-job difference solely to app reuse. Fourteen status-provider
+database probes summed 81,644 versus 97,658 ms, also across different runs.
+The provider oracle seeds `credential-review` and related rows consumed by
+native status tests. Removing its repeated execution without separately
+preserving those seed and final-state effects would change the tests; defer
+that proposed deduplication until the fixture boundary is independently
+proved. The PR remains open pending merge authorization at this checkpoint.
+
 The same exact-head compile artifact separates the 599-second pinned-Bookworm
 container phase into test targets 253 seconds, issuance binaries 206 seconds,
 Gateway binary 109 seconds, and Flow binary 29 seconds. The three binary
@@ -2910,6 +2938,17 @@ commands therefore account for 344 seconds in this run. They deliberately
 retain package-specific feature resolution; combining them is not yet a
 qualified optimization. The host `sccache` counters do not measure this
 network-disabled container, so they cannot justify a cache-hit claim.
+
+The public self-host image is a distinct release-profile build of the complete
+service binary list in `services/Dockerfile` and
+`scripts/build-rust-service-binaries.sh`; the Canvas acceptance executables
+and helper binaries are test/development-profile artifacts from a host-mounted
+target directory. Copying those binaries into the production image would
+change the qualified artifact, so the 402-second image build cannot be
+eliminated by that reuse. The image
+already uses a cargo-chef dependency stage, BuildKit cache scope, and the
+repository's filtered Docker context. A narrower image or changed cache mode
+needs its own runtime/packaging equivalence proof and comparable timing.
 
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
@@ -2920,6 +2959,17 @@ slowed together; #1211 also changed the combined head. These are different
 load/code conditions, not an attributable regression or a reason to delete
 one named case. A further fixture-reuse change needs case ownership and
 isolation proof under comparable runs.
+
+The #1220 timing artifact puts `json_consumer` at 27,853 ms for migration/seed
+and 29,491 ms for its serial probe. Its 66 validation cases sum to 12,466 ms;
+its 66 provider cases sum to 12,350 ms. Provider routes already reuse one app
+within each case. Validation constructs an app per case while patching
+case-specific environment, repository, file, and HTTP boundaries; cross-case
+reuse is not safe without proving app configuration does not capture those
+inputs. `worker_startup` took 21,902 ms in migration/seed; its oracle starts
+real child processes and checks their heartbeat, which remains its purpose.
+Neither is a
+justified next coverage reduction or a measured end-to-end speedup.
 
 ## Design references
 
