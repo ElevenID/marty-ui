@@ -773,7 +773,12 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         for step in workflow["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    assert len(classifier["run"].encode("utf-8")) < 21_000
+    # Keep headroom below GitHub's 21,000-character expression limit.
+    assert len(classifier["run"].encode("utf-8")) < 20_500
+    assert (
+        classifier["run"].index("rust/crates/service-acceptance/tests/*)")
+        < classifier["run"].index("--select-service-acceptance-tests")
+    )
     verified = subprocess.run(
         [
             sys.executable,
