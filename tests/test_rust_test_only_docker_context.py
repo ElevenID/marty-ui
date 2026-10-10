@@ -67,6 +67,12 @@ FLOW_SUPPORT_OWNERS = {
     "flow_public_startup_peers.rs": "support/flow_public_startup.rs",
     "flow_rendered_selection.rs": "support/flow_native_consumer.rs",
 }
+SELFHOST_TEST_ROOT = "rust/crates/selfhost-acceptance/tests/"
+SELFHOST_TEST_FILES = (
+    "selfhost_public_image_contract.rs",
+    "support/selfhost_packaged_runtime.rs",
+    "support/selfhost_runtime_sidecar.rs",
+)
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -471,6 +477,117 @@ def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> N
     assert not _is_ignored(FLOW_TEST_ROOT + "support/unreviewed.rs", root_lines)
 
 
+def test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
+    assert _tracked_paths(ROOT, SELFHOST_TEST_ROOT) == [
+        SELFHOST_TEST_ROOT + name for name in SELFHOST_TEST_FILES
+    ]
+    for name in SELFHOST_TEST_FILES:
+        path = SELFHOST_TEST_ROOT + name
+        source = ROOT / path
+        assert source.is_file() and not source.is_symlink(), (
+            f"Self-host test must be a regular checkout file: {path}"
+        )
+        assert _tracked_regular_mode(ROOT, path), (
+            f"Self-host test must have a regular Git index mode: {path}"
+        )
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/selfhost-acceptance/Cargo.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["package"]["autotests"] is False
+    assert "build" not in manifest["package"]
+    assert manifest["test"] == [
+        {
+            "name": "selfhost_public_image_contract",
+            "path": "tests/selfhost_public_image_contract.rs",
+        }
+    ]
+    target = (ROOT / (SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0])).read_text(
+        encoding="utf-8"
+    )
+    for name in SELFHOST_TEST_FILES[1:]:
+        assert target.count(f'#[path = "{name}"]') == 1
+        references = subprocess.run(
+            ["git", "grep", "-l", "-F", Path(name).name, "--", "*.rs"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        assert references == [SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0]], (
+            f"Self-host support gained another Rust consumer: {name}: {references}"
+        )
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for name in SELFHOST_TEST_FILES:
+            path = SELFHOST_TEST_ROOT + name
+            assert _is_ignored(path, lines), (
+                f"Docker COPY includes {ignore_path}: {path}"
+            )
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1
+        for path in PRODUCTION_INPUTS:
+            assert not _is_ignored(path, lines), (
+                f"Docker COPY excludes production input in {ignore_path}: {path}"
+            )
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(SELFHOST_TEST_ROOT + "support/unreviewed.rs", root_lines)
+
+
+def test_selfhost_context_proof_rejects_reincluded_test(monkeypatch) -> None:
+    import pytest
+
+    original = Path.read_text
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+
+        def with_reincluded_test(path: Path, *args, **kwargs) -> str:
+            source = original(path, *args, **kwargs)
+            if path == ROOT / ignore_path:
+                return source + "\n!" + SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0] + "\n"
+            return source
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", with_reincluded_test)
+            with pytest.raises(AssertionError, match="Docker COPY includes"):
+                test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+
+
+def test_selfhost_context_proof_rejects_non_test_consumer(monkeypatch) -> None:
+    import pytest
+
+    original = subprocess.run
+
+    def with_runtime_consumer(command, *args, **kwargs):
+        result = original(command, *args, **kwargs)
+        if command[:3] == ["git", "grep", "-l"]:
+            return subprocess.CompletedProcess(
+                command,
+                result.returncode,
+                stdout=result.stdout + "rust/services/issuance/src/lib.rs\n",
+                stderr=result.stderr,
+            )
+        return result
+
+    monkeypatch.setattr(subprocess, "run", with_runtime_consumer)
+    with pytest.raises(AssertionError, match="another Rust consumer"):
+        test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+
+
+def test_verified_selfhost_test_paths_require_six_context_proof() -> None:
+    result = subprocess.run(
+        [sys.executable, __file__, "--emit-verified-selfhost-tests"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    assert result.stderr == b""
+    assert result.stdout == b"\0".join(
+        (SELFHOST_TEST_ROOT + name).encode("utf-8") for name in SELFHOST_TEST_FILES
+    ) + b"\0"
+
+
 def test_flow_context_proof_rejects_reincluded_test(monkeypatch) -> None:
     import pytest
 
@@ -748,7 +865,11 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv == [sys.argv[0], "--emit-verified-flow-tests"]:
+    if sys.argv == [sys.argv[0], "--emit-verified-selfhost-tests"]:
+        test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
+        for name in SELFHOST_TEST_FILES:
+            sys.stdout.buffer.write((SELFHOST_TEST_ROOT + name).encode("utf-8") + b"\0")
+    elif sys.argv == [sys.argv[0], "--emit-verified-flow-tests"]:
         # An exact-file PR may omit runtime/image work only after this whole
         # source, sole-consumer, and Docker-context proof succeeds.
         test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
@@ -774,5 +895,5 @@ if __name__ == "__main__":
         raise SystemExit(
             "Usage: test_rust_test_only_docker_context.py "
             "--emit-verified-leaves|--emit-verified-worker-tests|"
-            "--emit-verified-flow-tests"
+            "--emit-verified-flow-tests|--emit-verified-selfhost-tests"
         )

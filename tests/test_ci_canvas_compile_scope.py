@@ -214,7 +214,9 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert 'rust_matrix=\'["canvas","contracts"]\'' in classifier["run"]
     assert "rust_matrix='[\"contracts\"]'" in classifier["run"]
     assert "rust_matrix='[\"worker\"]'" in classifier["run"]
+    assert "rust_matrix='[\"selfhost\"]'" in classifier["run"]
     assert "--emit-verified-worker-tests" in classifier["run"]
+    assert "--emit-verified-selfhost-tests" in classifier["run"]
     steps = {step.get("name"): step for step in job["steps"]}
     assert steps["Start digest-pinned Rust test services after registry setup"]["if"] == (
         "matrix.lane != 'selfhost'"

@@ -3069,6 +3069,21 @@ without weakening required gates. This remains a diagnostic, not a selective
 skip or an established wall-clock speedup. Measure the additional lane before
 considering an exact self-host test-source selector.
 
+Self-host pilot result and next A6 selector (2026-10-10): #1226's exact-head
+diagnostic lane passed all ten cases in 12m28s; its target run took 97.33s
+and the pinned image-pull/test group took 112.18s. The same PR's successful
+full Canvas rerun took 31m44s, and protected merge-group Canvas took 29m53s.
+These are different hosted attempts, not a causal speedup measurement. The
+initial Canvas attempt failed an unchanged ten-second issuance readiness
+assertion, then passed on the same commit without a skip or deadline change.
+An exact three-source PR selector is justified only while all three tracked
+`marty-selfhost-acceptance` test files remain the sole target's sources and
+outside every Rust-copying release image. The root release suite must still
+run because its Python policy tests inspect those files; unknown, mixed,
+manifest, helper, production, and protected merge-group inputs retain full
+Canvas/contracts. Measure a real source-only PR before attributing a faster
+feedback result to this selector.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
