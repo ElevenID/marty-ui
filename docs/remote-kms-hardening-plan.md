@@ -11074,3 +11074,19 @@ challenge structure before enabling submission and both before and after
 authentication, so a direct malformed widget input cannot reach an injected
 submission callback. Flutter analysis and all six focused review-screen tests
 passed. This is local PR #57 work, not a device or hosted proof.
+
+2026-10-09 grouped Authenticator publication: the 30 local commits after
+`e773596` were pushed once to draft [PR #57](https://github.com/ElevenID/marty-authenticator/pull/57)
+at exact head `a6985b67d79dd59cb96e0aeeb2f42e99dba701c5`. The PR
+description now reflects the combined remote-wallet, receipt, local-key
+retirement and fail-closed liveness changes and their remaining gates.
+The exact local source passed Flutter 3.44.6 formatting and analysis,
+`flutter test --coverage` (203 passed, four skipped), non-generated line
+coverage 90.35% (1,826/2,021), all three acceptance tests and the mobile
+custody source guard. Hosted quality, bridge, build, CodeQL and other checks
+started on this new head; none of the older `e773596` failures qualifies it.
+Do not claim native Rust linked tests, physical-device acceptance, real
+KMS-backed wallet proof, or production liveness from these local checks.
+UI PR #1192 run `38010917323` was still live without reported job failure at
+this checkpoint; local UI applicant correction `6e346dba6` remains outside
+its published head and must be included in the next grouped UI push.
