@@ -12876,3 +12876,15 @@ confirmed. All other completed jobs on
 passed; CI Gate inherited the three leaf failures (Rust Contracts, Canvas,
 OpenBao plugin/recovery). [Exact-head Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38074488223)
 passed. The failed run is immutable and does not qualify the local fixes.
+
+Tenant-signing origin trace for the next security feature: Flow constructs a
+`SigningRequest` from its resolved `SigningIdentity.organization_id` in
+`request_object.rs`; Issuance's `HttpDidSigner` forwards the credential or
+passport operation's organization ID as Gateway query input; the Canvas LTI
+tool path passes its configured organization into the same signer. Those
+paths have different upstream authority sources, so adding a tenant string
+or second shared credential at the common HTTP client is insufficient.
+Before coding the verifier, trace and bind Flow's persisted flow ownership,
+Issuance's authenticated API/job owner, and Canvas's configured tenant to an
+operation-specific proof. Signing Keys must validate that proof and payload
+binding directly, including direct-listener calls that bypass Gateway.
