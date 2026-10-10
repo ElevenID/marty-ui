@@ -3,7 +3,7 @@
   "beta_baseline_source_commit": "4596afaca3724e60a8dadbd4e227b6e765cb495c",
   "credentials_deletion_head": "d20a42b0e4c1aa58a6e9075056f898fcda10b228",
   "database_oid": "87774",
-  "observation_sha256": "b10ed2876f13b17cbc1a146ddea3fa20e810388fd8214f2b5addb8940092d0e9",
+  "observation_sha256": "8693f026be46157f3400712b0e3d7670b9b6e8a596c8ca0ef326c579fa42fd26",
   "postgres_system_identifier": "7663981200297017379",
   "production_attachments_sha256": "ef2f8524e18e63e9de44c02468d392d82a2afe6504fde945e8cec8a89bcd3a19",
   "schema": "marty.passport-beta-fence-approved-target/v1"
