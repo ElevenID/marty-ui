@@ -1758,7 +1758,7 @@ jobs:
           export BAO_TOKEN=test-only
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5 document_storage_contract:1; do
+          for entry in vdsnc_registration_live_contract:2 managed_key_create_live_contract:5 document_storage_contract:1; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
@@ -1803,6 +1803,11 @@ jobs:
             --header 'Content-Type: application/json' --request POST \
             --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
             http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null
+          cargo test --locked -p marty-signing-keys --test service_rotation_live_contract \
+            -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
+          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
           cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
             authenticated_gateway_reaches_remaining_rust_signing_handlers -- --ignored --exact
           cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \

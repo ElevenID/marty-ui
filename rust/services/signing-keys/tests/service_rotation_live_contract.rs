@@ -22,33 +22,8 @@ use std::sync::{
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
-async fn disposable_redis_url() -> String {
-    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
-    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
-    assert!(matches!(
-        parsed.host_str(),
-        Some("127.0.0.1" | "localhost" | "::1")
-    ));
-    assert!(parsed
-        .path()
-        .trim_start_matches('/')
-        .parse::<u8>()
-        .is_ok_and(|db| db >= 13));
-    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
-        .expect("disposable Redis sentinel value");
-    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
-    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
-    let mut connection = client
-        .get_multiplexed_async_connection()
-        .await
-        .expect("disposable Redis connection");
-    let observed: Option<String> = connection
-        .get("marty:tests:disposable-guard")
-        .await
-        .expect("disposable Redis sentinel read");
-    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
-    url
-}
+#[path = "support/disposable_backends.rs"]
+mod disposable_backends;
 
 async fn rotate(
     app: &Router,
@@ -133,10 +108,11 @@ async fn reconcile(
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao credential envelope"]
 async fn public_rotation_updates_state_only_after_kms_success() {
     const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
-    let redis_url = disposable_redis_url().await;
+    let redis_url = disposable_backends::disposable_redis_url().await;
+    let envelope = disposable_backends::disposable_openbao_envelope().await;
     let rotations = Arc::new(AtomicUsize::new(0));
     let latest_version = Arc::new(AtomicUsize::new(2));
     let fail = Arc::new(AtomicBool::new(false));
@@ -216,7 +192,10 @@ async fn public_rotation_updates_state_only_after_kms_success() {
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
 
     let organization_id = format!("test-rotation-{}", uuid::Uuid::new_v4().simple());
-    let store = RegistryStore::connect(&redis_url).await.unwrap();
+    let store = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(envelope.clone()));
     store
         .save(
             &organization_id,
@@ -302,7 +281,12 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         .unwrap();
     let competing_app = router_with_dependencies(
         "test-internal-key".into(),
-        Some(RegistryStore::connect(&redis_url).await.unwrap()),
+        Some(
+            RegistryStore::connect(&redis_url)
+                .await
+                .unwrap()
+                .with_auth_envelopes(Some(envelope)),
+        ),
         None,
         None,
         None,
@@ -454,6 +438,7 @@ async fn public_rotation_updates_state_only_after_kms_success() {
                 &json!({"services": [{
                     "id": "late-shared", "service_type": "openbao-transit",
                     "endpoint": endpoint, "mount": "transit", "auth_mode": "token",
+                    "auth_reference": "late-shared-token",
                     "key_reference": "signing-key"
                 }]})
             )
@@ -901,20 +886,17 @@ async fn public_rotation_updates_state_only_after_kms_success() {
         public_config_request(&app, &organization_id, "GET", json!({})).await;
     assert_eq!(status, StatusCode::OK);
     missing_token_config["services"][0]["auth_reference"] = Value::Null;
+    let rotations_before_invalid = rotations.load(Ordering::SeqCst);
     assert_eq!(
         public_config_request(&app, &organization_id, "PATCH", missing_token_config)
             .await
             .0,
-        StatusCode::OK
+        StatusCode::UNPROCESSABLE_ENTITY
     );
-    let rotations_before_invalid = rotations.load(Ordering::SeqCst);
-    let (status, invalid) = rotate(&app, &organization_id, "service-a", json!({})).await;
-    assert_eq!(status, StatusCode::OK, "{invalid}");
-    assert_eq!(invalid["ok"], false);
     assert_eq!(rotations.load(Ordering::SeqCst), rotations_before_invalid);
     assert_eq!(
-        store.load(&organization_id).await.unwrap()["services"][0]["rotation_state"],
-        json!({})
+        store.load(&organization_id).await.unwrap()["services"][0]["auth_reference"],
+        "fixture-token"
     );
 
     let old_lease = store
@@ -1060,17 +1042,22 @@ async fn public_rotation_updates_state_only_after_kms_success() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao credential envelope"]
 async fn lost_pending_write_response_keeps_registry_and_marker_together() {
-    let redis_url = disposable_redis_url().await;
+    let redis_url = disposable_backends::disposable_redis_url().await;
+    let envelope = disposable_backends::disposable_openbao_envelope().await;
     let organization_id = format!("test-pending-{}", uuid::Uuid::new_v4().simple());
-    let store = RegistryStore::connect(&redis_url).await.unwrap();
+    let store = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(envelope));
     let initial = store
         .save(
             &organization_id,
             &json!({"services": [{
                 "id": "service-a", "service_type": "openbao-transit",
                 "endpoint": "https://kms.example.test", "mount": "transit",
+                "auth_mode": "token", "auth_reference": "fixture-token",
                 "key_reference": "signing-key", "algorithms": ["ES256"]
             }]}),
         )
@@ -1163,6 +1150,9 @@ async fn lost_pending_write_response_keeps_registry_and_marker_together() {
         .unwrap();
     global_fence.release().await.unwrap();
     lease.release().await.unwrap();
+    let stored: String = connection.get(storage_key(&organization_id)).await.unwrap();
+    assert!(!stored.contains("fixture-token"));
+    assert!(stored.contains("auth_reference_envelope"));
     let persisted = store.load(&organization_id).await.unwrap();
     assert_eq!(
         persisted["services"][0]["rotation_state"]["reconcile_required"],

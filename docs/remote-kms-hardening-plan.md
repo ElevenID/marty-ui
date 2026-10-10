@@ -1224,11 +1224,11 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed current-head checks. UI #1192 is mergeable at `3e76339e5` after reconciling the new self-host lane from `main`; exact-head CI `38045990789` is running. Final release artifacts and wallet cutover remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed their last checked heads. UI #1192 is mergeable and draft at `be8fb4198`; exact-head CI `38049909527` and CodeQL `38049909528` are running. Final release artifacts and wallet cutover remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed. Grouped UI head adds sealed provider credentials, native AWS/Azure/GCP auth selection, mode-specific wizard inputs, and fail-closed unsupported-mode/service-type checks. Cloud credential destinations, Azure key identifiers/HSM audience, managed-token binding and workload metadata fixtures are corrected in published UI #1192. Real AWS/Azure/GCP acceptance and exact-head CI still remain. |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 at `d562739` pins Core `7f276a4`; all 19 exact-head checks passed (one scorecard skipped), including Core wheels, local binding, Rust/Python/WASM tests, Clippy and retirement guard. The repository root remains an empty Python test-harness wheel; Core owns canonical native wheels. Released-artifact qualification and native UI cutover remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. UI #1192 remains draft at mergeable `3e76339e5`; exact-head CI `38045990789` is running after the grouped fixture, response-bound and `main` reconciliation fixes. The other consumer PR heads were green at the last check. Core #355 still requires protected review. Exact release artifacts, real cloud providers, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. UI #1192 remains draft at mergeable `be8fb4198`; exact-head CI `38049909527` and CodeQL `38049909528` are running after the grouped fixture, provider-error and Azure HTTPS corrections. The other consumer PR heads were green at the last check. Core #355 still requires protected review. Exact release artifacts, real cloud providers, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. Local fresh PostgreSQL 16 checks ran Organization, Credential Template and Rust Issuance migrations twice: 47 service tables, nine Issuance ledger entries and no private-key catalog entries; injected Alembic/key state was rejected. The catalog gate and generic JSON/JSONB scan in published UI `5df61d68e` passed hosted CI. A newer local content scan also rejected synthetic PEM in generic text and JSON fields. Exact signed-image execution, final assembled table/column inventory, self-host cutover and release proof remain. |
 
 ### First execution steps
@@ -12187,3 +12187,42 @@ Gate inherited that failure. A broadened K8 source scan found only
 synthetic private-PEM rejection fixtures and local RSA generation for a
 separate Canvas timeout-oracle TLS identity. This scan is not a substitute
 for live KMS test custody or artifact qualification.
+
+The grouped correction is published at UI PR #1192 head `be8fb4198`, with
+[exact-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38049909527)
+and [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38049909528)
+started. The PR description now distinguishes prior terminal results from the
+new pending head. Keep this checkpoint local until those runs provide evidence
+or another substantive fix; the PR remains draft.
+
+On `be8fb4198`, the hosted Contracts job's safe Rust contract group has passed,
+including the Signing Keys validation golden vectors that failed on the prior
+head. The remaining Gateway and database portions of that job, Canvas, plugin,
+images, release contracts and CodeQL are still active; do not report the
+overall head as green yet.
+
+The `be8fb4198` Contracts lane later failed in its opt-in Signing Keys rotation
+suite, although the Rust workspace and corrected golden vectors passed. A
+guarded local replay showed more than fixture drift: the atomic
+`save_pending_rotation_with_marker` path wrote a normalized registry directly
+to Redis, bypassing the new remote credential envelope. This could persist a
+Transit token in plaintext. The local correction seals that payload before
+the atomic marker/registry write, retains the returned unsealed projection for
+the caller, and adds a raw Redis assertion that the token is absent. The same
+suite now requires the disposable OpenBao envelope provider and runs after CI
+provisions its non-exportable key. Both opt-in rotation cases passed locally
+against freshly labeled, guarded Redis and OpenBao containers; raw Redis was
+checked for the absence of the fixture token and presence of an envelope, and
+the containers were removed. The test also now expects public config writes
+that omit an external Transit token to fail before rotation.
+
+The `be8fb4198` Release Contracts lane also failed one of 6,203 selected
+Python tests: a newly merged self-host test's expected change-classifier map
+omits the `openbao: false` output present on this feature branch. This is
+workflow-test drift, not a reason to drop OpenBao change classification. Merge
+the current `main` test and update that expectation, then rerun the focused
+and broader checks before the next grouped push. Hosted CodeQL Rust analysis
+passed but its PR check still reports three high alerts: intentional Azure
+metadata HTTP and two shared request-send taint reports. The Azure client-secret
+HTTP and cleartext-transfer alerts cleared; review the remaining paths before
+any false-positive classification.

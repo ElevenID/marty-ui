@@ -511,7 +511,10 @@ impl RegistryStore {
             .ok_or_else(|| RegistryError::Invalid("Rotation marker has no service ID".into()))?;
         let index_key = rotation_marker_index_key(organization_id, service_id);
         let normalized = normalize_requested_registry(registry)?;
-        let registry_payload = serde_json::to_string(&normalized)
+        let sealed =
+            seal_auth_references(&normalized, organization_id, self.auth_envelopes.as_ref())
+                .await?;
+        let registry_payload = serde_json::to_string(&sealed)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let marker_payload = serde_json::to_string(marker)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
