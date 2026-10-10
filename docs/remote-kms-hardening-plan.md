@@ -13420,3 +13420,17 @@ conflict; the focused planner test passed with 33 subtests, and the merge diff
 passed `git diff --check`. The merge and tracker-only commits remain local to
 avoid restarting the in-flight hosted run. They require their own exact-head
 qualification before any protected landing.
+
+K8 startup-oracle retirement dependency check: the eight-case native
+`canvas_worker_startup_replay` can run against a fresh published-schema
+database with fixed public expectations, but the current test first runs the
+Python startup oracle and passes that result to the replay. The full-main
+`canvas-startup-fresh-run.json` attestation also pins the Python startup
+scripts, their source hashes and the frozen corpus; CI requires and uploads
+that artifact. Python image-startup fixture tests and the oracle producer
+inventory reference the same corpus. Replace the runtime Python capture,
+current-input sidecar and attestation schema together with native behavior
+and reviewed public expectations, then preserve the eight real-process/
+database assertions and the full-main evidence gate. Merely removing the
+Python invocation from the Rust test would break that evidence contract and
+leave other local-master-key oracle paths active.
