@@ -2846,6 +2846,24 @@ Bookworm compile runs inside a separate network-disabled container without
 the host `RUSTC_WRAPPER`; these counters do not measure its compilations.
 Do not claim a cache regression or add a new cache layer from that artifact.
 
+Follow-up ownership audit of that same artifact: 77 of the 106
+`migration_seed` events are the default `published_probe`; 14 are
+`status_provider` (99.2 seconds summed, 5.3–8.4 seconds each). The latter
+serve separate mutable native database/process/HTTP contracts and one
+published-Python/frozen-reference comparison. The worker repository-only
+matrices already use an owned migrated template with independent database
+clones, so extending that pattern to every probe is neither a new general
+optimization nor an isolation-safe default. In this run, the single
+`json_depth` published oracle took 104.6 seconds; `json_consumer` took 44.4
+seconds and `worker_startup` 41.0 seconds. Those are individual probe
+durations, while the status-provider sum overlaps other test work. The
+JSON-depth probe invokes both published validation and provider observations
+under a 180-second bound, and its test compares the full independent frozen
+observation. Do not remove or shorten that oracle merely because it is slow.
+Next measure its internal validation/provider phases and the target's
+critical-path overlap before proposing a fixture or qualification change;
+keep the current required case inventory and exact-owned cleanup meanwhile.
+
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
 self-host image, and 459 seconds in database contracts. #1212's combined-head
