@@ -1,7 +1,7 @@
 //! Test-only Kubernetes reference resolution over actual envsubst/composer output.
 //! No Kubernetes client, secret discovery, DNS or production input is used here.
 use super::{
-    issuance_named_peers::{API_KEY, SIGNING_KEY, TOKEN},
+    issuance_named_peers::{API_KEY, ISSUER_SIGN_KEY, SIGNING_KEY, TOKEN},
     resolved_runtime::{Isolation, ResolvedRuntime},
 };
 use marty_release_evidence::kubernetes_native as native;
@@ -441,6 +441,10 @@ fn checked_spec(value: &Value) -> Result<Spec> {
                 ("ISSUANCE_API_KEY".into(), API_KEY.into()),
                 ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
                 ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
+                (
+                    "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                    ISSUER_SIGN_KEY.into(),
+                ),
                 ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
                 ("PUBLIC_API_URL".into(), "https://issuer.example".into()),
                 ("UI_BASE_URL".into(), "http://localhost:3000".into()),
@@ -569,7 +573,7 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
         ),
         (
             "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
-            "synthetic-kubernetes-issuer-sign-key-32-chars".into(),
+            ISSUER_SIGN_KEY.into(),
         ),
         ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (
@@ -589,6 +593,7 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
         "ISSUANCE_API_KEY",
         "GRPC_SERVICE_TOKEN",
         "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
         "TOKEN_HMAC_KEY",
     ] {
         require(spec.inputs.get(name) == secret_values.get(name))?;

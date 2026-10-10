@@ -341,6 +341,7 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
         "issuance-native" => [
             "marty_db_password",
             "issuance_api_key",
+            "signing_keys_issuer_sign_key",
             "didcomm_issuance_openbao_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
@@ -351,6 +352,8 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
         .collect(),
         "gateway" => [
             "issuance_api_key",
+            "signing_keys_service_sign_gateway_key",
+            "signing_keys_issuer_sign_key",
             "openbao_service_token",
             "grpc_service_token",
             "device_registration_gateway_key",
@@ -368,6 +371,7 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "flow_webhook_secret",
             "flow_application_event_hmac_key",
             "issuance_api_key",
+            "signing_keys_issuer_sign_key",
         ]
         .into_iter()
         .collect(),
@@ -381,6 +385,8 @@ fn secret_field(key: &str) -> Result<&'static str> {
         "GRPC_SERVICE_TOKEN_FILE" => Ok("grpc_service_token"),
         "DEVICE_REGISTRATION_GATEWAY_KEY_FILE" => Ok("device_registration_gateway_key"),
         "ISSUANCE_API_KEY_FILE" | "SIGNING_KEYS_INTERNAL_API_KEY_FILE" => Ok("issuance_api_key"),
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE" => Ok("signing_keys_service_sign_gateway_key"),
+        "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
         "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
         "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
@@ -458,6 +464,8 @@ impl ClosedSelfhostModel {
             for raw in [
                 "ISSUANCE_API_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+                "SIGNING_KEYS_ISSUER_SIGN_KEY",
                 "GRPC_SERVICE_TOKEN",
                 "DEVICE_REGISTRATION_GATEWAY_KEY",
                 "MARTY_DB_PASSWORD",

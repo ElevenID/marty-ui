@@ -23,6 +23,7 @@ INPUT_KEYS = frozenset(
         "ISSUANCE_API_KEY",
         "GRPC_SERVICE_TOKEN",
         "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
         "TOKEN_HMAC_KEY",
         "PUBLIC_API_URL",
         "UI_BASE_URL",

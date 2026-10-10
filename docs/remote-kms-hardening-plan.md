@@ -11290,3 +11290,37 @@ contract that omitted both new dedicated credentials, even though the
 deployment template included them. The contract now includes both secret
 references; local release-evidence unit tests pass. This correction joins the
 same follow-up commit.
+
+2026-10-09 hosted follow-up head `6a4446cc76d936240d8ac1ac90b5f201d131e6a7`
+in UI PR #1192: Release Contract Tests and Rust Lint passed, and the Canvas
+job advanced beyond the previously failing Kubernetes runtime proof. Rust
+contracts exposed another closed self-host bundle fixture with a stale
+service-to-secret mount roster. The local correction lists the distinct
+issuer-sign and service-sign mounts for their actual owners, maps both `_FILE`
+selectors to those mounts, and rejects raw credential environment values.
+The source Compose YAML's three relevant service secret rosters were checked
+against the corrected fixture; package formatting and warnings-denied Clippy
+pass. The local Windows executable bundle test stops earlier because Docker
+Compose rejects its synthetic source inputs. A local Linux container using
+the CI-pinned, checksum-verified standalone Compose v5.4.0 renderer then
+passed all six `marty-selfhost-bundle --test executable_bundle` tests,
+including the previously failing packaged/extracted model and negative
+mutation cases. Hosted exact-head requalification is still required. Hold
+this correction until the other hosted jobs finish, then publish it with any
+further findings in one follow-up.
+
+Run `38018898122` finished with the contracts failure above and one Canvas
+packaged self-host loader failure. Its preserved diagnostics show three
+composed renewal children reaching `/issuer-dids/sign` with a credential that
+the owned signing peer rejected: the base Gateway/Envoy models used the
+development default, while the Kubernetes model used a different synthetic
+secret. That prevented a signature and left renewal pending; it was a fixture
+configuration failure, not evidence of successful delivery. The grouped local
+correction now passes the same distinct issuer credential through the closed
+base renderer input and Kubernetes secret resolution, explicitly sets it for
+the direct process case, and asserts both rendered native and Gateway
+environments match the owned signing peer before launching. WSL Linux actual
+Compose v5.4.0 rendering passed all four authcrypt/private-address policy
+combinations with the matching credential; warnings-denied Rust Canvas
+Clippy, Ruff, Python compilation and targeted formatting passed. The full
+packaged Canvas renewal still requires hosted exact-head requalification.
