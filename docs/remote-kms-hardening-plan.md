@@ -13149,6 +13149,8 @@ now requires that dedicated credential, with distinct synthetic values and
 rendered-model checks. Negative cases reject absence and reuse of the
 integration-secret key. The combined conformance and DIDComm configuration
 tests pass 190 cases; the full four-composition/five-rate render passes again.
+An additional 60 issuance/passport-native, Rust-candidate, beta DIDComm selector,
+and native DIDComm configuration tests pass on this held head.
 
 Additional local guard evidence after the shared-owner wiring: all 171
 `tests/test_conformance_native.py` cases and 158 adjacent beta/conformance
