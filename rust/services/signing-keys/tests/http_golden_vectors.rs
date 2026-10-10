@@ -454,6 +454,31 @@ async fn arbitrary_provider_signing_route_is_retired() {
 }
 
 #[tokio::test]
+async fn public_service_signing_requires_gateway_service_credential() {
+    let body = serde_json::json!({"payload_b64": "cGF5bG9hZA"}).to_string();
+    for (api_key, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some("wrong-internal-key"), StatusCode::UNAUTHORIZED),
+        (
+            Some("dev-signing-keys-internal-api-key"),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+    ] {
+        let mut request =
+            Request::post("/v1/signing-keys/services/service-a/sign?organization_id=org-a")
+                .header("content-type", "application/json");
+        if let Some(api_key) = api_key {
+            request = request.header("x-api-key", api_key);
+        }
+        let response = marty_signing_keys::http::router()
+            .oneshot(request.body(Body::from(body.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+}
+
+#[tokio::test]
 async fn internal_validation_requires_the_service_api_key() {
     let body = serde_json::json!({
         "service_type": "aws-kms",

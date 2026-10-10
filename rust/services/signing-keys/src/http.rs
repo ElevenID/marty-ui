@@ -3582,8 +3582,15 @@ async fn sign_public_service_payload(
     State(state): State<AppState>,
     Path(service_id): Path<String>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     input: Result<Json<PublicServiceSignRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
+    if authorize_internal(&state, &headers).is_err() {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Signing service authentication required.",
+        );
+    }
     let Json(input) = match input {
         Ok(input) => input,
         Err(error) => {

@@ -3071,9 +3071,16 @@ fn proxy_overrides(
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
-    // Only the exact Gateway-authorized DSC issuance action receives the
-    // internal Signing Keys credential. GatewayProxy strips caller identity
-    // and credential headers before applying these trusted overrides.
+    if is_public_service_sign_path(path)
+        && identity.required_permission.as_deref() == Some("signing-key:create")
+        && identity.organization_id.is_some()
+    {
+        overrides
+            .headers
+            .insert("x-api-key".into(), state.signing_service_api_key.clone());
+    }
+    // GatewayProxy strips caller identity and credential headers before
+    // applying these trusted action-specific Signing Keys credentials.
     if path == "/v1/signing-keys/issuer-identities/dsc-certificate"
         && identity.required_permission.as_deref() == Some("passport-certificate:issue")
         && identity.organization_id.is_some()
@@ -3120,6 +3127,12 @@ fn proxy_overrides(
             .insert("organization_id".into(), vec![organization_id]);
     }
     overrides
+}
+
+fn is_public_service_sign_path(path: &str) -> bool {
+    path.strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/sign"))
+        .is_some_and(|service_id| !service_id.is_empty() && !service_id.contains('/'))
 }
 
 fn compatibility_upstream_path(
@@ -7555,6 +7568,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn public_service_signing_receives_internal_key_only_after_gateway_authorization() {
+        let state = runtime_state();
+        let path = "/v1/signing-keys/services/service-1/sign";
+        assert!(is_public_service_sign_path(path));
+        assert!(!is_public_service_sign_path(
+            "/v1/signing-keys/services/service-1/rotate"
+        ));
+        assert!(!is_public_service_sign_path(
+            "/v1/signing-keys/services/a/b/sign"
+        ));
+        let mut identity = TrustedIdentityContext {
+            organization_id: Some("org-1".into()),
+            ..TrustedIdentityContext::default()
+        };
+        assert!(!proxy_overrides(&state, path, &identity)
+            .headers
+            .contains_key("x-api-key"));
+        identity.required_permission = Some("signing-key:create".into());
+        assert_eq!(
+            proxy_overrides(&state, path, &identity)
+                .headers
+                .get("x-api-key"),
+            Some(&state.signing_service_api_key)
+        );
+        identity.organization_id = None;
+        assert!(!proxy_overrides(&state, path, &identity)
+            .headers
+            .contains_key("x-api-key"));
+    }
+
     #[tokio::test]
     async fn signing_mutations_require_session_and_forward_trusted_scope() {
         let recorder = Arc::new(ActorRecordingUpstream::default());
@@ -7563,6 +7607,10 @@ mod tests {
             recorder.clone(),
         ));
         for (path, body) in [
+            (
+                "/v1/signing-keys/services/service-1/sign",
+                json!({"payload_b64": "cGF5bG9hZA", "key_purpose": "vc_jwt_issuer"}),
+            ),
             (
                 "/v1/signing-keys/config/resolve",
                 json!({"key_purpose": "mdoc_dsc", "algorithm": "EdDSA"}),
@@ -7604,6 +7652,12 @@ mod tests {
             assert_eq!(forwarded.method, HttpMethod::Post);
             assert_eq!(forwarded.path, path);
             assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            if is_public_service_sign_path(path) {
+                assert_eq!(
+                    forwarded.headers.get("x-api-key").map(String::as_str),
+                    Some("internal-signing-key")
+                );
+            }
             assert_eq!(
                 serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
                 body

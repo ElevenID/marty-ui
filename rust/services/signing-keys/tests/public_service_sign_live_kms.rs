@@ -200,6 +200,7 @@ async fn sign_service(
                 "/v1/signing-keys/services/{service_id}/sign?organization_id={organization_id}"
             ))
             .header("content-type", "application/json")
+            .header("x-api-key", "test-internal-key")
             .body(Body::from(payload.to_string()))
             .unwrap(),
         )
