@@ -11640,3 +11640,38 @@ credential resolution and tenant-scoped reference handling in Rust, then
 exercise the selected auth modes and sign/public-key/certificate flows with
 live provider identities. Until then, K6 and cloud-provider release claims
 remain open even if HTTP stubs and OpenBao live tests pass.
+
+2026-10-10 K6 credential-custody finding: the signing registry serializes its
+normalized service document directly into tenant-keyed Redis, including the
+`auth_reference` field (`registry.rs` `save_with_rotation_lease` and
+`normalize_service`). The public GET masks the field, but masking does not
+protect the stored value. Today OpenBao token mode uses the field as a literal
+token; Azure/GCP also use it as a literal bearer token, while AWS ignores it.
+Calling it a “reference” in the wizard therefore overstates the storage and
+provider contracts. Do not route cloud credentials through this field as
+plaintext or silently fall through to the process-wide AWS identity. The
+canonical Rust solution must define a tenant- and service-bound credential
+reference, store any required credential bytes under the dedicated
+non-exportable integration-secret Transit envelope (or use provider-native
+workload identity without stored bytes), resolve only for the matching
+provider/auth mode at operation time, and preserve the current public masking
+and unchanged-connection update semantics. Remove plaintext credential storage
+at the cutover; no compatibility migration is needed because there are no
+public deployments. Test cross-tenant/service rebinding rejection, changed
+endpoint/auth-mode clearing, KMS outage fail-closed behavior, and each provider
+mode before making a cloud BYOK release claim. The existing OpenBao
+registration-to-issuer live evidence does not qualify cloud credential custody.
+Provider-mode implementation must honor the KMS-only private-key boundary:
+AWS `assume_role` can use scoped STS credentials, Azure `certificate` must
+use a remotely held/non-exportable signing key for the client assertion, and
+GCP `service_account` must mean workload identity or service-account
+impersonation, never an imported service-account JSON private key. This is a
+contract clarification for the catalog, not authorization to drop those
+onboarding capabilities. AWS SDK for Rust documents that its unpinned default
+chain may select process environment keys, shared files, web identity, or
+container credentials; selecting `iam_role` in the UI does not currently
+force role credentials. Sources: [AWS credential providers](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/credproviders.html),
+[AWS AssumeRole Rust example](https://docs.aws.amazon.com/sdk-for-rust/latest/dg/rust_sts_code_examples.html),
+[GCP workload identity federation](https://docs.cloud.google.com/iam/docs/workload-identity-federation),
+[GCP ADC credential risks](https://docs.cloud.google.com/docs/authentication/application-default-credentials),
+[Azure Key Vault authentication](https://learn.microsoft.com/en-us/azure/key-vault/general/developers-guide).
