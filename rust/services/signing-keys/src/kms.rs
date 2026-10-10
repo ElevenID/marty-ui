@@ -158,11 +158,16 @@ pub(crate) fn validate_service_auth_config(config: &Value) -> Result<(), KmsErro
         }
         "aws-kms" => {
             validate_cloud_endpoint(config, "aws")?;
+            aws_region(config)?;
             validate_aws_auth_config(config)
         }
         "azure-key-vault" => {
             validate_cloud_endpoint(config, "azure")?;
-            validate_azure_auth_config(config)
+            validate_azure_auth_config(config)?;
+            if string(config, "key_reference").is_some_and(|value| !value.is_empty()) {
+                azure_key_path(config)?;
+            }
+            Ok(())
         }
         "gcp-cloud-kms" => {
             validate_cloud_endpoint(config, "gcp")?;
@@ -1093,6 +1098,7 @@ pub(crate) fn validate_azure_auth_config(config: &Value) -> Result<(), KmsError>
 }
 
 async fn azure_access_token(config: &Value) -> Result<String, KmsError> {
+    let resource = azure_token_resource(config)?;
     match parse_azure_auth(config)? {
         AzureAuth::ManagedIdentity(client_id) => {
             let endpoint = env::var("IDENTITY_ENDPOINT")
@@ -1122,13 +1128,15 @@ async fn azure_access_token(config: &Value) -> Result<String, KmsError> {
                             "Azure managed identity endpoint is invalid.".into(),
                         ));
                     }
-                    azure_managed_token(&endpoint, Some(&header), client_id.as_deref()).await
+                    azure_managed_token(&endpoint, Some(&header), client_id.as_deref(), resource)
+                        .await
                 }
                 (None, None) => {
                     azure_managed_token(
                         "http://169.254.169.254/metadata/identity/oauth2/token",
                         None,
                         client_id.as_deref(),
+                        resource,
                     )
                     .await
                 }
@@ -1142,15 +1150,33 @@ async fn azure_access_token(config: &Value) -> Result<String, KmsError> {
                 "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
                 credential.tenant_id
             );
-            azure_client_secret_token(&endpoint, &credential).await
+            azure_client_secret_token(&endpoint, &credential, resource).await
         }
     }
+}
+
+fn azure_token_resource(config: &Value) -> Result<&'static str, KmsError> {
+    validate_cloud_endpoint(config, "azure")?;
+    let endpoint = required(config, "endpoint", "Azure Key Vault endpoint is required.")?;
+    let parsed = reqwest::Url::parse(endpoint)
+        .map_err(|_| KmsError::InvalidConfig("Azure Key Vault endpoint is invalid.".into()))?;
+    Ok(
+        if parsed
+            .host_str()
+            .is_some_and(|host| host.ends_with(".managedhsm.azure.net"))
+        {
+            "https://managedhsm.azure.net"
+        } else {
+            "https://vault.azure.net"
+        },
+    )
 }
 
 async fn azure_managed_token(
     endpoint: &str,
     header: Option<&str>,
     client_id: Option<&str>,
+    resource: &str,
 ) -> Result<String, KmsError> {
     let client = Client::builder()
         .no_proxy()
@@ -1162,10 +1188,10 @@ async fn azure_managed_token(
     } else {
         "2018-02-01"
     };
-    let mut request = client.get(endpoint).timeout(HTTP_TIMEOUT).query(&[
-        ("api-version", version),
-        ("resource", "https://vault.azure.net"),
-    ]);
+    let mut request = client
+        .get(endpoint)
+        .timeout(HTTP_TIMEOUT)
+        .query(&[("api-version", version), ("resource", resource)]);
     if let Some(header) = header {
         request = request.header("X-IDENTITY-HEADER", header);
     } else {
@@ -1182,7 +1208,9 @@ async fn azure_managed_token(
 async fn azure_client_secret_token(
     endpoint: &str,
     credential: &AzureClientSecret,
+    resource: &str,
 ) -> Result<String, KmsError> {
+    let scope = format!("{resource}/.default");
     let response = send_json(
         cloud_http_client()?
             .post(endpoint)
@@ -1191,7 +1219,7 @@ async fn azure_client_secret_token(
                 ("grant_type", "client_credentials"),
                 ("client_id", credential.client_id.as_str()),
                 ("client_secret", credential.client_secret.as_str()),
-                ("scope", "https://vault.azure.net/.default"),
+                ("scope", scope.as_str()),
             ]),
     )
     .await
@@ -1223,12 +1251,7 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
         "endpoint",
         "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config",
     )?;
-    let key_reference = required(
-        config,
-        "key_reference",
-        "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config",
-    )?;
-    let key_path = key_path(key_reference, string(config, "key_version"));
+    let key_path = azure_key_path(config)?;
     let algorithm = string(config, "azure_signing_algorithm")
         .or_else(|| string(config, "algorithm"))
         .unwrap_or("ES256");
@@ -1272,7 +1295,7 @@ async fn public_key_azure(config: &Value) -> Result<Value, KmsError> {
         "key_reference",
         "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config",
     )?;
-    let key_path = key_path(key_reference, string(config, "key_version"));
+    let key_path = azure_key_path(config)?;
     let response = send_json(
         azure_bearer(
             cloud_http_client()?.get(format!(
@@ -1751,8 +1774,9 @@ fn aws_role_source(loader: aws_config::ConfigLoader) -> Result<aws_config::Confi
 }
 
 async fn aws_client(config: &Value) -> Result<aws_sdk_kms::Client, KmsError> {
-    let region = string(config, "region").unwrap_or("us-east-1").to_string();
-    let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
+    let region = aws_region(config)?.to_string();
+    let mut loader =
+        aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region.clone()));
     if let Some(endpoint) = string(config, "endpoint").filter(|value| !value.is_empty()) {
         loader = loader.endpoint_url(endpoint);
         if endpoint.starts_with("http://") {
@@ -1774,9 +1798,9 @@ async fn aws_client(config: &Value) -> Result<aws_sdk_kms::Client, KmsError> {
                 .await
         }
         AwsAuth::AssumeRole(role) => {
-            let source = aws_role_source(aws_config::defaults(BehaviorVersion::latest()).region(
-                Region::new(string(config, "region").unwrap_or("us-east-1").to_string()),
-            ))?
+            let source = aws_role_source(
+                aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region)),
+            )?
             .load()
             .await;
             let mut builder = aws_config::sts::AssumeRoleProvider::builder(role.role_arn)
@@ -1792,6 +1816,25 @@ async fn aws_client(config: &Value) -> Result<aws_sdk_kms::Client, KmsError> {
         }
     };
     Ok(aws_sdk_kms::Client::new(&sdk_config))
+}
+
+fn aws_region(config: &Value) -> Result<&str, KmsError> {
+    let region = string(config, "region")
+        .filter(|value| !value.is_empty())
+        .unwrap_or("us-east-1");
+    if region.len() > 64
+        || !region
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        || !region
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_lowercase)
+        || !region.as_bytes().last().is_some_and(u8::is_ascii_digit)
+    {
+        return Err(KmsError::InvalidConfig("AWS region is invalid.".into()));
+    }
+    Ok(region)
 }
 
 fn valid_aws_role_arn(value: &str) -> bool {
@@ -1966,11 +2009,80 @@ fn required<'a>(config: &'a Value, name: &str, message: &str) -> Result<&'a str,
         .ok_or_else(|| KmsError::InvalidConfig(message.to_string()))
 }
 
-fn key_path<'a>(key_reference: &'a str, version: Option<&'a str>) -> String {
-    version
-        .filter(|value| !value.is_empty())
-        .map(|version| format!("{key_reference}/{version}"))
-        .unwrap_or_else(|| key_reference.to_string())
+pub(crate) fn azure_key_path(config: &Value) -> Result<String, KmsError> {
+    let endpoint = required(config, "endpoint", "Azure Key Vault endpoint is required.")?;
+    let reference = required(config, "key_reference", "Azure key reference is required.")?;
+    let key_identifier = if reference.contains("://") {
+        if reference.contains('%')
+            || reference.contains("/./")
+            || reference.contains("/../")
+            || reference.ends_with("/.")
+            || reference.ends_with("/..")
+        {
+            return Err(KmsError::InvalidConfig(
+                "Azure key reference is invalid.".into(),
+            ));
+        }
+        let base = reqwest::Url::parse(endpoint)
+            .map_err(|_| KmsError::InvalidConfig("Azure Key Vault endpoint is invalid.".into()))?;
+        let key = reqwest::Url::parse(reference)
+            .map_err(|_| KmsError::InvalidConfig("Azure key reference is invalid.".into()))?;
+        if key.origin() != base.origin()
+            || !key.username().is_empty()
+            || key.password().is_some()
+            || key.query().is_some()
+            || key.fragment().is_some()
+        {
+            return Err(KmsError::InvalidConfig(
+                "Azure key reference must belong to its configured vault.".into(),
+            ));
+        }
+        key.path()
+            .strip_prefix("/keys/")
+            .ok_or_else(|| KmsError::InvalidConfig("Azure key reference is invalid.".into()))?
+            .to_string()
+    } else {
+        reference.to_string()
+    };
+    let mut parts = key_identifier.split('/');
+    let name = parts.next().unwrap_or_default();
+    let embedded_version = parts.next();
+    if parts.next().is_some()
+        || !valid_azure_key_segment(name)
+        || embedded_version.is_some_and(|value| !valid_azure_key_segment(value))
+    {
+        return Err(KmsError::InvalidConfig(
+            "Azure key reference is invalid.".into(),
+        ));
+    }
+    if config
+        .get("key_version")
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+    {
+        return Err(KmsError::InvalidConfig(
+            "Azure key version is invalid.".into(),
+        ));
+    }
+    let version = string(config, "key_version").filter(|value| !value.is_empty());
+    if version.is_some_and(|value| !valid_azure_key_segment(value))
+        || matches!((embedded_version, version), (Some(a), Some(b)) if a != b)
+    {
+        return Err(KmsError::InvalidConfig(
+            "Azure key version is invalid.".into(),
+        ));
+    }
+    Ok(match embedded_version.or(version) {
+        Some(version) => format!("{name}/{version}"),
+        None => name.to_string(),
+    })
+}
+
+fn valid_azure_key_segment(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 127
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
 fn transit_token(config: &Value) -> String {
@@ -1984,7 +2096,7 @@ fn transit_token(config: &Value) -> String {
         .to_owned()
 }
 
-fn secret_value(name: &str) -> Option<String> {
+pub(crate) fn secret_value(name: &str) -> Option<String> {
     env::var(name)
         .ok()
         .map(|value| value.trim().to_owned())
@@ -2252,6 +2364,60 @@ mod tests {
             gcp_endpoint(&json!({"endpoint": ""})),
             "https://cloudkms.googleapis.com"
         );
+        assert_eq!(aws_region(&json!({"region": ""})).unwrap(), "us-east-1");
+        for region in ["us-east-1.attacker.example", "us-east-1/path", "US-EAST-1"] {
+            assert!(validate_service_auth_config(&json!({
+                "service_type": "aws-kms", "auth_mode": "iam_role", "region": region
+            }))
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn azure_key_identifier_resolves_only_within_its_configured_vault() {
+        let base = json!({
+            "service_type": "azure-key-vault",
+            "endpoint": "https://issuer.vault.azure.net",
+            "auth_mode": "managed_identity",
+            "key_reference": "https://issuer.vault.azure.net/keys/signing-key/version-1"
+        });
+        assert_eq!(azure_key_path(&base).unwrap(), "signing-key/version-1");
+        assert!(validate_service_auth_config(&base).is_ok());
+        assert_eq!(
+            azure_token_resource(&base).unwrap(),
+            "https://vault.azure.net"
+        );
+        let mut hsm = base.clone();
+        hsm["endpoint"] = json!("https://westus.issuer.managedhsm.azure.net");
+        hsm["key_reference"] =
+            json!("https://westus.issuer.managedhsm.azure.net/keys/signing-key/version-1");
+        assert_eq!(azure_key_path(&hsm).unwrap(), "signing-key/version-1");
+        assert_eq!(
+            azure_token_resource(&hsm).unwrap(),
+            "https://managedhsm.azure.net"
+        );
+        for reference in [
+            "https://other.vault.azure.net/keys/signing-key/version-1",
+            "https://issuer.vault.azure.net/keys/signing-key/extra/path",
+            "https://issuer.vault.azure.net/keys/signing-key%2Fother",
+            "https://issuer.vault.azure.net/keys/old/../signing-key",
+            "https://issuer.vault.azure.net/keys/signing-key?version=1",
+            "https://issuer.vault.azure.net/keys/signing-key#fragment",
+        ] {
+            let mut config = base.clone();
+            config["key_reference"] = json!(reference);
+            assert!(
+                validate_service_auth_config(&config).is_err(),
+                "{reference}"
+            );
+        }
+        let mut mismatched_version = base.clone();
+        mismatched_version["key_version"] = json!("version-2");
+        assert!(azure_key_path(&mismatched_version).is_err());
+        let mut bare = base.clone();
+        bare["key_reference"] = json!("signing-key");
+        bare["key_version"] = json!("version-1");
+        assert_eq!(azure_key_path(&bare).unwrap(), "signing-key/version-1");
     }
 
     #[tokio::test]
@@ -2360,7 +2526,7 @@ mod tests {
             panic!("client-secret mode was not selected")
         };
         assert_eq!(
-            azure_client_secret_token(&endpoint, &credential)
+            azure_client_secret_token(&endpoint, &credential, "https://vault.azure.net")
                 .await
                 .unwrap(),
             "scoped-azure-token"

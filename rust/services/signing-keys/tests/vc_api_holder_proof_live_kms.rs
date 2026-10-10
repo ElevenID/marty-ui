@@ -18,6 +18,8 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
         parsed.host_str(),
         Some("127.0.0.1" | "localhost" | "::1")
     ));
+    std::env::set_var("BAO_ADDR", &endpoint);
+    std::env::set_var("BAO_TOKEN", &scoped_token);
     let client = Client::new();
     // The disposable bootstrap mounts Transit. This test runs with a scoped
     // workload token, which must not have sys/mounts privileges.
@@ -53,8 +55,6 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
 
     // Exercise the deployed environment lookup, internal authentication, and
     // HTTP response with the same scoped OpenBao token used above.
-    std::env::set_var("BAO_ADDR", &endpoint);
-    std::env::set_var("BAO_TOKEN", &scoped_token);
     std::env::set_var("ISSUER_BASE_URL", "https://issuer.example");
     std::env::set_var("MARTY_RELEASE_VERSION", "development");
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

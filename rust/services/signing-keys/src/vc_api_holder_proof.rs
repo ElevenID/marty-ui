@@ -115,11 +115,23 @@ impl OpenBaoHolderProofProvider {
         Ok(())
     }
 
+    fn validate_mounted_token(&self) -> Result<(), HolderProofError> {
+        let endpoint = env::var("BAO_ADDR").map_err(|_| HolderProofError::Unavailable)?;
+        let token = kms::secret_value("BAO_TOKEN")
+            .or_else(|| kms::secret_value("OPENBAO_SERVICE_TOKEN"))
+            .ok_or(HolderProofError::Unavailable)?;
+        if endpoint.trim_end_matches('/') != self.endpoint || token != self.token {
+            return Err(HolderProofError::Unavailable);
+        }
+        Ok(())
+    }
+
     pub async fn issue(
         &self,
         request: HolderProofRequest,
     ) -> Result<HolderProofResponse, HolderProofError> {
         self.validate(&request)?;
+        self.validate_mounted_token()?;
         let tenant_digest = Sha256::digest(request.organization_id.as_bytes());
         let key_name = format!(
             "{KEY_PREFIX}{}-{}-{}",
@@ -153,6 +165,7 @@ impl OpenBaoHolderProofProvider {
     /// Reconcile keys left by process death or an uncertain create/delete result.
     /// Keys younger than one hour may still belong to an in-flight request.
     pub async fn reap_stale_keys(&self) -> Result<usize, HolderProofError> {
+        self.validate_mounted_token()?;
         let client = Client::new();
         let response = client
             .get(format!("{}/v1/transit/keys?list=true", self.endpoint))
@@ -202,7 +215,8 @@ impl OpenBaoHolderProofProvider {
             "mount":"transit",
             "key_reference":key_name,
             "algorithm":"EdDSA",
-            "auth_reference":self.token,
+            "auth_mode":"service_token",
+            "auth_reference":"",
         })
     }
 

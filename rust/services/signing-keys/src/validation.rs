@@ -228,29 +228,30 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     let service_type_id = string(payload, "service_type");
     let key_reference = string(payload, "key_reference");
     if !key_reference.is_empty() {
-        let (pattern, pass, fail) = match provider {
+        let (valid, pass, fail) = match provider {
             "aws" => (
-                r"^arn:aws:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$",
+                Regex::new(r"^arn:aws:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$")
+                    .expect("static provider regex")
+                    .is_match(key_reference),
                 "AWS key reference looks like a valid KMS key ARN.",
                 "AWS key reference should be a key ARN (arn:aws:kms:region:account:key/<id>).",
             ),
             "azure" => (
-                r"^https://[a-z0-9-]+\.vault\.azure\.net/keys/[A-Za-z0-9-]+(/[A-Za-z0-9-]+)?$",
+                kms::azure_key_path(payload).is_ok(),
                 "Azure key reference looks like a Key Vault key identifier.",
-                "Azure key reference should look like https://<vault>.vault.azure.net/keys/<name>/<version?>.",
+                "Azure key reference must name a key in the configured Key Vault or Managed HSM.",
             ),
             "gcp" => (
-                r"^projects/[a-z0-9-]+/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+(/cryptoKeyVersions/[0-9]+)?$",
+                Regex::new(r"^projects/[a-z0-9-]+/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+(/cryptoKeyVersions/[0-9]+)?$")
+                    .expect("static provider regex")
+                    .is_match(key_reference),
                 "GCP key reference looks like a Cloud KMS resource path.",
                 "GCP key reference should look like projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>[/cryptoKeyVersions/<v>].",
             ),
-            _ => ("", "", ""),
+            _ => (false, "", ""),
         };
-        if !pattern.is_empty() {
-            if Regex::new(pattern)
-                .expect("static provider regex")
-                .is_match(key_reference)
-            {
+        if !pass.is_empty() {
+            if valid {
                 add(checks, "Provider key format", "pass", pass, "provider");
             } else {
                 add(checks, "Provider key format", "fail", fail, "provider");
@@ -954,6 +955,35 @@ mod tests {
                 .iter()
                 .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
         }
+    }
+
+    #[tokio::test]
+    async fn azure_validation_accepts_vault_uri_and_rejects_cross_vault_key() {
+        let config = json!({
+            "service_type": "azure-key-vault",
+            "endpoint": "https://issuer.vault.azure.net",
+            "auth_mode": "managed_identity",
+            "key_reference": "https://issuer.vault.azure.net/keys/signing-key/version-1",
+            "algorithms": ["ES256"]
+        });
+        let accepted = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(accepted.ok);
+        let mut cross_vault = config;
+        cross_vault["key_reference"] = json!("https://other.vault.azure.net/keys/signing-key");
+        let rejected = validate(ValidationRequest {
+            service_config: cross_vault.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(!rejected.ok);
+        assert!(rejected
+            .checks
+            .iter()
+            .any(|check| check.name == "Provider key format" && check.status == "fail"));
     }
 
     #[tokio::test]

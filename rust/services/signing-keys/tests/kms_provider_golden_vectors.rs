@@ -384,6 +384,12 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
     for mut case in fixture.sign_cases {
         let (endpoint, captured, shutdown) =
             spawn_stub(StatusCode::OK, case.provider_response).await;
+        if let Some(reference) = case.service_config["key_reference"].as_str() {
+            if reference.starts_with("$STUB/") {
+                case.service_config["key_reference"] =
+                    Value::String(reference.replacen("$STUB", &endpoint, 1));
+            }
+        }
         case.service_config["endpoint"] = Value::String(endpoint);
         let response = kms::sign(SignRequest {
             service_config: case.service_config,

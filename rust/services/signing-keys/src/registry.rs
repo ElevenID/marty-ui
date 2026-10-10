@@ -1348,7 +1348,7 @@ fn managed_openbao_service(endpoint: &str, keys: &[ManagedKey], inventory_comple
         "mount": "transit",
         "namespace": "",
         "auth_mode": "service_token",
-        "auth_reference": "Managed by Marty service stack",
+        "auth_reference": "",
         "key_reference": default_reference,
         "key_aliases": references,
         "key_algorithms": key_algorithms,
@@ -1536,6 +1536,9 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
     let auth_config = json!({
         "service_type": definition.id,
         "endpoint": string_or(service.get("endpoint"), ""),
+        "region": string_or(service.get("region"), ""),
+        "key_reference": string_or(service.get("key_reference"), ""),
+        "key_version": service.get("key_version").cloned().unwrap_or(Value::Null),
         "auth_mode": auth_mode,
         "auth_reference": string_or(service.get("auth_reference"), ""),
     });
@@ -1597,7 +1600,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         .map(str::to_string)
         .unwrap_or_else(|| format!("svc-{}", Uuid::new_v4().simple()));
 
-    Ok(Some(json!({
+    let mut normalized = json!({
         "id": id,
         "name": nonblank_string(service.get("name")).unwrap_or(definition.label),
         "description": string_or(service.get("description"), ""),
@@ -1648,7 +1651,11 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         "cert_pem": optional_string(service.get("cert_pem")),
         "cert_chain_pem": optional_string(service.get("cert_chain_pem")),
         "cert_expires_at": optional_string(service.get("cert_expires_at")),
-    })))
+    });
+    if let Some(version) = service.get("key_version") {
+        normalized["key_version"] = version.clone();
+    }
+    Ok(Some(normalized))
 }
 
 fn normalize_requested_registry(value: &Value) -> Result<Value, RegistryError> {
@@ -2759,6 +2766,25 @@ mod tests {
                 "{service_type}"
             );
         }
+    }
+
+    #[test]
+    fn azure_registration_binds_key_identifier_to_selected_vault() {
+        let service = json!({
+            "service_type": "azure-key-vault",
+            "endpoint": "https://issuer.vault.azure.net",
+            "auth_mode": "managed_identity",
+            "key_reference": "https://issuer.vault.azure.net/keys/signing-key/version-1"
+        });
+        assert!(normalize_service_value(&service).is_ok());
+        let mut cross_vault = service;
+        cross_vault["key_reference"] = json!("https://other.vault.azure.net/keys/signing-key");
+        assert!(normalize_service_value(&cross_vault).is_err());
+        let mut bare = cross_vault;
+        bare["key_reference"] = json!("signing-key");
+        bare["key_version"] = json!("version-1");
+        let normalized = normalize_service_value(&bare).unwrap().unwrap();
+        assert_eq!(normalized["key_version"], json!("version-1"));
     }
 
     #[test]

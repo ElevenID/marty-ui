@@ -430,7 +430,7 @@ async fn gateway_transit_sign(
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only; run alone"]
 async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
     let redis_url = disposable_signing_redis_url().await;
@@ -449,6 +449,10 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    // This exact-case acceptance process binds the mounted token to its own
+    // disposable transit stub, matching the production BAO_ADDR guard.
+    let prior_bao_addr = std::env::var_os("BAO_ADDR");
+    std::env::set_var("BAO_ADDR", &endpoint);
     let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
     let store = SigningRegistryStore::connect(&redis_url)
         .await
@@ -802,6 +806,11 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .unwrap();
     signing_server.abort();
     kms_server.abort();
+    if let Some(previous) = prior_bao_addr {
+        std::env::set_var("BAO_ADDR", previous);
+    } else {
+        std::env::remove_var("BAO_ADDR");
+    }
 }
 
 async fn disposable_signing_openbao() -> (String, String) {
@@ -2095,6 +2104,24 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         .find(|case| case["name"] == "gcp_pem_public_key")
         .unwrap()["provider_response"]
         .clone();
+    let metadata = Router::new().route(
+        "/computeMetadata/v1/instance/service-accounts/default/token",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(
+                headers
+                    .get("metadata-flavor")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Google")
+            );
+            Json(json!({"access_token": "internal-test-credential"}))
+        }),
+    );
+    let metadata_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let metadata_host = metadata_listener.local_addr().unwrap().to_string();
+    let prior_metadata_host = std::env::var_os("GCE_METADATA_HOST");
+    std::env::set_var("GCE_METADATA_HOST", metadata_host);
+    let metadata_server =
+        tokio::spawn(async move { axum::serve(metadata_listener, metadata).await.unwrap() });
     let kms_material = Arc::new(std::sync::Mutex::new(provider_response));
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let kms_endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
@@ -2142,7 +2169,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
                 "services": [{
                     "id": "gateway-service", "name": "Gateway mDoc Signer",
                     "service_type": "gcp-cloud-kms", "endpoint": kms_endpoint,
-                    "auth_mode": "workload_identity", "auth_reference": "internal-test-credential",
+                    "auth_mode": "workload_identity",
                     "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
                     "algorithms": ["ES256"], "key_purposes": ["mdoc_dsc"]
                 }],
@@ -2359,6 +2386,12 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         }));
     }
     kms_server.abort();
+    metadata_server.abort();
+    if let Some(previous) = prior_metadata_host {
+        std::env::set_var("GCE_METADATA_HOST", previous);
+    } else {
+        std::env::remove_var("GCE_METADATA_HOST");
+    }
     let mut connection = verify_registry.connection();
     let _: usize = redis::cmd("DEL")
         .arg(marty_signing_keys::registry::storage_key(&organization_id))

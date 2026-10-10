@@ -91,15 +91,21 @@ const getProviderRunbook = (data, definition) => {
           '# Use resulting key ARN as key reference in Marty',
         ].join('\n'),
       };
-    case 'azure':
+    case 'azure': {
+      const isManagedHsm = data.endpoint?.trim().toLowerCase().replace(/\/$/, '').endsWith('.managedhsm.azure.net');
       return {
-        docsLabel: 'Azure Key Vault key creation guide',
-        docsUrl: 'https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal',
+        docsLabel: isManagedHsm ? 'Azure Managed HSM key guide' : 'Azure Key Vault key creation guide',
+        docsUrl: isManagedHsm
+          ? 'https://learn.microsoft.com/en-us/azure/key-vault/managed-hsm/key-management'
+          : 'https://learn.microsoft.com/en-us/azure/key-vault/keys/quick-create-portal',
         command: [
           'az keyvault key create \\\n  --vault-name <vault-name> \\\n  --name <marty-signing-key> \\\n  --kty EC \\\n  --curve P-256',
           '# Use key identifier URI as key reference in Marty',
-        ].join('\n'),
+        ].join('\n')
+          .replace('--vault-name <vault-name>', isManagedHsm ? '--hsm-name <hsm-name>' : '--vault-name <vault-name>')
+          .replace('--kty EC', isManagedHsm ? '--kty EC-HSM' : '--kty EC'),
       };
+    }
     case 'gcp':
       return {
         docsLabel: 'Google Cloud KMS key creation guide',

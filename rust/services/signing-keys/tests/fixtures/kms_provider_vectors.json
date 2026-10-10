@@ -134,8 +134,7 @@
       "service_config": {
         "service_type": "azure-key-vault",
         "endpoint": "$STUB",
-        "key_reference": "issuer-key",
-        "key_version": "version-1",
+        "key_reference": "$STUB/keys/issuer-key/version-1",
         "auth_mode": "managed_identity",
         "algorithm": "ES256",
         "azure_signing_algorithm": "ES256"
