@@ -13275,3 +13275,20 @@ was manually dispatched for `cf27e0e88` and is queued. Its `workflow_dispatch`
 event forces the full matrix. Check whether the resulting CI Gate attaches as
 a required PR check; if not, the PR-event scheduling gap must be resolved
 before protected landing.
+
+Token-scope self-review: the minted `didcomm-issuance` policy permits only
+versioned public metadata reads and envelope pack operations; the live probe
+now also rejects current-key reads and rotation. Its OpenBao ACL uses `+`
+wildcards for tenant, key name, and version, however, so it is a service-wide
+capability rather than an independently tenant-scoped KMS token. Native Rust
+checks the request organization against the configured versioned reference
+before use, but that is application authorization and must not be described
+as an OpenBao per-tenant ACL. Tenant-bound operation authority and deployment
+token lifecycle remain open security-review gates for production acceptance.
+In the disposable OpenBao 2.5.5 dev probe the minted token had about 32 days
+remaining and was renewable, but the current Compose overlay has no renewal
+agent. Native Rust re-reads the token file on every request, allowing an
+atomic operator replacement, yet no automated rotation/reissue path has been
+qualified. The probe now requires finite renewable lifetime and denies
+current-key metadata reads and sender-key rotation in addition to the earlier
+administrative negatives.

@@ -104,8 +104,17 @@ def run() -> None:
         if (
             lookup["policies"] != ["didcomm-issuance"]
             or lookup.get("orphan") is not True
+            or not isinstance(lookup.get("ttl"), int)
+            or lookup["ttl"] <= 0
+            or lookup.get("renewable") is not True
         ):
             raise RuntimeError("DIDComm workload token has unexpected authority")
+        print(
+            "Disposable DIDComm token lifetime:",
+            lookup.get("ttl"),
+            "seconds; renewable:",
+            lookup.get("renewable"),
+        )
 
         sender_did = "did:example:scoped-sender"
         recipient_did = "did:example:scoped-recipient"
@@ -162,6 +171,8 @@ def run() -> None:
                 "didcomm/keys/tenant_a/forbidden",
                 {"sender_did": sender_did, "sender_key_id": sender_did + "#new"},
             ),
+            ("GET", "didcomm/keys/tenant_a/sender", None),
+            ("POST", "didcomm/keys/tenant_a/sender/rotate", {}),
             ("GET", "transit/keys/cred-issuer-marty-es256", None),
             ("POST", "auth/token/create", {"policies": ["root"]}),
             ("GET", "sys/mounts", None),
