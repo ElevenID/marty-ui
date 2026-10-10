@@ -1491,7 +1491,10 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         not in steps["Prepare required rendered base executable acceptance"]["run"]
     )
     late = steps["Prepare required rendered base executable acceptance"]["run"]
-    assert "docker pull redis:7-alpine" in late
+    assert "bash scripts/ci/pull-pinned-dockerhub-image.sh" in late
+    assert "redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2" in late
+    assert 'docker tag "$redis_image" redis:7-alpine' in late
+    assert "docker pull redis:7-alpine" not in late
     assert "docker build --tag marty-envoy:native-contract config/envoy" in late
     assert (
         names.index("Compile reusable Rust test executables")

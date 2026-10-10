@@ -272,6 +272,20 @@ def test_published_canvas_and_flow_acceptance_keep_frozen_digest_with_mirror() -
     assert 'docker tag "$redis_image" redis:7-alpine' in flow
 
 
+def test_selfhost_isolated_child_inherits_the_selected_oracle_postgres_image() -> None:
+    source = (ROOT / "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs").read_text(
+        encoding="utf-8"
+    )
+    assert '.env_clear()' in source
+    assert 'std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE")' in source
+    assert 'command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);' in source
+    fixture = (ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs").read_text(
+        encoding="utf-8"
+    )
+    assert 'Some(value) if value == canonical || value == mirrored' in fixture
+    assert 'Some(_) => Err("Published PostgreSQL image differs from pinned oracle"' in fixture
+
+
 def test_both_supply_chain_workflows_run_the_same_pinned_native_audit() -> None:
     script = (ROOT / "scripts/ci/run-cargo-deny.sh").read_text(encoding="utf-8")
     assert "version=0.20.2" in script

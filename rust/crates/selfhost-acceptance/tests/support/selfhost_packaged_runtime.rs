@@ -105,9 +105,9 @@ fn run_isolated_case(case: ChildCase) -> Result<(), String> {
     ] {
         command.env(key, std::env::var_os(key).ok_or(ERROR)?);
     }
-    // The parent selected the exact oracle digest from the available registry
-    // cache. The child revalidates this optional reference against the same
-    // pinned oracle before creating its disposable PostgreSQL container.
+    // The outer Canvas runner selected this exact oracle digest after its
+    // mirror-first pull. Preserve that choice across the deliberately cleared
+    // child environment; PublishedDatabase validates it against the oracle.
     if let Some(image) = std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
         command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);
     }
