@@ -12902,6 +12902,18 @@ prove the old key is rejected; those tests do not restore private-key use.
 This is separate from retiring the Python Canvas worker oracle graph, whose
 startup/REST fixtures still *execute* with raw master-key configuration.
 
+Further tenant-origin evidence: Gateway's public route middleware resolves an
+organization from path/resource ownership/query/body/session and calls its
+membership authorization provider before forwarding. Flow gRPC's
+`start_flow` loads a stored definition, checks the authenticated principal's
+`flow-instance:start` permission for that definition's organization, then
+creates the instance under that organization. These are promising authority
+sources for an operation grant, but the existing internal issuer-signing
+route does not carry either authorization result to Signing Keys. A grant
+must be minted from those checked contexts (or verified directly against
+their authoritative stores), bind the exact sign input, and remain valid for
+the asynchronous job lifetime without a reusable cross-tenant bearer.
+
 Grouped correction head `6869d336d` has a successful
 [exact-head Rust CodeQL run](https://github.com/ElevenID/marty-ui/actions/runs/38076853453).
 Its [UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38076853519)
