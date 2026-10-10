@@ -10826,3 +10826,28 @@ At UI PR #1192's exact published head, the OpenBao DIDComm plugin image job
 passed along with Rust contracts, service images, release contracts, and
 Rust CodeQL. Canvas Rust service tests are the only remaining pending check
 at this observation; the entire run is not yet terminal.
+
+2026-10-09 mobile QR review correction: local Authenticator commit `8533896`
+replaces the Dart scanner's fabricated credential compatibility, verifier
+trust, privacy-risk, and template results with classification from the native
+Rust `walletValidateQrInput` parser. A supported OID4VC offer now requires
+native-parsed issuer, offer URI, and configuration IDs before its review dialog;
+external-provider and malformed offers cannot enter the accept flow. Offer
+review requires an explicit tap, remains visible until the user acts, and
+displays the native issuer and IDs. Presentation selection continues through
+the verified Rust-backed wallet path; QR parsing alone is no longer presented
+as verification. Unimplemented web image upload and mDoc/push actions no
+longer imply functionality. QR processing errors use generic messages rather
+than exposing scanned URI or exception text. The existing Flutter CI job now
+runs `acceptance_test` alongside its default suite, with no separate job.
+Local Dart analysis passed, the default Flutter suite passed 197 tests with
+four skips, all three acceptance tests passed, the mobile custody source
+guard passed, and `git diff --check` passed. Non-generated line coverage is
+88.05% (1,813/2,059), still below the protected 90% gate. The QR batch
+remains local to combine with other mobile corrections before publishing.
+Liveness still needs real server-issued KMS-backed challenge custody and
+authenticated submission; physical-device/native release evidence is also
+outstanding. UI #1192's exact published head remains green except for its
+still-running Canvas Rust service job, currently in isolated database
+contract suites. Core #355, Verifier #154, and Credentials #313 retain their
+previously green exact-head checks and remain unmerged.
