@@ -10968,3 +10968,24 @@ line coverage is **90.35% (1,807/2,000)**. Other extended unsupported
 wallet/mDoc/SD-JWT APIs and optional `keyId` signatures still need review.
 This is local work for the grouped Authenticator PR #57 update, not hosted
 mobile or release-device qualification.
+
+2026-10-09 grouped UI landing reconciliation: published draft PR #1192 at
+`148d85b8f` has 28 successful hosted checks, one skipped check, and no
+failed check, but newer `main` made the published branch conflicting. Local
+merge commit `559833b2a` incorporates the two new main commits. Conflict
+resolution preserves the branch's fresh Rust issuance migrations and KMS
+schema gate, plus main's registry fallback, isolated selfhost image reference,
+and Kubernetes assertions. Main had reintroduced a beta passport fence CI
+job and PostgreSQL test that import `build_sql` from the historical SQL bundle
+builder retired by `daa74b80e`; test collection proved the import fails.
+The merged branch keeps that obsolete builder, test and job retired rather
+than restoring a second migration path. Focused workflow tests passed 15
+with 17 Windows skips; the expanded workflow/registry/native fixture and
+Kubernetes suite passed 233 with 17 skips; retired beta operator tests passed
+67. Rust formatting and Python lint/compilation checks passed on the merge
+surfaces. This is local reconciliation, not yet a new hosted PR head; Canvas
+preflight tests are still running at this checkpoint. Core PR #355 remains
+green and mergeable but requires protected review; Verifier PR #154 and
+Credentials draft PR #313 have green published heads. A repository search
+found no server-issued liveness challenge route in the native services, so
+mobile liveness remains a cross-service implementation gap.
