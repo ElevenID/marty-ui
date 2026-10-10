@@ -13358,3 +13358,16 @@ manual-dispatch attachment concern for this head. Exact-head Rust CodeQL run
 and other policy/quality workflows started. The PR description records the
 terminal `cf27e0e88` result and this grouped fix. No new-head leaf result is
 yet counted as acceptance.
+
+The new `95284232a` [PR-event CI run
+38089378067](https://github.com/ElevenID/marty-ui/actions/runs/38089378067)
+has one confirmed Release Contract failure after 6,215 passing tests, ten
+skips and 404 passing subtests: the Python mixed-roster synthetic signer test
+still sent the old shared API key to `issuer-dids/sign`, while its fixture
+correctly requires the separate issuer-sign key. The held correction exports
+that synthetic key once from the fixture and uses it for the signing request;
+all 13 mixed-roster fixture tests and Ruff pass locally. This changes only
+test transport setup, preserving the distinct production signer credential.
+The other long-running CI leaves and exact-head CodeQL were still active at
+this checkpoint. Preserve the published failure as immutable evidence and
+batch this correction with any further hosted findings before the next push.
