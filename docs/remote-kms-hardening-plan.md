@@ -12014,3 +12014,12 @@ unbounded provider JSON reads without duplicating parsing logic. The shared
 Signing Keys library suite passed (166 tests, nine expected opt-in ignores),
 as did all-target warnings-denied Clippy. This extension remains local until
 the current published CI run finishes; exact-head hosted proof is still due.
+
+The published `e131e16fb` CI run
+[`38042364164`](https://github.com/ElevenID/marty-ui/actions/runs/38042364164)
+finished with Canvas, OpenBao plugin/recovery, service images, and other
+unaffected lanes successful. Contracts failed at the public KMS config-resolve
+fixture without its credential envelope, and release contracts failed at the
+stale workflow invocation count; CI Gate inherited those failures. Both
+corrections, plus the shared provider response bounds above, are in the next
+grouped UI batch. No prior green lane qualifies that new head.
