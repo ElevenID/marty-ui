@@ -2971,6 +2971,17 @@ real child processes and checks their heartbeat, which remains its purpose.
 Neither is a
 justified next coverage reduction or a measured end-to-end speedup.
 
+[UI #1222](https://github.com/ElevenID/marty-ui/pull/1222) records the
+source-backed Gateway-to-Credential-Template issuer-resolution consumer in
+the fail-closed shadow planner. Its exact-head [PR run
+38016397675](https://github.com/ElevenID/marty-ui/actions/runs/38016397675)
+passed the planner-owned release tests, including the new named regression,
+and the final gate in 2m08s from workflow start to gate completion. This
+planner-only input legitimately selected the narrow PR lane; the protected
+merge group remains full. It is one scoped observation, not a pipeline-wide
+average or a speedup caused by the added edge. The PR remains open pending
+merge authorization at this checkpoint.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
