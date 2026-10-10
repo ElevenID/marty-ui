@@ -343,7 +343,7 @@ def compatibility_ci(workflow):
     )
     _, canvas_branch = remaining.split("\nelse\n", 1)
     assert (
-        'if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow ]]; then'
+        'if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then'
         in worker_branch
     )
     for value in (
@@ -354,6 +354,8 @@ def compatibility_ci(workflow):
         "--test flow_published_schema_contract --no-run",
         "--bin marty-flow --message-format=json",
         '--flow-only "$artifacts" target',
+        "--test selfhost_public_image_contract --no-run",
+        '--selfhost-only "$artifacts" target',
     ):
         assert value in worker_branch
     assert worker_branch.count("--network none") == 1

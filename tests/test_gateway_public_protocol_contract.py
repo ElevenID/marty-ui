@@ -200,8 +200,16 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             "true &&",
         ),
         (
-            '\'["canvas","contracts","worker"]\' || needs.changes.outputs.rust_matrix) }}',
-            "'[\"worker\"]') }}",
+            "contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&",
+            "true &&",
+        ),
+        (
+            '\'["canvas","contracts","worker"]\' ||',
+            "'[\"worker\"]' ||",
+        ),
+        (
+            '\'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}',
+            "'[\"selfhost\"]' || needs.changes.outputs.rust_matrix) }}",
         ),
         ('rust_matrix=\'["canvas","contracts"]\'', "rust_matrix='[\"canvas\"]'"),
         ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
