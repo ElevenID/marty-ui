@@ -12106,3 +12106,13 @@ finding at the sink rather than relying only on the caller. The complete
 Signing Keys library suite passed 172 tests (nine expected ignores), and
 all-target warnings-denied Clippy passed. Hosted CodeQL must still confirm
 which alerts remain on the new head.
+
+The published `3e76339e5` UI run
+[`38045990789`](https://github.com/ElevenID/marty-ui/actions/runs/38045990789)
+is terminal. Canvas (including isolated database contracts), OpenBao plugin
+image and recovery, service images, release contracts, and the other lanes
+passed. Contracts failed at the public key metadata fixture before disposable
+OpenBao provisioning, and CI Gate inherited that failure. The independent
+CodeQL check reported six alerts reviewed above. The next UI push groups the
+metadata fixture correction, redirect and provider error/path/TLS hardening,
+and the tracker evidence for one new exact-head run.
