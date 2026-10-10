@@ -12736,3 +12736,11 @@ include paths. The helper now names the distinct envelope credential through
 a short constant; formatting checks pass from both acceptance crates. The
 remaining hosted jobs are still active, so this correction stays local for a
 single grouped follow-up after terminal CI evidence.
+
+The same `b1540254c` run's Rust Contracts lane failed while compiling
+`marty-service-acceptance`: two cross-crate call sites of
+`router_with_all_keys` lacked the newly required integration-secret credential
+slot. Both now pass an explicit absent credential, preserving their signing
+scope. `cargo check --locked -p marty-service-acceptance --tests` and format
+checks for service, Canvas and Flow acceptance crates pass locally. This fix
+is part of the held follow-up; the failed hosted job remains immutable.

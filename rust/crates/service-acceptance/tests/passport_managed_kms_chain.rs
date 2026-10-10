@@ -375,6 +375,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         INTERNAL_KEY.into(),
         None,
         Some(ISSUER_SIGN_KEY.into()),
+        None,
         Some(DSC_GATEWAY_KEY.into()),
         None,
         false,

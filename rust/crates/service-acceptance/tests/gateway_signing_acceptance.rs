@@ -474,6 +474,7 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         Some(ISSUER_SIGN_GATEWAY_KEY.into()),
         None,
         None,
+        None,
         false,
         Some(store),
         Some(documents.clone()),
