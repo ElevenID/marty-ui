@@ -13141,3 +13141,17 @@ Compose binding script and 171 conformance tests pass locally after the
 correction; five additional negative tests check missing/downgraded remote
 custody inputs. This fixes configuration wiring, not yet a live beta or
 conformance startup proof.
+
+Adjacent DIDComm authcrypt root gap (not fixed by the envelope correction):
+the shared beta/conformance native service still receives an opt-in policy
+directory from `docker-compose.profile.didcomm-native-authcrypt.yml`, whose
+comment describes sender private keys, but those Compose roots provide no
+`DIDCOMM_KMS_ADDR` or token file to the native service. The current Rust
+policy parser rejects local sender-key fields and authcrypt fails closed
+without a remote KMS. The conformance base also starts stock OpenBao rather
+than the X25519 extension. Before KMS-only authcrypt can qualify there,
+replace the legacy dual-owner policy pairing with reference-only native
+selection, wire a scoped token and plugin-backed OpenBao endpoint, and prove
+real live authcrypt in the beta/conformance composition. Do not count the
+current opt-in overlay as a working compatibility path or weaken the Rust
+fail-closed behavior.
