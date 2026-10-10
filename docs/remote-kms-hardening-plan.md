@@ -11356,3 +11356,75 @@ plugin image, coordinated PostgreSQL/Raft integration-secret recovery, and
 Rust service images passed. Canvas and Rust contracts failed only at the two
 fixtures corrected in local `cfdabd48a`; the CI Gate consequently failed.
 Publish the grouped correction once and require green exact-head checks.
+
+2026-10-09 Core verification fixture follow-up: `marty-verification` mDL
+unit fixtures still construct a P-256 signing key in
+`src/verification/mdl.rs`. One call derives only a public device point; the
+other signs a dynamic session-transcript payload. The latter must move to the
+shared remote signer test support while retaining valid/tampered transcript
+coverage. Do not count static public vectors as a substitute for that dynamic
+signature test. This remains separate from UI exact-head qualification.
+
+The Core mDL default verification tests now consume two fixed public signed
+DeviceResponse CBOR vectors for canonical and non-preferred transcript bytes.
+The issuer digest fixture uses the vector's public P-256 point directly.
+The two local signing-key constructions and their signer imports are removed;
+the valid, tampered and empty-disclosure checks remain. Local Core verification
+library tests passed (274 passed, 72 marked disposable-OpenBao tests ignored),
+as did warnings-denied Clippy for library and test targets. A separate live
+remote-signer test for freshly varying mDL transcripts is still to be added
+and qualified with the marked disposable OpenBao runner before this fixture
+retirement is considered complete.
+
+The follow-up Core test now signs a freshly built mDL device-authentication
+payload through the existing marked disposable OpenBao Transit fixture, checks
+successful verification against its exact transcript, and rejects a changed
+transcript. The focused live WSL/Windows-Cargo run passed with a scoped
+non-exportable ES256 key. `marty-verification` library/test Clippy with warnings
+denied, shell syntax, and diff checks passed. Keep this Core commit local until
+the other production consumers can be repinned in one grouped qualification
+batch; hosted exact-head and release-artifact proof remain open.
+
+Next Core test-custody review: `marty-verification/src/jwk/jwe.rs` still has
+`cfg(test)` HAIP raw private-JWK generation, parsing and decryption helpers,
+plus a committed `haip_jwe.json` vector containing a private JWK. Production
+already exposes the opaque one-use `HaipResponseDecryptionSession` under the
+explicit ephemeral-session feature. Retire the raw test-only JWK path and
+qualify the opaque session's public-JWK/encrypt/decrypt and wrong-session
+behavior without losing HAIP interoperability coverage. EAC/HAIP ephemeral
+session key agreement remains a separately classified protocol capability,
+not a persistent issuer or holder key fallback.
+
+The local Core HAIP cleanup removed those `cfg(test)` raw private-JWK helpers
+and stripped the private JWK from the jwcrypto fixture. Default tests now use
+the opaque one-use session for public metadata, A256GCM round-trip and
+wrong-recipient rejection; the old external vector still qualifies its public
+header. Default verification library tests passed (273 passed, 73 ignored),
+the `ephemeral-session-keys` library suite passed (278 passed, 73 ignored),
+and warnings-denied Clippy and documentation tests passed. This change does
+reduce the old fixture's cross-library *decryption* coverage; restore that
+with an external encryptor feeding a fresh opaque session before publishing
+the Core batch. No production HAIP session capability was removed.
+
+The missing external HAIP decrypt proof now has a local replacement: a Python
+`cryptography` encryptor accepts only the Rust session's public P-256 JWK,
+creates a fresh ephemeral sender agreement key in process, derives the RFC
+7518 ECDH-ES A256GCM key and emits a compact JWE. The opaque Rust session
+decrypted its payload under both default and explicit ephemeral-session
+feature configurations. A conditional
+Core PR CI step installs pinned `cryptography==50.0.1` in an isolated venv
+and runs the external interoperability test when verification changes. The
+Python sender's one-message ephemeral agreement scalar is a protocol-session
+exception, never a persisted issuer/holder key or recipient private-JWK
+fixture. Hosted exact-head qualification remains pending.
+
+2026-10-09 Core fixture batch published at `7f276a427b28ecc43fb2941b60a3884a731401e0`
+in PR #355; exact-head CI, release-wheel and wallet workflows started.
+UI, Credentials and Verifier local candidate manifests/locks now point at
+that revision. The UI and Credentials closed Core graph checks and Verifier
+locked metadata resolve passed locally. Authenticator cannot be repinned yet:
+its `marty-sync` dependency pulls Core through Verifier PR #154 at `1817638`,
+so direct repinning alone resolves two Core revisions. Its attempted local
+repin was reverted cleanly. Qualify and publish Verifier's new Core pin first,
+then pin Authenticator to that Verifier head plus the same Core head in one
+consumer update. No dependent repin has been pushed yet.

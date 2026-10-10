@@ -3091,7 +3091,7 @@ checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
+source = "git+https://github.com/ElevenID/marty-core?rev=7f276a4#7f276a427b28ecc43fb2941b60a3884a731401e0"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -3100,7 +3100,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
+source = "git+https://github.com/ElevenID/marty-core?rev=7f276a4#7f276a427b28ecc43fb2941b60a3884a731401e0"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -3135,7 +3135,7 @@ dependencies = [
 [[package]]
 name = "marty-didcomm"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
+source = "git+https://github.com/ElevenID/marty-core?rev=7f276a4#7f276a427b28ecc43fb2941b60a3884a731401e0"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -3158,7 +3158,7 @@ dependencies = [
 [[package]]
 name = "marty-emrtd-issuance"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
+source = "git+https://github.com/ElevenID/marty-core?rev=7f276a4#7f276a427b28ecc43fb2941b60a3884a731401e0"
 dependencies = [
  "cms",
  "const-oid 0.9.6",
@@ -3240,7 +3240,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
+source = "git+https://github.com/ElevenID/marty-core?rev=7f276a4#7f276a427b28ecc43fb2941b60a3884a731401e0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3306,7 +3306,7 @@ version = "0.1.0"
 [[package]]
 name = "marty-verification"
 version = "0.2.0"
-source = "git+https://github.com/ElevenID/marty-core?rev=bd6e4cc#bd6e4cc9a7e86d11aec53194899e074289f7b681"
+source = "git+https://github.com/ElevenID/marty-core?rev=7f276a4#7f276a427b28ecc43fb2941b60a3884a731401e0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
