@@ -978,8 +978,81 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
     assert "new/Dockerfile" not in DOCKER_CONTEXTS
 
 
+def _select_acceptance_test_lane(changed: bytes) -> str | None:
+    """Accept only a nonempty exact-file diff owned by one proven test lane."""
+    if not changed.endswith(b"\0") or not changed[:-1]:
+        return None
+    paths = changed[:-1].split(b"\0")
+    if b"" in paths or len(set(paths)) != len(paths):
+        return None
+    cohorts = (
+        (
+            "worker",
+            WORKER_TEST_ROOT,
+            WORKER_TEST_FILES,
+            (
+                test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts,
+                test_worker_roster_support_has_one_test_target_consumer,
+            ),
+        ),
+        (
+            "flow",
+            FLOW_TEST_ROOT,
+            FLOW_TEST_FILES,
+            (test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts,),
+        ),
+        (
+            "selfhost",
+            SELFHOST_TEST_ROOT,
+            SELFHOST_TEST_FILES,
+            (
+                test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts,
+            ),
+        ),
+    )
+    for lane, root, names, proofs in cohorts:
+        owned = {(root + name).encode("utf-8") for name in names}
+        if all(path in owned for path in paths):
+            for proof in proofs:
+                proof()
+            return lane
+    return None
+
+
+def test_acceptance_lane_selector_rejects_unowned_and_malformed_diffs() -> None:
+    worker = (WORKER_TEST_ROOT + WORKER_TEST_FILES[0]).encode()
+    flow = (FLOW_TEST_ROOT + FLOW_TEST_FILES[0]).encode()
+    selfhost = (SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0]).encode()
+    for changed, expected in (
+        (worker + b"\0", "worker"),
+        (flow + b"\0", "flow"),
+        (selfhost + b"\0", "selfhost"),
+        (b"", None),
+        (b"\0", None),
+        (worker, None),
+        (worker + b"\0\0", None),
+        (worker + b"\0" + worker + b"\0", None),
+        (worker + b"\0" + flow + b"\0", None),
+        (flow + b"\0" + selfhost + b"\0", None),
+        (worker + b"\nother\0", None),
+        (b"rust/crates/canvas-worker-acceptance/tests/unreviewed.rs\0", None),
+    ):
+        result = subprocess.run(
+            [sys.executable, __file__, "--select-acceptance-test-lane"],
+            cwd=ROOT,
+            input=changed,
+            capture_output=True,
+        )
+        assert (result.stdout.decode() if result.returncode == 0 else None) == expected
+
+
 if __name__ == "__main__":
-    if sys.argv == [sys.argv[0], "--select-service-acceptance-tests"]:
+    if sys.argv == [sys.argv[0], "--select-acceptance-test-lane"]:
+        lane = _select_acceptance_test_lane(sys.stdin.buffer.read())
+        if lane is None:
+            raise SystemExit(1)
+        sys.stdout.write(lane)
+    elif sys.argv == [sys.argv[0], "--select-service-acceptance-tests"]:
         # NUL-delimited paths are the exact git diff, not a filename-glob hint.
         # Fail closed on an empty, malformed, or unowned change set.
         changed = sys.stdin.buffer.read()
@@ -1030,5 +1103,5 @@ if __name__ == "__main__":
             "--emit-verified-leaves|--emit-verified-worker-tests|"
             "--emit-verified-flow-tests|--emit-verified-selfhost-tests"
             "|--emit-verified-service-acceptance-tests"
-            "|--select-service-acceptance-tests"
+            "|--select-service-acceptance-tests|--select-acceptance-test-lane"
         )
