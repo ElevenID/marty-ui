@@ -32,7 +32,8 @@ use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
     http::{
-        router_with_dependencies as signing_router, router_with_dependencies_and_ceremony_keys,
+        router_with_dependencies_and_ceremony_keys,
+        router_with_dependencies_and_sign_key as signing_router,
     },
     profiles::ProfileStore as SigningProfileStore,
     registry::RegistryStore as SigningRegistryStore,
@@ -291,6 +292,8 @@ fn signing_gateway_state(signing_url: String) -> Arc<GatewayRuntimeState> {
         )
         .unwrap()
         .with_service_token(Some("s".repeat(32)))
+        .unwrap()
+        .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
         .unwrap(),
     )
 }
@@ -459,6 +462,7 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let cleanup_store = store.clone();
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(store),
         Some(documents.clone()),
         None,
@@ -523,6 +527,44 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     );
     assert!(!created.to_string().contains("test-only"));
     assert!(!created.to_string().contains("private_key"));
+    let service_sign_path = "/v1/signing-keys/services/managed-openbao-transit/sign";
+    let service_sign_body = json!({
+        "payload_b64": "cGF5bG9hZA", "key_reference": reference,
+        "algorithm": "ES256"
+    });
+    let service_sign_request = |authenticated: bool| {
+        let mut request =
+            Request::post(service_sign_path).header("content-type", "application/json");
+        if authenticated {
+            request = request.header("cookie", "sessionId=valid");
+        }
+        request
+            .body(Body::from(service_sign_body.to_string()))
+            .unwrap()
+    };
+    let denied = gateway
+        .clone()
+        .oneshot(service_sign_request(false))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert!(fixture.signs.lock().unwrap().is_empty());
+    let signed_service = gateway
+        .clone()
+        .oneshot(service_sign_request(true))
+        .await
+        .unwrap();
+    let status = signed_service.status();
+    let signed_service: Value = serde_json::from_slice(
+        &to_bytes(signed_service.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status, StatusCode::OK, "{signed_service}");
+    assert_eq!(signed_service["ok"], true);
+    assert_eq!(fixture.signs.lock().unwrap().len(), 1);
+    fixture.signs.lock().unwrap().clear();
     let listed = gateway
         .clone()
         .oneshot(
@@ -803,6 +845,7 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
     let documents = SigningDocumentStore::from_connection(registry.connection());
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(registry),
         Some(documents),
         None,
@@ -1025,6 +1068,7 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
     store.save(&organization_id, &registry).await.unwrap();
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(store.clone()),
         None,
         None,
@@ -1574,6 +1618,7 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     store.save(&organization_id, &registry).await.unwrap();
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(
             store
                 .clone()
@@ -1710,6 +1755,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
     let verify_registry = store.clone();
     let signing = signing_router(
         "test-internal-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(store),
         Some(documents),
         None,

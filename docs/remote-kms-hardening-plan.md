@@ -11166,3 +11166,25 @@ Gateway Rust-cutover and deployment catalog/provisioner suites passed 48
 tests with one skipped. The scoped internal issuer-DID signing path remains and needs separate
 least-privilege review; this change does not prove that a compromised shared
 internal credential cannot reach any signing operation.
+
+2026-10-09 local live signing qualification after `15ea9b781`: `python
+scripts/probe_signing_keys_openbao_policy.py --rust-adapter` passed against
+labeled disposable OpenBao, Redis and PostgreSQL containers. Its opt-in Rust
+suite exercised the updated public service-sign route with the dedicated
+Gateway credential, managed-key metadata/signing, profile and tenant binding
+negatives, provider HMAC verification, holder lifecycle and persistence, and
+pairing state. The probe's cleanup removed its disposable containers. This is
+live local KMS source evidence, not a packaged release image or hosted CI for
+the unpublished head. During acceptance self-review, the Gateway-to-Signing
+Keys Rust acceptance fixture was updated to configure the same distinct key
+on both services. The opt-in
+`authenticated_gateway_reaches_rust_managed_key_route_without_custody`
+acceptance case then passed against labeled disposable Redis and its synthetic
+Transit fixture: unauthenticated public service signing caused no KMS call,
+while the session-authorized Gateway request reached Signing Keys and signed
+with the dedicated upstream credential. The fixture proves Gateway routing and
+credential injection, while the separate disposable OpenBao probe proves real
+remote signing; neither is exact release-image qualification. The accepted
+Redis container was removed after the run.
+The acceptance test target compiled with warnings-denied Clippy; targeted
+Rust formatting and diff checks passed.
