@@ -1240,17 +1240,27 @@ async fn azure_client_secret_token(
     credential: &AzureClientSecret,
     resource: &str,
 ) -> Result<String, KmsError> {
+    let request =
+        azure_client_secret_request(cloud_http_client()?, endpoint, credential, resource)?;
+    let response = send_json(request)
+        .await
+        .map_err(|_| KmsError::Provider("Azure client token acquisition failed.".into()))?;
+    azure_token_value(response)
+}
+
+fn azure_client_secret_request(
+    client: Client,
+    endpoint: &str,
+    credential: &AzureClientSecret,
+    resource: &str,
+) -> Result<reqwest::RequestBuilder, KmsError> {
     let url = reqwest::Url::parse(endpoint)
         .map_err(|_| KmsError::InvalidConfig("Azure token endpoint is invalid.".into()))?;
     let official_path = format!("/{}/oauth2/v2.0/token", credential.tenant_id);
-    let official = url.scheme() == "https"
-        && url.host_str() == Some("login.microsoftonline.com")
-        && url.port().is_none()
-        && url.path() == official_path;
-    let local_debug = cfg!(debug_assertions)
-        && url.scheme() == "http"
-        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
-    if !(official || local_debug)
+    if url.scheme() != "https"
+        || url.host_str() != Some("login.microsoftonline.com")
+        || url.port().is_some()
+        || url.path() != official_path
         || !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -1261,20 +1271,12 @@ async fn azure_client_secret_token(
         ));
     }
     let scope = format!("{resource}/.default");
-    let response = send_json(
-        cloud_http_client()?
-            .post(endpoint)
-            .timeout(HTTP_TIMEOUT)
-            .form(&[
-                ("grant_type", "client_credentials"),
-                ("client_id", credential.client_id.as_str()),
-                ("client_secret", credential.client_secret.as_str()),
-                ("scope", scope.as_str()),
-            ]),
-    )
-    .await
-    .map_err(|_| KmsError::Provider("Azure client token acquisition failed.".into()))?;
-    azure_token_value(response)
+    Ok(client.post(url).timeout(HTTP_TIMEOUT).form(&[
+        ("grant_type", "client_credentials"),
+        ("client_id", credential.client_id.as_str()),
+        ("client_secret", credential.client_secret.as_str()),
+        ("scope", scope.as_str()),
+    ]))
 }
 
 fn azure_token_value(response: Value) -> Result<String, KmsError> {
@@ -2543,8 +2545,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn azure_client_secret_never_posts_to_an_unapproved_origin() {
+    #[test]
+    fn azure_client_secret_never_posts_to_an_unapproved_origin() {
         let credential = AzureClientSecret {
             tenant_id: "11111111-1111-1111-1111-111111111111".into(),
             client_id: "22222222-2222-2222-2222-222222222222".into(),
@@ -2557,9 +2559,9 @@ mod tests {
             "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token?redirect=1",
         ] {
             assert!(
-                azure_client_secret_token(endpoint, &credential, "https://vault.azure.net")
-                    .await
-                    .is_err(),
+                azure_client_secret_request(
+                    cloud_http_client().unwrap(), endpoint, &credential, "https://vault.azure.net"
+                ).is_err(),
                 "accepted {endpoint}"
             );
         }
@@ -2770,38 +2772,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn azure_client_secret_uses_scoped_oauth_form() {
-        async fn token(request: axum::extract::Request, expected_scope: &str) -> axum::Json<Value> {
-            assert_eq!(request.method(), reqwest::Method::POST);
-            let body = axum::body::to_bytes(request.into_body(), 4096)
-                .await
-                .unwrap();
-            let form = String::from_utf8(body.to_vec()).unwrap();
-            assert!(form.contains("grant_type=client_credentials"));
-            assert!(form.contains(expected_scope));
-            assert!(form.contains("client_secret=fixture-secret"));
-            axum::Json(json!({"access_token": "scoped-azure-token"}))
-        }
-        let app = axum::Router::new()
-            .route(
-                "/vault",
-                axum::routing::post(|request| {
-                    token(request, "scope=https%3A%2F%2Fvault.azure.net%2F.default")
-                }),
-            )
-            .route(
-                "/hsm",
-                axum::routing::post(|request| {
-                    token(
-                        request,
-                        "scope=https%3A%2F%2Fmanagedhsm.azure.net%2F.default",
-                    )
-                }),
-            );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    #[test]
+    fn azure_client_secret_uses_scoped_oauth_form() {
         let config = json!({
             "auth_mode": "client_secret",
             "auth_reference": r#"{"tenant_id":"11111111-1111-1111-1111-111111111111","client_id":"22222222-2222-2222-2222-222222222222","client_secret":"fixture-secret"}"#
@@ -2810,27 +2782,34 @@ mod tests {
         let AzureAuth::ClientSecret(credential) = parse_azure_auth(&config).unwrap() else {
             panic!("client-secret mode was not selected")
         };
-        assert_eq!(
-            azure_client_secret_token(
-                &format!("{endpoint}/vault"),
-                &credential,
-                "https://vault.azure.net"
-            )
-            .await
-            .unwrap(),
-            "scoped-azure-token"
-        );
-        assert_eq!(
-            azure_client_secret_token(
-                &format!("{endpoint}/hsm"),
-                &credential,
+        let endpoint = "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token";
+        for (resource, expected_scope) in [
+            (
+                "https://vault.azure.net",
+                "scope=https%3A%2F%2Fvault.azure.net%2F.default",
+            ),
+            (
                 "https://managedhsm.azure.net",
+                "scope=https%3A%2F%2Fmanagedhsm.azure.net%2F.default",
+            ),
+        ] {
+            let request = azure_client_secret_request(
+                cloud_http_client().unwrap(),
+                endpoint,
+                &credential,
+                resource,
             )
-            .await
-            .unwrap(),
-            "scoped-azure-token"
-        );
-        server.abort();
+            .unwrap()
+            .build()
+            .unwrap();
+            assert_eq!(request.method(), reqwest::Method::POST);
+            assert_eq!(request.url().as_str(), endpoint);
+            let form = std::str::from_utf8(request.body().unwrap().as_bytes().unwrap()).unwrap();
+            assert!(form.contains("grant_type=client_credentials"));
+            assert!(form.contains("client_id=22222222-2222-2222-2222-222222222222"));
+            assert!(form.contains("client_secret=fixture-secret"));
+            assert!(form.contains(expected_scope));
+        }
     }
 
     #[tokio::test]

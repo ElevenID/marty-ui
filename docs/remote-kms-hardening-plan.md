@@ -12160,3 +12160,15 @@ the focused golden-vector target passes locally. This is a fixture alignment
 finding, not evidence that HTTP Transit should be re-enabled. The remaining
 hosted lanes are still running, so this correction is held with the Python
 public-vector and provider-error redaction batch.
+
+The `c0a29d636` CodeQL Rust analysis passed, but the PR alert check still
+reports five high findings, down from six alerts including two critical on
+the prior head. The two OpenBao path SSRF findings cleared. Remaining alerts
+cover intentional local/link-local Azure managed-identity HTTP, the debug-only
+Azure client-secret HTTP test path, and two taint reports at shared response
+handling. The client-secret helper now rejects HTTP in every build and its
+OAuth form test inspects the fully built HTTPS request without transmitting
+test credentials. Both focused Azure tests, Rustfmt and all-target Clippy pass.
+Recheck exact-head CodeQL before classifying any remaining alert as a reviewed
+false positive; do not weaken the real Azure metadata behavior merely to clear
+the scanner.
