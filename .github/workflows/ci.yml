@@ -1757,13 +1757,6 @@ jobs:
           export BAO_ADDR=http://127.0.0.1:8200
           export BAO_TOKEN=test-only
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14
-          for entry in public_key_metadata_live_contract:2; do
-            suite="${entry%%:*}"
-            expected="${entry##*:}"
-            cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
-              | tee "$RUNNER_TEMP/signing-$suite.log"
-            grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
-          done
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
           for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5 document_storage_contract:1; do
             suite="${entry%%:*}"
@@ -1819,6 +1812,11 @@ jobs:
             | tee "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
           grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
             "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
+          cargo test --locked -p marty-signing-keys --test public_key_metadata_live_contract \
+            -- --ignored --test-threads=1 \
+            | tee "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
+          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
           cargo test --locked -p marty-signing-keys --lib \
             registry::tests::persisted_registry_credentials_use_real_openbao_ciphertext -- --ignored --exact
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \

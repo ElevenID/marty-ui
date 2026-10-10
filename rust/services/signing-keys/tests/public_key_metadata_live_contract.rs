@@ -16,33 +16,9 @@ use tokio::sync::Barrier;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-async fn disposable_redis_url() -> String {
-    let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
-    let parsed = reqwest::Url::parse(&url).expect("disposable Redis URL syntax");
-    assert!(matches!(
-        parsed.host_str(),
-        Some("127.0.0.1" | "localhost" | "::1")
-    ));
-    assert!(parsed
-        .path()
-        .trim_start_matches('/')
-        .parse::<u8>()
-        .is_ok_and(|db| db >= 13));
-    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")
-        .expect("disposable Redis sentinel value");
-    assert!(nonce.len() >= 16, "disposable Redis sentinel is too short");
-    let client = redis::Client::open(url.as_str()).expect("disposable Redis client");
-    let mut connection = client
-        .get_multiplexed_async_connection()
-        .await
-        .expect("disposable Redis connection");
-    let observed: Option<String> = connection
-        .get("marty:tests:disposable-guard")
-        .await
-        .expect("disposable Redis sentinel read");
-    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
-    url
-}
+#[path = "support/disposable_backends.rs"]
+mod disposable_backends;
+use disposable_backends::{disposable_openbao_envelope, disposable_redis_url};
 
 async fn request(
     app: &Router,
@@ -77,12 +53,16 @@ async fn request(
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn public_key_detail_and_jwks_metadata_do_not_mutate_kms_registration() {
     let redis_url = disposable_redis_url().await;
+    let envelope = disposable_openbao_envelope().await;
     let organization_id = format!("rust-key-meta-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-key-meta-other-{}", Uuid::new_v4().simple());
-    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(envelope));
     registry
         .save(
             &organization_id,
@@ -90,6 +70,8 @@ async fn public_key_detail_and_jwks_metadata_do_not_mutate_kms_registration() {
                 "services": [{
                     "id": "service-a", "service_type": "custom-transit-compatible",
                     "provider": "custom", "key_reference": "kms-held-key",
+                    "endpoint": "https://kms.example", "mount": "transit",
+                    "auth_mode": "token", "auth_reference": "fixture-token",
                     "algorithms": ["ES256"]
                 }],
                 "default_service_id": "service-a"

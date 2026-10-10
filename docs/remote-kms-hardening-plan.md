@@ -12054,3 +12054,14 @@ without reaching its target. The Signing Keys library suite passed 167 tests
 all-target warnings-denied Clippy passed. This fix still needs its own
 exact-head hosted qualification after
 batching with any findings from the running run.
+
+The `3e76339e5` hosted run's contracts lane found another stale test fixture:
+the public key metadata case tried to save a token-authenticated provider
+without an envelope and before the disposable OpenBao Transit key existed.
+The fixture now uses the same guarded Redis/OpenBao helper as public config
+resolve, and both two-case suites run after the CI lane provisions its
+non-exportable integration-secret key. All four cases passed locally against
+fresh, isolated disposable Redis and OpenBao containers; those containers
+were removed afterward. The workflow policy test passed (142 cases), and
+Rustfmt, test compilation, Ruff, and YAML parsing passed. The correction is
+held with the provider redirect fix until the remaining hosted lanes finish.

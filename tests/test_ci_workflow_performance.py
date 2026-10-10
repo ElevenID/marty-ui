@@ -351,6 +351,14 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
     assert signing_routes.count("-- --ignored --exact") == 1
     assert "--test public_config_resolve_live_contract" in managed_chain
     assert "signing-public_config_resolve_live_contract.log" in managed_chain
+    assert "--test public_key_metadata_live_contract" in managed_chain
+    assert "signing-public_key_metadata_live_contract.log" in managed_chain
+    redis_contracts = next(
+        step["run"]
+        for step in rust["steps"]
+        if step.get("name") == "Exercise live Signing Keys public contracts on disposable Redis"
+    )
+    assert "--test public_key_metadata_live_contract" not in redis_contracts
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )
