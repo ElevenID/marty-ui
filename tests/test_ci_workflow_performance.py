@@ -773,7 +773,12 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         for step in workflow["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    assert len(classifier["run"].encode("utf-8")) < 21_000
+    # Keep headroom below GitHub's 21,000-character expression limit.
+    assert len(classifier["run"].encode("utf-8")) < 20_500
+    assert (
+        classifier["run"].index("rust/crates/service-acceptance/tests/*)")
+        < classifier["run"].index("--select-service-acceptance-tests")
+    )
     verified = subprocess.run(
         [
             sys.executable,
@@ -4893,11 +4898,31 @@ def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate()
         if step.get("name")
         == "Test native passport Gateway signed webhook on PostgreSQL"
     )
+    names = [step.get("name") for step in contracts]
+    assert names.count(gate["name"]) == 1
+    assert (
+        names.index("Create isolated Rust contract databases")
+        < names.index(gate["name"])
+        < names.index("Run safe Rust contract groups concurrently")
+    )
+    create = next(
+        step
+        for step in contracts
+        if step.get("name") == "Create isolated Rust contract databases"
+    )
+    assert "marty_passport_gateway_test" in create["run"]
+    assert gate["if"] == "matrix.lane == 'contracts'"
     assert gate["env"]["MARTY_PASSPORT_GATEWAY_TEST_URL"].endswith(
         "/marty_passport_gateway_test"
     )
     assert "--test passport_gateway_postgres" in gate["run"]
     assert "-- --exact" in gate["run"]
+    source = (
+        ROOT / "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs"
+    ).read_text(encoding="utf-8")
+    assert '"marty_passport_gateway_test"' in source
+    assert 'sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")' in source
+    assert "migration::migrate_passport(&pool).await.unwrap();" in source
 
 
 @pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])

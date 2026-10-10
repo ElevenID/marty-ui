@@ -177,8 +177,7 @@ jobs:
                 seen_k8s_policy_paths+=("$path")
               done
             fi
-            # A nonempty PR consisting solely of proven test-only leaves has
-            # no production Rust or image input. Keep every actual test owner.
+            # Proven test-only leaves have no production Rust/image input.
             leaf_only=false
             leaf_candidate=true
             if (( ${#changed_files[@]} == 0 )); then
@@ -211,9 +210,7 @@ jobs:
                 done
               fi
             fi
-            # Only the four tracked worker acceptance test sources may use
-            # the published worker lane alone. The proof checks all six
-            # Rust-copying Docker contexts before this PR-only narrowing.
+            # Worker-only selection requires exact sources and six-context proof.
             worker_test_only=false
             worker_candidate=true
             if [[ "${{ github.event_name }}" != pull_request ||
@@ -249,9 +246,7 @@ jobs:
                 fi
               fi
             fi
-            # Flow acceptance test-source edits have no runtime/image input.
-            # Require the complete tracked-source and Docker-context proof;
-            # unknown siblings or any second kind of change retain full CI.
+            # Flow-only selection requires exact sources and Docker-context proof.
             flow_test_only=false
             flow_candidate=true
             if [[ "${{ github.event_name }}" != pull_request ||
@@ -287,9 +282,7 @@ jobs:
                 fi
               fi
             fi
-            # These three tracked self-host acceptance test sources have one
-            # exact target owner and are absent from all release Rust images.
-            # Their source-reading Python guards still run in release pytest.
+            # Self-host-only selection requires exact sources and release-image proof.
             selfhost_test_only=false
             selfhost_candidate=true
             if [[ "${{ github.event_name }}" != pull_request ||
@@ -326,9 +319,18 @@ jobs:
               fi
             fi
             service_acceptance_test_only=false
-            # The verifier checks exact source ownership and all six Docker
-            # contexts on this checkout before selecting only contracts.
-            if [[ "${{ github.event_name }}" == pull_request && ${#changed_files[@]} -gt 0 ]] &&
+            service_acceptance_candidate=true
+            if [[ "${{ github.event_name }}" != pull_request || ${#changed_files[@]} -eq 0 ]]; then
+              service_acceptance_candidate=false
+            fi
+            for path in "${changed_files[@]}"; do
+              case "$path" in
+                rust/crates/service-acceptance/tests/*) ;;
+                *) service_acceptance_candidate=false; break ;;
+              esac
+            done
+            # The prefix only rejects; exact ownership and six contexts grant.
+            if [[ "$service_acceptance_candidate" == true ]] &&
                printf '%s\0' "${changed_files[@]}" |
                  python3 tests/test_rust_test_only_docker_context.py \
                    --select-service-acceptance-tests; then
@@ -1702,6 +1704,19 @@ jobs:
           docker exec --interactive "$MARTY_RUST_CI_POSTGRES_ID" \
             psql --username postgres --dbname marty_passport_packaged_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
+      # This source-owned acceptance case has its own disposable database and
+      # needs no prior contract group. Report a regression after compilation
+      # rather than after the unrelated Redis/OpenBao and database suites.
+      - name: Test native passport Gateway signed webhook on PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        env:
+          MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
+        run: |
+          set -euo pipefail
+          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1924,16 +1939,6 @@ jobs:
           MARTY_PASSPORT_RECONCILIATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_reconciliation_test
         run: |
           cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
-      - name: Test native passport Gateway signed webhook on PostgreSQL
-        if: matrix.lane == 'contracts'
-        working-directory: rust
-        env:
-          MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
-        run: |
-          set -euo pipefail
-          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
