@@ -3260,6 +3260,55 @@ issue after a guard-call finding was corrected. This is bounded input
 inventory only: no execution gate, historical reuse decision, or CI speed
 claim changes; hosted exact-head qualification remains pending.
 
+## October 10 protected outcomes and next maintenance slice
+
+- A5 [UI #1241](https://github.com/ElevenID/marty-ui/pull/1241) merged as
+  `c3bd9a122` with the bounded published-image oracle invocation witness.
+  It inventories an input path; it does not certify complete historical-input
+  closure or permit another qualification skip.
+- A6 [UI #1242](https://github.com/ElevenID/marty-ui/pull/1242) merged as
+  `b301168df` with the checked-out source/context proof for selecting the
+  contracts lane on exact service-acceptance test-source PRs. The one-source
+  pilot [#1244](https://github.com/ElevenID/marty-ui/pull/1244) merged as
+  `efb71a896` after its PR and full protected merge-group checks passed. Its
+  protected Canvas job took 27m24s; this is proof of retained protected
+  coverage, not a measured general pipeline saving.
+- Canvas diagnostics [UI #1243](https://github.com/ElevenID/marty-ui/pull/1243)
+  merged as `7f1b1b045` without weakening the lease observation. A0/A3
+  [#1247](https://github.com/ElevenID/marty-ui/pull/1247) merged as
+  `f6416f4e5` with source-backed Gateway issuer-resolution consumer edges in
+  the shadow planner; it does not narrow any check. A follow-up read-only
+  audit found no further high-confidence non-Cargo edge in the inspected
+  service URL/gRPC bindings, so no speculative edge was added.
+- [UI #1245](https://github.com/ElevenID/marty-ui/pull/1245) merged as
+  `b3d7b4581` with a worktree-derived Compose project, network, volumes and
+  loopback ports for PostgreSQL/Redis, plus a Vite UI bound to that worktree's
+  Gateway port. The local UI answered HTTP 200; with no Gateway started, its
+  API proxy returned 502 rather than reaching a shared stack. Three helper
+  isolation tests passed. This is an infra/UI feedback loop, not full product
+  or protected acceptance evidence.
+- A6 [UI #1248](https://github.com/ElevenID/marty-ui/pull/1248) merged as
+  `63622d804` after exact-head PR and protected merge-group CI passed. It
+  moved the unchanged native passport webhook case immediately after database
+  creation and added a cheap prefix rejection before the existing exact
+  service-acceptance source/context proof. The moved case passed in 76s on the
+  PR run. Mixed, unknown and protected changes retain full validation. The
+  protected Canvas jobs for #1244, #1245 and #1248 took 27m24s, 30m57s and
+  30m59s respectively; these differing heads and runners are not a causal
+  before/after speed measurement.
+
+The next A6 maintenance candidate consolidates the three existing exact
+worker, Flow and self-host test-source selectors into the checked-out Python
+ownership verifier while preserving their proof CLIs for CodeQL. A cheap
+directory-prefix rejection avoids launching that proof for unrelated changes;
+without it, the Windows external-include policy harness repeatedly exceeded
+its 30-second bound. With the guard, the isolated case passed in 2.16s and
+the three targeted policy modules passed 208 tests in 83.08s. The classifier
+body is 17,045 bytes, below GitHub's 21,000-byte limit. This creates workflow
+headroom and avoids unnecessary local proof launches; it does not add a new
+skip or establish a hosted runtime saving. Independent re-review and hosted
+qualification remain before merge.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

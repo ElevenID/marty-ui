@@ -216,8 +216,21 @@ jobs:
             worker_test_only=false
             flow_test_only=false
             selfhost_test_only=false
+            acceptance_candidate=true
             if [[ "${{ github.event_name }}" == pull_request &&
                   ${#changed_files[@]} -gt 0 ]]; then
+              for path in "${changed_files[@]}"; do
+                case "$path" in
+                  rust/crates/canvas-worker-acceptance/tests/*|rust/crates/flow-acceptance/tests/*|rust/crates/selfhost-acceptance/tests/*) ;;
+                  *) acceptance_candidate=false; break ;;
+                esac
+              done
+            else
+              acceptance_candidate=false
+            fi
+            # This prefix can only reject; the checked-out exact-file and
+            # six-context proofs below alone grant a narrower PR matrix.
+            if [[ "$acceptance_candidate" == true ]]; then
               if acceptance_lane=$(printf '%s\0' "${changed_files[@]}" |
                 python3 tests/test_rust_test_only_docker_context.py \
                   --select-acceptance-test-lane); then
