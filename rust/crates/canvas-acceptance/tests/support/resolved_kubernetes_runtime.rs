@@ -920,6 +920,7 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
             "ISSUANCE_API_KEY": API_KEY,
             "GRPC_SERVICE_TOKEN": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING_KEY,
+            "SIGNING_KEYS_ISSUER_SIGN_KEY": ISSUER_SIGN_KEY,
             "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
             "PUBLIC_API_URL": "https://issuer.example",
             "UI_BASE_URL": "http://localhost:3000",

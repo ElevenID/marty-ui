@@ -53,10 +53,8 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-ed25519-dalek.workspace = true
 hex.workspace = true
 http.workspace = true
-jsonwebtoken.workspace = true
 tower.workspace = true
 
 [build-dependencies]

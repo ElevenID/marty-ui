@@ -32,7 +32,7 @@ use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
     http::{
-        router_with_dependencies_and_ceremony_keys,
+        router_with_all_keys, router_with_dependencies_and_ceremony_keys,
         router_with_dependencies_and_sign_key as signing_router,
     },
     profiles::ProfileStore as SigningProfileStore,
@@ -45,6 +45,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const DEFAULT_MAXIMUM_BODY_BYTES: usize = 10 * 1024 * 1024;
+const ISSUER_SIGN_GATEWAY_KEY: &str = "dedicated-issuer-sign-gateway-key-000001";
 
 struct SigningIdentity {
     organization_id: String,
@@ -294,6 +295,8 @@ fn signing_gateway_state(signing_url: String) -> Arc<GatewayRuntimeState> {
         .with_service_token(Some("s".repeat(32)))
         .unwrap()
         .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
+        .unwrap()
+        .with_issuer_sign_key(ISSUER_SIGN_GATEWAY_KEY.into())
         .unwrap(),
     )
 }
@@ -460,9 +463,13 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let profiles = SigningProfileStore::from_connection(store.connection());
     let documents = SigningDocumentStore::from_connection(store.connection());
     let cleanup_store = store.clone();
-    let signing = signing_router(
+    let signing = router_with_all_keys(
         "internal-signing-key".into(),
         Some("dedicated-service-sign-gateway-key-000001".into()),
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
+        None,
+        false,
         Some(store),
         Some(documents.clone()),
         None,
@@ -715,13 +722,28 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .unwrap();
     assert_eq!(denied_sign.status(), StatusCode::UNAUTHORIZED);
     assert!(fixture.signs.lock().unwrap().is_empty());
-    let signed = gateway
+    let shared_key_sign = gateway
         .clone()
         .oneshot(
             Request::post(format!(
                 "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
             ))
             .header("x-api-key", "internal-signing-key")
+            .header("content-type", "application/json")
+            .body(Body::from(sign_body.to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(shared_key_sign.status(), StatusCode::UNAUTHORIZED);
+    assert!(fixture.signs.lock().unwrap().is_empty());
+    let signed = gateway
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
+            ))
+            .header("x-api-key", ISSUER_SIGN_GATEWAY_KEY)
             .header("content-type", "application/json")
             .body(Body::from(sign_body.to_string()))
             .unwrap(),

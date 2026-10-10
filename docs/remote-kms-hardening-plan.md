@@ -11324,3 +11324,35 @@ Compose v5.4.0 rendering passed all four authcrypt/private-address policy
 combinations with the matching credential; warnings-denied Rust Canvas
 Clippy, Ruff, Python compilation and targeted formatting passed. The full
 packaged Canvas renewal still requires hosted exact-head requalification.
+
+2026-10-09 hosted UI head `8745ff6503d7790e150cd951f826435d8826d0ab`
+in PR #1192 passed the base Compose 2×2 proof, release contracts and Rust
+lint, but Canvas failed before the Kubernetes 2×2 proof because that test's
+own closed input specification omitted `SIGNING_KEYS_ISSUER_SIGN_KEY`.
+The opt-in Gateway managed-key acceptance also still sent the old shared
+credential to the issuer-DID route and received 401. Both corrections are
+local: the Kubernetes spec now includes the dedicated credential and its
+actual Linux `envsubst`/native-composer 2×2 test passed; the Gateway fixture
+and Signing Keys backend use the same distinct credential, the shared key is
+explicitly rejected, and the opt-in acceptance passed against labeled
+disposable Redis and a synthetic Transit peer. This is source/fixture
+qualification, not a complete hosted or release-image result. The previous
+run's OpenBao plugin and Rust service image jobs remain active at this
+checkpoint; batch any further findings before one follow-up push.
+
+2026-10-09 K8 Flow test-custody follow-up: `siop_submission_behavior` still
+created P-256 and Ed25519 private keys in the test process to sign SIOP
+tokens. It now consumes twelve fixed signed public JWT vectors with embedded
+public JWKs and no stored private key. The existing positive ES256/EdDSA,
+issuer/audience/nonce, signature-tamper, time-boundary, expiry and replay
+cases are retained; a fixture guard decodes every header and payload and
+rejects private-key material through the shared Rust key-material policy.
+The two signer-only Flow dev dependencies were removed. All five SIOP tests,
+target warnings-denied Clippy, formatting and lockfile checks pass locally.
+These vectors are verification input, not evidence of KMS signing custody.
+
+Hosted UI run `38020996810` then completed. The packaged OpenBao DIDComm
+plugin image, coordinated PostgreSQL/Raft integration-secret recovery, and
+Rust service images passed. Canvas and Rust contracts failed only at the two
+fixtures corrected in local `cfdabd48a`; the CI Gate consequently failed.
+Publish the grouped correction once and require green exact-head checks.
