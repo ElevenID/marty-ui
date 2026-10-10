@@ -4012,10 +4012,27 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
             step for step in job["steps"] if step.get("name", "").startswith("Analyze")
         ]
         assert analysis_steps
-        assert all(
-            step["if"] == "steps.scope.outputs.analyze == 'true'"
-            for step in analysis_steps
-        )
+        expected_condition = "steps.scope.outputs.analyze == 'true'"
+        if job is rust_job:
+            expected_condition += " && steps.test_only.outputs.skip != 'true'"
+            proof = next(step for step in job["steps"] if step.get("id") == "test_only")
+            assert proof["if"] == "steps.scope.outputs.test_only_candidate == 'true'"
+            assert "--emit-verified-worker-tests" in proof["with"]["script"]
+            assert "--emit-verified-flow-tests" in proof["with"]["script"]
+            assert "--emit-verified-selfhost-tests" in proof["with"]["script"]
+            init = next(
+                step for step in job["steps"]
+                if step.get("name") == "Initialize production-focused analysis"
+            )
+            assert init["with"]["languages"] == "rust"
+            assert init["with"]["build-mode"] == "none"
+            assert init["with"]["config-file"] == (
+                "${{ (github.event_name == 'schedule' || "
+                "github.event_name == 'workflow_dispatch') && "
+                "'./.github/codeql/codeql-full.yml' || "
+                "'./.github/codeql/codeql-production.yml' }}"
+            )
+        assert all(step["if"] == expected_condition for step in analysis_steps)
     assert "filename.startsWith('rust/')" in rust_source
     assert "filename.startsWith('.github/codeql/')" in rust_source
     assert "filename === '.github/workflows/codeql-rust.yml'" in rust_source
@@ -4036,6 +4053,125 @@ def test_advanced_codeql_keeps_full_merge_and_scheduled_coverage() -> None:
         "path": "dynamic/github-code-scanning/codeql",
         "event": "dynamic",
     } not in required
+
+
+def test_rust_codeql_test_only_scope_fails_closed() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node is unavailable for the GitHub Script policy test")
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/codeql-rust.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["analyze-rust"]["steps"]
+    scope = next(step for step in steps if step.get("id") == "scope")["with"]["script"]
+    proof = next(step for step in steps if step.get("id") == "test_only")["with"]["script"]
+    workflow_source = (ROOT / ".github/workflows/codeql-rust.yml").read_text(
+        encoding="utf-8"
+    )
+    config = (ROOT / ".github/codeql/codeql-production.yml").read_text(
+        encoding="utf-8"
+    )
+    selfhost = "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs"
+    proofs = {
+        "--emit-verified-worker-tests": {
+            "status": 0,
+            "stdout": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs\0",
+        },
+        "--emit-verified-flow-tests": {
+            "status": 0,
+            "stdout": "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs\0",
+        },
+        "--emit-verified-selfhost-tests": {"status": 0, "stdout": selfhost + "\0"},
+    }
+    harness = r"""
+      const fs = require('node:fs');
+      const payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+      const outputs = {};
+      const core = { setOutput: (key, value) => { outputs[key] = value; }, info: () => {} };
+      const github = {
+        paginate: async () => payload.files,
+        rest: { pulls: { listFiles: {} } },
+      };
+      const context = {
+        eventName: payload.event,
+        repo: { owner: 'ElevenID', repo: 'marty-ui' },
+        payload: { pull_request: { number: 1228 } },
+      };
+      (async () => {
+        const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+        await new AsyncFunction('core', 'github', 'context', payload.scope)(
+          core, github, context
+        );
+        if (outputs.test_only_candidate === 'true') {
+          const mockedRequire = name => {
+            if (name === 'node:fs') return { readFileSync: path =>
+              path.endsWith('codeql-production.yml') ? payload.config : payload.workflow
+            };
+            if (name === 'node:child_process') return {
+              spawnSync: (_program, args) => payload.proofs[args[1]] ||
+                { status: 1, stderr: 'unverified', stdout: '' },
+            };
+            throw new Error(`unexpected module: ${name}`);
+          };
+          await new AsyncFunction('core', 'require', 'process', payload.proof)(
+            core, mockedRequire, { env: { CANDIDATE_PATHS: outputs.candidate_paths } }
+          );
+        }
+        process.stdout.write(JSON.stringify(outputs));
+      })().catch(error => { console.error(error); process.exitCode = 1; });
+    """
+
+    def classify(files: list[dict], *, event: str = "pull_request",
+                 codeql_config: str = config, workflow_text: str = workflow_source,
+                 proof_results: dict = proofs) -> dict:
+        result = subprocess.run(
+            [node, "-e", harness],
+            input=json.dumps({
+                "files": files, "event": event, "config": codeql_config,
+                "workflow": workflow_text,
+                "proofs": proof_results, "scope": scope, "proof": proof,
+            }),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return json.loads(result.stdout)
+
+    exact = [{"filename": selfhost, "status": "modified"}]
+    assert classify(exact)["skip"] == "true"
+    for path in [
+        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
+        "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs",
+    ]:
+        assert classify([{"filename": path, "status": "modified"}])["skip"] == "true"
+    for changed in [
+        exact + [{"filename": "README.md", "status": "modified"}],
+        [{"filename": selfhost, "status": "added"}],
+        [{"filename": selfhost, "status": "renamed", "previous_filename": "old.rs"}],
+        [{"filename": "rust/services/issuance/src/main.rs", "status": "modified"}],
+    ]:
+        assert "skip" not in classify(changed)
+    assert "skip" not in classify([{
+        "filename": "rust/crates/selfhost-acceptance/tests/support/unverified.rs",
+        "status": "modified",
+    }])
+    assert "skip" not in classify(exact, codeql_config=config + "# changed\n")
+    assert "skip" not in classify(
+        exact, workflow_text=workflow_source.replace("build-mode: none", "build-mode: manual")
+    )
+    assert "skip" not in classify(
+        exact, workflow_text=workflow_source.replace(
+            "|| './.github/codeql/codeql-production.yml'",
+            "|| './.github/codeql/codeql-full.yml'",
+        )
+    )
+    failed_proofs = {**proofs, "--emit-verified-selfhost-tests": {
+        "status": 1, "stdout": "", "stderr": "proof failed"
+    }}
+    assert "skip" not in classify(exact, proof_results=failed_proofs)
+    assert classify(exact, event="merge_group")["analyze"] == "true"
+    assert classify([{"filename": "README.md", "status": "modified"}])["analyze"] == "false"
 
 
 def test_warm_cache_uses_the_same_rust_test_profile() -> None:
