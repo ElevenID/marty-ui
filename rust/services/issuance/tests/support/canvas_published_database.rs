@@ -289,6 +289,28 @@ fn safe_timing_diagnostics(report: &Value) -> Option<&Value> {
     .then_some(diagnostics)
 }
 
+fn safe_lease_observation_diagnostics(report: &Value) -> Option<&Value> {
+    if report["error_class"] != "LeaseObservationChanged" {
+        return None;
+    }
+    let diagnostics = report.get("lease_observation_diagnostics")?;
+    let fields = diagnostics.as_object()?;
+    let keys = [
+        "jobs",
+        "facts",
+        "oauth",
+        "snapshot",
+        "heartbeat",
+        "target",
+        "shape",
+    ];
+    (fields.len() == keys.len()
+        && keys
+            .iter()
+            .all(|key| fields.get(*key).and_then(Value::as_bool).is_some()))
+    .then_some(diagnostics)
+}
+
 pub(super) fn docker(arguments: &[&str]) -> Result<String, String> {
     docker_with_timeout(arguments, Duration::from_secs(120))
 }
@@ -1941,7 +1963,10 @@ impl PublishedDatabase {
                     let timing = safe_timing_diagnostics(&report)
                         .map(|value| format!(", timing_diagnostics={value}"))
                         .unwrap_or_default();
-                    return Err(format!("Published probe failed: class={}, frames={}{timing} (exception messages suppressed)",
+                    let lease_observation = safe_lease_observation_diagnostics(&report)
+                        .map(|value| format!(", lease_observation_diagnostics={value}"))
+                        .unwrap_or_default();
+                    return Err(format!("Published probe failed: class={}, frames={}{timing}{lease_observation} (exception messages suppressed)",
                         report["error_class"], report["frames"]));
                 }
                 break;
