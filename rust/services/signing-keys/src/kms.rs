@@ -1037,11 +1037,7 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
                 response.status().as_u16()
             ),
         ),
-        Err(error) => result.add_check(
-            "Connectivity",
-            "fail",
-            format!("Cannot reach endpoint: {error}"),
-        ),
+        Err(_) => result.add_check("Connectivity", "fail", "Cannot reach Transit endpoint."),
     }
     result
 }
@@ -1930,7 +1926,7 @@ async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
         .signing_algorithm(SigningAlgorithmSpec::from(algorithm))
         .send()
         .await
-        .map_err(|error| KmsError::Provider(format!("AWS KMS sign failed: {error}")))?;
+        .map_err(|_| KmsError::Provider("AWS KMS sign failed.".into()))?;
     output
         .signature()
         .map(|signature| signature.as_ref().to_vec())
@@ -1970,7 +1966,7 @@ async fn public_key_aws(config: &Value) -> Result<Value, KmsError> {
         .key_id(key_id)
         .send()
         .await
-        .map_err(|error| KmsError::Provider(format!("AWS KMS get public key failed: {error}")))?;
+        .map_err(|_| KmsError::Provider("AWS KMS get public key failed.".into()))?;
     let der = output
         .public_key()
         .map(|value| value.as_ref())
@@ -2008,11 +2004,7 @@ async fn verify_aws(config: &Value) -> CapabilityResult {
             "pass",
             format!("AWS KMS key '{key_id}' is reachable."),
         ),
-        Err(error) => result.add_check(
-            "Connectivity",
-            "fail",
-            format!("AWS KMS verification failed: {error}"),
-        ),
+        Err(_) => result.add_check("Connectivity", "fail", "AWS KMS verification failed."),
     }
     result
 }
@@ -2308,10 +2300,10 @@ where
             let (name, status, detail) = classify(response.status());
             result.add_check(name, status, detail);
         }
-        Err(error) => result.add_check(
+        Err(_) => result.add_check(
             "Connectivity",
             "fail",
-            format!("{provider} verification failed: {error}"),
+            format!("{provider} verification failed."),
         ),
     }
     result

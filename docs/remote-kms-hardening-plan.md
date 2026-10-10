@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-09 (America/Denver).
+Status: active. Updated: 2026-10-10 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -12116,3 +12116,26 @@ OpenBao provisioning, and CI Gate inherited that failure. The independent
 CodeQL check reported six alerts reviewed above. The next UI push groups the
 metadata fixture correction, redirect and provider error/path/TLS hardening,
 and the tracker evidence for one new exact-head run.
+
+The grouped correction was published to UI PR #1192 at `c0a29d636`.
+The PR remains draft and mergeable. Exact-head CI
+[`38048056618`](https://github.com/ElevenID/marty-ui/actions/runs/38048056618)
+and CodeQL Rust
+[`38048056726`](https://github.com/ElevenID/marty-ui/actions/runs/38048056726)
+started; this checkpoint is held locally until their outcome or a further
+code correction so the evidence note itself does not trigger another run.
+After publication, both affected two-case Signing Keys suites were rerun
+against fresh guarded local Redis and OpenBao instances on the published
+source; all four passed, and the disposable containers were removed. This
+checks the new request-path guard and Transit endpoint validation with live
+envelope calls, but does not substitute for hosted exact-head CI.
+
+Further error-surface self-review, held locally while `c0a29d636` CI runs:
+AWS SDK and provider connection failures were still interpolated into public
+capability or API error text. These now return fixed, provider-specific
+diagnostics while preserving success and HTTP-status classifications. This
+reduces the chance that a transport or SDK error echoes request metadata or
+credential-bearing URLs. Library, provider-vector, formatting and Clippy
+checks passed: 172 Signing Keys library cases (nine expected ignores), five
+provider vectors, Rustfmt, and all-target warnings-denied Clippy. The
+correction remains local pending the currently running hosted result.
