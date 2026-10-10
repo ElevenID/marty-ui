@@ -3018,8 +3018,8 @@ alone.
 
 Local native-seed pilot (2026-10-09,
 [UI #1223](https://github.com/ElevenID/marty-ui/pull/1223), awaiting Linux CI):
-a new constructor retains
-the pinned published migrations, review-recovery overlay, isolated PostgreSQL
+a new constructor retains the pinned published migrations, review-recovery
+overlay, isolated PostgreSQL
 container and owned cleanup, then executes the nine existing issued-review
 seed statements plus the delivery row without the provider oracle. Thirteen
 native composition cases use it; the independent published-Python/frozen
@@ -3028,6 +3028,11 @@ rows across all ten fixture tables, ignoring generated timestamps only.
 Twelve available native cases passed on Windows, including the two packaged
 process cases; the mirror-worker lifecycle case is Unix-only and still needs
 Linux CI. The comparison and the 22 current-input hash tests passed locally.
+Separate fixed `migration_seed` and `fixture_seed` labels now cover the new
+constructor; the timing collector accepts only those exact labels. Its 53
+targeted policy/current-input tests and Docker-backed parity test passed
+locally. Measure these labels in the follow-up exact-head Linux run, not in
+the earlier CI run that predates them.
 No CI speedup is claimed until a full exact-head Canvas run measures this
 change and verifies the Unix case.
 
