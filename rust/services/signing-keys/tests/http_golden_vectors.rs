@@ -454,15 +454,46 @@ async fn arbitrary_provider_signing_route_is_retired() {
 }
 
 #[tokio::test]
+async fn shared_key_legacy_service_sign_route_is_retired() {
+    for api_key in [
+        "dev-signing-keys-internal-api-key",
+        "dedicated-service-sign-gateway-key-000001",
+    ] {
+        let response = marty_signing_keys::http::router_with_dependencies_and_sign_key(
+            "dev-signing-keys-internal-api-key".into(),
+            Some("dedicated-service-sign-gateway-key-000001".into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .oneshot(
+            Request::post("/internal/compat/services/service-a/sign")
+                .header("content-type", "application/json")
+                .header("x-api-key", api_key)
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+}
+
+#[tokio::test]
 async fn public_service_signing_requires_gateway_service_credential() {
     let body = serde_json::json!({"payload_b64": "cGF5bG9hZA"}).to_string();
+    let dedicated_key = "dedicated-service-sign-gateway-key-000001";
     for (api_key, expected) in [
         (None, StatusCode::UNAUTHORIZED),
         (Some("wrong-internal-key"), StatusCode::UNAUTHORIZED),
         (
             Some("dev-signing-keys-internal-api-key"),
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::UNAUTHORIZED,
         ),
+        (Some(dedicated_key), StatusCode::SERVICE_UNAVAILABLE),
     ] {
         let mut request =
             Request::post("/v1/signing-keys/services/service-a/sign?organization_id=org-a")
@@ -470,10 +501,19 @@ async fn public_service_signing_requires_gateway_service_credential() {
         if let Some(api_key) = api_key {
             request = request.header("x-api-key", api_key);
         }
-        let response = marty_signing_keys::http::router()
-            .oneshot(request.body(Body::from(body.clone())).unwrap())
-            .await
-            .unwrap();
+        let response = marty_signing_keys::http::router_with_dependencies_and_sign_key(
+            "dev-signing-keys-internal-api-key".into(),
+            Some(dedicated_key.into()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .oneshot(request.body(Body::from(body.clone())).unwrap())
+        .await
+        .unwrap();
         assert_eq!(response.status(), expected);
     }
 }

@@ -11129,3 +11129,40 @@ credential with a distinct Gateway-only signing credential, validate
 distinctness at startup, update base/self-host/Kubernetes secret wiring and
 prove direct calls with the shared key are rejected while authorized Gateway
 calls continue. Do not count the present check as final least-privilege proof.
+
+2026-10-09 dedicated service-signing credential follow-up (local candidate):
+Gateway now injects `SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY` only on the exact
+authorized service-sign route; Signing Keys checks that key with a constant-time
+comparison and rejects the shared internal credential. Both services reject a
+missing/default key outside development, keys shorter than 32 characters, and
+credential reuse. The key is wired only to Gateway and Signing Keys in base,
+self-host, Kubernetes and disposable passport Compose; the deployment catalog,
+Kubernetes secret creation, self-host file loader and example, disposable
+provisioner, and CI render environment carry it. Local Signing Keys library
+tests passed 141 with eight ignored and HTTP golden vectors passed 16/16;
+Gateway library tests passed 160 with one ignored, including exact-route
+forwarding and session mutation. Both services' all-target checks and
+warnings-denied Clippy passed, and the
+self-host frozen-model comparison passed. Catalog/provisioner tests passed 42
+with one skip; beta passport selector tests passed 167 with two skips; YAML
+parsing and a two-workload Kubernetes holder test passed. The opt-in live
+OpenBao signing fixtures have been updated to use the dedicated key but have
+not yet been rerun. This follow-up remains unpublished at this
+checkpoint, and the published UI head `5df61d68e` does not qualify it. Its
+CI run `38010917323` has no failed jobs; only Canvas is still running.
+
+2026-10-09 service-signing bypass self-review: a second, legacy
+`/internal/compat/services/{service_id}/sign` route still accepted the shared
+Signing Keys credential, and Gateway exposed it as
+`/internal/signing-keys/services/{service_id}/sign`. A source search of the UI
+and Credentials candidate roots found no production caller; the references
+were the two route implementations, contracts and tests. The local follow-up
+removes both routes and their contract entries, retaining the authorized
+public service-signing route and its shared signing kernel. Direct calls to
+the retired backend route with either shared or dedicated credentials and
+calls through the retired Gateway route are covered by 404 regression checks.
+The revised Gateway library suite passed 160 tests with one ignored;
+Gateway Rust-cutover and deployment catalog/provisioner suites passed 48
+tests with one skipped. The scoped internal issuer-DID signing path remains and needs separate
+least-privilege review; this change does not prove that a compromised shared
+internal credential cannot reach any signing operation.

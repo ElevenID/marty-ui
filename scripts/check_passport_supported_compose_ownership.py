@@ -53,7 +53,7 @@ SECRET_MOUNTS = {
     "openbao": ("bao_root_token",),
     "db-migrate": ("marty_db_password", "bao_token"),
     "issuance-migrations": ("marty_db_password",),
-    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
+    "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key", "signing_keys_service_sign_gateway_key",
                      "signing_keys_workload_server_cert", "signing_keys_workload_server_key",
                      "workload_identity_ca_cert"),
     "revocation-profile-migrate": ("marty_db_password",),
@@ -78,7 +78,7 @@ SECRET_MOUNTS = {
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
-    "gateway": ("bao_token", "signing_keys_internal_api_key", "issuance_api_key",
+    "gateway": ("bao_token", "signing_keys_internal_api_key", "signing_keys_service_sign_gateway_key", "issuance_api_key",
                 "grpc_service_token", "device_registration_gateway_key"),
 }
 BASE_CEREMONY_MOUNTS = ("dsc_issue_gateway_key", "csca_issue_gateway_key")

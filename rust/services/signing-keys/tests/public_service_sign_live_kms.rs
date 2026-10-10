@@ -200,7 +200,7 @@ async fn sign_service(
                 "/v1/signing-keys/services/{service_id}/sign?organization_id={organization_id}"
             ))
             .header("content-type", "application/json")
-            .header("x-api-key", "test-internal-key")
+            .header("x-api-key", "test-service-sign-gateway-key-000000")
             .body(Body::from(payload.to_string()))
             .unwrap(),
         )
@@ -258,8 +258,9 @@ async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
         .unwrap();
     let managed = registry.clone().with_managed_openbao(Some(endpoint));
     let profiles = ProfileStore::from_connection(registry.connection());
-    let app = marty_signing_keys::http::router_with_dependencies(
+    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
         "test-internal-key".to_string(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(managed),
         Some(DocumentStore::from_connection(registry.connection())),
         None,
@@ -347,8 +348,9 @@ async fn public_config_cannot_replace_managed_kms_purpose_bindings() {
         )
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies(
+    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
         "test-internal-key".to_string(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(registry.clone()),
         None,
         None,
@@ -516,8 +518,9 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
         .put(&other_organization_id, "foreign-profile", foreign_profile)
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies(
+    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
         "test-internal-key".to_string(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(managed),
         Some(DocumentStore::from_connection(stored.connection())),
         None,
@@ -656,8 +659,9 @@ async fn live_managed_provider_rejects_foreign_profile_for_explicit_and_default_
         .put(&foreign_tenant, "foreign-profile", forged)
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies(
+    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
         "test-internal-key".to_string(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(managed),
         Some(DocumentStore::from_connection(stored.connection())),
         None,
@@ -768,8 +772,9 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         .put(&organization_id, "ip-vector", profile)
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies(
+    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
         "test-internal-key".to_string(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(registry.clone()),
         Some(documents),
         None,

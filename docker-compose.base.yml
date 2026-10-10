@@ -396,6 +396,7 @@ services:
       PASSPORT_TENANT_API_KEYS: ${PASSPORT_TENANT_API_KEYS:-}
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ${SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY:-dev-signing-keys-service-sign-gateway-key}
       MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:-}
@@ -812,6 +813,7 @@ services:
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/dev_integration_secret_server_cert
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/dev_integration_secret_server_key
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
+      SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ${SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY:-dev-signing-keys-service-sign-gateway-key}
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:-dev-device-registration-signing-keys-key-change-me}
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}

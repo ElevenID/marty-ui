@@ -18,7 +18,7 @@ use axum::{
 };
 use marty_signing_keys::{
     documents::{DocumentStore, LoadDidRequest},
-    http::router_with_dependencies,
+    http::router_with_dependencies_and_sign_key,
     profiles::ProfileStore,
     registry::{storage_key, RegistryStore},
 };
@@ -206,7 +206,14 @@ async fn json_route(app: &Router, method: &str, path: &str, body: Value) -> (Sta
                 .method(method)
                 .uri(path)
                 .header("content-type", "application/json")
-                .header("x-api-key", "test-internal-key")
+                .header(
+                    "x-api-key",
+                    if path.contains("/sign?") {
+                        "test-service-sign-gateway-key-000000"
+                    } else {
+                        "test-internal-key"
+                    },
+                )
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -246,8 +253,9 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
         .with_managed_openbao(Some(endpoint.clone()));
     let profiles = ProfileStore::from_connection(registry.connection());
     let documents = DocumentStore::from_connection(registry.connection());
-    let app = router_with_dependencies(
+    let app = router_with_dependencies_and_sign_key(
         "test-internal-key".into(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(registry.clone()),
         Some(documents.clone()),
         None,
@@ -512,8 +520,9 @@ async fn failed_managed_provision_does_not_activate_an_issuer_profile() {
         .unwrap()
         .with_managed_openbao(Some(endpoint));
     let profiles = ProfileStore::from_connection(registry.connection());
-    let app = router_with_dependencies(
+    let app = router_with_dependencies_and_sign_key(
         "test-internal-key".into(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(registry.clone()),
         Some(DocumentStore::from_connection(registry.connection())),
         None,
@@ -576,8 +585,9 @@ async fn denied_read_or_missing_mount_never_provisions_a_profile() {
             .unwrap()
             .with_managed_openbao(Some(endpoint));
         let profiles = ProfileStore::from_connection(registry.connection());
-        let app = router_with_dependencies(
+        let app = router_with_dependencies_and_sign_key(
             "test-internal-key".into(),
+            Some("test-service-sign-gateway-key-000000".into()),
             Some(registry.clone()),
             Some(DocumentStore::from_connection(registry.connection())),
             None,
@@ -652,8 +662,9 @@ async fn existing_managed_key_profiles_with_read_access_and_no_create_permission
         .unwrap()
         .with_managed_openbao(Some(endpoint));
     let profiles = ProfileStore::from_connection(registry.connection());
-    let app = router_with_dependencies(
+    let app = router_with_dependencies_and_sign_key(
         "test-internal-key".into(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(registry.clone()),
         Some(DocumentStore::from_connection(registry.connection())),
         None,
@@ -748,8 +759,9 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
         .with_managed_openbao(Some(endpoint));
     let organization_id = format!("rust-managed-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("rust-managed-other-{}", Uuid::new_v4().simple());
-    let app = router_with_dependencies(
+    let app = router_with_dependencies_and_sign_key(
         "test-internal-key".into(),
+        Some("test-service-sign-gateway-key-000000".into()),
         Some(registry.clone()),
         Some(DocumentStore::from_connection(registry.connection())),
         None,

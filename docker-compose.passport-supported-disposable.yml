@@ -151,9 +151,10 @@ services:
       BAO_TOKEN_FILE: /run/secrets/bao_token
       PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
+      SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
-    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, signing_keys_workload_server_cert, signing_keys_workload_server_key, workload_identity_ca_cert]
+    secrets: [marty_db_password, bao_token, signing_keys_internal_api_key, signing_keys_service_sign_gateway_key, signing_keys_workload_server_cert, signing_keys_workload_server_key, workload_identity_ca_cert]
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -550,7 +551,8 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/signing_keys_internal_api_key
-    secrets: [bao_token, signing_keys_internal_api_key, issuance_api_key, grpc_service_token, device_registration_gateway_key]
+      SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
+    secrets: [bao_token, signing_keys_internal_api_key, signing_keys_service_sign_gateway_key, issuance_api_key, grpc_service_token, device_registration_gateway_key]
     depends_on:
       organization:
         condition: service_healthy
@@ -581,6 +583,8 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bao_token
   signing_keys_internal_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_internal_api_key
+  signing_keys_service_sign_gateway_key:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_service_sign_gateway_key
   dsc_issue_gateway_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/dsc_issue_gateway_key
   csca_issue_gateway_key:

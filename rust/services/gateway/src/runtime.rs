@@ -95,6 +95,7 @@ pub struct GatewayRuntimeState {
     pub did_web_authority: String,
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
+    pub service_sign_gateway_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_service_api_key: String,
@@ -207,6 +208,7 @@ impl GatewayRuntimeState {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
+            service_sign_gateway_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             issuance_service_api_key,
@@ -250,13 +252,36 @@ impl GatewayRuntimeState {
         key: Option<String>,
     ) -> Result<Self, mmf_platform::PlatformError> {
         if let Some(key) = &key {
-            if key.len() < 32 || key == &self.signing_service_api_key {
+            if key.len() < 32
+                || key == &self.signing_service_api_key
+                || self.service_sign_gateway_key.as_ref() == Some(key)
+            {
                 return Err(mmf_platform::PlatformError::InvalidConfiguration(
                     "DSC issuance credential must be distinct and at least 32 bytes".into(),
                 ));
             }
         }
         self.dsc_issue_gateway_key = key;
+        Ok(self)
+    }
+
+    pub fn with_service_sign_gateway_key(
+        mut self,
+        key: String,
+    ) -> Result<Self, mmf_platform::PlatformError> {
+        if key.len() < 32
+            || key == self.signing_service_api_key
+            || key == self.issuance_service_api_key
+            || self.service_token.as_ref() == Some(&key)
+            || self.device_registration_gateway_key.as_ref() == Some(&key)
+            || self.dsc_issue_gateway_key.as_ref() == Some(&key)
+            || self.csca_issue_gateway_key.as_ref() == Some(&key)
+        {
+            return Err(mmf_platform::PlatformError::InvalidConfiguration(
+                "service signing Gateway credential must be distinct and at least 32 bytes".into(),
+            ));
+        }
+        self.service_sign_gateway_key = Some(key);
         Ok(self)
     }
 
@@ -267,6 +292,7 @@ impl GatewayRuntimeState {
         if let Some(key) = &key {
             if key.len() < 32
                 || key == &self.signing_service_api_key
+                || self.service_sign_gateway_key.as_ref() == Some(key)
                 || self.dsc_issue_gateway_key.as_ref() == Some(key)
             {
                 return Err(mmf_platform::PlatformError::InvalidConfiguration(
@@ -3075,9 +3101,9 @@ fn proxy_overrides(
         && identity.required_permission.as_deref() == Some("signing-key:create")
         && identity.organization_id.is_some()
     {
-        overrides
-            .headers
-            .insert("x-api-key".into(), state.signing_service_api_key.clone());
+        if let Some(key) = &state.service_sign_gateway_key {
+            overrides.headers.insert("x-api-key".into(), key.clone());
+        }
     }
     // GatewayProxy strips caller identity and credential headers before
     // applying these trusted action-specific Signing Keys credentials.
@@ -3307,13 +3333,6 @@ async fn internal_signing_compatibility_handler(
             request,
         )
         .await;
-    }
-    if let SigningCompatibilityOperation::ServiceSign { service_id } = &operation {
-        let path = format!(
-            "/internal/compat/services/{}/sign",
-            utf8_percent_encode(service_id, NON_ALPHANUMERIC)
-        );
-        return forward_signing_body(&state, &organization_id, &path, request).await;
     }
     if operation == SigningCompatibilityOperation::CreateProfile {
         return forward_profile_write(
@@ -5400,24 +5419,6 @@ mod tests {
                     }))
                     .expect("public identity response")
                 }
-                "/internal/compat/services/service%2D1/sign" => {
-                    let body: Value =
-                        serde_json::from_slice(request.body.as_deref().expect("service sign body"))
-                            .expect("service sign JSON");
-                    assert_eq!(body["organization_id"], "org-1");
-                    assert_eq!(body["payload_b64"], "cGF5bG9hZA");
-                    serde_json::to_vec(&json!({
-                        "ok": true,
-                        "service_id": "service-1",
-                        "algorithm": "ES256",
-                        "payload_length": 7,
-                        "signature_encoding": "der",
-                        "signature_b64": "c2lnbmF0dXJl",
-                        "signature_hex": "7369676e6174757265",
-                        "signed_at": "2026-08-20T00:00:00+00:00"
-                    }))
-                    .expect("service sign response")
-                }
                 "/internal/compat/issuer-dids/sign" => {
                     let body: Value =
                         serde_json::from_slice(request.body.as_deref().expect("DID sign body"))
@@ -6245,6 +6246,8 @@ mod tests {
         .expect("runtime state")
         .with_service_token(Some("s".repeat(32)))
         .expect("service token")
+        .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
+        .expect("service sign credential")
         .with_passport_native_gateway(
             passport_native,
             passport_native.then(|| {
@@ -7569,7 +7572,7 @@ mod tests {
     }
 
     #[test]
-    fn public_service_signing_receives_internal_key_only_after_gateway_authorization() {
+    fn public_service_signing_receives_dedicated_key_only_after_gateway_authorization() {
         let state = runtime_state();
         let path = "/v1/signing-keys/services/service-1/sign";
         assert!(is_public_service_sign_path(path));
@@ -7591,8 +7594,15 @@ mod tests {
             proxy_overrides(&state, path, &identity)
                 .headers
                 .get("x-api-key"),
-            Some(&state.signing_service_api_key)
+            state.service_sign_gateway_key.as_ref()
         );
+        let mut missing_credential = runtime_state();
+        Arc::get_mut(&mut missing_credential)
+            .unwrap()
+            .service_sign_gateway_key = None;
+        assert!(!proxy_overrides(&missing_credential, path, &identity)
+            .headers
+            .contains_key("x-api-key"));
         identity.organization_id = None;
         assert!(!proxy_overrides(&state, path, &identity)
             .headers
@@ -7655,7 +7665,7 @@ mod tests {
             if is_public_service_sign_path(path) {
                 assert_eq!(
                     forwarded.headers.get("x-api-key").map(String::as_str),
-                    Some("internal-signing-key")
+                    Some("dedicated-service-sign-gateway-key-000001")
                 );
             }
             assert_eq!(
@@ -9781,7 +9791,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_routes_replace_body_scope_and_preserve_custody_privacy() {
+    async fn retired_service_sign_route_is_unavailable_and_did_sign_keeps_trusted_scope() {
         let direct = runtime_router()
             .oneshot(
                 Request::builder()
@@ -9796,14 +9806,7 @@ mod tests {
             )
             .await
             .expect("response");
-        assert_eq!(direct.status(), StatusCode::OK);
-        let body: Value = serde_json::from_slice(
-            &to_bytes(direct.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
-                .await
-                .expect("body"),
-        )
-        .expect("service sign JSON");
-        assert_eq!(body["service_id"], "service-1");
+        assert_eq!(direct.status(), StatusCode::NOT_FOUND);
 
         let did = runtime_router()
             .oneshot(

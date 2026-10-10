@@ -82,6 +82,7 @@ struct ServiceStatus {
 #[derive(Clone)]
 struct AppState {
     internal_api_key: Arc<str>,
+    service_sign_gateway_key: Option<Arc<str>>,
     dsc_issue_gateway_key: Option<Arc<str>>,
     csca_issue_gateway_key: Option<Arc<str>>,
     beta_csca_issuance_enabled: bool,
@@ -112,9 +113,35 @@ pub fn router_with_dependencies(
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     public_domain: Option<String>,
 ) -> Router {
-    router_with_dependencies_and_dsc_key(
+    router_with_dependencies_and_sign_key(
         internal_api_key,
         None,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_dependencies_and_sign_key(
+    internal_api_key: String,
+    service_sign_gateway_key: Option<String>,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+) -> Router {
+    router_with_all_keys(
+        internal_api_key,
+        service_sign_gateway_key,
+        None,
+        None,
+        false,
         registry_store,
         document_store,
         csca_lifecycle_store,
@@ -152,6 +179,35 @@ pub fn router_with_dependencies_and_dsc_key(
 #[allow(clippy::too_many_arguments)]
 pub fn router_with_dependencies_and_ceremony_keys(
     internal_api_key: String,
+    dsc_issue_gateway_key: Option<String>,
+    csca_issue_gateway_key: Option<String>,
+    beta_csca_issuance_enabled: bool,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+) -> Router {
+    router_with_all_keys(
+        internal_api_key,
+        None,
+        dsc_issue_gateway_key,
+        csca_issue_gateway_key,
+        beta_csca_issuance_enabled,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_all_keys(
+    internal_api_key: String,
+    service_sign_gateway_key: Option<String>,
     dsc_issue_gateway_key: Option<String>,
     csca_issue_gateway_key: Option<String>,
     beta_csca_issuance_enabled: bool,
@@ -337,10 +393,6 @@ pub fn router_with_dependencies_and_ceremony_keys(
             "/internal/compat/issuer-profiles/{profile_id}/public-identity",
             post(profile_public_identity),
         )
-        .route(
-            "/internal/compat/services/{service_id}/sign",
-            post(service_sign),
-        )
         .route("/internal/compat/issuer-dids/sign", post(issuer_did_sign))
         .route(
             "/internal/compat/issuer-profiles",
@@ -482,6 +534,7 @@ pub fn router_with_dependencies_and_ceremony_keys(
         .layer(TraceLayer::new_for_http())
         .with_state(AppState {
             internal_api_key: Arc::from(internal_api_key),
+            service_sign_gateway_key: service_sign_gateway_key.map(Arc::from),
             dsc_issue_gateway_key: dsc_issue_gateway_key.map(Arc::from),
             csca_issue_gateway_key: csca_issue_gateway_key.map(Arc::from),
             beta_csca_issuance_enabled,
@@ -3585,7 +3638,7 @@ async fn sign_public_service_payload(
     headers: HeaderMap,
     input: Result<Json<PublicServiceSignRequest>, axum::extract::rejection::JsonRejection>,
 ) -> Response {
-    if authorize_internal(&state, &headers).is_err() {
+    if !authorize_service_sign(&state, &headers) {
         return public_error(
             StatusCode::UNAUTHORIZED,
             "Signing service authentication required.",
@@ -6510,23 +6563,6 @@ async fn profile_identity_response(
         .map(Json)
 }
 
-async fn service_sign(
-    State(state): State<AppState>,
-    Path(service_id): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<ServiceSignRequest>,
-) -> Result<Json<serde_json::Value>, CompatibilityError> {
-    authorize_internal(&state, &headers).map_err(|_| CompatibilityError::Unauthorized)?;
-    let service = state
-        .compatibility
-        .as_ref()
-        .ok_or(CompatibilityError::Unavailable)?;
-    service
-        .sign_with_service(&service_id, &request)
-        .await
-        .map(Json)
-}
-
 async fn issuer_did_sign(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -7576,6 +7612,25 @@ fn authorize_internal(state: &AppState, headers: &HeaderMap) -> Result<(), kms::
     Ok(())
 }
 
+fn authorize_service_sign(state: &AppState, headers: &HeaderMap) -> bool {
+    let Some(expected) = state.service_sign_gateway_key.as_ref() else {
+        return false;
+    };
+    if expected.as_ref() == state.internal_api_key.as_ref()
+        || state.dsc_issue_gateway_key.as_deref() == Some(expected.as_ref())
+        || state.csca_issue_gateway_key.as_deref() == Some(expected.as_ref())
+    {
+        return false;
+    }
+    let supplied = headers
+        .get("x-api-key")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .as_bytes();
+    let expected = expected.as_bytes();
+    expected.len() == supplied.len() && expected.ct_eq(supplied).unwrap_u8() == 1
+}
+
 fn authorize_dsc_issue(state: &AppState, headers: &HeaderMap) -> bool {
     let Some(expected) = state.dsc_issue_gateway_key.as_ref() else {
         return false;
@@ -8386,6 +8441,7 @@ mod public_contract_tests {
             .unwrap();
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            service_sign_gateway_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,
@@ -9406,6 +9462,7 @@ mod public_contract_tests {
     fn public_config_preserves_provider_routing_defaults_for_lossless_updates() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            service_sign_gateway_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,
@@ -9447,6 +9504,7 @@ mod public_contract_tests {
     fn public_config_redacts_credentials_without_hiding_service_metadata() {
         let state = AppState {
             internal_api_key: Arc::from("test-key"),
+            service_sign_gateway_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
             beta_csca_issuance_enabled: false,

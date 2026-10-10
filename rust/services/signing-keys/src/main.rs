@@ -90,8 +90,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_revision = %config.build_revision,
         "starting Rust signing-keys service"
     );
-    let app = http::router_with_dependencies_and_ceremony_keys(
+    let app = http::router_with_all_keys(
         config.internal_api_key,
+        Some(config.service_sign_gateway_key),
         config.dsc_issue_gateway_key,
         config.csca_issue_gateway_key,
         config.beta_csca_issuance_enabled,

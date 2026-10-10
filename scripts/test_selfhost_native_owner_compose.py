@@ -460,6 +460,19 @@ def assert_models(
     assert preserved["services"]["device-registration"]["environment"].pop(
         "TRUST_PROFILE_SERVICE_URL"
     ) == "http://trust-profile:8004"
+    signing_secret = preserved["secrets"].pop("signing_keys_service_sign_gateway_key")
+    assert signing_secret["file"].endswith("/signing_keys_service_sign_gateway_key")
+    for name in ("gateway", "signing-keys"):
+        service = preserved["services"][name]
+        assert service["environment"].pop("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE") == (
+            "/run/secrets/signing_keys_service_sign_gateway_key"
+        )
+        mount = {
+            "source": "signing_keys_service_sign_gateway_key",
+            "target": "/run/secrets/signing_keys_service_sign_gateway_key",
+        }
+        assert service["secrets"].count(mount) == 1
+        service["secrets"].remove(mount)
     assert preserved == before, "Unowned self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(before, sort_keys=True, indent=2).splitlines(keepends=True),

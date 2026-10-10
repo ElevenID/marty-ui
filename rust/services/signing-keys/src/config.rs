@@ -3,6 +3,7 @@ use std::{collections::HashMap, env, fs, net::SocketAddr, path::PathBuf};
 const DEFAULT_HTTP_PORT: u16 = 8017;
 const DEFAULT_INTEGRATION_SECRET_TLS_PORT: u16 = 8018;
 const DEVELOPMENT_INTERNAL_API_KEY: &str = "dev-signing-keys-internal-api-key";
+const DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY: &str = "dev-signing-keys-service-sign-gateway-key";
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct IntegrationSecretTls {
@@ -18,6 +19,7 @@ pub struct Config {
     pub release_version: String,
     pub build_revision: String,
     pub internal_api_key: String,
+    pub service_sign_gateway_key: String,
     pub holder_device_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
@@ -81,10 +83,34 @@ impl Config {
             );
         }
         let dsc_issue_gateway_key = secret_value(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        if value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY").is_some()
+            && value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE").is_some()
+        {
+            return Err("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must use one secret source".into());
+        }
+        let service_sign_gateway_key =
+            secret_value(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY")?
+                .unwrap_or_else(|| DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY.to_string());
+        let environment = value(values, "ENVIRONMENT").unwrap_or_else(|| "development".into());
+        let nondevelopment_environment = !matches!(
+            environment.to_ascii_lowercase().as_str(),
+            "development" | "dev" | "local" | "test"
+        );
+        if service_sign_gateway_key.len() < 32
+            || service_sign_gateway_key == internal_api_key
+            || ((release_version != "development" || nondevelopment_environment)
+                && service_sign_gateway_key == DEVELOPMENT_SERVICE_SIGN_GATEWAY_KEY)
+        {
+            return Err(
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be distinct and at least 32 characters"
+                    .into(),
+            );
+        }
         let holder_device_key = secret_value(values, "DEVICE_REGISTRATION_SIGNING_KEYS_KEY")?;
         if holder_device_key.as_ref().is_some_and(|key| {
             key.len() < 32
                 || key == &internal_api_key
+                || key == &service_sign_gateway_key
                 || dsc_issue_gateway_key.as_ref() == Some(key)
         }) {
             return Err(
@@ -92,10 +118,9 @@ impl Config {
                     .into(),
             );
         }
-        if dsc_issue_gateway_key
-            .as_ref()
-            .is_some_and(|key| key.len() < 32 || key == &internal_api_key)
-        {
+        if dsc_issue_gateway_key.as_ref().is_some_and(|key| {
+            key.len() < 32 || key == &internal_api_key || key == &service_sign_gateway_key
+        }) {
             return Err(
                 "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY must be distinct and at least 32 characters"
                     .into(),
@@ -128,6 +153,7 @@ impl Config {
         if csca_issue_gateway_key.as_ref().is_some_and(|key| {
             key.len() < 32
                 || key == &internal_api_key
+                || key == &service_sign_gateway_key
                 || dsc_issue_gateway_key.as_ref() == Some(key)
                 || holder_device_key.as_ref() == Some(key)
         }) {
@@ -143,6 +169,14 @@ impl Config {
             return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from BAO_TOKEN".into());
         }
         let haip_kms_token_file = value(values, "HAIP_KMS_TOKEN_FILE").map(PathBuf::from);
+        if values.iter().any(|(name, value)| {
+            name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
+                && name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE"
+                && value.contains(&service_sign_gateway_key)
+        }) || bao_token.as_deref() == Some(service_sign_gateway_key.as_str())
+        {
+            return Err("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must not be reused by another configuration value".into());
+        }
         if let Some(dsc_key) = dsc_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
                 name != "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY"
@@ -184,6 +218,7 @@ impl Config {
             release_version,
             build_revision: value(values, "MARTY_UI_SHA").unwrap_or_else(|| "unknown".into()),
             internal_api_key,
+            service_sign_gateway_key,
             holder_device_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
@@ -284,11 +319,44 @@ mod tests {
                 "SIGNING_KEYS_INTERNAL_API_KEY".into(),
                 "a-production-strength-secret".into(),
             ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-production-service-sign-key-000001".into(),
+            ),
         ]);
         assert_eq!(
             Config::from_values(&configured).unwrap().internal_api_key,
             "a-production-strength-secret"
         );
+    }
+
+    #[test]
+    fn service_sign_gateway_key_cannot_reuse_shared_internal_credential() {
+        let mut values = HashMap::from([(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "dev-signing-keys-internal-api-key".into(),
+        )]);
+        assert!(Config::from_values(&values).is_err());
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "dedicated-service-sign-gateway-key-000001".into(),
+        );
+        assert!(Config::from_values(&values).is_ok());
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE".into(),
+            "/run/secrets/service-sign-gateway-key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE");
+        values.insert(
+            "OTHER_SERVICE_SECRET".into(),
+            "dedicated-service-sign-gateway-key-000001".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("OTHER_SERVICE_SECRET");
+        values.insert("ENVIRONMENT".into(), "production".into());
+        values.remove("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY");
+        assert!(Config::from_values(&values).is_err());
     }
 
     #[test]
@@ -382,6 +450,10 @@ mod tests {
                 "SIGNING_KEYS_INTERNAL_API_KEY".into(),
                 "internal-signing-key-32-characters-long".into(),
             ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-service-sign-gateway-key-000001".into(),
+            ),
         ]);
         assert!(Config::from_values(&values).is_err());
         values.insert(
@@ -440,6 +512,10 @@ mod tests {
             (
                 "SIGNING_KEYS_INTERNAL_API_KEY".into(),
                 "independent-internal-key-32-characters".into(),
+            ),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "dedicated-service-sign-gateway-key-000001".into(),
             ),
             (
                 "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY_FILE".into(),

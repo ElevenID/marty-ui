@@ -107,6 +107,7 @@ pub struct GatewayConfig {
     pub grpc_service_token: Option<String>,
     pub device_registration_gateway_key: String,
     pub signing_internal_api_key: String,
+    pub service_sign_gateway_key: String,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
     pub issuance_api_key: String,
@@ -148,6 +149,7 @@ impl fmt::Debug for GatewayConfig {
             )
             .field("device_registration_gateway_key_configured", &true)
             .field("signing_internal_api_key_configured", &true)
+            .field("service_sign_gateway_key_configured", &true)
             .field(
                 "dsc_issue_gateway_key_configured",
                 &self.dsc_issue_gateway_key.is_some(),
@@ -284,6 +286,18 @@ impl GatewayConfig {
             )?;
         }
         let dsc_issue_gateway_key = secret(values, "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY")?;
+        let service_sign_gateway_key = secret(values, "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY")?
+            .or_else(|| (!production).then(|| "dev-signing-keys-service-sign-gateway-key".into()))
+            .ok_or_else(|| error("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY is required"))?;
+        if service_sign_gateway_key.len() < 32
+            || service_sign_gateway_key == signing_internal_api_key
+            || (production
+                && service_sign_gateway_key == "dev-signing-keys-service-sign-gateway-key")
+        {
+            return Err(error(
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY must be distinct and at least 32 characters",
+            ));
+        }
         let csca_issue_gateway_key = secret(values, "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY")?;
         if csca_issue_gateway_key.is_some() && !environment.eq_ignore_ascii_case("beta") {
             return Err(error("CSCA issuance credential is beta-only"));
@@ -312,6 +326,7 @@ impl GatewayConfig {
             )?;
         }
         if csca_issue_gateway_key.as_deref() == Some(signing_internal_api_key.as_str())
+            || csca_issue_gateway_key.as_deref() == Some(service_sign_gateway_key.as_str())
             || csca_issue_gateway_key.as_deref() == dsc_issue_gateway_key.as_deref()
                 && csca_issue_gateway_key.is_some()
         {
@@ -326,6 +341,7 @@ impl GatewayConfig {
             validate_production_secret("ISSUANCE_API_KEY", Some(&issuance_api_key), 16)?;
         }
         if device_registration_gateway_key == signing_internal_api_key
+            || device_registration_gateway_key == service_sign_gateway_key
             || device_registration_gateway_key == issuance_api_key
         {
             return Err(error(
@@ -346,6 +362,19 @@ impl GatewayConfig {
                     "DSC issuance credential must not be reused by another configuration value",
                 ));
             }
+        }
+        if dsc_issue_gateway_key.as_deref() == Some(service_sign_gateway_key.as_str())
+            || issuance_api_key == service_sign_gateway_key
+            || grpc_service_token.as_deref() == Some(service_sign_gateway_key.as_str())
+            || values.iter().any(|(name, value)| {
+                name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
+                    && name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE"
+                    && value.contains(&service_sign_gateway_key)
+            })
+        {
+            return Err(error(
+                "Service signing credential must not be reused by another configuration value",
+            ));
         }
         if let Some(csca_key) = csca_issue_gateway_key.as_deref() {
             let reused_in_environment = values.iter().any(|(name, value)| {
@@ -496,6 +525,7 @@ impl GatewayConfig {
             grpc_service_token,
             device_registration_gateway_key,
             signing_internal_api_key,
+            service_sign_gateway_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,
             issuance_api_key,
@@ -874,6 +904,10 @@ mod tests {
                 "synthetic-signing-key".into(),
             ),
             (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "synthetic-dedicated-service-sign-key-000001".into(),
+            ),
+            (
                 "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY".into(),
                 "synthetic-dsc-gateway-only-credential-000001".into(),
             ),
@@ -888,6 +922,7 @@ mod tests {
             "private-organization",
             "synthetic-grpc-token",
             "synthetic-signing-key",
+            "synthetic-dedicated-service-sign-key-000001",
             "synthetic-dsc-gateway-only-credential-000001",
             "synthetic-issuance-key",
             "synthetic-redis-password",
@@ -942,6 +977,14 @@ mod tests {
         values.insert("GRPC_SERVICE_TOKEN".into(), "g".repeat(32));
         values.insert("DEVICE_REGISTRATION_GATEWAY_KEY".into(), "d".repeat(32));
         values.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32));
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("missing dedicated service signing credential")
+            .to_string()
+            .contains("SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"));
+        values.insert(
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "k".repeat(32),
+        );
         values.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
         assert!(GatewayConfig::from_values(&values)
             .expect_err("missing TLS")
@@ -963,6 +1006,10 @@ mod tests {
             ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
             ("DEVICE_REGISTRATION_GATEWAY_KEY".into(), "a".repeat(32)),
             ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "s".repeat(32)),
+            (
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+                "k".repeat(32),
+            ),
             ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
             ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
         ]);

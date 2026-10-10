@@ -111,6 +111,11 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
             - name: DEPLOYMENT_PROFILE_SERVICE_URL
               valueFrom:
                 configMapKeyRef:
