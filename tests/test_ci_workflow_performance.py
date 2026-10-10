@@ -320,10 +320,11 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         managed_chain.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 5
+        == 6
     )
     for case in (
         "authenticated_gateway_reaches_remaining_rust_signing_handlers",
+        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
         "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
         "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
         "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
@@ -342,14 +343,13 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         signing_routes.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 2
+        == 1
     )
-    for case in (
-        "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
-        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
-    ):
-        assert case in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 2
+    assert "authenticated_gateway_reaches_rust_managed_key_route_without_custody" in signing_routes
+    assert "authenticated_gateway_rotates_only_a_dedicated_signing_service" not in signing_routes
+    assert signing_routes.count("-- --ignored --exact") == 1
+    assert "--test public_config_resolve_live_contract" in managed_chain
+    assert "signing-public_config_resolve_live_contract.log" in managed_chain
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )

@@ -9,6 +9,7 @@ use axum::{
     Json, Router,
 };
 use marty_signing_keys::{
+    flow_envelope::OpenBaoEnvelopeProvider,
     http::router_with_dependencies,
     profiles::ProfileStore,
     registry::{storage_key, RegistryStore},
@@ -68,9 +69,34 @@ async fn resolve(app: &Router, organization_id: &str, body: Value) -> (StatusCod
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn public_config_resolve_preserves_selection_and_redacts_kms_credentials() {
     let redis_url = disposable_redis_url().await;
+    let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+    let bao_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    let parsed_bao = reqwest::Url::parse(&bao_url).expect("disposable OpenBao URL syntax");
+    assert!(parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"));
+    assert_eq!(
+        std::env::var("BAO_TOKEN").as_deref(),
+        Ok(bao_token.as_str())
+    );
+    let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
+        .expect("disposable OpenBao sentinel value");
+    assert!(bao_nonce.len() >= 16);
+    let marker: Value = reqwest::Client::new()
+        .get(format!(
+            "{bao_url}/v1/secret/data/marty-test-disposable-guard"
+        ))
+        .header("X-Vault-Token", &bao_token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(marker["data"]["data"]["nonce"], bao_nonce);
     let writes = Arc::new(AtomicUsize::new(0));
     let unavailable = Arc::new(AtomicBool::new(false));
     let kms = Router::new().route(
@@ -109,7 +135,12 @@ async fn public_config_resolve_preserves_selection_and_redacts_kms_credentials()
 
     let organization_id = format!("test-config-resolve-{}", uuid::Uuid::new_v4().simple());
     let other_organization_id = format!("{organization_id}-other");
-    let store = RegistryStore::connect(&redis_url).await.unwrap();
+    let store = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     store
         .save(
             &organization_id,

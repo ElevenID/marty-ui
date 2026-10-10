@@ -11982,3 +11982,17 @@ suite passed (165 library tests, nine expected opt-in ignores), and
 all-target warnings-denied Clippy passed. This local code requires its own
 exact-head hosted qualification after batching with any findings from the
 running CI; it is not evidence of live backend custody by itself.
+
+The published `e131e16fb` run then failed its contracts and release-contract
+lanes on two fixture/workflow assertions. The public config-resolve contract
+still persisted a tenant Transit credential without an OpenBao envelope; it
+now uses the disposable integration-secret key after provisioning, with a
+Redis/OpenBao guard and mounted-token binding. Both exact opt-in cases passed
+locally against fresh disposable Redis and OpenBao containers, which were
+stopped. The release-contract suite counted Gateway acceptance invocations
+before the rotation case was moved to that provisioned step; its assertion
+now matches the actual six OpenBao-backed and one early Gateway invocation
+and verifies the public resolve suite remains there. The two focused workflow
+tests passed, Ruff passed, workflow YAML parsed, Rustfmt and all-target
+warnings-denied Clippy passed. The other hosted lanes and next exact-head
+qualification are still pending.
