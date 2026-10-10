@@ -11474,3 +11474,17 @@ because shipped-artifact and real wallet/KMS gates remain open. UI run
 `38026156744` remains active with Canvas, OpenBao plugin and service image
 jobs; its earlier completed jobs have not shown a failure. Verifier PR #154
 remains green; Core PR #355 still requires protected review.
+
+K1 production-root follow-up found one additional direct Core consumer:
+`marty-subscriptions/packages/verifier_entitlements/marty-license` pinned
+`marty-secure-storage` to Core `5a4d6ff`. It is built as a native subscription
+binding. A separate worktree `kms-subscriptions-core-consumer-20261009` now
+pins Core `7f276a4`; locked Linux all-feature compilation, 33 unit tests,
+four policy-vector tests, and warnings-denied all-target Clippy passed. Draft
+subscriptions PR #71 at `ce8d934` has exact-head hosted native/wheel and
+image jobs in progress. Local all-feature test linking was unavailable because
+the disposable compiler image lacks `libpython3.11`; hosted CI is the binding
+qualification. The crate also has local Ed25519 PEM issuance for
+software license tokens, a separate key class from credential issuer/holder
+keys; do not treat this Core repin as KMS custody for license signing or claim
+the subscription service has no local private keys.
