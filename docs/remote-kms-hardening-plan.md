@@ -13472,3 +13472,31 @@ also passed. UI #1192 remains draft. The local merge of subsequent `main` and
 tracker commits are not the published PR head and do not inherit this
 exact-head qualification; batch them with substantive hardening before the
 next CI-triggering push.
+
+K8 native startup-oracle retirement candidate (local, unpublished): the
+eight-case `worker_startup_matches_published_process_and_idle_heartbeat`
+acceptance now starts only the published-schema database and native Rust
+Canvas worker. It asserts the idle heartbeat, live process, empty job queue,
+and POSIX interrupt exit directly from reviewed expectations; it no longer
+launches or compares the legacy Python startup worker. The public startup
+scenario inventory remains pinned. The full-main
+`canvas-startup-fresh-run.json` gate stays required and is now schema v2,
+binding the checked-out commit, scenario and Rust replay source hashes,
+compiled test and worker binaries, pinned database/image fixture, eight
+case names, actual replay success and owned cleanup. The old startup capture
+switch and Rust capture CLI route are removed; its Python runner remains as a
+shared helper and historical corpus producer for other Python oracles, and
+the producer inventory marks it retired from the schema preparer. This is a
+partial K8 retirement, not proof that the full Python oracle graph or its
+synthetic raw integration-secret key has been removed.
+
+The local eight-case real-process replay passed on disposable PostgreSQL
+using Rust 1.95.0; all 11 startup attestation unit tests passed. Focused
+Python current-input, producer-closure and source-contract checks passed
+63/63; the surrounding image-startup, process and logging fixtures passed
+54/54; warnings-denied Clippy for the Canvas worker acceptance test and the
+Issuance capture example compile passed. The broad CI-performance suite
+previously had one Windows-only `git bash` subprocess timeout after 185
+passes; its inventory consumer check was corrected and passed in the focused
+rerun. Hosted exact-head qualification remains required after this grouped
+candidate is published.

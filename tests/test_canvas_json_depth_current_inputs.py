@@ -145,7 +145,7 @@ def test_current_json_depth_probe_inputs_and_selector() -> None:
 
     constructor = (ROOT / CONSTRUCTOR).read_text(encoding="utf-8")
     depth = constructor.split("pub async fn start_with_json_depth()", 1)[1].split(
-        "pub async fn start_with_worker_startup()", 1
+        "pub async fn start_with_worker_rest()", 1
     )[0]
     assert (
         '"json_depth",\n                "json-depth",\n                "json_depth",'

@@ -2001,18 +2001,9 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_startup()
+    let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
-    let oracle = owned.oracle.clone().unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-startup-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(
-        oracle, expected,
-        "published startup reference must regenerate unchanged"
-    );
     let worker_binary = canvas_worker_process_signals::worker_executable();
     let worker_binary_before = canvas_startup_attestation::file_sha(&worker_binary);
     let pool = PgPoolOptions::new()
@@ -2020,12 +2011,11 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
         .connect(&owned.url)
         .await
         .unwrap();
-    canvas_worker_startup_replay::replay(&pool, &owned.url, &oracle).await;
+    canvas_worker_startup_replay::replay(&pool, &owned.url).await;
     pool.close().await;
     owned.close().unwrap();
     canvas_startup_attestation::emit_after_startup_pass(
         &canvas_published_database::repository_root(),
-        &oracle,
         &worker_binary,
         &worker_binary_before,
     );

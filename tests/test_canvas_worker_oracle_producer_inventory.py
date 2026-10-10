@@ -94,6 +94,7 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     assert set(inventory) == {
         "schema",
         "purpose",
+        "retired_from_preparer",
         "direct_runner_corpora",
         "shared_runner_corpora",
         "standalone_runner_entries",
@@ -103,6 +104,8 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     }
 
     direct = inventory["direct_runner_corpora"]
+    retired = set(inventory["retired_from_preparer"])
+    assert retired == {"run_canvas_worker_startup_oracle.py"}
     shared = inventory["shared_runner_corpora"]
     metadata = inventory["external_fixture_corpora"]
     listed = (
@@ -192,7 +195,7 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
             encoding="utf-8"
         ), "Standalone historical runner must remain in CI"
     assert preparer_worker_runners(PREPARER.read_text(encoding="utf-8")) == (
-        mapped_runners - set(standalone)
+        mapped_runners - set(standalone) - retired
     ), "Published preparer worker dispatch needs producer-ownership review"
 
 

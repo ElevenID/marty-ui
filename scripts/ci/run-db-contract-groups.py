@@ -185,7 +185,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "worker_reclaimers_retry",
         "worker_rest",
         "worker_retry",
-        "worker_startup",
     }
 )
 TIMING_NAMES = {

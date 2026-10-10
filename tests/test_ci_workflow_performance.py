@@ -1790,9 +1790,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
-            "tests/test_canvas_worker_startup_input_evidence.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
-            "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",

@@ -67,7 +67,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "worker_reclaimers_retry",
     "worker_rest",
     "worker_retry",
-    "worker_startup",
 ];
 
 fn published_probe_timing_name(script: Option<&str>) -> String {
@@ -901,16 +900,6 @@ impl PublishedDatabase {
             Some("canvas-issued-review-scenarios.json"),
             true,
         )
-        .await
-    }
-
-    pub async fn start_with_worker_startup() -> Result<Self, String> {
-        Self::start_probe(Some((
-            "worker_startup",
-            "worker-startup",
-            "worker_startup",
-            "MARTY_CANVAS_WORKER_STARTUP_ORACLE=1",
-        )))
         .await
     }
 

@@ -59,7 +59,6 @@ async fn main() -> Result<(), String> {
         "utf7-consumer" => PublishedDatabase::start_with_utf7_consumer().await?,
         "json-consumer" => PublishedDatabase::start_with_json_consumer().await?,
         "json-depth" => PublishedDatabase::start_with_json_depth().await?,
-        "worker-startup" => PublishedDatabase::start_with_worker_startup().await?,
         "worker-rest" => PublishedDatabase::start_with_worker_rest().await?,
         "worker-facts" => PublishedDatabase::start_with_worker_facts().await?,
         "worker-retry" => PublishedDatabase::start_with_worker_retry().await?,
@@ -74,7 +73,7 @@ async fn main() -> Result<(), String> {
         "worker-reclaimers-retry" => PublishedDatabase::start_with_worker_reclaimers_retry().await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-retry-after, worker-validation, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-rest, worker-facts, worker-retry, worker-retry-after, worker-validation, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
                     .into(),
             )
         }
