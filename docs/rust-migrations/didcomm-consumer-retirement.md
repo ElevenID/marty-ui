@@ -106,11 +106,12 @@ specific overlays; it does not restore full Python ownership now that the base
 composition is native.
 
 Beta and conformance share `docker-compose.service.issuance-native.yml` at the
-repository root. The former beta definition is frozen at `cb1a01656703896ce552bff42c140f154a97026a`
-in `tests/fixtures/issuance-native-compose-before-extraction.yml`. Full rendered
-beta equality covers unset, empty and custom optional values, including exact
-required-variable failure text (Compose's map/list diagnostic location is not
-part of that behavior). The service file is required alongside the Compose files
+repository root. The current-model Compose gate checks reviewed shared inputs,
+native custody exclusions, unset/empty/custom optional values, and missing
+required-variable failures. It also checks native conformance selection against
+the current base composition. The historical pre-extraction beta fixture was
+retired because it contained the raw integration-secret master-key input. The
+service file is required alongside the Compose files
 in the source checkout; it is not a runtime bind asset and must not be copied
 into the self-host runtime-asset directory. Existing beta deployment uses its
 source-verified full checkout. Self-host release bundle selection is unchanged.

@@ -1,4 +1,4 @@
-"""Read-only Compose selection, whole-model preservation and synthetic binding gate.
+"""Read-only current Compose selection and synthetic binding gate.
 
 No daemon, images, operator environment files, network or application is used.
 """
@@ -111,16 +111,14 @@ def synthetic_values(model, directory):
         CORS_ORIGINS="https://conformance.example:9443",
         OIDF_TLS_CERT_DIR=(directory / "tls").as_posix(),
         DIDCOMM_ENCRYPTION_POLICY_DIR=(directory / "policy").as_posix(),
-        INTEGRATION_SECRET_MASTER_KEY="synthetic-frozen-reference-only",
     )
     return values
 
 
 def assert_native_delta(legacy, actual):
     expected = deepcopy(legacy)
-    # The native owner is validated separately in full; all existing service,
-    # network, secret, volume, routing and mount fields are compared unchanged
-    # except the explicitly enumerated native authentication/selection delta.
+    # The native owner is validated separately in full; this comparison guards
+    # the explicitly enumerated authentication and selection differences.
     expected["services"]["issuance-native"] = actual["services"]["issuance-native"]
     token = actual["services"]["issuance-native"]["environment"]["GRPC_SERVICE_TOKEN"]
     for name in NATIVE["TOKEN_CONSUMERS"]:
@@ -149,44 +147,24 @@ def assert_native_delta(legacy, actual):
     assert actual == expected, "Native selection changed an unowned existing field"
 
 
-def assert_beta_shared_setting_repairs(previous, actual, inputs=None):
-    """Reviewed shared and default-off passport inputs only."""
-    expected = deepcopy(previous)
-    before = expected["services"]["issuance-native"]["environment"]
-    assert "INTEGRATION_SECRET_MASTER_KEY" in before
-    before.pop("INTEGRATION_SECRET_MASTER_KEY")
-    legacy = expected["services"]["issuance"]["environment"]
-    assert before["DATABASE_URL"].startswith("postgresql+asyncpg://")
-    before["DATABASE_URL"] = before["DATABASE_URL"].replace(
-        "postgresql+asyncpg://", "postgresql://", 1
-    )
+def assert_native_inputs(common, base_source):
+    """Keep the current native owner bound to the reviewed shared inputs."""
+    native = common["services"]["issuance-native"]["environment"]
+    shared = base_source["services"]["issuance"]["environment"]
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in native
+    assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
+    assert native["DATABASE_URL"].startswith("postgresql://")
     for setting in SHARED_SETTING_REPAIRS:
-        assert setting in legacy
+        assert setting in shared and setting in native
         if setting == "CANVAS_MIRROR_WORKER_ENABLED":
-            assert legacy[setting] == "false"
-            selected = (inputs or {}).get(setting) or "false"
+            assert shared[setting] == "false"
+            assert native[setting] == "${CANVAS_MIRROR_WORKER_ENABLED:-false}"
         else:
-            selected = legacy[setting]
-        if setting in before:
-            assert before[setting] == selected
-        else:
-            before[setting] = selected
-    if inputs is not None:
-        for setting in PASSPORT_SHARED_INPUTS:
-            assert setting in legacy
-            if setting in before:
-                assert before[setting] == legacy[setting]
-            else:
-                before[setting] = legacy[setting]
-        for setting, (_, default) in PASSPORT_NATIVE_ONLY.items():
-            selected = inputs.get(setting) or default
-            if setting in before:
-                assert before[setting] == selected
-            else:
-                before[setting] = selected
-    assert actual == expected, (
-        "Beta changed outside the reviewed shared-setting repairs"
-    )
+            assert native[setting] == shared[setting]
+    for setting in PASSPORT_SHARED_INPUTS:
+        assert setting in shared and native[setting] == shared[setting]
+    for setting, (expression, _) in PASSPORT_NATIVE_ONLY.items():
+        assert native[setting] == expression
 
 
 def complete_common(common, runtime):
@@ -215,45 +193,13 @@ def run(command):
         yaml.safe_load((ROOT / COMMON).read_text(encoding="utf-8")),
         yaml.safe_load((ROOT / RUNTIME).read_text(encoding="utf-8")),
     )
-    frozen = yaml.safe_load(
-        (
-            ROOT / "tests/fixtures/issuance-native-compose-before-extraction.yml"
-        ).read_text(encoding="utf-8")
-    )
     base_source = yaml.safe_load(
         (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
     )
     legacy_environment = base_source["services"]["issuance"]["environment"]
     token_expression = legacy_environment["TOKEN_RATE_LIMIT"]
     assert token_expression == "${TOKEN_RATE_LIMIT:-30}"
-    expected_common = deepcopy(frozen)
-    expected_environment = expected_common["services"]["issuance-native"][
-        "environment"
-    ]
-    assert "INTEGRATION_SECRET_MASTER_KEY" in expected_environment
-    expected_environment.pop("INTEGRATION_SECRET_MASTER_KEY")
-    assert expected_environment["DATABASE_URL"].startswith("postgresql+asyncpg://")
-    expected_environment["DATABASE_URL"] = expected_environment["DATABASE_URL"].replace(
-        "postgresql+asyncpg://", "postgresql://", 1
-    )
-    for setting in SHARED_SETTING_REPAIRS:
-        assert setting not in expected_environment
-        assert setting in legacy_environment
-        if setting == "CANVAS_MIRROR_WORKER_ENABLED":
-            # The Rust alias cannot own the separate Canvas mirror worker.
-            assert legacy_environment[setting] == "false"
-            expected_environment[setting] = "${CANVAS_MIRROR_WORKER_ENABLED:-false}"
-        else:
-            expected_environment[setting] = legacy_environment[setting]
-    for setting in PASSPORT_SHARED_INPUTS:
-        assert setting not in expected_environment
-        expected_environment[setting] = legacy_environment[setting]
-    for setting, (expression, _) in PASSPORT_NATIVE_ONLY.items():
-        assert setting not in expected_environment
-        expected_environment[setting] = expression
-    assert common == expected_common, (
-        "Shared service changed beyond the governed shared-setting repairs"
-    )
+    assert_native_inputs(common, base_source)
     assert set(common) == {"services"} and set(common["services"]) == {
         "issuance-native"
     }
@@ -271,16 +217,7 @@ def run(command):
 
     with tempfile.TemporaryDirectory(prefix="conformance-native-render-") as temporary:
         directory = Path(temporary)
-        before_source = yaml.safe_load(
-            (ROOT / "docker-compose.beta.yml").read_text(encoding="utf-8")
-        )
-        before_source["services"]["issuance-native"] = frozen["services"][
-            "issuance-native"
-        ]
-        before_path = directory / "beta-before.json"
-        before_path.write_text(json.dumps(before_source), encoding="utf-8")
-
-        def beta_binding(before, effective):
+        def beta_binding(effective):
             (directory / "images.env").write_text(
                 "".join(f"{key}={value}\n" for key, value in sorted(effective.items())),
                 encoding="utf-8",
@@ -289,7 +226,7 @@ def run(command):
                 directory,
                 command,
                 ROOT / "docker-compose.base.yml",
-                before_path if before else ROOT / "docker-compose.beta.yml",
+                ROOT / "docker-compose.beta.yml",
                 project=PROJECT,
             )
 
@@ -301,15 +238,22 @@ def run(command):
             {key: "synthetic-custom" for key in optional},
         ):
             effective = {**values, **overrides}
-            assert_beta_shared_setting_repairs(
-                beta_binding(True, effective), beta_binding(False, effective), effective
-            )
+            actual = beta_binding(effective)
+            native = actual["services"]["issuance-native"]["environment"]
+            assert "INTEGRATION_SECRET_MASTER_KEY" not in native
+            assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
+            for setting in SHARED_SETTING_REPAIRS + PASSPORT_SHARED_INPUTS:
+                if setting != "CANVAS_MIRROR_WORKER_ENABLED":
+                    assert native[setting] == actual["services"]["issuance"][
+                        "environment"
+                    ][setting]
+            for setting, (_, default) in PASSPORT_NATIVE_ONLY.items():
+                assert native[setting] == (effective.get(setting) or default)
         for configured, expected_rate in TOKEN_RATE_CASES:
             effective = dict(values)
             if configured is not None:
                 effective["TOKEN_RATE_LIMIT"] = configured
-            actual = beta_binding(False, effective)
-            assert_beta_shared_setting_repairs(beta_binding(True, effective), actual, effective)
+            actual = beta_binding(effective)
             assert (
                 actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"]
                 == expected_rate
@@ -320,24 +264,12 @@ def run(command):
                 effective = {**values, key: ""}
                 if missing:
                     effective.pop(key)
-                errors = []
-                for before in (False, True):
-                    try:
-                        beta_binding(before, effective)
-                    except subprocess.CalledProcessError as error:
-                        errors.append(error.stderr)
-                    else:
-                        raise AssertionError(
-                            "Required beta input unexpectedly accepted"
-                        )
-                # Compose may report a map key or list index for equivalent
-                # environment forms; retain the complete required-variable
-                # failure text, not that parser-internal collection location.
-                failures = [
-                    re.search(r"required variable .+", error).group(0)
-                    for error in errors
-                ]
-                assert len(failures) == 2 and failures[0] == failures[1]
+                try:
+                    beta_binding(effective)
+                except subprocess.CalledProcessError as error:
+                    assert re.search(r"required variable .+", error.stderr)
+                else:
+                    raise AssertionError("Required beta input unexpectedly accepted")
         for local in (False, True):
             for authcrypt in (False, True):
                 selected = render(*files(native=True, local=local, authcrypt=authcrypt))
@@ -386,7 +318,7 @@ def run(command):
                         == expected_rate
                     )
     print(
-        "PASS: beta whole-model preservation with reviewed shared-setting repairs; four native conformance compositions x five token-rate inputs. Configuration only, not runtime acceptance."
+        "PASS: current beta native inputs and required bindings; four native conformance compositions x five token-rate inputs. Configuration only, not runtime acceptance."
     )
 
 

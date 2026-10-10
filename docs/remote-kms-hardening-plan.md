@@ -12950,3 +12950,17 @@ locally. All other CI leaf jobs passed, including Rust Contracts, service
 images, Release Contracts, OpenBao coordinated recovery and Rust Lint;
 the CI Gate inherited Canvas failure. The separate exact-head Rust CodeQL
 run passed. Preserve this failed run as immutable evidence.
+
+2026-10-10 K8 historical Compose fixture retirement (local candidate):
+`scripts/test_conformance_native_compose.py` now checks current native shared
+inputs, raw-master-key absence, beta unset/empty/custom option bindings,
+required-variable failures, token-rate cases and all four native conformance
+compositions directly. It no longer loads a pre-extraction beta model or
+supplies a synthetic raw integration-secret master key. Removed
+`tests/fixtures/issuance-native-compose-before-extraction.yml`, the first of
+two historical test-only snapshots that still contained that key, and updated
+the DIDComm retirement note. The read-only Docker Compose test passed locally.
+The separate self-host `selfhost-before-native-owner.yml` snapshot and its
+historical comparison remain to be replaced; do not count K8 complete.
+This local change is held for the next grouped UI feature push while the
+published `60c82efbc` exact-head CI and CodeQL runs remain active.
