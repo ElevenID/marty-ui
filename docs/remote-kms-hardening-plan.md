@@ -11232,3 +11232,13 @@ PostgreSQL 16 probe passed on clean data and rejected synthetic PEM injected
 into both a generic text column and a generic JSON field, with teardown.
 This is stronger source/database evidence, not a completed assembled release
 inventory or proof against arbitrary encoded key material.
+
+2026-10-09 K10 content-scan alignment follow-up: review against the shared
+Rust key-material policy found that the SQL qualifier still missed field
+names such as `issuerPrivateKeyMultibase`, `private_pem` and `pkcs8`, and a
+nested JWK with `kty` plus `rsa_d`. The local SQL gate now rejects those
+shapes. Its two focused Python suites passed 22 tests. A new disposable
+PostgreSQL 16 run passed on clean rows and rejected five synthetic cases:
+generic text PEM, generic JSON encrypted PEM, both private-name variants,
+and nested RSA JWK private material. The container was removed. This remains
+candidate source proof pending exact release-image qualification.

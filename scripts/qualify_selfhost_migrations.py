@@ -83,11 +83,11 @@ BEGIN
                 || 'OR jsonb_path_exists(%I::jsonb, %L::jsonpath))',
                 candidate.schema_name, candidate.table_name,
                 candidate.column_name,
-                '"(private_key|privateKey|private_jwk|privateJwk|encrypted_jwk|encryptedJwk|secret_key|secretKey|key_material|keyMaterial)"[[:space:]]*:',
+                '"[^\"]*(private[^[:alnum:]]*(key|jwk|pem)|secret[^[:alnum:]]*key|encrypted[^[:alnum:]]*jwk|key[^[:alnum:]]*material|pkcs8)[^\"]*"[[:space:]]*:',
                 candidate.column_name,
                 '-----BEGIN (RSA |EC |OPENSSH |ENCRYPTED )?PRIVATE KEY-----',
                 candidate.column_name,
-                '$.** ? (exists(@.kty) && exists(@.d))'
+                '$.** ? (exists(@.kty) && (exists(@.d) || exists(@.p) || exists(@.q) || exists(@.dp) || exists(@.dq) || exists(@.qi) || exists(@.oth) || exists(@.k) || exists(@.rsa_d)))'
             ) INTO found;
         ELSE
             EXECUTE format(
