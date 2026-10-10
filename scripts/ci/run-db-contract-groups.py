@@ -188,10 +188,11 @@ TIMING_NAMES = {
     | frozenset(
         {
             "published_probe",
+            "status_native_seed",
             "worker_validation_template",
         }
     ),
-    "fixture_seed": FIXTURE_NAMES,
+    "fixture_seed": FIXTURE_NAMES | frozenset({"status_native_seed"}),
     "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
     "oracle_case": JSON_CONSUMER_CASE_NAMES,
     "oracle_phase": frozenset(

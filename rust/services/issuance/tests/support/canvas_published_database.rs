@@ -785,7 +785,14 @@ impl PublishedDatabase {
     /// Experimental native-test initializer: preserve the pinned migrations
     /// and recovery overlay, but do not execute the independent Python oracle.
     pub async fn start_with_status_native_seed() -> Result<Self, String> {
-        let owned = Self::start_with_review_recovery().await?;
+        let owned = Self::start_probe_with_migration_named(
+            None,
+            None,
+            true,
+            Some("status_native_seed".into()),
+        )
+        .await?;
+        let seed_timing = PhaseTimer::start("fixture_seed", "status_native_seed");
         static SCENARIOS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
         let scenarios = SCENARIOS.get_or_init(|| {
             serde_json::from_str(include_str!(
@@ -829,6 +836,7 @@ impl PublishedDatabase {
             .await
             .map_err(|_| "Owned status fixture commit failed")?;
         pool.close().await;
+        seed_timing.success();
         Ok(owned)
     }
 
