@@ -1,7 +1,10 @@
 param(
     [Parameter(Mandatory = $true)][string]$StackManifest,
     [Parameter(Mandatory = $true)][string]$BetaBaselineManifest,
-    [Parameter(Mandatory = $true)][string]$OutputPath
+    [Parameter(Mandatory = $true)][string]$OutputPath,
+    [string]$CompatiblePriorStackManifest,
+    [string]$PreinstallTargetFile,
+    [switch]$RecoveryPreflightOnly
 )
 
 # Run only from the clean protected main release after target approval lands.
@@ -22,6 +25,15 @@ if ($OutputPath -cnotmatch '^[A-Za-z]:\\[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]
     throw 'Beta fence receipt path must be a local Windows drive file'
 }
 $outputAbsolute = [IO.Path]::GetFullPath($OutputPath)
+$recover = -not [string]::IsNullOrWhiteSpace($CompatiblePriorStackManifest) -or
+    -not [string]::IsNullOrWhiteSpace($PreinstallTargetFile)
+if ($recover -and ([string]::IsNullOrWhiteSpace($CompatiblePriorStackManifest) -or
+        [string]::IsNullOrWhiteSpace($PreinstallTargetFile))) {
+    throw 'Fence recovery requires a compatible signed release and preinstallation target'
+}
+if ($RecoveryPreflightOnly -and -not $recover) {
+    throw 'Fence recovery preflight requires recovery inputs'
+}
 if ($outputAbsolute -cnotmatch '^[A-Za-z]:\\[^\\/:*?"<>|\r\n]+(?:\\[^\\/:*?"<>|\r\n]+)*$') {
     throw 'Canonical beta fence receipt path is not a local Windows drive file'
 }
@@ -32,6 +44,7 @@ if ($outputAbsolute.StartsWith(
 }
 . (Join-Path $PSScriptRoot 'beta-deployment-lock.ps1')
 . (Join-Path $PSScriptRoot 'beta-passport-fence-legacy-boundary.ps1')
+. (Join-Path $PSScriptRoot 'beta-passport-fence-recovery-intent.ps1')
 
 function Invoke-FencePython {
     param([Parameter(Mandatory = $true)][string[]]$Arguments)
@@ -40,7 +53,7 @@ function Invoke-FencePython {
         $ErrorActionPreference = 'Continue'
         $output = @(& python @Arguments 2>$null)
         if ($LASTEXITCODE -ne 0 -or $output.Count -ne 1) {
-            throw 'Protected beta fence Python check failed'
+            throw "Protected beta fence Python check failed: $(Split-Path -Leaf $Arguments[0])"
         }
         return ($output[0] | ConvertFrom-Json -ErrorAction Stop)
     }
@@ -87,19 +100,38 @@ function Assert-SourceSqlHash {
     return $sql
 }
 
-$lock = Enter-BetaDeploymentLock
+$lock = Enter-BetaDeploymentLock -AllowPending:$recover
 try {
     $approval = Join-Path $repo 'deploy-config/passport-beta-fence-approved-target.json'
-    $plan = Invoke-FencePython -Arguments @(
-        (Join-Path $PSScriptRoot 'check_passport_beta_fence_authority.py'),
-        '--approved-target', $approval,
-        '--stack-manifest', $StackManifest,
-        '--beta-baseline-manifest', $BetaBaselineManifest
-    )
+    if ($recover) {
+        $plan = Invoke-FencePython -Arguments @(
+            (Join-Path $PSScriptRoot 'check_passport_beta_fence_recovery_authority.py'),
+            '--stack-manifest', $StackManifest,
+            '--beta-baseline-manifest', $BetaBaselineManifest,
+            '--compatible-prior-stack-manifest', $CompatiblePriorStackManifest,
+            '--preinstall-target', $PreinstallTargetFile
+        )
+    }
+    else {
+        $plan = Invoke-FencePython -Arguments @(
+            (Join-Path $PSScriptRoot 'check_passport_beta_fence_authority.py'),
+            '--approved-target', $approval,
+            '--stack-manifest', $StackManifest,
+            '--beta-baseline-manifest', $BetaBaselineManifest
+        )
+    }
     if ($plan.schema -cne 'marty.passport-beta-fence-authority-plan/v1' -or
         $plan.verified -ne $true -or
-        (Test-Path -LiteralPath (Get-BetaPassportFenceMarkerPath)) -or
         (Test-Path -LiteralPath $outputAbsolute)) {
+        throw 'Protected beta fence intent, authority, or output state is invalid'
+    }
+    $markerPath = Get-BetaPassportFenceMarkerPath
+    if ($recover) {
+        $intentAt = Assert-BetaPassportFenceRecoveryIntent `
+            -FenceMarkerPath $markerPath `
+            -MutationMarkerPath (Get-BetaMutationMarkerPath)
+    }
+    elseif (Test-Path -LiteralPath $markerPath) {
         throw 'Protected beta fence intent, authority, or output state is invalid'
     }
     $container = [string]$plan.postgres_container_id
@@ -126,8 +158,9 @@ try {
         "SET marty.passport_beta_expected_system_identifier = '$systemId';`n" +
         "SET marty.passport_beta_expected_database_oid = '$databaseOid';`n"
 
-    $before = Invoke-FencePython -Arguments @(
-        (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py'))
+    $before = if ($recover) { $plan.preinstall_target }
+        else { Invoke-FencePython -Arguments @(
+            (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py')) }
     if ($before.schema -cne 'marty.passport-beta-fence-target/v1' -or
         $before.observation_sha256 -cne $plan.target_observation_sha256 -or
         $before.beta.postgres_system_identifier -cne $systemId -or
@@ -146,21 +179,41 @@ try {
         throw 'Approved beta service generation or database route changed before fence'
     }
 
-    # The persistent fence marker precedes any database mutation. A failure
-    # leaves both markers for supervised inspection and blocks legacy deploy.
-    Start-BetaMutation
-    $markerPath = Get-BetaPassportFenceMarkerPath
-    $stream = [IO.File]::Open($markerPath, [IO.FileMode]::CreateNew,
-        [IO.FileAccess]::Write, [IO.FileShare]::None)
-    try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes(
-            "passport fence intent $([DateTime]::UtcNow.ToString('o'))`n")
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Flush($true)
+    if ($recover) {
+        $existing = Invoke-FencePython -Arguments @(
+            (Join-Path $PSScriptRoot 'probe_passport_beta_fence_target.py'),
+            '--fenced')
+        if ($existing.schema -cne 'marty.passport-beta-fence-postinstall-target/v1' -or
+            $existing.beta.services.postgres.container_id -cne $container -or
+            $existing.beta.postgres_system_identifier -cne $systemId -or
+            $existing.beta.database_oid -cne $databaseOid -or
+            $existing.docker.context -cne $plan.docker.context -or
+            $existing.docker.daemon_id -cne $plan.docker.daemon_id -or
+            $existing.production.sha256 -cne $plan.production_snapshot_sha256 -or
+            $existing.production_attachments_sha256 -cne
+                $plan.production_attachments_sha256 -or
+            ($existing.beta.services | ConvertTo-Json -Depth 20 -Compress) -cne
+                ($plan.beta_services | ConvertTo-Json -Depth 20 -Compress) -or
+            ($existing.beta.database_route | ConvertTo-Json -Depth 20 -Compress) -cne
+                ($plan.database_route | ConvertTo-Json -Depth 20 -Compress)) {
+            throw 'Interrupted beta fence target or production changed'
+        }
     }
-    finally { $stream.Dispose() }
-
-    Invoke-FencePsql -Container $container -Sql ($session + $install) | Out-Null
+    else {
+        # The persistent fence marker precedes any database mutation. A failure
+        # leaves both markers for supervised inspection and blocks legacy deploy.
+        Start-BetaMutation
+        $stream = [IO.File]::Open($markerPath, [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try {
+            $bytes = [Text.Encoding]::UTF8.GetBytes(
+                "passport fence intent $([DateTime]::UtcNow.ToString('o'))`n")
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush($true)
+        }
+        finally { $stream.Dispose() }
+        Invoke-FencePsql -Container $container -Sql ($session + $install) | Out-Null
+    }
     $verified = @(Invoke-FencePsql -Container $container -Sql ($session + $verify))
     if ($verified.Count -ne 1) { throw 'Beta fence verifier returned ambiguous evidence' }
     $fence = $verified[0] | ConvertFrom-Json -ErrorAction Stop
@@ -183,6 +236,20 @@ try {
         throw 'Installed beta fence timestamp differs from verified epoch'
     }
     $fenceInstalledAtUtc = $Matches[2]
+    if ($recover) {
+        Assert-BetaPassportFenceRecoveryTiming -IntentAt $intentAt `
+            -InstalledAt ([DateTimeOffset]::Parse($fenceInstalledAtUtc))
+    }
+    if ($RecoveryPreflightOnly) {
+        Write-Output ([ordered]@{
+            schema = 'marty.passport-beta-fence-recovery-preflight/v1'
+            verified = $true
+            source_commit = $plan.source.source_commit
+            fence_epoch = $fence.epoch
+            production_attachments_sha256 = $plan.production_attachments_sha256
+        } | ConvertTo-Json -Compress)
+        return
+    }
     $direct = Invoke-FencePython -Arguments @(
         (Join-Path $PSScriptRoot 'probe_passport_beta_fence_direct_writes.py'),
         '--postgres-container', $container,
@@ -245,6 +312,9 @@ try {
         post_install_observation_sha256 = $after.observation_sha256
         production_snapshot_sha256 = $after.production.sha256
         production_attachments_sha256 = $after.production_attachments_sha256
+    }
+    if ($recover) {
+        $receipt.recovery = $plan.recovery
     }
     $json = $receipt | ConvertTo-Json -Depth 20 -Compress
     $outputStream = [IO.File]::Open($outputAbsolute, [IO.FileMode]::CreateNew,

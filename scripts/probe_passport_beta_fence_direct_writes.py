@@ -119,9 +119,12 @@ def unrelated_sql(token: str) -> dict[str, str]:
             WITH inserted AS (
                 INSERT INTO flow_service.flow_definitions
                     (id, organization_id, name, status, flow_type,
-                     steps, transitions, created_at, updated_at)
+                     steps, transitions, default_timeout_seconds, max_retries,
+                     enable_resume, version, deployment_profile_ids,
+                     approval_strategy, hooks, created_at, updated_at)
                 VALUES ('{flow_identifier}', 'fence-probe', 'Fence probe',
-                    'active', 'verification', '[]', '[]',
+                    'active', 'verification', '[]', '[]', 600, 0, false, 1,
+                    '[]', 'none', '[]',
                     clock_timestamp(), clock_timestamp())
                 RETURNING id
             ) SELECT count(*) FROM inserted
