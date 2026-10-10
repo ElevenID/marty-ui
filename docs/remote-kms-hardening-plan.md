@@ -12303,3 +12303,12 @@ check. All five managed-key cases and the one document-storage case passed on
 a fresh disposable Redis instance; the instance was removed. Both changed
 test targets pass warnings-denied Clippy and Rustfmt, and CI YAML/diff checks
 pass. This remains in the same unpublished correction batch.
+
+The `c4e899f40` [exact-head CI run](https://github.com/ElevenID/marty-ui/actions/runs/38052575174)
+is terminal. OpenBao plugin/raft recovery, service images, Release Contracts,
+Canvas including isolated database suites, lint/packaging and every other
+substantive lane passed. Only the early Rust Contracts suite failed on the
+VDS-NC fixtures corrected in local commit `20d556d2d`; CI Gate inherited that
+failure. The independent [CodeQL Rust run](https://github.com/ElevenID/marty-ui/actions/runs/38052575175)
+passed on the same head. Publish the grouped test/CI correction for one new
+exact-head run and keep the previous failed evidence immutable.
