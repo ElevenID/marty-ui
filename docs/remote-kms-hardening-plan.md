@@ -12065,3 +12065,24 @@ fresh, isolated disposable Redis and OpenBao containers; those containers
 were removed afterward. The workflow policy test passed (142 cases), and
 Rustfmt, test compilation, Ruff, and YAML parsing passed. The correction is
 held with the provider redirect fix until the remaining hosted lanes finish.
+
+The same published head's CodeQL check reported six alerts (two SSRF on
+OpenBao envelope calls, one Azure managed-identity HTTP endpoint, one Azure
+client-secret transmission, and two possible cleartext logs). Review found
+the Azure client-secret request uses the fixed Microsoft HTTPS token host,
+while managed identity intentionally uses the local/link-local metadata HTTP
+endpoint with redirects disabled. The OpenBao HAIP scope and version were
+already constrained; defense in depth now also validates every envelope
+request path at the HTTP sink and constructs it under the configured provider
+origin. Provider error bodies are reduced to fixed, non-secret state signals
+needed by OpenBao's existing-key and missing-route logic; public error text,
+debug formatting, network errors, and JSON parse errors omit provider content.
+Focused tests prove path escape rejection and that an echoed provider secret
+cannot appear in the public error. These changes require exact-head
+CodeQL and hosted CI review before resolving the alerts.
+The local Signing Keys library suite passed 169 cases (nine expected opt-in
+ignores), and a subsequent fixed-signal redaction test passed separately.
+Five provider vectors passed, and all-target warnings-denied Clippy passed
+after this security correction. The published run's OpenBao plugin and
+service-image lanes passed; its Canvas lane is still building the public
+self-host image, so no next grouped push has started yet.

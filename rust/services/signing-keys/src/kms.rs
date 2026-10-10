@@ -94,7 +94,7 @@ pub enum KmsError {
     InvalidConfig(String),
     #[error("No adapter found for service type '{0}'.")]
     UnsupportedProvider(String),
-    #[error("Provider returned HTTP {status}: {detail}")]
+    #[error("Provider returned HTTP {status}.")]
     ProviderStatus { status: StatusCode, detail: String },
     #[error("{0}")]
     InvalidResponse(String),
@@ -2128,7 +2128,7 @@ async fn bounded_response_body(
     while let Some(chunk) = response
         .chunk()
         .await
-        .map_err(|error| KmsError::Provider(format!("Provider response failed: {error}")))?
+        .map_err(|_| KmsError::Provider("Provider response failed.".into()))?
     {
         if body.len().saturating_add(chunk.len()) > max_bytes {
             return Err(KmsError::InvalidResponse(
@@ -2145,22 +2145,21 @@ pub(crate) async fn bounded_provider_json(
     max_bytes: usize,
 ) -> Result<Value, KmsError> {
     let body = bounded_response_body(response, max_bytes).await?;
-    serde_json::from_slice(&body).map_err(|error| {
-        KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
-    })
+    serde_json::from_slice(&body)
+        .map_err(|_| KmsError::InvalidResponse("Provider returned invalid JSON.".into()))
 }
 
 async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> {
     let response = builder
         .send()
         .await
-        .map_err(|error| KmsError::Provider(format!("Provider request failed: {error}")))?;
+        .map_err(|_| KmsError::Provider("Provider request failed.".into()))?;
     let status = response.status();
     if !status.is_success() {
         let detail = bounded_response_body(response, MAX_PROVIDER_ERROR_BYTES).await?;
         return Err(KmsError::ProviderStatus {
             status,
-            detail: bounded(&String::from_utf8_lossy(&detail)),
+            detail: safe_provider_detail(&detail),
         });
     }
     bounded_provider_json(response, MAX_PROVIDER_JSON_BYTES).await
@@ -2170,7 +2169,7 @@ async fn send_json_or_empty(builder: reqwest::RequestBuilder) -> Result<Value, K
     let response = builder
         .send()
         .await
-        .map_err(|error| KmsError::Provider(format!("Provider request failed: {error}")))?;
+        .map_err(|_| KmsError::Provider("Provider request failed.".into()))?;
     let status = response.status();
     let max_bytes = if status.is_success() {
         MAX_PROVIDER_JSON_BYTES
@@ -2181,15 +2180,14 @@ async fn send_json_or_empty(builder: reqwest::RequestBuilder) -> Result<Value, K
     if !status.is_success() {
         return Err(KmsError::ProviderStatus {
             status,
-            detail: bounded(&String::from_utf8_lossy(&body)),
+            detail: safe_provider_detail(&body),
         });
     }
     if body.is_empty() {
         Ok(Value::Null)
     } else {
-        serde_json::from_slice(&body).map_err(|error| {
-            KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
-        })
+        serde_json::from_slice(&body)
+            .map_err(|_| KmsError::InvalidResponse("Provider returned invalid JSON.".into()))
     }
 }
 
@@ -2327,8 +2325,25 @@ fn decode_urlsafe(value: &str, label: &str) -> Result<Vec<u8>, KmsError> {
         })
 }
 
-fn bounded(value: &str) -> String {
-    value.chars().take(MAX_PROVIDER_ERROR_BYTES).collect()
+fn safe_provider_detail(body: &[u8]) -> String {
+    let raw = String::from_utf8_lossy(body);
+    if empty_transit_list_response(&raw) {
+        return r#"{"errors":[]}"#.into();
+    }
+    let lower = raw.to_ascii_lowercase();
+    for signal in [
+        "already exists",
+        "existing key",
+        "no handler for route",
+        "unsupported path",
+        "route not found",
+        "permission denied",
+    ] {
+        if lower.contains(signal) {
+            return signal.into();
+        }
+    }
+    "Provider rejected the request.".into()
 }
 
 #[cfg(test)]
@@ -2412,6 +2427,53 @@ mod tests {
             Err(KmsError::InvalidResponse(_))
         ));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn provider_error_body_cannot_reappear_in_public_error() {
+        let secret = "provider-echoed-secret-must-stay-private";
+        let app = axum::Router::new().route(
+            "/error",
+            axum::routing::get(move || async move { (StatusCode::BAD_REQUEST, secret) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let error = send_json(Client::new().get(format!("{endpoint}/error")))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, KmsError::ProviderStatus { .. }));
+        assert!(!error.to_string().contains(secret));
+        assert!(!format!("{error:?}").contains(secret));
+        let response = error.into_response();
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&body).contains(secret));
+        server.abort();
+    }
+
+    #[test]
+    fn provider_error_signals_keep_state_without_echoing_response() {
+        let secret = "provider-echoed-secret-must-stay-private";
+        assert_eq!(
+            safe_provider_detail(
+                format!("{{\"errors\":[\"key already exists {secret}\"]}}").as_bytes()
+            ),
+            "already exists"
+        );
+        assert_eq!(
+            safe_provider_detail(br#"{"errors":[]}"#),
+            r#"{"errors":[]}"#
+        );
+        assert_eq!(
+            safe_provider_detail(format!("permission denied {secret}").as_bytes()),
+            "permission denied"
+        );
+        assert_eq!(
+            safe_provider_detail(secret.as_bytes()),
+            "Provider rejected the request."
+        );
     }
 
     #[test]

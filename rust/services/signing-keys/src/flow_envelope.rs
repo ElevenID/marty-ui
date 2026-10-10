@@ -81,6 +81,7 @@ impl OpenBaoEnvelopeProvider {
             .map_err(|error| format!("BAO_ADDR is invalid: {error}"))?;
         if !matches!(url.scheme(), "http" | "https")
             || url.host_str().is_none()
+            || url.path() != "/"
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
@@ -195,9 +196,12 @@ impl OpenBaoEnvelopeProvider {
 
     async fn get_haip(&self, path: &str) -> Result<Value, FlowEnvelopeError> {
         let token = self.haip_token()?;
+        let url = self
+            .provider_url(path)
+            .map_err(|_| FlowEnvelopeError::HaipFailed)?;
         let response = self
             .client
-            .get(format!("{}{path}", self.endpoint))
+            .get(url)
             .timeout(TIMEOUT)
             .header("X-Vault-Token", token)
             .header("accept", "application/json")
@@ -236,9 +240,10 @@ impl OpenBaoEnvelopeProvider {
         body: Value,
         token: &str,
     ) -> Result<Value, KmsError> {
+        let url = self.provider_url(path)?;
         let response = self
             .client
-            .post(format!("{}{path}", self.endpoint))
+            .post(url)
             .timeout(TIMEOUT)
             .header("X-Vault-Token", token)
             .header("accept", "application/json")
@@ -252,9 +257,10 @@ impl OpenBaoEnvelopeProvider {
     }
 
     pub(crate) async fn get(&self, path: &str) -> Result<Value, KmsError> {
+        let url = self.provider_url(path)?;
         let response = self
             .client
-            .get(format!("{}{path}", self.endpoint))
+            .get(url)
             .timeout(TIMEOUT)
             .header("X-Vault-Token", &self.token)
             .header("accept", "application/json")
@@ -264,6 +270,24 @@ impl OpenBaoEnvelopeProvider {
             .error_for_status()
             .map_err(|_| KmsError::Provider("OpenBao request failed".into()))?;
         kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES).await
+    }
+
+    fn provider_url(&self, path: &str) -> Result<reqwest::Url, KmsError> {
+        if !path.starts_with("/v1/")
+            || path.len() > 512
+            || path.split('/').any(|part| part == "." || part == "..")
+            || !path
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_'))
+        {
+            return Err(KmsError::InvalidConfig(
+                "OpenBao request path is invalid.".into(),
+            ));
+        }
+        let mut url = reqwest::Url::parse(&self.endpoint)
+            .map_err(|_| KmsError::InvalidConfig("OpenBao endpoint is invalid.".into()))?;
+        url.set_path(path);
+        Ok(url)
     }
 }
 
@@ -351,6 +375,31 @@ mod tests {
             "x".repeat(64)
         );
         server.abort();
+    }
+
+    #[test]
+    fn openbao_path_cannot_change_provider_origin_or_add_query() {
+        let provider = OpenBaoEnvelopeProvider::new("http://127.0.0.1:8200", "test-token")
+            .expect("test provider");
+        let url = provider
+            .provider_url("/v1/didcomm/haip/keys/org-1/flow-1")
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "http://127.0.0.1:8200/v1/didcomm/haip/keys/org-1/flow-1"
+        );
+        for path in [
+            "//attacker.example/v1/transit/keys",
+            "/v1/../sys/health",
+            "/v1/transit/keys?list=true",
+            "/v1/transit/keys#fragment",
+            "/v1/transit/%2e%2e/sys/health",
+        ] {
+            assert!(provider.provider_url(path).is_err(), "accepted {path}");
+        }
+        assert!(
+            OpenBaoEnvelopeProvider::new("http://127.0.0.1:8200/v1/transit", "test-token").is_err()
+        );
     }
 
     #[test]
