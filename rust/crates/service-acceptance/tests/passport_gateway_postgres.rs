@@ -385,4 +385,5 @@ async fn native_passport_gateway_signed_webhook_updates_durable_tenant_job() {
     assert_eq!(completed.status, "READY_FOR_ACTIVATION");
     assert_eq!(completed.tracking_number.as_deref(), Some("tracking-org-1"));
     assert_eq!(untouched.status, "SUBMITTED");
+    assert_eq!(untouched.tracking_number, None);
 }
