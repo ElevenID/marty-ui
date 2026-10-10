@@ -12439,3 +12439,12 @@ next exact head. The previous published `6d3e1a7f2` CI remains live with
 Canvas running and Rust Contracts failed in the now locally corrected
 dedicated CSR fixture. Keep the fix and main merge local until that run is
 terminal, then publish one grouped head for hosted requalification.
+
+The `6d3e1a7f2` [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
+is now terminal failed: Canvas, including isolated database suites, passed,
+as did packaged OpenBao plugin/Raft recovery, service images, release
+contracts and the other substantive jobs. Rust Contracts failed only in the
+dedicated CSR fixture described above; CI Gate inherited the failure. Its
+independent [CodeQL Rust run](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
+passed. Preserve this evidence and publish the already tested CSR repair and
+current-main integration together for the next exact-head qualification.
