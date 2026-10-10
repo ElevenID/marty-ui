@@ -13379,3 +13379,12 @@ CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38089378068)
 completed successfully. Canvas remained active at the public self-host image
 build when checked. These successes are evidence for this exact failed head,
 not a substitute for requalification after the held fixture correction.
+
+The `95284232a` PR-event run is terminal failure. Canvas passed its complete
+lane, including the repaired mixed-roster HTTPS preflight and isolated database
+contract suites. Release Contracts was the only failed leaf, with the single
+mixed-roster synthetic signer test fixture diagnosed above; CI Gate inherited
+that result. All other required leaves and exact-head Rust CodeQL passed.
+The held local `760805e31` fixture correction, this tracker evidence and the
+earlier note-only commits are the next grouped push. The terminal failure is
+immutable and does not qualify the correction before its own exact-head run.
