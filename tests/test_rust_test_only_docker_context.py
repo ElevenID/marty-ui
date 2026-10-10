@@ -650,6 +650,27 @@ def test_verified_service_acceptance_paths_require_six_context_proof() -> None:
     )
 
 
+def test_service_acceptance_selector_rejects_unowned_or_malformed_diffs() -> None:
+    owned = (
+        SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs"
+    ).encode()
+    for changed, accepted in (
+        (owned + b"\0", True),
+        (b"", False),
+        (owned, False),
+        (owned + b"\0docs/other.md\0", False),
+        (owned + b"\0\0", False),
+    ):
+        result = subprocess.run(
+            [sys.executable, __file__, "--select-service-acceptance-tests"],
+            cwd=ROOT,
+            input=changed,
+            capture_output=True,
+        )
+        assert (result.returncode == 0) is accepted
+        assert result.stdout == b""
+
+
 def test_service_acceptance_context_proof_rejects_reincluded_test(monkeypatch) -> None:
     import pytest
 
@@ -958,7 +979,20 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv == [sys.argv[0], "--emit-verified-service-acceptance-tests"]:
+    if sys.argv == [sys.argv[0], "--select-service-acceptance-tests"]:
+        # NUL-delimited paths are the exact git diff, not a filename-glob hint.
+        # Fail closed on an empty, malformed, or unowned change set.
+        changed = sys.stdin.buffer.read()
+        owned = {
+            (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8")
+            for name in SERVICE_ACCEPTANCE_TARGETS
+        }
+        if not changed.endswith(b"\0") or not changed[:-1]:
+            raise SystemExit(1)
+        if not all(path in owned for path in changed[:-1].split(b"\0")):
+            raise SystemExit(1)
+        test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+    elif sys.argv == [sys.argv[0], "--emit-verified-service-acceptance-tests"]:
         test_service_acceptance_targets_stay_out_of_release_rust_contexts()
         for name in SERVICE_ACCEPTANCE_TARGETS:
             sys.stdout.buffer.write(
@@ -996,4 +1030,5 @@ if __name__ == "__main__":
             "--emit-verified-leaves|--emit-verified-worker-tests|"
             "--emit-verified-flow-tests|--emit-verified-selfhost-tests"
             "|--emit-verified-service-acceptance-tests"
+            "|--select-service-acceptance-tests"
         )
