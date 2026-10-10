@@ -12421,3 +12421,8 @@ non-exportable Transit envelope key; both containers were removed. Rustfmt,
 warnings-denied Clippy and diff checks passed. CodeQL Rust passed on the
 published head. Other CI jobs remain live; preserve the failed head until
 their outcomes are terminal before publishing the grouped correction.
+The two acceptance cases following the failed CSR case in CI were also
+replayed against fresh disposable Redis/OpenBao with scoped test sentinels:
+the operator-granted DSC ceremony and the managed CSCA-to-DSC-to-SOD chain
+both passed. This narrows the next hosted replay to the corrected fixture
+and later unexecuted steps; it does not replace an exact-head CI pass.
