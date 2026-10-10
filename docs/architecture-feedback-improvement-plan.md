@@ -2929,7 +2929,8 @@ The provider oracle seeds `credential-review` and related rows consumed by
 native status tests. Removing its repeated execution without separately
 preserving those seed and final-state effects would change the tests; defer
 that proposed deduplication until the fixture boundary is independently
-proved. The PR remains open pending merge authorization at this checkpoint.
+proved. [Protected run 38029895146](https://github.com/ElevenID/marty-ui/actions/runs/38029895146)
+passed and #1220 merged into main as `ae7cfc797` on 2026-10-10.
 
 The same exact-head compile artifact separates the 599-second pinned-Bookworm
 container phase into test targets 253 seconds, issuance binaries 206 seconds,
@@ -2979,8 +2980,9 @@ passed the planner-owned release tests, including the new named regression,
 and the final gate in 2m08s from workflow start to gate completion. This
 planner-only input legitimately selected the narrow PR lane; the protected
 merge group remains full. It is one scoped observation, not a pipeline-wide
-average or a speedup caused by the added edge. The PR remains open pending
-merge authorization at this checkpoint.
+average or a speedup caused by the added edge.
+[Protected run 38029925495](https://github.com/ElevenID/marty-ui/actions/runs/38029925495)
+passed and #1222 merged into main as `ab721eee6` on 2026-10-10.
 
 The same #1220 Canvas artifact has 83 default `published_probe`
 `migration_seed` rows totaling 361,983 ms across concurrently run tests.
@@ -3016,8 +3018,8 @@ disposable, isolated published-schema databases. Retain the one full oracle
 and its frozen comparison; do not switch constructors based on source reading
 alone.
 
-Local native-seed pilot (2026-10-09,
-[UI #1223](https://github.com/ElevenID/marty-ui/pull/1223), awaiting Linux CI):
+Native-seed pilot (2026-10-09,
+[UI #1223](https://github.com/ElevenID/marty-ui/pull/1223)):
 a new constructor retains the pinned published migrations, review-recovery
 overlay, isolated PostgreSQL
 container and owned cleanup, then executes the nine existing issued-review
@@ -3026,15 +3028,22 @@ native composition cases use it; the independent published-Python/frozen
 comparison still runs once and now checks the seeded and published resulting
 rows across all ten fixture tables, ignoring generated timestamps only.
 Twelve available native cases passed on Windows, including the two packaged
-process cases; the mirror-worker lifecycle case is Unix-only and still needs
-Linux CI. The comparison and the 22 current-input hash tests passed locally.
+process cases. The exact-head [Linux PR run 38019790357](https://github.com/ElevenID/marty-ui/actions/runs/38019790357)
+passed the Unix-only mirror-worker lifecycle, independent published/frozen
+oracle, Release Contract Tests, Canvas, Analyze Rust/Actions, and final gate. The comparison
+and the 22 current-input hash tests also passed locally.
 Separate fixed `migration_seed` and `fixture_seed` labels now cover the new
 constructor; the timing collector accepts only those exact labels. Its 53
 targeted policy/current-input tests and Docker-backed parity test passed
-locally. Measure these labels in the follow-up exact-head Linux run, not in
-the earlier CI run that predates them.
-No CI speedup is claimed until a full exact-head Canvas run measures this
-change and verifies the Unix case.
+locally. The Linux timing artifact recorded one full status-provider migration
+(6,810 ms), 14 native-seed migrations (69,336 ms total, including parity),
+and 14 native fixture seeds (3,769 ms total). The #1220 baseline had 14 full
+provider migrations totaling 81,644 ms. This proves less repeated oracle
+work, not a wall-clock saving: the Canvas job was 30m48s versus 29m05s and
+composition target 469s versus 350s. Unchanged scenario durations were also
+1.36x higher on the new run, so runner variation prevents causal attribution.
+The PR was rebased after #1220 and #1222 merged; its rewritten head still
+requires fresh exact-head validation and protected queue qualification.
 
 ## Design references
 
