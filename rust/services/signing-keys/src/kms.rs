@@ -1435,6 +1435,17 @@ fn canonical_provider_jwk(
     for private in ["d", "p", "q", "dp", "dq", "qi", "oth", "k"] {
         object.remove(private);
     }
+    // Azure Key Vault extends JWK `kty` with custody-specific HSM values.
+    // Public DID/JWK consumers require the standard asymmetric key type.
+    match object.get("kty").and_then(Value::as_str) {
+        Some("EC-HSM") => {
+            object.insert("kty".to_string(), Value::String("EC".to_string()));
+        }
+        Some("RSA-HSM") => {
+            object.insert("kty".to_string(), Value::String("RSA".to_string()));
+        }
+        _ => {}
+    }
     object
         .entry("kid".to_string())
         .or_insert_with(|| Value::String(key_reference.to_string()));
@@ -1931,17 +1942,29 @@ mod tests {
     }
 
     #[test]
-    fn provider_jwks_remove_private_material() {
+    fn azure_hsm_public_jwks_use_standard_types_without_private_material() {
         let value = canonical_provider_jwk(
             serde_json::from_value::<Map<String, Value>>(json!({
-                "kty": "OKP", "crv": "Ed25519", "x": "AQ", "d": "secret"
+                "kty": "EC-HSM", "crv": "P-256", "x": "AQ", "y": "Ag", "d": "secret"
             }))
             .expect("object"),
             "key-1",
         )
         .expect("public JWK");
+        assert_eq!(value["kty"], "EC");
         assert_eq!(value["kid"], "key-1");
         assert!(value.get("d").is_none());
+
+        let rsa = canonical_provider_jwk(
+            serde_json::from_value::<Map<String, Value>>(json!({
+                "kty": "RSA-HSM", "n": "AQ", "e": "AQAB", "p": "secret"
+            }))
+            .expect("object"),
+            "key-2",
+        )
+        .expect("public RSA JWK");
+        assert_eq!(rsa["kty"], "RSA");
+        assert!(rsa.get("p").is_none());
     }
 
     #[test]

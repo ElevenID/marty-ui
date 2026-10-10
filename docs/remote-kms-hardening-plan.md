@@ -11595,3 +11595,18 @@ The current Windows workspace exposes neither `adb` nor `flutter` on PATH;
 hosted Android/iOS build checks are available, but physical-device wallet
 acceptance needs a configured device/test host and the eventual exact
 released service digests.
+
+K6 Azure HSM self-review found a concrete public-key interoperability gap.
+[Azure's Get Key contract](https://learn.microsoft.com/en-us/rest/api/keyvault/keys/get-key/get-key?view=rest-keyvault-keys-2025-07-01)
+returns `EC-HSM` or `RSA-HSM` as `kty` for HSM-backed keys, while issuer
+selection and certificate checks require standard public JWK `EC`/`RSA`.
+The local Signing Keys adapter now normalizes those two Azure public types
+before projecting the JWK and strips private members as before. The focused
+test passed, the full Signing Keys library suite passed 143 tests with eight
+expected opt-in ignores, Rustfmt passed, and warnings-denied library Clippy
+passed under Rust 1.95 on Windows. This change is local and should be batched
+with other K6 corrections into one UI PR push; a live Azure HSM enrollment,
+sign and certificate flow is still required before claiming provider support.
+The provider-neutral HTTP golden vector now supplies an Azure `EC-HSM` Get
+Key response and expects a public `EC` JWK; its full public-key-discovery
+test passed, covering the request, response and private-member stripping.

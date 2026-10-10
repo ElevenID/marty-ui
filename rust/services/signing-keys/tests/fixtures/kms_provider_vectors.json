@@ -225,10 +225,10 @@
       "expected_response": { "kty": "OKP", "crv": "Ed448", "x": "2pGLo-V_3KAyb0bH7IQ7qPyw1X-hXyWIpXuunfVYIQNR5-FVgbJEWcCnzeHoNVgtcXwGmepy6MkA", "kid": "ed448-key" }
     },
     {
-      "name": "azure_embedded_public_jwk",
+      "name": "azure_hsm_embedded_public_jwk",
       "service_config": { "service_type": "azure-key-vault", "endpoint": "$STUB", "key_reference": "issuer-key", "auth_reference": "azure-token" },
       "expected_request": { "method": "GET", "path_query": "/keys/issuer-key?api-version=7.4", "headers": { "authorization": "Bearer azure-token" } },
-      "provider_response": { "key": { "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "d": "must-not-cross-boundary" } },
+      "provider_response": { "key": { "kty": "EC-HSM", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "d": "must-not-cross-boundary" } },
       "expected_response": { "provider": "azure", "key_reference": "issuer-key", "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "issuer-key" }
     },
     {
