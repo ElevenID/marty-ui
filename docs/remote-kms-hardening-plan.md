@@ -13065,3 +13065,11 @@ Before deleting it, map the 31 guard, renewal-window, idempotency, DIDComm
 delivery and response cases to actual native Rust renewal/database/holder
 acceptance. Keep public fixed vectors where needed, but do not execute a
 local issuer X25519 sender key in a KMS-only qualification path.
+
+Recovery-probe self-review: the first container-removal wait treated any
+`docker inspect` failure as proof the name was free, which could mask Docker
+daemon errors. The held correction now uses an exact-name `docker container
+ls --all` inventory, checks the command exit status and rejects ambiguous
+results before permitting restart. A disposable local Docker stop/removal test
+and a simulated inventory-command failure both passed; hosted cold recovery
+still needs rerun on the next grouped head.

@@ -54,8 +54,12 @@ function Wait-ContainerRemoved([string]$Name) {
     # `docker stop` can return before Docker finishes removing a --rm container.
     # Reusing its name immediately would race that asynchronous cleanup.
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
-        docker container inspect $Name *> $null
-        if ($LASTEXITCODE -ne 0) { return }
+        $names = @(docker container ls --all --filter "name=^/$Name$" --format '{{.Names}}')
+        if ($LASTEXITCODE -ne 0) { throw 'disposable OpenBao container inventory failed' }
+        if ($names.Count -eq 0) { return }
+        if ($names.Count -ne 1 -or $names[0] -cne $Name) {
+            throw 'disposable OpenBao container inventory was ambiguous'
+        }
         Start-Sleep -Milliseconds 500
     }
     throw "disposable OpenBao container was not removed: $Name"
