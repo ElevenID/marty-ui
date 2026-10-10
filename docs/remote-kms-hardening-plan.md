@@ -13073,3 +13073,18 @@ ls --all` inventory, checks the command exit status and rejects ambiguous
 results before permitting restart. A disposable local Docker stop/removal test
 and a simulated inventory-command failure both passed; hosted cold recovery
 still needs rerun on the next grouped head.
+
+Published `60c82efbc` [CI run 38079882439](https://github.com/ElevenID/marty-ui/actions/runs/38079882439)
+is now terminal failure. The self-host synthetic-secret unit and Rust Contracts
+passed, but Canvas's `selfhost_public_image_loader_isolated` stopped after
+`correct:await-health`; the OpenBao plugin lane hit the disposable container
+name race, so CI Gate failed. Exact-head Rust CodeQL passed. Source review of
+the Canvas loader found that its synthetic remote integration-secret server
+expected `MANAGEMENT_KEY`, while Issuance received the distinct
+`signing_keys_integration_secret_key` file. Startup's required remote
+encrypt/decrypt proof therefore could not authenticate. The held correction
+uses the same dedicated fixture constant for the remote server and mounted
+secret, and adds a regression assertion that it differs from the management
+key. This is a source-backed cause, not yet a hosted qualification: replay the
+packaged Canvas lane on the next grouped head and investigate further if its
+health check still fails.

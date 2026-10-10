@@ -593,7 +593,7 @@ fn write_synthetic_secrets(
         ),
         (
             "signing_keys_integration_secret_key",
-            "synthetic-selfhost-integration-secret-key-00000001",
+            super::remote_integration_secret::INTEGRATION_SECRET_KEY,
         ),
     ];
     if matches!(case, SecretCase::Empty | SecretCase::Placeholder) {
@@ -743,7 +743,7 @@ pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Res
     let gateway = super::selfhost_runtime_sidecar::network_gateway(database)?;
     let kms = super::remote_integration_secret::container_server(
         gateway,
-        super::selfhost_runtime_sidecar::MANAGEMENT_KEY,
+        super::remote_integration_secret::INTEGRATION_SECRET_KEY,
     )
     .await?;
     let result = async {
@@ -823,6 +823,17 @@ mod tests {
             .collect();
         assert_eq!(actual, expected);
         assert!(KMS_CA_CERT.starts_with("-----BEGIN CERTIFICATE-----\n"));
+        let dedicated_key =
+            std::fs::read_to_string(directory.path().join("signing_keys_integration_secret_key"))
+                .unwrap();
+        assert_eq!(
+            dedicated_key,
+            super::super::remote_integration_secret::INTEGRATION_SECRET_KEY
+        );
+        assert_ne!(
+            dedicated_key,
+            super::super::selfhost_runtime_sidecar::MANAGEMENT_KEY
+        );
     }
 
     #[test]
