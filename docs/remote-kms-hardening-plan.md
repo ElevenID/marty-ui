@@ -12448,3 +12448,23 @@ dedicated CSR fixture described above; CI Gate inherited the failure. Its
 independent [CodeQL Rust run](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 passed. Preserve this evidence and publish the already tested CSR repair and
 current-main integration together for the next exact-head qualification.
+
+K1 production dependency checkpoint on published `64a8623c5`: the locked
+normal/build Cargo tree for the native Rust workspace, including the explicit
+`x86_64-unknown-linux-gnu` target selection, resolves
+`marty-crypto`, `marty-didcomm` and `marty-verification` from the single
+Core `7f276a4` revision, and `isomdl` from fork revision `784a5294`.
+This query excludes dev dependencies and found no second Core revision in
+this workspace graph. It does not yet prove separate Dockerfile build roots,
+standalone products, final wheel contents or signed release artifacts. The
+exact-head [UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38061209760)
+remains live. [Production Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38061209832)
+passed; the new classifier selected actual Rust analysis for this
+production-changing PR.
+The Rust Contracts job's live public-contract step passed on `64a8623c5`.
+The separate protected Gateway CSR/passport-chain step explicitly runs the
+previously failing dedicated service-CSR case, profile-scoped CSR case,
+operator-granted DSC case and managed CSCA-to-DSC-to-SOD chain against
+disposable Redis/OpenBao; it is still running. The previous-head fixture
+failure is not closed until that step passes. Canvas and aggregate CI also
+remain live.
