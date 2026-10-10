@@ -3156,6 +3156,18 @@ proof tests and the focused dynamic CodeQL policy test pass; an independent
 reviewer found no P1-P3 issue. Exact-head hosted CI and any timing benefit
 remain unproven until the candidate is published.
 
+The #1237 source/context proof and PR-only CodeQL scope have since merged.
+The next bounded A6 candidate lets a nonempty PR touching only those three
+registered `marty-service-acceptance` test sources select the contracts lane
+without the unrelated Canvas lane. It runs the merged six-context and Cargo
+ownership proof on the checked-out head before narrowing. Unknown, mixed,
+missing, symlinked, manifest/context-drift, or proof-failed inputs retain the
+full Rust matrix; protected merge groups and main remain full. The existing
+contracts owner, Rust lint, supply-chain, protocol, release and aggregate
+gates remain selected as before. Four focused classifier/ownership/gate tests
+pass locally. Hosted exact-head qualification and a real one-source PR pilot
+are still needed; no time saving is claimed from this candidate.
+
 [#1232](https://github.com/ElevenID/marty-ui/pull/1232) adds per-target
 Canvas phase attribution without changing coverage and passed exact-head PR
 CI. Its hosted sample found the published-canvas group at 629s, with worker
