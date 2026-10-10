@@ -12391,3 +12391,13 @@ runs the exact three-curve CSR test in the hosted Rust Contracts lane. The
 entire probe, including this addition, passed locally against fresh owned
 OpenBao, Redis and PostgreSQL containers, which were removed. Hosted
 qualification remains pending the next grouped UI head.
+
+The `b2c7ea217` [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38055379872)
+is terminal failed. Canvas, packaged OpenBao plugin/Raft recovery, service
+images, Release Contracts, lint/packaging and the other substantive lanes
+passed; only Rust Contracts failed in the managed-policy holder signature and
+CI Gate inherited that result. The independent [CodeQL Rust run](https://github.com/ElevenID/marty-ui/actions/runs/38055379870)
+passed. Keep both immutable. The grouped local replacement includes the
+service-token adapter correction, shared mock-origin guard, K10 raw holder-row
+assertion, native wheel retirement, and hosted three-curve CSR custody probe;
+publish these together for one new exact-head CI cycle.
