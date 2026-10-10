@@ -13263,3 +13263,15 @@ published, so that leaf is not a pass. Exact-head CodeQL Rust run
 and other policy/quality runs started. An exact-head CI run had not yet
 appeared at this checkpoint; the new OpenBao probe and Release Contracts
 therefore have no hosted result yet.
+
+The older [CI run 38085880059](https://github.com/ElevenID/marty-ui/actions/runs/38085880059)
+was cancelled after its known Release Contract failure and green Rust Contracts,
+OpenBao/recovery and other leaf jobs; Canvas had not completed. GitHub did not
+automatically create a CI workflow run for the new PR synchronize event, though
+CodeQL/policy/quality runs did appear. To ensure one full exact-head qualification
+without another source push, [CI run
+38087722833](https://github.com/ElevenID/marty-ui/actions/runs/38087722833)
+was manually dispatched for `cf27e0e88` and is queued. Its `workflow_dispatch`
+event forces the full matrix. Check whether the resulting CI Gate attaches as
+a required PR check; if not, the PR-event scheduling gap must be resolved
+before protected landing.
