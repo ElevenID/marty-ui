@@ -238,6 +238,7 @@ if [[ "$mode" == selfhost-only ]]; then
   test -x "${MARTY_SELFHOST_BUNDLE_TEST_COMPOSE:?}"
   [[ "$(docker image inspect --format '{{.Id}}' "$MARTY_SELFHOST_TEST_IMAGE")" == "$MARTY_SELFHOST_TEST_IMAGE" ]]
   timed image_pull postgres pull_published_postgres "${images[0]}"
+  timed image_pull published_probe docker pull "${images[1]}"
   selfhost_log=$(mktemp "${RUNNER_TEMP:?}/canvas-selfhost-only.XXXXXX")
   trap 'rm -f -- "$selfhost_log"' EXIT
   timed canvas_target selfhost "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"

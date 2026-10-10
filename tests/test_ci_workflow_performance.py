@@ -283,6 +283,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"]
         if step.get("name") == "Start digest-pinned Rust test services after registry setup"
     )
+    assert setup["if"] == "matrix.lane != 'selfhost'"
     for image in (
         "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
         "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
@@ -294,7 +295,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"]
         if step.get("name") == "Remove owned Rust test services and volumes"
     )
-    assert cleanup["if"] == "always()"
+    assert cleanup["if"] == "always() && matrix.lane != 'selfhost'"
     assert "down --volumes --remove-orphans" in cleanup["run"]
     chain_step_name = (
         "Exercise Gateway CSR and managed passport chain with disposable OpenBao"

@@ -1839,12 +1839,14 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas\n"
         'elif [[ "${{ matrix.lane }}" == flow ]]; then\n'
         "  bash ../scripts/ci/run-flow-acceptance-contracts.sh\n"
+        'elif [[ "${{ matrix.lane }}" == selfhost ]]; then\n'
+        "  python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas\n"
         "else\n"
         "  python3 ../scripts/ci/run-db-contract-groups.py "
         "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}\n"
         "fi\n"
     )
-    assert steps[image]["if"] == "matrix.lane == 'canvas'"
+    assert steps[image]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
     assert "if" not in steps[full]
     for index in (preflight, full):
         assert not steps[index].get("continue-on-error", False)

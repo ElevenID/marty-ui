@@ -332,6 +332,7 @@ def test_selfhost_diagnostic_is_additive_and_uses_the_full_image_contract() -> N
     assert "MARTY_SELFHOST_TEST_IMAGE" in selfhost_branch
     assert "MARTY_SELFHOST_TEST_REVISION" in selfhost_branch
     assert "pull_published_postgres" in selfhost_branch
+    assert 'timed image_pull published_probe docker pull "${images[1]}"' in selfhost_branch
     assert "--nocapture --test-threads=4" in selfhost_branch
     assert "10 passed; 0 failed; 0 ignored" in selfhost_branch
     assert runner.count("selfhost_public_image_loader_isolated: test") == 2
