@@ -12973,7 +12973,26 @@ when the probe attempted to restart that `--rm` container immediately after
 `docker stop`. The local correction adds a bounded wait for Docker to finish
 removing this specific disposable container before name reuse. This is a
 probe lifecycle race, not evidence of failed KMS decryption or lost key
-versions. Local PowerShell parser validation and diff checks pass; the hosted
+versions. Local PowerShell parser validation, a real disposable Docker
+stop/removal probe of the new wait function, and diff checks pass; the hosted
 recovery lane must rerun on a later grouped head. Other jobs, including
 Canvas packaged acceptance and Rust Contracts, remained active at this
 checkpoint. Preserve the failed job as immutable evidence.
+
+2026-10-10 K8 self-host historical fixture retirement (local candidate):
+`tests/fixtures/selfhost-before-native-owner.yml` also contained the old
+integration-secret master-key mount. Its consumers included the self-host
+whole-model/mutation gate and Flow's rendered-runtime fixture. Replaced it
+with a root-relative, hash-pinned snapshot of the current KMS-only self-host
+model (`selfhost-kms-only-model.snapshot.yml`), preserving full rendered-model
+comparison, 70 mutation guards, the exhaustive input inventory, native
+dispatcher and Signing Keys dependency checks, three interpolated input modes,
+and missing/empty rejection of all ten required inputs. Flow's fixture now
+checks the same current-model snapshot; its 16 focused tests passed locally.
+The self-host Compose script and its 70 focused tests passed locally too.
+The new snapshot contains no raw integration-secret master-key environment
+field or secret mount; the config parser's negative rejection cases remain.
+This removes the second historical raw-key Compose snapshot, but the separate
+Python Canvas worker oracle graph still actively uses raw master-key inputs
+and needs replacement before K8 can close. Hosted image CI and the full
+release graph have not qualified this local snapshot change.

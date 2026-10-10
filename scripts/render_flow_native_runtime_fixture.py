@@ -90,7 +90,7 @@ def render(spec, command):
         root = Path(temporary)
         required = set()
         for name in ("docker-compose.base.yml", SELFHOST["GATE"]["BASE"],
-                     SELFHOST["FROZEN"]):
+                     SELFHOST["APPROVED"]):
             required.update(
                 re.findall(r"\$\{([A-Z0-9_]+):\?", (ROOT / name).read_text())
             )
@@ -126,22 +126,9 @@ def render(spec, command):
             inputs=inputs,
             policy_directory=directory,
         )
-        previous = compose(ROOT / SELFHOST["FROZEN"])
+        previous = compose(ROOT / SELFHOST["APPROVED"])
         selfhost = compose(ROOT / SELFHOST["GATE"]["BASE"])
-        SELFHOST["assert_models"](
-            previous,
-            selfhost,
-            shared_additions=SELFHOST["rendered_additions"](
-                SELFHOST["SHARED_ADDITIONS"], inputs
-            ),
-            native_additive=SELFHOST["rendered_additions"](
-                SELFHOST["NATIVE_ADDITIVE"], inputs
-            ),
-            passport_consumer_additive=SELFHOST["rendered_passport_consumer_additions"](
-                inputs
-            ),
-            didcomm_kms_addr=inputs["BAO_ADDR"],
-        )
+        SELFHOST["assert_models"](previous, selfhost)
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {
             name: {

@@ -1,4 +1,4 @@
-"""Mutation tests against the frozen and current rendered self-host models."""
+"""Mutation tests against the approved KMS-only self-host model."""
 
 from copy import deepcopy
 import hashlib
@@ -22,10 +22,10 @@ def test_selfhost_openbao_requires_transactional_raft_storage():
 
 def test_reference_identity_and_descriptor_closure():
     GATE["assert_input_inventory"]()
-    data = (ROOT / GATE["FROZEN"]).read_text(encoding="utf-8").encode()
+    data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "5c643478422ecb9f71bb9bd3133af55805e91b184bd8f3c84852fafd418905f8"
+        == "5d72ff9654f8c07960449de43dd6818aa2bf8273ca6834ba75ec27ffe0e9d01e"
     )
     import json
 
@@ -35,9 +35,9 @@ def test_reference_identity_and_descriptor_closure():
 
 @pytest.fixture(scope="module")
 def rendered_models():
-    # Compare the reviewed frozen source to the current complete Rust model.
+    # Compare the independently approved KMS-only source to the current model.
     render = GATE["GATE"]["render"]
-    before = render(GATE["FROZEN"])
+    before = render(GATE["APPROVED"])
     after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
