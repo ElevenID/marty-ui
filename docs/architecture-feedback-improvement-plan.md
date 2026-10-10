@@ -3055,15 +3055,19 @@ run 38034389609](https://github.com/ElevenID/marty-ui/actions/runs/38034389609)
 also passed; #1223 merged as `bd2594845` on 2026-10-10. No comparable
 whole-pipeline speedup is established by these different hosted runs.
 
-Self-host diagnostic preparation (2026-10-10, local draft): a separate
-label-triggered PR rehearsal is being built for the existing ten-case
+Self-host diagnostic preparation (2026-10-10,
+[UI #1226](https://github.com/ElevenID/marty-ui/pull/1226)): a separate
+label-triggered PR rehearsal runs the existing ten-case
 `marty-selfhost-acceptance` target. The scoped artifact verifier requires its
 exact Bookworm-compiled test harness; the runner reuses the full lane's ten-ID
-roster, pinned PostgreSQL image, immutable public image ID, packager,
+roster, both pinned PostgreSQL and published-probe images, immutable public image ID, packager,
 standalone Compose renderer, owned database cleanup, and complete test-result
 check. The ordinary PR matrix and every protected merge-group lane remain
-unchanged. This is not yet hosted evidence or a selective skip; measure the
-additional lane before considering an exact self-host test-source selector.
+unchanged. The first hosted pilot exposed a missing published-probe image pull
+in the isolated lane and stale exact CI-policy assertions; both were corrected
+without weakening required gates. This remains a diagnostic, not a selective
+skip or an established wall-clock speedup. Measure the additional lane before
+considering an exact self-host test-source selector.
 
 ## Design references
 
