@@ -93,9 +93,10 @@
     ]
   },
   {
-    "name": "mdoc_rejects_rsa_algorithm",
+    "name": "mdoc_warns_rsa_algorithm",
     "input": {
       "service_type": "custom-transit-compatible",
+      "endpoint": "https://kms.example",
       "auth_mode": "token",
       "auth_reference": "secret-reference",
       "key_reference": "document-signer",
@@ -117,6 +118,7 @@
     "name": "lti_requires_rs256",
     "input": {
       "service_type": "custom-transit-compatible",
+      "endpoint": "https://kms.example",
       "auth_mode": "token",
       "auth_reference": "lti-token",
       "key_reference": "lti-tool",

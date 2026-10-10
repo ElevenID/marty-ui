@@ -313,7 +313,6 @@ proves these candidate service paths with synthetic data; hosted CI, an
 actual wallet app, the exact release image and supported deployment cutover
 remain open.
 
-
 2026-10-07 Flow HAIP reissue self-review: a persisted remote key reference
 was locally well-formed but could be reused to publish another request object
 after its actual OpenBao key version disappeared. The candidate now resolves
@@ -12139,3 +12138,25 @@ credential-bearing URLs. Library, provider-vector, formatting and Clippy
 checks passed: 172 Signing Keys library cases (nine expected ignores), five
 provider vectors, Rustfmt, and all-target warnings-denied Clippy. The
 correction remains local pending the currently running hosted result.
+
+K8 test-custody review found two Python passport evidence suites still
+generating P-256 issuer keys and signing locally. Their certificate-chain and
+fresh-challenge verification cases now consume one checked-in fixture with
+public certificates and signatures only. The six distinct 48-byte challenge
+vectors retain positive chain/signature checks plus replay, wrong-key,
+unrelated-anchor and tamper rejections. The production evidence path still
+requests random challenges and remote signing; the fixed vectors are verifier
+tests, not live KMS custody proof. The fixture expires in January 2036 and
+must be refreshed before then. Both affected suites passed 40 tests, Ruff
+passed, and a source/fixture scan found no key generation, local signing, or
+private PEM in these files. Broader K8 test-custody and live release acceptance
+remain open.
+
+The new `c0a29d636` contracts lane reached the Signing Keys service
+validation golden vectors and failed because its two external Transit token
+fixtures omitted the newly mandatory HTTPS endpoint. Both now name a
+synthetic HTTPS KMS origin, preserving their algorithm-warning assertions;
+the focused golden-vector target passes locally. This is a fixture alignment
+finding, not evidence that HTTP Transit should be re-enabled. The remaining
+hosted lanes are still running, so this correction is held with the Python
+public-vector and provider-error redaction batch.
