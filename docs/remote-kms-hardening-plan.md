@@ -10882,3 +10882,20 @@ checks and one skipped check. Its last Canvas Rust service job
 The local integration branch has tracker-only commits beyond the published
 head; do not describe those local commits as hosted qualified. The PR remains
 draft, mergeable, and unmerged.
+
+2026-10-09 mobile legacy interface retirement: local Authenticator commit
+`5b9fc2e` removes the base Dart APIs for DID creation, VC/JWT/SD-JWT signing,
+key-pair generation, CSR/certificate signing, and ad hoc mDoc response
+creation. Their implementations only threw after local custody was retired,
+but leaving them in `ISpruceIdPlatformService`, `ISpruceIdClient`, the base
+managers, and the web implementation preserved a misleading callable private-
+key surface. The obsolete test that invoked these old methods merely to check
+for `UnsupportedError` is removed; a source guard now prevents their return
+to those interfaces and implementations. Verification methods and the active
+remote wallet bridge remain. Dart analysis passed with no issues; the full
+Flutter suite passed 196 tests with four skips; the mobile custody guard and
+`git diff --check` passed. Non-generated line coverage is 88.59%
+(1,786/2,016), still below 90%. The extended SDK interfaces still contain
+unsupported optional `keyId` and local-key method names, so this is a bounded
+retirement step, not final KMS-only API qualification. The commit remains
+local in the grouped Authenticator PR batch.
