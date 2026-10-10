@@ -13175,6 +13175,14 @@ the live Raft snapshot and recovery probe. That closes the prior container
 name-race failure on `7b8c81631`; it does not qualify the seven held local
 commits or the still-running Canvas job.
 
+The same head's Canvas lane passed the public self-host image build and
+packaged loader acceptance, including the health gate that failed on
+`60c82efbc`. It also passed disposable DIDComm KMS backend setup. Its
+isolated database contract group was still running at this checkpoint; the
+full Canvas job and CI Gate remain unqualified. Hold the next grouped push
+until that job reaches a terminal result so any further failure can join the
+same correction batch.
+
 The same published head's Rust Contracts lane later completed successfully,
 including the self-host closed-model test and signing/database contract
 groups. Rust Service Images also passed. These are evidence for `7b8c81631`
