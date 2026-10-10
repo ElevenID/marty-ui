@@ -11031,3 +11031,28 @@ Clippy passed, and Rust formatting and diff checks passed. This correction
 remains local while published UI head `5df61d68e` runs hosted CI; that run
 does not qualify `6e346dba6`. The backend KMS challenge, capture proof,
 single-use submission, and honest verified result remain required.
+
+2026-10-09 mobile key-selector retirement: local Authenticator commit
+`fc3dfeb` removes every remaining optional `keyId` argument from the
+unsupported extended SDK interfaces, wrappers and platform service. Those
+arguments were unused and falsely offered caller-selected local key behavior.
+`rg` found no remaining `keyId` in Dart `lib`; Flutter analysis passed and the
+full suite passed 202 tests with four skips. This is local grouped PR #57 work,
+not hosted qualification.
+
+2026-10-09 applicant liveness architecture audit: the native applicant
+service currently has no Signing Keys client, challenge route, or persisted
+single-use challenge state. Its biometric enrollment accepts raw capture data
+but cannot establish liveness. The Signing Keys `/internal/kms/sign` endpoint
+accepts arbitrary caller-supplied provider configuration and payload behind a
+shared internal API key, so it is too broad to expose to a mobile client or
+use directly as a purpose-bound liveness authority. A production design needs
+a dedicated server-side challenge issuer with a configured non-exportable KMS
+key, a canonical signed payload binding challenge ID, nonce, authenticated
+applicant/organization, gestures, issued/expiry times and purpose, plus
+durable atomic consume-once state. Submission must authenticate the caller,
+verify the KMS signature and challenge binding, reject expiry/replay and
+validate actual device capture evidence before setting a verified result.
+Do not treat the present UI mock capture or client-supplied biometric template
+as that evidence. This audit narrows the next implementation contract; no
+production liveness claim is made.
