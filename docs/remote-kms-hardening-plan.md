@@ -12996,3 +12996,28 @@ This removes the second historical raw-key Compose snapshot, but the separate
 Python Canvas worker oracle graph still actively uses raw master-key inputs
 and needs replacement before K8 can close. Hosted image CI and the full
 release graph have not qualified this local snapshot change.
+
+Issuer-sign authorization source audit (2026-10-10): the direct Signing Keys
+`issuer_did_sign` handler checks only the shared dedicated `x-api-key` before
+passing `IssuerDidSignRequest` to the signing service. Gateway's internal
+compatibility handler checks the same dedicated key, then accepts its
+`organization_id` from a query parameter and forwards the body. Flow's HTTP
+provider sends `request.organization_id` in both query and body, and its
+request-object path fills that field from `SigningIdentity`. Thus neither a
+Gateway hop nor the distinct issuer-sign key proves to Signing Keys that a
+caller may sign for the selected tenant. This confirms the K6 tenant-authority
+gap at the direct signing boundary. The corrective feature must bind a
+verified operation owner, tenant, and exact payload to each sign request, with
+Signing Keys performing validation before invoking remote KMS. Do not treat
+client-supplied tenant equality between query/body as authorization.
+`IssuerDidSignRequest` is also constructed inside Signing Keys for managed CSR
+and certificate assembly, so a required external proof must attach at the
+HTTP authorization boundary (or an explicit authorized-operation wrapper),
+not be conflated with the internal cryptographic request type. The signing
+service already resolves a tenant-scoped active profile and remote key, but
+that establishes key selection, not caller permission. Gateway currently
+replaces the upstream `x-api-key` with its own issuer credential and does not
+forward a checked tenant context; Flow and Issuance can also call the route
+without Gateway. A verifier at Signing Keys therefore needs a canonical,
+purpose-scoped grant format and issuer-specific authority sources rather than
+trusting the transport hop or profile lookup.
