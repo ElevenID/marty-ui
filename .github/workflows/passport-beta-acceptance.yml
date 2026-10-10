@@ -84,7 +84,7 @@ jobs:
           python3 -c 'import json,sys; from pathlib import Path; report=json.loads(Path(sys.argv[1]).read_text()); sys.exit(0 if report.get("schema") == "marty.passport-beta-acceptance/v1" and report.get("status") == "accepted" else "Passport beta acceptance remains blocked")' "$report_file"
       - name: Upload sanitized beta evidence
         if: always() && (steps.probe.outcome == 'success' || steps.probe.outcome == 'failure')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: passport-beta-acceptance-${{ github.run_id }}
           path: tests/artifacts/passport-beta-acceptance/passport-beta-acceptance-${{ github.run_id }}.json

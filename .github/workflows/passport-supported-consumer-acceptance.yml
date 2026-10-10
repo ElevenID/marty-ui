@@ -99,7 +99,7 @@ jobs:
             and .status == "accepted"' "$report"
       - name: Upload blocked supported consumer receipt
         if: always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: passport-supported-consumer-acceptance-${{ github.run_id }}
           path: passport-supported-consumer-acceptance-${{ github.run_id }}.json
