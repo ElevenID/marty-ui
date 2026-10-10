@@ -117,7 +117,7 @@ describe('KeyManagementServiceWizard', () => {
 
     await user.type(screen.getByRole('textbox', { name: /service name/i }), 'Production AWS KMS')
     await user.type(screen.getByRole('textbox', { name: /region \/ location/i }), 'us-west-2')
-    await user.type(screen.getByLabelText(/credential reference/i), 'aws-role/signing')
+    expect(screen.getByText(/web identity, container credentials, or EC2 metadata/i)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
     await user.type(screen.getByRole('textbox', { name: /key arn/i }), 'arn:aws:kms:us-west-2:123456789012:key/abc')
@@ -143,6 +143,8 @@ describe('KeyManagementServiceWizard', () => {
       provider: 'aws',
       protocol: 'aws-kms',
       region: 'us-west-2',
+      auth_mode: 'iam_role',
+      auth_reference: '',
       key_reference: 'arn:aws:kms:us-west-2:123456789012:key/abc',
     })
 
@@ -150,6 +152,37 @@ describe('KeyManagementServiceWizard', () => {
     expect(screen.getByText(/create or verify the signing key in the KMS provider you just registered/i)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Create issuer identity' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Use managed OpenBao key creation' })).toBeInTheDocument()
+  })
+
+  it('submits structured AWS credentials without exposing them in review', async () => {
+    const { user } = renderWithRouter(<KeyManagementServiceWizard />, {
+      initialEntries: ['/console/org/deploy/signing-keys/services/new'],
+    })
+    await screen.findByText('Choose a key management service')
+    await user.click(screen.getByText('AWS KMS'))
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await user.type(screen.getByRole('textbox', { name: /service name/i }), 'AWS access key signer')
+    await user.type(screen.getByRole('textbox', { name: /region \/ location/i }), 'us-west-2')
+    await user.click(screen.getByRole('combobox', { name: 'Authentication mode' }))
+    await user.click(screen.getByRole('option', { name: 'Access key' }))
+    await user.type(screen.getByRole('textbox', { name: 'Access key ID' }), 'AKIAEXAMPLE')
+    await user.type(screen.getByLabelText(/Secret access key/), 'aws-secret')
+    expect(screen.getByLabelText(/Secret access key/)).toHaveAttribute('type', 'password')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+
+    await user.type(screen.getByRole('textbox', { name: /key arn/i }), 'arn:aws:kms:us-west-2:123456789012:key/abc')
+    await user.click(screen.getByRole('button', { name: 'Next' }))
+    expect(screen.getByText('Authentication details: Configured (hidden)')).toBeInTheDocument()
+    expect(screen.queryByText(/aws-secret/)).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    const service = mockUpdateKeyManagementConfig.mock.calls[0][0].services[1]
+    expect(service.auth_mode).toBe('access_key')
+    expect(JSON.parse(service.auth_reference)).toEqual({
+      access_key_id: 'AKIAEXAMPLE', secret_access_key: 'aws-secret',
+    })
   })
 
   it('runs backend validation checks in the review step', async () => {
@@ -169,8 +202,8 @@ describe('KeyManagementServiceWizard', () => {
     const mountInput = screen.getByRole('textbox', { name: /transit mount/i })
     await user.clear(mountInput)
     await user.type(mountInput, 'marty-transit')
-    await user.type(screen.getByLabelText(/credential reference/i), 'vault-token')
-    expect(screen.getByLabelText(/credential reference/i)).toHaveAttribute('type', 'password')
+    await user.type(screen.getByLabelText(/transit token/i), 'vault-token')
+    expect(screen.getByLabelText(/transit token/i)).toHaveAttribute('type', 'password')
     await user.click(screen.getByRole('button', { name: 'Next' }))
 
     await user.type(screen.getByRole('textbox', { name: /key reference/i }), 'cred-issuer-prod')
@@ -179,8 +212,8 @@ describe('KeyManagementServiceWizard', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Review' })).toBeInTheDocument()
     })
-    expect(screen.getByText('Credential reference: Configured (hidden)')).toBeInTheDocument()
-    expect(screen.queryByText(/Credential reference: vault-token/)).not.toBeInTheDocument()
+    expect(screen.getByText('Authentication details: Configured (hidden)')).toBeInTheDocument()
+    expect(screen.queryByText(/Authentication details: vault-token/)).not.toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('vault secrets enable -path=marty-transit transit'))).toBeInTheDocument()
     expect(screen.getByText((content) => content.includes('vault write -f marty-transit/keys/cred-issuer-prod type=ecdsa-p256'))).toBeInTheDocument()
 

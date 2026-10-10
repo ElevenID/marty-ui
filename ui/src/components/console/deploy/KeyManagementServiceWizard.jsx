@@ -35,6 +35,7 @@ import HubIcon from '@mui/icons-material/Hub';
 import VerifiedIcon from '@mui/icons-material/Verified';
 
 import signingKeysApi from '../../../services/signingKeysApi';
+import { authFieldsForMode, authModeHelp, isAuthComplete, isAuthModeAvailable, serializeAuthReference } from './keyManagementAuth';
 import { useWizard } from '../../../hooks/useWizard';
 import { useAsyncData } from '../../../hooks/useAsyncData';
 import { useNotifications } from '../../../hooks/useNotifications';
@@ -254,7 +255,7 @@ const KeyManagementServiceWizard = () => {
         if (definition.connection_fields.includes('mount') && !data.mount?.trim()) {
           return false;
         }
-        return Boolean(data.auth_mode);
+        return Boolean(data.auth_mode) && isAuthComplete(data.auth_mode, data.auth_fields);
       case 2:
         if (!(data.key_reference?.trim() || data.key_aliases?.trim())) {
           return false;
@@ -279,7 +280,10 @@ const KeyManagementServiceWizard = () => {
   }, [serviceCatalog]);
 
   const handleSubmit = useCallback(async (data) => {
-    const newService = createKeyManagementServicePayload(data, serviceCatalog);
+    const newService = createKeyManagementServicePayload({
+      ...data,
+      auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
+    }, serviceCatalog);
     const nextDefaultServiceId = data.make_default
       ? newService.id
       : (currentConfig.default_service_id || newService.id);
@@ -306,7 +310,7 @@ const KeyManagementServiceWizard = () => {
       mount: 'transit',
       namespace: '',
       auth_mode: '',
-      auth_reference: '',
+      auth_fields: {},
       key_reference: '',
       key_aliases: '',
       algorithms: ['ES256'],
@@ -368,7 +372,7 @@ const KeyManagementServiceWizard = () => {
         mount: wizard.data.mount,
         namespace: wizard.data.namespace,
         auth_mode: wizard.data.auth_mode,
-        auth_reference: wizard.data.auth_reference,
+        auth_reference: serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields),
         key_reference: wizard.data.key_reference,
         key_aliases: wizard.data.key_aliases,
         algorithms: wizard.data.algorithms,
@@ -401,13 +405,14 @@ const KeyManagementServiceWizard = () => {
     } finally {
       setPreflightLoading(false);
     }
-  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_reference, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
+  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
 
   const handleSelectServiceType = (definition) => {
     setPreflightChecks([]);
     wizard.updateData({
       service_type: definition.id,
-      auth_mode: definition.auth_modes[0] || 'custom',
+      auth_mode: definition.auth_modes.find(isAuthModeAvailable) || '',
+      auth_fields: {},
       mount: definition.connection_fields.includes('mount') ? (wizard.data.mount || 'transit') : '',
       namespace: definition.connection_fields.includes('namespace') ? wizard.data.namespace : '',
       endpoint: definition.connection_fields.includes('endpoint') ? wizard.data.endpoint : '',
@@ -477,7 +482,7 @@ const KeyManagementServiceWizard = () => {
         Connection details
       </Typography>
       <Typography color="text.secondary" sx={{ mb: 3 }}>
-        Tell Marty how to reach {selectedDefinition.label} and which credential reference or workload identity it should use.
+        Tell Marty how to reach {selectedDefinition.label} and which credentials or workload identity it should use.
       </Typography>
       <Box sx={{ display: 'grid', gap: 2 }}>
         <TextField
@@ -497,28 +502,37 @@ const KeyManagementServiceWizard = () => {
         />
         {selectedDefinition.connection_fields.map((fieldName) => renderConnectionField(fieldName))}
         <FormControl fullWidth>
-          <InputLabel>Authentication mode</InputLabel>
+          <InputLabel id="kms-auth-mode-label">Authentication mode</InputLabel>
           <Select
+            labelId="kms-auth-mode-label"
             label="Authentication mode"
             value={wizard.data.auth_mode || selectedDefinition.auth_modes[0] || ''}
-            onChange={(event) => wizard.updateData({ auth_mode: event.target.value })}
+            onChange={(event) => wizard.updateData({ auth_mode: event.target.value, auth_fields: {} })}
           >
             {selectedDefinition.auth_modes.map((authMode) => (
-              <MenuItem key={authMode} value={authMode}>
-                {authModeLabel(authMode)}
+              <MenuItem key={authMode} value={authMode} disabled={!isAuthModeAvailable(authMode)}>
+                {authModeLabel(authMode)}{!isAuthModeAvailable(authMode) ? ' (not yet supported)' : ''}
               </MenuItem>
             ))}
           </Select>
         </FormControl>
-        <TextField
-          fullWidth
-          label="Credential reference"
-          type="password"
-          autoComplete="new-password"
-          helperText="Use a provider identity or secret reference when supported. Token-based modes treat this value as sensitive; prefer the managed service token when available."
-          value={wizard.data.auth_reference}
-          onChange={(event) => wizard.updateData({ auth_reference: event.target.value })}
-        />
+        <Typography variant="body2" color="text.secondary">{authModeHelp(wizard.data.auth_mode)}</Typography>
+        {wizard.data.auth_mode === 'token' && (
+          <TextField
+            fullWidth required label="Transit token" type="password" autoComplete="new-password"
+            value={wizard.data.auth_fields.token || ''}
+            onChange={(event) => wizard.updateData({ auth_fields: { ...wizard.data.auth_fields, token: event.target.value } })}
+          />
+        )}
+        {authFieldsForMode(wizard.data.auth_mode).map((field) => (
+          <TextField
+            key={field.name} fullWidth required={Boolean(field.required)} label={field.label}
+            type={field.secret ? 'password' : 'text'}
+            autoComplete={field.secret ? 'new-password' : 'off'}
+            value={wizard.data.auth_fields[field.name] || ''}
+            onChange={(event) => wizard.updateData({ auth_fields: { ...wizard.data.auth_fields, [field.name]: event.target.value } })}
+          />
+        ))}
       </Box>
     </Box>
   );
@@ -738,7 +752,7 @@ const KeyManagementServiceWizard = () => {
           Authentication: {authModeLabel(wizard.data.auth_mode)}
         </Typography>
         <Typography variant="body2" sx={{ mb: 0.75 }}>
-          Credential reference: {wizard.data.auth_reference ? 'Configured (hidden)' : '-'}
+          Authentication details: {serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields) ? 'Configured (hidden)' : 'Workload identity'}
         </Typography>
         <Typography variant="body2" sx={{ mb: 0.75 }}>
           {selectedDefinition.key_reference_label}: {wizard.data.key_reference || '-'}
@@ -777,7 +791,7 @@ const KeyManagementServiceWizard = () => {
               Validate connection
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Run preflight checks for auth reference, key reference, algorithm coverage, and signer capability before saving.
+              Run preflight checks for authentication, key reference, algorithm coverage, and signer capability before saving.
             </Typography>
           </Box>
           <Button

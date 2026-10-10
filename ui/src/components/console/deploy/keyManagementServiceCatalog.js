@@ -6,7 +6,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     provider: 'openbao',
     protocol: 'vault-transit',
     category: 'service-hsm',
-    auth_modes: ['service_token', 'token', 'approle', 'mtls'],
+    auth_modes: ['token', 'approle', 'mtls'],
     connection_fields: ['endpoint', 'mount', 'namespace'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,

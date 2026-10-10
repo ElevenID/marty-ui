@@ -89,6 +89,7 @@ fn normalize_payload(body: &Value) -> Value {
         .filter(|value| KEY_PURPOSES.contains(&value.as_str()))
         .collect::<Vec<_>>();
     json!({
+        "id": trimmed(body.get("id")).unwrap_or_default(),
         "service_type": definition.id,
         "provider": definition.provider,
         "protocol": definition.protocol,
@@ -110,7 +111,15 @@ fn normalize_payload(body: &Value) -> Value {
 fn append_baseline_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     let auth_mode = string(payload, "auth_mode");
     let auth_reference = string(payload, "auth_reference");
-    if requires_auth_reference(auth_mode) && auth_reference.is_empty() {
+    if auth_mode == "service_token" && kms::validate_transit_auth_config(payload).is_err() {
+        add(
+            checks,
+            "Authentication reference",
+            "fail",
+            "Mounted OpenBao token is only available to the managed service at its configured endpoint.",
+            "baseline",
+        );
+    } else if requires_auth_reference(auth_mode) && auth_reference.is_empty() {
         add(
             checks,
             "Authentication reference",
@@ -335,6 +344,16 @@ async fn validate_provider_adapter(payload: &Value, checks: &mut Vec<ValidationC
 }
 
 async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationCheck>) {
+    if let Err(error) = kms::validate_transit_auth_config(payload) {
+        add(
+            checks,
+            "Provider auth",
+            "fail",
+            error.to_string(),
+            "adapter",
+        );
+        return;
+    }
     let endpoint = string(payload, "endpoint");
     if endpoint.is_empty() {
         add(
@@ -692,9 +711,11 @@ fn validator_url(provider: &str) -> Option<String> {
 
 fn transit_token(payload: &Value) -> String {
     match string(payload, "auth_mode") {
-        "service_token" => secret_value("BAO_TOKEN")
-            .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
-            .unwrap_or_default(),
+        "service_token" if kms::validate_transit_auth_config(payload).is_ok() => {
+            secret_value("BAO_TOKEN")
+                .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
+                .unwrap_or_default()
+        }
         "token" | "api_key" | "custom" => string(payload, "auth_reference").to_string(),
         _ => String::new(),
     }
@@ -806,6 +827,27 @@ mod tests {
             .checks
             .iter()
             .any(|check| check.name == "Algorithm coverage" && check.status == "fail"));
+    }
+
+    #[tokio::test]
+    async fn external_transit_validation_rejects_mounted_token_even_without_live_probe() {
+        let config = json!({
+            "service_type": "openbao-transit",
+            "auth_mode": "service_token",
+            "endpoint": "https://external.example",
+            "key_reference": "signer",
+            "algorithms": ["ES256"]
+        });
+        let result = validate(ValidationRequest {
+            service_config: config.as_object().unwrap().clone(),
+            live_probe: false,
+        })
+        .await;
+        assert!(!result.ok);
+        assert!(result
+            .checks
+            .iter()
+            .any(|check| { check.name == "Authentication reference" && check.status == "fail" }));
     }
 
     #[tokio::test]

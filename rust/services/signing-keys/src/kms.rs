@@ -129,6 +129,7 @@ impl Provider {
                 "Provider configuration must not contain private key material.".into(),
             ));
         }
+        validate_transit_auth_config(config)?;
         match string(config, "service_type").unwrap_or_default() {
             "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible" => {
                 Ok(Self::OpenBao)
@@ -147,6 +148,24 @@ impl Provider {
             "raw"
         }
     }
+}
+
+pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsError> {
+    if string(config, "auth_mode") != Some("service_token") {
+        return Ok(());
+    }
+    let configured = env::var("BAO_ADDR")
+        .map_err(|_| KmsError::InvalidConfig("Managed OpenBao endpoint is unavailable.".into()))?;
+    let endpoint = string(config, "endpoint").unwrap_or_default();
+    if string(config, "id") != Some("managed-openbao-transit")
+        || string(config, "service_type") != Some("openbao-transit")
+        || configured.trim_end_matches('/') != endpoint.trim_end_matches('/')
+    {
+        return Err(KmsError::InvalidConfig(
+            "Mounted OpenBao service token is restricted to the managed endpoint.".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
@@ -2087,6 +2106,15 @@ mod tests {
             "impersonated-token"
         );
         server.abort();
+    }
+
+    #[test]
+    fn mounted_token_cannot_be_routed_to_an_external_transit_endpoint() {
+        let config = json!({
+            "id": "external-signer", "service_type": "openbao-transit",
+            "auth_mode": "service_token", "endpoint": "https://external.example"
+        });
+        assert!(Provider::from_config(&config).is_err());
     }
 
     #[test]

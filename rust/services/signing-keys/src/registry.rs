@@ -1495,6 +1495,11 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
     let Some(service) = service.as_object() else {
         return Ok(None);
     };
+    if service.get("auth_mode").and_then(Value::as_str) == Some("service_token") {
+        return Err(RegistryError::Invalid(
+            "Only the managed OpenBao service may use the mounted service token.".into(),
+        ));
+    }
     let definition = service_type(
         service
             .get("service_type")
@@ -2675,6 +2680,25 @@ mod tests {
             .unwrap(),
             NormalizeServiceResponse { service: None }
         );
+    }
+
+    #[test]
+    fn external_registration_cannot_use_mounted_openbao_token() {
+        let service = json!({
+            "service_type": "openbao-transit",
+            "auth_mode": "service_token",
+            "endpoint": "https://external.example",
+            "key_reference": "signer"
+        });
+        assert!(normalize_service(NormalizeServiceRequest {
+            service: service.clone(),
+        })
+        .is_err());
+        assert!(normalize_registry(NormalizeRegistryRequest {
+            mode: RegistryMode::Requested,
+            registry: json!({"services": [service]}),
+        })
+        .is_err());
     }
 
     #[test]

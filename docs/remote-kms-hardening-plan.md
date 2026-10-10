@@ -11780,3 +11780,27 @@ acceptance remain unproved, so K6 stays open. Sources: [Google REST metadata
 authentication](https://docs.cloud.google.com/docs/authentication/rest),
 [GKE workload identity metadata server](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity),
 [IAM Credentials generateAccessToken](https://docs.cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateAccessToken).
+
+2026-10-10 K6 BYOK wizard and mounted-token boundary, local UI batch: the
+registration wizard now collects mode-specific fields for AWS access keys and
+role assumption, Azure managed identity and client secret, GCP service-account
+impersonation, and transit tokens. It serializes only the selected mode's
+fields into the Rust adapter's `auth_reference` contract, requires complete
+credentials before advancing, clears fields when the mode/provider changes,
+and hides credentials in review. Workload modes send no credential override.
+The wizard disables certificate, AppRole, mTLS, API-key, and custom modes until
+the signer actually implements them. The mounted OpenBao service token is no
+longer offered for external registration. Rust registry normalization now
+rejects that mode for user services, the provider adapter requires the
+managed service ID and exact configured `BAO_ADDR` before using the mounted
+token, and the validator refuses to probe an external endpoint with it.
+The managed OpenBao service still uses its explicit internal token mode.
+Local checks: three focused UI suites (10 tests), UI TypeScript build check,
+focused ESLint, Signing Keys library (154 passed, nine expected opt-in
+ignores), HTTP golden vectors (16 passed), and targeted Rustfmt passed.
+This remains unpushed so the cohesive K6 batch incurs one grouped CI run.
+Open K6 proof remains real AWS/Azure/GCP identity and signing acceptance,
+external GCP federation, Azure certificate remote assertion signing, and
+supported AppRole/mTLS implementations or removal from the advertised
+backend catalog. No cloud-provider acceptance is claimed from UI or local
+stub tests.
