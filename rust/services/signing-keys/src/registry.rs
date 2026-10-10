@@ -2123,6 +2123,38 @@ mod tests {
 
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    struct ScopedBaoEnv {
+        previous_addr: Option<String>,
+        previous_token: Option<String>,
+    }
+
+    impl ScopedBaoEnv {
+        fn new(endpoint: &str) -> Self {
+            let previous_addr = std::env::var("BAO_ADDR").ok();
+            let previous_token = std::env::var("BAO_TOKEN").ok();
+            std::env::set_var("BAO_ADDR", endpoint);
+            std::env::set_var("BAO_TOKEN", "test-only");
+            Self {
+                previous_addr,
+                previous_token,
+            }
+        }
+    }
+
+    impl Drop for ScopedBaoEnv {
+        fn drop(&mut self) {
+            for (name, previous) in [
+                ("BAO_ADDR", self.previous_addr.take()),
+                ("BAO_TOKEN", self.previous_token.take()),
+            ] {
+                match previous {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
+
     #[tokio::test]
     async fn signing_credentials_are_sealed_and_bound_to_tenant_and_service() {
         #[derive(Clone, Default)]
@@ -2516,8 +2548,7 @@ mod tests {
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let _guard = BAO_ENV_LOCK.lock().await;
-        let previous = std::env::var("BAO_TOKEN").ok();
-        std::env::set_var("BAO_TOKEN", "test-only");
+        let _env = ScopedBaoEnv::new(&endpoint);
         let revoked = "cred-issuer-00000000000000000000-es256";
         let deleted = "cred-dsc-11111111111111111111-es256";
         let registry = json!({"key_reference_purposes": {"managed-openbao-transit": {
@@ -2562,10 +2593,6 @@ mod tests {
         ]});
         let active = active_managed_profile_references("org-a", &profiles);
         let (keys, complete) = managed_live_keys("org-a", &registry, &active, &endpoint).await;
-        match previous {
-            Some(value) => std::env::set_var("BAO_TOKEN", value),
-            None => std::env::remove_var("BAO_TOKEN"),
-        }
         server.abort();
         assert!(!complete, "exportable managed key must degrade inventory");
         assert_eq!(
@@ -2636,8 +2663,7 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let redis_url = disposable_redis_url().await;
         let _guard = BAO_ENV_LOCK.lock().await;
-        let previous = std::env::var("BAO_TOKEN").ok();
-        std::env::set_var("BAO_TOKEN", "test-only");
+        let _env = ScopedBaoEnv::new(&endpoint);
         let organization_id = format!("rust-signing-cache-{}", Uuid::new_v4().simple());
         let reference = "cred-issuer-0123456789abcdef0123-es256";
         let store = RegistryStore::connect(&redis_url)
@@ -2694,10 +2720,6 @@ mod tests {
             .query_async(&mut connection)
             .await
             .unwrap();
-        match previous {
-            Some(value) => std::env::set_var("BAO_TOKEN", value),
-            None => std::env::remove_var("BAO_TOKEN"),
-        }
         server.abort();
     }
 

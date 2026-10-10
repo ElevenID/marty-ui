@@ -12465,6 +12465,37 @@ The Rust Contracts job's live public-contract step passed on `64a8623c5`.
 The separate protected Gateway CSR/passport-chain step explicitly runs the
 previously failing dedicated service-CSR case, profile-scoped CSR case,
 operator-granted DSC case and managed CSCA-to-DSC-to-SOD chain against
-disposable Redis/OpenBao; it is still running. The previous-head fixture
-failure is not closed until that step passes. Canvas and aggregate CI also
-remain live.
+disposable Redis/OpenBao; that entire step passed, closing the previous-head
+CSR fixture failure. The packaged OpenBao plugin and Rust service images
+passed as well. Canvas and aggregate CI remain live.
+
+The next Rust Contracts step failed in the holder lifecycle test at
+`holder_remote_live_kms.rs:280`: pairing succeeded, but remote key proof at
+`/v1/devices/pairing-ack` returned a non-success status. The managed holder
+adapter now requests `service_token`, whose sign path requires the exact
+`BAO_ADDR` origin. This CI step supplied only the scoped `BAO_TOKEN`.
+An isolated local replay used fresh digest-pinned OpenBao 2.5.2 and
+PostgreSQL 15 containers, disposable sentinel/policy/token and separate
+databases: without `BAO_ADDR` the exact test failed at the same assertion;
+with `BAO_ADDR` bound to the disposable origin it passed. Both containers
+were removed. The local workflow correction mounts `BAO_ADDR` alongside the
+scoped token; its workflow-performance suite passed 144 tests. Keep the
+failed hosted head immutable and batch the correction after Canvas is
+terminal.
+
+Security review found that `validate_transit_auth_config` bound the mounted
+service token to `BAO_ADDR` for signing but not for managed key creation,
+metadata read, deletion or inventory/list. The local candidate now resolves
+the mounted token through one fallible shared adapter that checks the exact
+configured origin before every token-bearing managed operation; external
+BYOK token modes retain their existing validated registration path. The
+inventory path uses the same adapter. A focused negative test covers read,
+create, delete, list and missing-key collection lookup with a foreign origin.
+The registry's mock environment now restores both address and token even on
+failure. All 173 active Signing Keys library tests passed, warnings-denied
+Clippy passed, and the full disposable pinned OpenBao/Rust-adapter replay
+passed six managed prefixes, provider HMAC, ES256/ES384/ES512 CSR custody,
+holder service/database/OpenBao lifecycle, credential durability, pairing
+tickets, tenant routes and managed-profile routes. The disposable containers
+were removed. This is local candidate proof; the grouped fix still needs
+exact-head hosted CI and release-image qualification.

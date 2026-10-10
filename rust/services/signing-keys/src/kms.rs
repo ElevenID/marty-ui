@@ -360,9 +360,12 @@ pub async fn managed_openbao_metadata_existing(
 /// List public Transit key names without creating or exporting key material.
 /// Callers must tenant-filter the names before reading individual keys.
 pub async fn list_managed_openbao_key_names(endpoint: &str) -> Result<Vec<String>, KmsError> {
-    let token = secret_value("BAO_TOKEN")
-        .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
-        .ok_or_else(|| KmsError::InvalidConfig("Managed OpenBao access is unavailable.".into()))?;
+    let token = transit_token(&json!({
+        "id": "managed-openbao-transit",
+        "service_type": "openbao-transit",
+        "auth_mode": "service_token",
+        "endpoint": endpoint,
+    }))?;
     list_managed_openbao_key_names_with_token(endpoint, &token).await
 }
 
@@ -431,7 +434,7 @@ pub async fn openbao_latest_version(request: ProviderRequest) -> Result<u64, Kms
         "key_reference",
         "A registered KMS key reference is required for rotation",
     )?;
-    let token = transit_token(config);
+    let token = transit_token(config)?;
     if token.is_empty() {
         return Err(KmsError::InvalidConfig(
             "Transit access is not configured for rotation.".into(),
@@ -478,7 +481,7 @@ pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError>
         "key_reference",
         "A registered KMS key reference is required for rotation",
     )?;
-    let token = transit_token(config);
+    let token = transit_token(config)?;
     if token.is_empty() {
         return Err(KmsError::InvalidConfig(
             "Transit access is not configured for rotation.".into(),
@@ -607,7 +610,7 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
         provider_http_client()?
             .post(url)
             .timeout(HTTP_TIMEOUT)
-            .header("X-Vault-Token", transit_token(config))
+            .header("X-Vault-Token", transit_token(config)?)
             .json(&body),
     )
     .await?;
@@ -657,7 +660,7 @@ async fn openbao_key_data(config: &Value) -> Result<Value, KmsError> {
                 endpoint.trim_end_matches('/')
             ))
             .timeout(HTTP_TIMEOUT)
-            .header("X-Vault-Token", transit_token(config)),
+            .header("X-Vault-Token", transit_token(config)?),
     )
     .await?;
     response
@@ -861,7 +864,7 @@ pub async fn delete_managed_openbao(request: ProviderRequest) -> Result<(), KmsE
             "Managed OpenBao mount or key reference is invalid".into(),
         ));
     }
-    let token = transit_token(config);
+    let token = transit_token(config)?;
     if token.is_empty() {
         return Err(KmsError::InvalidConfig(
             "Managed OpenBao access is not configured for the signing service".into(),
@@ -906,7 +909,7 @@ async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
         .trim_matches('/');
     let algorithm = string(config, "algorithm").unwrap_or("ES256");
     let key_type = openbao_key_type(algorithm)?;
-    let token = transit_token(config);
+    let token = transit_token(config)?;
     if token.is_empty() {
         return Err(KmsError::InvalidConfig(
             "Managed OpenBao access is not configured for the signing service.".into(),
@@ -994,13 +997,19 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
         Ok(client) => client,
         Err(_) => return CapabilityResult::fail("Connectivity", "KMS HTTP client is unavailable"),
     };
+    let token = match transit_token(config) {
+        Ok(token) => token,
+        Err(_) => {
+            return CapabilityResult::fail("Authentication", "KMS authentication is unavailable")
+        }
+    };
     let request = client
         .get(format!(
             "{}/v1/{mount}/keys/{key_reference}",
             endpoint.trim_end_matches('/')
         ))
         .timeout(PROBE_TIMEOUT)
-        .header("X-Vault-Token", transit_token(config));
+        .header("X-Vault-Token", token);
     let mut result = CapabilityResult::ok();
     match request.send().await {
         Ok(response) if response.status() == StatusCode::OK => {
@@ -2133,15 +2142,18 @@ fn valid_azure_key_segment(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
 
-fn transit_token(config: &Value) -> String {
+fn transit_token(config: &Value) -> Result<String, KmsError> {
     if string(config, "auth_mode") == Some("service_token") {
+        validate_transit_auth_config(config)?;
         return secret_value("BAO_TOKEN")
             .or_else(|| secret_value("OPENBAO_SERVICE_TOKEN"))
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                KmsError::InvalidConfig("Managed OpenBao access is unavailable.".into())
+            });
     }
-    string(config, "auth_reference")
+    Ok(string(config, "auth_reference")
         .unwrap_or_default()
-        .to_owned()
+        .to_owned())
 }
 
 pub(crate) fn secret_value(name: &str) -> Option<String> {
@@ -2271,7 +2283,7 @@ pub(crate) async fn missing_managed_openbao_key(
             "Managed OpenBao key lookup requires the transit mount".into(),
         ));
     }
-    let token = transit_token(config);
+    let token = transit_token(config)?;
     if token.is_empty() {
         return Err(KmsError::InvalidConfig(
             "Managed OpenBao access is unavailable.".into(),
@@ -2738,6 +2750,56 @@ mod tests {
             "auth_mode": "service_token", "endpoint": "https://external.example"
         });
         assert!(Provider::from_config(&config).is_err());
+    }
+
+    #[tokio::test]
+    async fn mounted_token_is_origin_bound_for_managed_lifecycle_and_inventory() {
+        let endpoint = "https://unmounted.example.invalid";
+        let config = json!({
+            "id": "managed-openbao-transit", "service_type": "openbao-transit",
+            "auth_mode": "service_token", "endpoint": endpoint, "mount": "transit",
+            "key_reference": "issuer-key", "algorithm": "ES256"
+        });
+        let rejects = |error: KmsError| {
+            matches!(error, KmsError::InvalidConfig(detail)
+                if detail.contains("Mounted OpenBao service token")
+                    || detail.contains("Managed OpenBao endpoint is unavailable"))
+        };
+        assert!(rejects(
+            read_managed_openbao(ProviderRequest {
+                service_config: config.clone(),
+            })
+            .await
+            .unwrap_err()
+        ));
+        assert!(rejects(
+            create_managed_openbao(ProviderRequest {
+                service_config: config.clone(),
+            })
+            .await
+            .unwrap_err()
+        ));
+        assert!(rejects(
+            delete_managed_openbao(ProviderRequest {
+                service_config: config.clone(),
+            })
+            .await
+            .unwrap_err()
+        ));
+        assert!(rejects(
+            list_managed_openbao_key_names(endpoint).await.unwrap_err()
+        ));
+        assert!(rejects(
+            missing_managed_openbao_key(
+                &config,
+                &KmsError::ProviderStatus {
+                    status: StatusCode::NOT_FOUND,
+                    detail: r#"{"errors":[]}"#.into(),
+                },
+            )
+            .await
+            .unwrap_err()
+        ));
     }
 
     #[test]

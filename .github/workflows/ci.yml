@@ -1925,6 +1925,7 @@ jobs:
             MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only \
             MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce" \
             DEVICE_REGISTRATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_holder_kms_test \
+            BAO_ADDR=http://127.0.0.1:8200 \
             BAO_TOKEN="$scoped_token" \
             cargo test --locked -p marty-device-registration --test holder_remote_live_kms \
               registration_provision_sign_and_deactivate_delete_remote_key -- --ignored --exact
