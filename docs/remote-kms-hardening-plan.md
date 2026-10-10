@@ -12426,3 +12426,16 @@ replayed against fresh disposable Redis/OpenBao with scoped test sentinels:
 the operator-granted DSC ceremony and the managed CSCA-to-DSC-to-SOD chain
 both passed. This narrows the next hosted replay to the corrected fixture
 and later unexecuted steps; it does not replace an exact-head CI pass.
+
+2026-10-10 current-main integration, local candidate: merged `origin/main` at
+`19238407b` after its v1.1.239 stack coordinate, CI timing, production
+CodeQL test-source classifier and self-host recovery topology changes. The
+merge was conflict-free. The changed workflow and release-contract tests
+passed together (182 tests), and the merge diff passed `git diff --check`.
+The CodeQL classifier only skips analysis when every changed Rust file is a
+modified, verified test source excluded by the production configuration;
+this KMS branch changes production Rust and must still receive CodeQL on its
+next exact head. The previous published `6d3e1a7f2` CI remains live with
+Canvas running and Rust Contracts failed in the now locally corrected
+dedicated CSR fixture. Keep the fix and main merge local until that run is
+terminal, then publish one grouped head for hosted requalification.
