@@ -10899,3 +10899,14 @@ Flutter suite passed 196 tests with four skips; the mobile custody guard and
 unsupported optional `keyId` and local-key method names, so this is a bounded
 retirement step, not final KMS-only API qualification. The commit remains
 local in the grouped Authenticator PR batch.
+
+2026-10-09 remote holder regression proof: local Authenticator commit
+`a99c31c` adds behavior tests for serializing pair attempts, waiting for an
+in-flight pair before renewal, rejecting non-200 issuer-trust responses,
+rejecting non-200 remote signing responses, and accepting the exact raw
+holder-binding signature format. These cases exercise real HTTP request
+construction against a controlled client, but they are not physical-device
+or live OpenBao acceptance. Dart analysis passed; the default Flutter suite
+passed 199 tests with four skips. Non-generated coverage reached 88.84%
+(1,791/2,016), still below the 90% gate. The tests remain local in the
+grouped mobile PR batch.
