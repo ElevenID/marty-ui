@@ -3004,6 +3004,18 @@ retaining the one full independent oracle, but it must prove the native
 tests' exact required initial/final rows, recovery migration, pinned-input
 closure, and cleanup before replacing any call. No skip or saving is claimed.
 
+Source follow-up: a bare replay of `shared.seed` is **not** equivalent to the
+current fixture. The published status oracle additionally inserts
+`delivery-provider`, iterates provider cases, and can persist credential and
+delivery changes (including credential-route writes). Native runtime setup
+updates those same rows, while review tests snapshot the initial delivery row
+and compare unaffected rows across cases. Therefore first compare the
+post-oracle and seed-only database states for the columns each native case
+reads, then test any narrower initializer against all 13 native cases on
+disposable, isolated published-schema databases. Retain the one full oracle
+and its frozen comparison; do not switch constructors based on source reading
+alone.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
