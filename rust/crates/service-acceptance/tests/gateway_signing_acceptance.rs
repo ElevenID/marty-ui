@@ -1084,7 +1084,12 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap();
     assert!(created_key.status().is_success());
 
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(endpoint.clone(), token.clone()).unwrap(),
+        ));
     let service = json!({
         "id":service_id, "name":"Gateway dedicated CSR",
         "service_type":"openbao-transit", "endpoint":endpoint,
@@ -1098,6 +1103,14 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap()
         .push(service.clone());
     store.save(&organization_id, &registry).await.unwrap();
+    let mut raw_connection = store.connection();
+    let raw: String = redis::cmd("GET")
+        .arg(marty_signing_keys::registry::storage_key(&organization_id))
+        .query_async(&mut raw_connection)
+        .await
+        .unwrap();
+    assert!(raw.contains("auth_reference_envelope"));
+    assert!(!raw.contains(&token));
     let signing = signing_router(
         "internal-signing-key".into(),
         Some("dedicated-service-sign-gateway-key-000001".into()),
