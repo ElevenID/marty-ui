@@ -11056,3 +11056,21 @@ validate actual device capture evidence before setting a verified result.
 Do not treat the present UI mock capture or client-supplied biometric template
 as that evidence. This audit narrows the next implementation contract; no
 production liveness claim is made.
+
+2026-10-09 mobile liveness ownership correction: the Authenticator's
+`DocumentScanningView` is launched from mobile document/passport placeholders
+and currently constructs `LivenessCheckView` without a production challenge
+provider. Its `ReviewAndSubmitView` receives only the challenge object, never
+camera frames or a capture evidence artifact, and has no production
+authentication/submission handlers. No source path connects this flow to the
+native applicant service. Therefore adding an applicant challenge endpoint
+alone would not satisfy the mobile requirement, and KMS signing a challenge
+would establish challenge origin but not physical liveness. First establish
+the actual product submission owner and server-verifiable capture-evidence
+contract, then wire a purpose-bound KMS issuer and atomic replay state at that
+owner. Keep the current production mobile path fail closed in the meantime.
+Local Authenticator commit `a6985b6` makes the review screen revalidate
+challenge structure before enabling submission and both before and after
+authentication, so a direct malformed widget input cannot reach an injected
+submission callback. Flutter analysis and all six focused review-screen tests
+passed. This is local PR #57 work, not a device or hosted proof.
