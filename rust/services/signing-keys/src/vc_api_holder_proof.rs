@@ -8,7 +8,7 @@ use std::{env, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
-use reqwest::{Client, Url};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -166,7 +166,7 @@ impl OpenBaoHolderProofProvider {
     /// Keys younger than one hour may still belong to an in-flight request.
     pub async fn reap_stale_keys(&self) -> Result<usize, HolderProofError> {
         self.validate_mounted_token()?;
-        let client = Client::new();
+        let client = kms::provider_http_client().map_err(|_| HolderProofError::Provider)?;
         let response = client
             .get(format!("{}/v1/transit/keys?list=true", self.endpoint))
             .timeout(TIMEOUT)

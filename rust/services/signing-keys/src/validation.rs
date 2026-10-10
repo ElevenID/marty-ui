@@ -391,7 +391,10 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
     let key_reference = string(payload, "key_reference");
     let token = transit_token(payload);
     let namespace = string(payload, "namespace");
-    let mut health = Client::new()
+    let Some(client) = provider_client(checks) else {
+        return;
+    };
+    let mut health = client
         .get(format!("{}/v1/sys/health", endpoint.trim_end_matches('/')))
         .timeout(PROBE_TIMEOUT);
     if !token.is_empty() {
@@ -447,7 +450,6 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
         }
     }
 
-    let client = Client::new();
     if token.is_empty() {
         add(
             checks,
@@ -585,7 +587,9 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
 }
 
 async fn validate_bridge(payload: &Value, validator_url: &str, checks: &mut Vec<ValidationCheck>) {
-    let client = Client::new();
+    let Some(client) = provider_client(checks) else {
+        return;
+    };
     let auth_reference = string(payload, "auth_reference");
     let mut health_request = client
         .get(format!("{}/health", validator_url.trim_end_matches('/')))
@@ -749,6 +753,22 @@ fn secret_value(name: &str) -> Option<String> {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty())
         })
+}
+
+fn provider_client(checks: &mut Vec<ValidationCheck>) -> Option<Client> {
+    match kms::provider_http_client() {
+        Ok(client) => Some(client),
+        Err(_) => {
+            add(
+                checks,
+                "Provider connectivity",
+                "warning",
+                "KMS HTTP client is unavailable.",
+                "live",
+            );
+            None
+        }
+    }
 }
 
 fn add(

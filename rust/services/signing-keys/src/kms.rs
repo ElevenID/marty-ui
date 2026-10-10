@@ -225,11 +225,15 @@ fn validate_cloud_endpoint(config: &Value, provider: &str) -> Result<(), KmsErro
     Ok(())
 }
 
-fn cloud_http_client() -> Result<Client, KmsError> {
+pub(crate) fn provider_http_client() -> Result<Client, KmsError> {
     Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|_| KmsError::Provider("Cloud KMS HTTP client is unavailable.".into()))
+        .map_err(|_| KmsError::Provider("KMS HTTP client is unavailable.".into()))
+}
+
+fn cloud_http_client() -> Result<Client, KmsError> {
+    provider_http_client()
 }
 
 pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsError> {
@@ -341,7 +345,7 @@ async fn list_managed_openbao_key_names_with_token(
     token: &str,
 ) -> Result<Vec<String>, KmsError> {
     let response = match send_json(
-        Client::new()
+        provider_http_client()?
             .get(format!(
                 "{}/v1/transit/keys",
                 endpoint.trim_end_matches('/')
@@ -410,7 +414,7 @@ pub async fn openbao_latest_version(request: ProviderRequest) -> Result<u64, Kms
     let mount = string(config, "mount")
         .unwrap_or("transit")
         .trim_matches('/');
-    let mut read = Client::new()
+    let mut read = provider_http_client()?
         .get(format!(
             "{}/v1/{mount}/keys/{key_reference}",
             endpoint.trim_end_matches('/')
@@ -464,7 +468,7 @@ pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError>
         "{}/v1/{mount}/keys/{key_reference}",
         endpoint.trim_end_matches('/')
     );
-    let rotate = Client::new()
+    let rotate = provider_http_client()?
         .post(format!("{url}/rotate"))
         .timeout(HTTP_TIMEOUT)
         .header("X-Vault-Token", &token);
@@ -474,7 +478,7 @@ pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError>
         rotate
     };
     send_json_or_empty(rotate).await?;
-    let read = Client::new()
+    let read = provider_http_client()?
         .get(url)
         .timeout(HTTP_TIMEOUT)
         .header("X-Vault-Token", &token);
@@ -574,7 +578,7 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
         endpoint.trim_end_matches('/')
     );
     let response = send_json(
-        Client::new()
+        provider_http_client()?
             .post(url)
             .timeout(HTTP_TIMEOUT)
             .header("X-Vault-Token", transit_token(config))
@@ -621,7 +625,7 @@ async fn openbao_key_data(config: &Value) -> Result<Value, KmsError> {
         .unwrap_or("transit")
         .trim_matches('/');
     let response = send_json(
-        Client::new()
+        provider_http_client()?
             .get(format!(
                 "{}/v1/{mount}/keys/{key_reference}",
                 endpoint.trim_end_matches('/')
@@ -841,7 +845,7 @@ pub async fn delete_managed_openbao(request: ProviderRequest) -> Result<(), KmsE
         "{}/v1/{mount}/keys/{key_reference}",
         endpoint.trim_end_matches('/')
     );
-    let client = Client::new();
+    let client = provider_http_client()?;
     send_json_or_empty(
         client
             .post(format!("{key_url}/config"))
@@ -882,9 +886,10 @@ async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
             "Managed OpenBao access is not configured for the signing service.".into(),
         ));
     }
+    let client = provider_http_client()?;
     let create = || {
         send_json_or_empty(
-            Client::new()
+            client
                 .post(format!(
                     "{}/v1/{mount}/keys/{key_reference}",
                     endpoint.trim_end_matches('/')
@@ -905,7 +910,7 @@ async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
             if status == StatusCode::NOT_FOUND && missing_route_detail(&detail) =>
         {
             match send_json_or_empty(
-                Client::new()
+                client
                     .post(format!(
                         "{}/v1/sys/mounts/{mount}",
                         endpoint.trim_end_matches('/')
@@ -959,7 +964,11 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
         .unwrap_or("transit")
         .trim_matches('/');
     let key_reference = string(config, "key_reference").unwrap_or_default();
-    let request = Client::new()
+    let client = match provider_http_client() {
+        Ok(client) => client,
+        Err(_) => return CapabilityResult::fail("Connectivity", "KMS HTTP client is unavailable"),
+    };
+    let request = client
         .get(format!(
             "{}/v1/{mount}/keys/{key_reference}",
             endpoint.trim_end_matches('/')
@@ -2325,6 +2334,52 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn provider_http_does_not_forward_vault_token_to_redirect_target() {
+        let (tx, mut received) = tokio::sync::mpsc::unbounded_channel();
+        let target = axum::Router::new().route(
+            "/leak",
+            axum::routing::get(move |headers: axum::http::HeaderMap| {
+                let tx = tx.clone();
+                async move {
+                    let _ = tx.send(headers.get("X-Vault-Token").cloned());
+                    StatusCode::OK
+                }
+            }),
+        );
+        let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_url = format!("http://{}/leak", target_listener.local_addr().unwrap());
+        let target_server =
+            tokio::spawn(async move { axum::serve(target_listener, target).await.unwrap() });
+        let redirect = axum::Router::new().route(
+            "/transit",
+            axum::routing::get(move || {
+                let target_url = target_url.clone();
+                async move {
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(axum::http::header::LOCATION, target_url)],
+                    )
+                }
+            }),
+        );
+        let redirect_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/transit", redirect_listener.local_addr().unwrap());
+        let redirect_server =
+            tokio::spawn(async move { axum::serve(redirect_listener, redirect).await.unwrap() });
+        let response = provider_http_client()
+            .unwrap()
+            .get(endpoint)
+            .header("X-Vault-Token", "tenant-secret")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert!(received.try_recv().is_err());
+        redirect_server.abort();
+        target_server.abort();
+    }
 
     #[tokio::test]
     async fn provider_http_rejects_oversized_success_and_error_bodies() {
