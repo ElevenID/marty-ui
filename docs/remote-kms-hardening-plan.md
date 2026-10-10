@@ -13142,6 +13142,23 @@ correction; five additional negative tests check missing/downgraded remote
 custody inputs. This fixes configuration wiring, not yet a live beta or
 conformance startup proof.
 
+Additional local guard evidence after the shared-owner wiring: all 171
+`tests/test_conformance_native.py` cases and 158 adjacent beta/conformance
+release and base-native Compose cases pass; the full four-composition/five-rate
+render check passes. A broad local Python `tests` run was stopped after its
+early portion progressed very slowly on Windows; it is not a full-suite pass.
+The published Release Contract Tests failure above still requires a new
+exact-head hosted run after the current one reaches terminal state.
+
+On the published `7b8c81631` head, [Rust CodeQL run
+38082985035](https://github.com/ElevenID/marty-ui/actions/runs/38082985035)
+completed successfully. In the still-running CI job, packaged OpenBao plugin
+storage/self-host Raft qualification and live Raft snapshot export/recovery
+have passed, including the container-name release correction. Coordinated
+Rust integration-secret PostgreSQL/Raft restore, Canvas and the final CI Gate
+remain active at this checkpoint; do not infer their results from earlier
+steps.
+
 Adjacent DIDComm authcrypt root gap (not fixed by the envelope correction):
 the shared beta/conformance native service still receives an opt-in policy
 directory from `docker-compose.profile.didcomm-native-authcrypt.yml`, whose
