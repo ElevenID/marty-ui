@@ -11188,3 +11188,12 @@ remote signing; neither is exact release-image qualification. The accepted
 Redis container was removed after the run.
 The acceptance test target compiled with warnings-denied Clippy; targeted
 Rust formatting and diff checks passed.
+
+2026-10-09 grouped UI hosted result: draft PR #1192's exact published head
+`5df61d68e7e042bcc5d4cb920a77b5e60b108bf7` completed CI run
+`38010917323` successfully. Canvas, Rust contracts, OpenBao plugin image,
+Rust service images, release contracts, CodeQL, organization quality and the
+aggregate CI Gate all passed. This qualifies only the published head; the
+newer local applicant-liveness and dedicated service-signing commits, including
+the Gateway acceptance fixture, remain unpublished and require their own
+grouped exact-head hosted qualification.
