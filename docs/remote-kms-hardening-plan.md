@@ -12721,5 +12721,10 @@ warnings-denied Clippy passed for Signing Keys and Issuance test targets. The
 affected self-host/base Compose whole-model checks and 156 passport
 provisioning/ownership/ceremony/infra Python tests passed (2 skipped). The
 direct Rust client now rejects the retired Gateway URL prefix as well. The
-grouped candidate remains unpublished; hosted exact-head CI and live recovery
-qualification still need evidence before this authority reduction is final.
+grouped head `b1540254c` is published on draft UI PR #1192. Its
+[exact-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38073204986)
+and [production Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38073205041)
+started and are not yet terminal. The PR body records this head. Hosted
+exact-head CI and live recovery qualification still need evidence before this
+authority reduction is final. Keep this tracker-only correction local until
+the next substantive grouped push to avoid another hosted run.
