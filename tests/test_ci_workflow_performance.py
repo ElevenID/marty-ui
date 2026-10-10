@@ -767,6 +767,13 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
 def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
     tmp_path: Path,
 ) -> None:
+    _, workflow = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in workflow["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    assert len(classifier["run"].encode("utf-8")) < 21_000
     verified = subprocess.run(
         [
             sys.executable,

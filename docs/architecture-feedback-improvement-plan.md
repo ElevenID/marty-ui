@@ -3167,6 +3167,11 @@ contracts owner, Rust lint, supply-chain, protocol, release and aggregate
 gates remain selected as before. Four focused classifier/ownership/gate tests
 pass locally. Hosted exact-head qualification and a real one-source PR pilot
 are still needed; no time saving is claimed from this candidate.
+The first #1242 push was rejected by GitHub before jobs started because the
+expanded inline classifier exceeded its 21,000-character expression limit.
+The selector now delegates the exact NUL-delimited path and six-context proof
+to the existing Python verifier, and a local workflow-length test guards the
+limit. Requalify this corrected head; the failed run proves no tests executed.
 
 [#1232](https://github.com/ElevenID/marty-ui/pull/1232) adds per-target
 Canvas phase attribution without changing coverage and passed exact-head PR
