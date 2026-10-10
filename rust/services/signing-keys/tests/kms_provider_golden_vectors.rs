@@ -14,6 +14,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex, OnceCell};
 
 static AZURE_IDENTITY: OnceCell<()> = OnceCell::const_new();
+static GCP_METADATA: OnceCell<()> = OnceCell::const_new();
 
 async fn setup_azure_identity() {
     AZURE_IDENTITY
@@ -39,6 +40,43 @@ async fn setup_azure_identity() {
                 format!("http://{}/identity/token", listener.local_addr().unwrap()),
             );
             std::env::set_var("IDENTITY_HEADER", "fixture-identity-header");
+            std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                        axum::serve(listener, app).await.unwrap();
+                    });
+            });
+        })
+        .await;
+}
+
+async fn setup_gcp_metadata() {
+    GCP_METADATA
+        .get_or_init(|| async {
+            async fn token(request: Request<Body>) -> axum::Json<Value> {
+                assert_eq!(
+                    request
+                        .headers()
+                        .get("metadata-flavor")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("Google")
+                );
+                axum::Json(serde_json::json!({"access_token": "gcp-token"}))
+            }
+            let app = Router::new().route(
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                axum::routing::get(token),
+            );
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            std::env::set_var(
+                "GCE_METADATA_HOST",
+                listener.local_addr().unwrap().to_string(),
+            );
             std::thread::spawn(move || {
                 tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -339,6 +377,7 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
 #[tokio::test]
 async fn provider_signing_matches_language_neutral_http_vectors() {
     setup_azure_identity().await;
+    setup_gcp_metadata().await;
     let fixture = fixture();
     assert_eq!(fixture.schema_version, 1);
 
@@ -396,6 +435,7 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
 #[tokio::test]
 async fn public_key_discovery_matches_language_neutral_http_vectors() {
     setup_azure_identity().await;
+    setup_gcp_metadata().await;
     for mut case in fixture().public_key_cases {
         let (endpoint, captured, shutdown) =
             spawn_stub(StatusCode::OK, case.provider_response).await;
@@ -443,6 +483,7 @@ async fn public_key_discovery_matches_language_neutral_http_vectors() {
 #[tokio::test]
 async fn connectivity_probes_match_language_neutral_http_vectors() {
     setup_azure_identity().await;
+    setup_gcp_metadata().await;
     for mut case in fixture().verify_cases {
         let status = StatusCode::from_u16(case.provider_status).expect("fixture HTTP status");
         let (endpoint, captured, shutdown) = spawn_stub(status, case.provider_response).await;

@@ -160,7 +160,7 @@
         "service_type": "gcp-cloud-kms",
         "endpoint": "$STUB",
         "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
-        "auth_reference": "gcp-token",
+        "auth_mode": "workload_identity",
         "algorithm": "ES256"
       },
       "payload_b64": "cGF5bG9hZA",
@@ -185,7 +185,7 @@
         "service_type": "gcp-cloud-kms",
         "endpoint": "$STUB",
         "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/2",
-        "auth_reference": "gcp-token",
+        "auth_mode": "workload_identity",
         "algorithm": "EdDSA"
       },
       "payload_b64": "cGF5bG9hZA",
@@ -233,7 +233,7 @@
     },
     {
       "name": "gcp_pem_public_key",
-      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "auth_reference": "gcp-token" },
+      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "auth_mode": "workload_identity" },
       "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/publicKey", "headers": { "authorization": "Bearer gcp-token" } },
       "provider_response": { "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n", "algorithm": "EC_SIGN_P256_SHA256", "protectionLevel": "HSM" },
       "expected_response": { "provider": "gcp", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n", "algorithm": "EC_SIGN_P256_SHA256", "protection_level": "HSM", "public_jwk": { "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1" } }
@@ -266,16 +266,16 @@
     },
     {
       "name": "gcp_key_missing",
-      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k", "auth_reference": "token" },
-      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k", "headers": { "authorization": "Bearer token" } },
+      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k", "auth_mode": "workload_identity" },
+      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k", "headers": { "authorization": "Bearer gcp-token" } },
       "provider_status": 404,
       "provider_response": { "error": "not found" },
       "expected_response": { "ok": false, "checks": [{ "name": "Key exists", "status": "fail", "detail": "Configured GCP key reference was not found.", "source": "adapter" }] }
     },
     {
       "name": "gcp_key_reachable",
-      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k", "auth_reference": "token" },
-      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k", "headers": { "authorization": "Bearer token" } },
+      "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k", "auth_mode": "workload_identity" },
+      "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k", "headers": { "authorization": "Bearer gcp-token" } },
       "provider_status": 200,
       "provider_response": { "name": "projects/p/locations/l/keyRings/r/cryptoKeys/k" },
       "expected_response": { "ok": true, "checks": [{ "name": "Key exists", "status": "pass", "detail": "GCP KMS key 'projects/p/locations/l/keyRings/r/cryptoKeys/k' is reachable.", "source": "adapter" }] }

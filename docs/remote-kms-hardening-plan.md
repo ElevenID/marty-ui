@@ -11756,3 +11756,27 @@ managed identity/client-secret enrollment and certificate binding remain
 unproved. Sources: [Azure managed identity REST endpoint](https://learn.microsoft.com/en-us/azure/app-service/overview-managed-identity),
 [Microsoft Entra client credentials](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-client-creds-grant-flow),
 [Key Vault token resource](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc).
+
+2026-10-10 K6 GCP auth selection, local UI batch: the Rust GCP adapter now
+acquires a short-lived access token from the Compute/GKE metadata service for
+`workload_identity`, requiring the `Metadata-Flavor: Google` header. It no
+longer accepts a literal bearer token in `auth_reference`. The
+`service_account` mode now accepts only a service-account email document and
+uses the metadata workload token to call IAM Credentials
+`generateAccessToken`; it does not ingest a service-account JSON private key.
+Metadata host selection is restricted to Google metadata or local test hosts,
+and token-acquisition errors are generic. The same Rust parser drives
+registration validation. GCP sign/public-key/verify HTTP vectors now exercise
+the metadata request and resulting bearer token; a focused impersonation test
+checks the short-lived cloud-platform scope and delegated token. The ignored
+certificate/publication route test was updated to use a local metadata stub
+and passed against a newly created disposable Redis container; that container
+was removed afterward. The complete Signing Keys library suite passed 151
+tests with nine expected opt-in ignores; provider vectors (five), service
+validation vector, all-target warnings-denied Clippy, and Rustfmt passed.
+External workload identity federation outside a Google metadata
+environment and real GCP KMS key enrollment/sign/public-key/certificate
+acceptance remain unproved, so K6 stays open. Sources: [Google REST metadata
+authentication](https://docs.cloud.google.com/docs/authentication/rest),
+[GKE workload identity metadata server](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/workload-identity),
+[IAM Credentials generateAccessToken](https://docs.cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/generateAccessToken).

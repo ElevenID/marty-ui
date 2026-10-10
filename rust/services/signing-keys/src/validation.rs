@@ -267,55 +267,27 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
 }
 
 fn append_provider_auth(payload: &Value, checks: &mut Vec<ValidationCheck>) {
-    let provider = string(payload, "provider");
-    let auth_mode = string(payload, "auth_mode");
-    let has_reference = !string(payload, "auth_reference").is_empty();
-    if provider == "aws" {
-        match kms::validate_aws_auth_config(payload) {
-            Ok(()) => add(
-                checks,
-                "Provider auth policy",
-                "pass",
-                "AWS credential configuration matches the selected auth mode.",
-                "provider",
-            ),
-            Err(error) => add(
-                checks,
-                "Provider auth policy",
-                "fail",
-                error.to_string(),
-                "provider",
-            ),
-        }
-        return;
-    }
-    if provider == "azure" {
-        match kms::validate_azure_auth_config(payload) {
-            Ok(()) => add(
-                checks,
-                "Provider auth policy",
-                "pass",
-                "Azure credential configuration matches the selected auth mode.",
-                "provider",
-            ),
-            Err(error) => add(
-                checks,
-                "Provider auth policy",
-                "fail",
-                error.to_string(),
-                "provider",
-            ),
-        }
-        return;
-    }
-    let result = match (provider, auth_mode, has_reference) {
-        ("gcp", "workload_identity", _) => Some(("pass", "Workload identity selected; ensure cloudkms.cryptoKeyVersions.useToSign permission is granted.")),
-        ("gcp", "service_account", true) => Some(("pass", "Service account reference provided for GCP auth mode.")),
-        ("gcp", "service_account", false) => Some(("warning", "Provide a service account reference for GCP auth mode.")),
-        _ => None,
+    let (name, result) = match string(payload, "provider") {
+        "aws" => ("AWS", kms::validate_aws_auth_config(payload)),
+        "azure" => ("Azure", kms::validate_azure_auth_config(payload)),
+        "gcp" => ("GCP", kms::validate_gcp_auth_config(payload)),
+        _ => return,
     };
-    if let Some((status, detail)) = result {
-        add(checks, "Provider auth policy", status, detail, "provider");
+    match result {
+        Ok(()) => add(
+            checks,
+            "Provider auth policy",
+            "pass",
+            format!("{name} credential configuration matches the selected auth mode."),
+            "provider",
+        ),
+        Err(error) => add(
+            checks,
+            "Provider auth policy",
+            "fail",
+            error.to_string(),
+            "provider",
+        ),
     }
 }
 
@@ -875,6 +847,33 @@ mod tests {
                 "auth_mode": mode,
                 "auth_reference": reference,
                 "key_reference": "https://vault.azure.net/keys/test",
+                "algorithms": ["ES256"]
+            });
+            let result = validate(ValidationRequest {
+                service_config: config.as_object().unwrap().clone(),
+                live_probe: false,
+            })
+            .await;
+            assert!(!result.ok, "{mode} must fail");
+            assert!(result
+                .checks
+                .iter()
+                .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_validation_rejects_bearer_and_service_account_private_key() {
+        for (mode, reference) in [
+            ("workload_identity", "literal-bearer-token"),
+            ("service_account", r#"{"private_key":"local-key"}"#),
+            ("service_account", r#"{"email":"not-a-service-account"}"#),
+        ] {
+            let config = json!({
+                "service_type": "gcp-cloud-kms",
+                "auth_mode": mode,
+                "auth_reference": reference,
+                "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
                 "algorithms": ["ES256"]
             });
             let result = validate(ValidationRequest {

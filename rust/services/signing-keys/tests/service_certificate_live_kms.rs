@@ -619,6 +619,25 @@ async fn registered_service_public_material_routes_use_current_kms_key_and_tenan
         .await
         .expect("mock KMS server");
     });
+    let metadata_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("mock GCP metadata listener");
+    let previous_metadata_host = std::env::var("GCE_METADATA_HOST").ok();
+    std::env::set_var(
+        "GCE_METADATA_HOST",
+        metadata_listener.local_addr().unwrap().to_string(),
+    );
+    tokio::spawn(async move {
+        axum::serve(
+            metadata_listener,
+            Router::new().route(
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                axum::routing::get(|| async { Json(json!({"access_token": "test-only-token"})) }),
+            ),
+        )
+        .await
+        .expect("mock GCP metadata server");
+    });
 
     let registry = RegistryStore::connect(&redis_url)
         .await
@@ -630,7 +649,7 @@ async fn registered_service_public_material_routes_use_current_kms_key_and_tenan
                 "services": [{
                     "id": "service-a", "name": "Test mDoc Signer",
                     "service_type": "gcp-cloud-kms", "endpoint": endpoint,
-                    "auth_mode": "workload_identity", "auth_reference": "test-only-token",
+                    "auth_mode": "workload_identity",
                     "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "algorithms": ["ES256"],
                     "key_purposes": ["mdoc_dsc"],
                     "cert_pem": fixture["certificate"]["cert_pem"]
@@ -817,4 +836,9 @@ async fn registered_service_public_material_routes_use_current_kms_key_and_tenan
             .status(),
         StatusCode::NOT_FOUND
     );
+    if let Some(previous) = previous_metadata_host {
+        std::env::set_var("GCE_METADATA_HOST", previous);
+    } else {
+        std::env::remove_var("GCE_METADATA_HOST");
+    }
 }

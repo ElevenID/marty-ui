@@ -1223,6 +1223,169 @@ async fn verify_azure(config: &Value) -> CapabilityResult {
     .await
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GcpServiceAccount {
+    email: String,
+}
+
+enum GcpAuth {
+    WorkloadIdentity,
+    ServiceAccount(GcpServiceAccount),
+}
+
+fn parse_gcp_auth(config: &Value) -> Result<GcpAuth, KmsError> {
+    let reference = string(config, "auth_reference").unwrap_or_default();
+    match string(config, "auth_mode").unwrap_or("workload_identity") {
+        "workload_identity" => {
+            if !reference.is_empty() {
+                return Err(KmsError::InvalidConfig(
+                    "GCP workload identity does not accept a bearer token.".into(),
+                ));
+            }
+            Ok(GcpAuth::WorkloadIdentity)
+        }
+        "service_account" => {
+            if reference.len() > 4096 {
+                return Err(KmsError::InvalidConfig(
+                    "GCP service account reference is invalid.".into(),
+                ));
+            }
+            let account: GcpServiceAccount = serde_json::from_str(reference).map_err(|_| {
+                KmsError::InvalidConfig("GCP service account reference is invalid.".into())
+            })?;
+            if !valid_gcp_service_account(&account.email) {
+                return Err(KmsError::InvalidConfig(
+                    "GCP service account reference is invalid.".into(),
+                ));
+            }
+            Ok(GcpAuth::ServiceAccount(account))
+        }
+        _ => Err(KmsError::InvalidConfig(
+            "GCP authentication mode is unsupported.".into(),
+        )),
+    }
+}
+
+fn valid_gcp_service_account(email: &str) -> bool {
+    email.len() <= 256
+        && email.ends_with(".gserviceaccount.com")
+        && email.split_once('@').is_some_and(|(name, domain)| {
+            !name.is_empty()
+                && !domain.is_empty()
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                && domain
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+        })
+}
+
+pub(crate) fn validate_gcp_auth_config(config: &Value) -> Result<(), KmsError> {
+    parse_gcp_auth(config).map(|_| ())
+}
+
+async fn gcp_metadata_token() -> Result<String, KmsError> {
+    let host = env::var("GCE_METADATA_HOST")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "metadata.google.internal".into());
+    if host
+        .chars()
+        .any(|character| matches!(character, '/' | '?' | '#' | '@') || character.is_whitespace())
+    {
+        return Err(KmsError::InvalidConfig(
+            "GCP metadata endpoint is invalid.".into(),
+        ));
+    }
+    let endpoint =
+        format!("http://{host}/computeMetadata/v1/instance/service-accounts/default/token");
+    let parsed = reqwest::Url::parse(&endpoint)
+        .map_err(|_| KmsError::InvalidConfig("GCP metadata endpoint is invalid.".into()))?;
+    if !matches!(
+        parsed.host_str(),
+        Some("metadata.google.internal" | "169.254.169.254" | "127.0.0.1" | "localhost" | "::1")
+    ) || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some_and(|port| {
+            port != 80 && !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+        })
+    {
+        return Err(KmsError::InvalidConfig(
+            "GCP metadata endpoint is invalid.".into(),
+        ));
+    }
+    let client = Client::builder()
+        .no_proxy()
+        .build()
+        .map_err(|_| KmsError::Provider("GCP metadata HTTP client is unavailable.".into()))?;
+    let response = send_json(
+        client
+            .get(endpoint)
+            .timeout(HTTP_TIMEOUT)
+            .header("Metadata-Flavor", "Google"),
+    )
+    .await
+    .map_err(|_| KmsError::Provider("GCP workload token acquisition failed.".into()))?;
+    gcp_token_value(response, "access_token")
+}
+
+async fn gcp_service_account_token_at(
+    endpoint: &str,
+    account: &GcpServiceAccount,
+    source_token: &str,
+) -> Result<String, KmsError> {
+    let email =
+        percent_encoding::utf8_percent_encode(&account.email, percent_encoding::NON_ALPHANUMERIC);
+    let response = send_json(
+        Client::new()
+            .post(format!(
+                "{}/v1/projects/-/serviceAccounts/{email}:generateAccessToken",
+                endpoint.trim_end_matches('/')
+            ))
+            .timeout(HTTP_TIMEOUT)
+            .bearer_auth(source_token)
+            .json(&json!({"scope": ["https://www.googleapis.com/auth/cloud-platform"]})),
+    )
+    .await
+    .map_err(|_| KmsError::Provider("GCP service account token acquisition failed.".into()))?;
+    gcp_token_value(response, "accessToken")
+}
+
+fn gcp_token_value(response: Value, field: &str) -> Result<String, KmsError> {
+    response
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            KmsError::InvalidResponse("GCP identity response omitted access token.".into())
+        })
+}
+
+async fn gcp_access_token(config: &Value) -> Result<String, KmsError> {
+    match parse_gcp_auth(config)? {
+        GcpAuth::WorkloadIdentity => gcp_metadata_token().await,
+        GcpAuth::ServiceAccount(account) => {
+            let source_token = gcp_metadata_token().await?;
+            gcp_service_account_token_at(
+                "https://iamcredentials.googleapis.com",
+                &account,
+                &source_token,
+            )
+            .await
+        }
+    }
+}
+
+async fn gcp_bearer(
+    builder: reqwest::RequestBuilder,
+    config: &Value,
+) -> Result<reqwest::RequestBuilder, KmsError> {
+    Ok(builder.bearer_auth(gcp_access_token(config).await?))
+}
+
 async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
     let endpoint = string(config, "endpoint").unwrap_or("https://cloudkms.googleapis.com");
     let key_reference = required(
@@ -1233,13 +1396,14 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
     let algorithm = string(config, "algorithm").unwrap_or("ES256");
     let body = gcp_sign_body(algorithm, payload)?;
     let response = send_json(
-        bearer(
+        gcp_bearer(
             Client::new().post(format!(
                 "{}/v1/{key_reference}:asymmetricSign",
                 endpoint.trim_end_matches('/')
             )),
             config,
         )
+        .await?
         .timeout(HTTP_TIMEOUT)
         .json(&body),
     )
@@ -1264,13 +1428,14 @@ async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
         "gcp-cloud-kms adapter requires 'key_reference' in service_config",
     )?;
     let response = send_json(
-        bearer(
+        gcp_bearer(
             Client::new().get(format!(
                 "{}/v1/{key_reference}/publicKey",
                 endpoint.trim_end_matches('/')
             )),
             config,
         )
+        .await?
         .timeout(HTTP_TIMEOUT),
     )
     .await?;
@@ -1301,15 +1466,20 @@ async fn verify_gcp(config: &Value) -> CapabilityResult {
         Some(value) => value,
         None => return CapabilityResult::fail("Key reference", "key_reference is required"),
     };
+    let builder = match gcp_bearer(
+        Client::new().get(format!(
+            "{}/v1/{key_reference}",
+            endpoint.trim_end_matches('/')
+        )),
+        config,
+    )
+    .await
+    {
+        Ok(builder) => builder,
+        Err(error) => return CapabilityResult::fail("Authentication", error.to_string()),
+    };
     verify_http_status(
-        bearer(
-            Client::new().get(format!(
-                "{}/v1/{key_reference}",
-                endpoint.trim_end_matches('/')
-            )),
-            config,
-        )
-        .timeout(PROBE_TIMEOUT),
+        builder.timeout(PROBE_TIMEOUT),
         "GCP Cloud KMS",
         |status| match status {
             StatusCode::OK => (
@@ -1670,13 +1840,6 @@ fn key_path<'a>(key_reference: &'a str, version: Option<&'a str>) -> String {
         .unwrap_or_else(|| key_reference.to_string())
 }
 
-fn bearer(builder: reqwest::RequestBuilder, config: &Value) -> reqwest::RequestBuilder {
-    match string(config, "auth_reference").filter(|value| !value.is_empty()) {
-        Some(token) => builder.bearer_auth(token),
-        None => builder,
-    }
-}
-
 fn transit_token(config: &Value) -> String {
     if string(config, "auth_mode") == Some("service_token") {
         return secret_value("BAO_TOKEN")
@@ -1886,6 +2049,45 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn gcp_impersonation_uses_short_lived_cloud_scope_without_a_key() {
+        async fn token(request: axum::extract::Request) -> axum::Json<Value> {
+            assert_eq!(request.method(), reqwest::Method::POST);
+            assert!(request.uri().path().contains("serviceAccounts/"));
+            assert!(request.uri().path().contains("%40"));
+            assert_eq!(
+                request
+                    .headers()
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer source-token")
+            );
+            let body = axum::body::to_bytes(request.into_body(), 4096)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                body["scope"],
+                json!(["https://www.googleapis.com/auth/cloud-platform"])
+            );
+            axum::Json(json!({"accessToken": "impersonated-token"}))
+        }
+        let app = axum::Router::new().fallback(axum::routing::post(token));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let account = GcpServiceAccount {
+            email: "signer@project.iam.gserviceaccount.com".into(),
+        };
+        assert_eq!(
+            gcp_service_account_token_at(&endpoint, &account, "source-token")
+                .await
+                .unwrap(),
+            "impersonated-token"
+        );
+        server.abort();
+    }
 
     #[test]
     fn provider_operations_reject_nested_private_material() {
