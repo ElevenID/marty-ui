@@ -269,35 +269,30 @@ def published_image_oracle_mounts(source: str) -> list[dict[str, str]]:
     marker = "pub(super) async fn provider_configuration_image_oracle()"
     assert source.count(marker) == 1, "Review published-image oracle owner"
     body = source.split(marker, 1)[1]
-    sources = dict(
-        re.findall(
-            r'let (\w+)_source = root\s*\.join\("([^"]+)"\)', body
-        )
-    )
+    sources = dict(re.findall(r'let (\w+)_source = root\s*\.join\("([^"]+)"\)', body))
     assert len(sources) == len(re.findall(r"\.join\s*\(", body)), (
         "Review published-image oracle source paths"
     )
     assert set(sources) == {"script", "scenarios"}
     mounts = re.findall(
-        r'let (\w+)_mount = format!\(\s*'
+        r"let (\w+)_mount = format!\(\s*"
         r'"type=bind,source=\{\},target=\{(PROVIDER_ORACLE_\w+)\},readonly",\s*'
-        r'(\w+)_source\s*\)',
+        r"(\w+)_source\s*\)",
         body,
     )
     assert len(mounts) == body.count("type=bind,source=") == 2, (
         "Review published-image oracle mount shape"
     )
     consts = dict(
-        re.findall(
-            r'const (PROVIDER_ORACLE_\w+): &str =\s*"([^"]+)";', source
-        )
+        re.findall(r'const (PROVIDER_ORACLE_\w+): &str =\s*"([^"]+)";', source)
     )
     create = body.split("let id = docker(&[", 1)[1].split("])?;", 1)[0]
     assert create.count('"--mount"') == 2, (
         "Review published-image oracle Docker mount count"
     )
     assert re.findall(r'"--mount",\s*&(\w+)_mount,', create) == [
-        "script", "scenarios"
+        "script",
+        "scenarios",
     ], "Review published-image oracle Docker mounts"
     result = []
     for name, constant, source_name in mounts:
@@ -321,6 +316,67 @@ def published_image_oracle_mounts(source: str) -> list[dict[str, str]]:
         assert target == f"/verification/{path}"
         result.append({"source": path, "target": target})
     return result
+
+
+def published_image_oracle_invocation(source: str) -> dict[str, str]:
+    """Witness the Python invocation against the separately inventoried mount."""
+    mounts = published_image_oracle_mounts(source)
+    commands = re.findall(
+        r'pub\(super\) const PROVIDER_ORACLE_COMMAND: &str = r#"(.*?)"#;',
+        source,
+        flags=re.DOTALL,
+    )
+    assert len(commands) == 1, "Review published-image oracle command owner"
+    command = commands[0]
+    call = re.fullmatch(
+        r"import json,runpy; print\(json.dumps\(runpy.run_path\('([^']+)'\)"
+        r"\['([^']+)'\]\(\), sort_keys=True\)\)",
+        command,
+    )
+    assert call is not None, "Review published-image oracle Python invocation"
+    script_target, callable_name = call.groups()
+    assert script_target == mounts[0]["target"], (
+        "Published-image oracle command must execute its mounted script"
+    )
+
+    checked = source.split("impl PublishedImageOracle {", 1)[1].split(
+        "    fn cleanup(", 1
+    )[0]
+    assert checked.count('serde_json::json!(["python"])') == 1, (
+        "Review published-image oracle checked entrypoint"
+    )
+    assert checked.count('serde_json::json!(["-c", PROVIDER_ORACLE_COMMAND])') == 1, (
+        "Review published-image oracle checked command"
+    )
+    body = source.split("pub(super) async fn provider_configuration_image_oracle()", 1)[
+        1
+    ]
+    create = body.split("let id = docker(&[", 1)[1].split("])?;", 1)[0]
+    assert re.findall(
+        r'"--entrypoint",\s*"([^"]+)",\s*image,\s*"([^"]+)",\s*(\w+),',
+        create,
+    ) == [("python", "-c", "PROVIDER_ORACLE_COMMAND")], (
+        "Review published-image oracle Docker invocation"
+    )
+    assert body.count("owner.checked(&inspect(&id)?, &id)?;") == 1, (
+        "Review published-image oracle post-create identity check"
+    )
+    assert body.count("owner.checked(&state, &id)?;") == 1, (
+        "Review published-image oracle poll identity check"
+    )
+    cleanup = source.split("impl PublishedImageOracle {", 1)[1].split(
+        "impl Drop for PublishedImageOracle", 1
+    )[0]
+    assert cleanup.count("self.checked(&inspect(id)?, id)?;") == 1, (
+        "Review published-image oracle cleanup identity check"
+    )
+    return {
+        "entrypoint": "python",
+        "mode": "-c",
+        "command": command,
+        "script_target": script_target,
+        "callable": callable_name,
+    }
 
 
 def test_historical_capture_input_graph_is_reviewed():
@@ -358,8 +414,9 @@ def test_historical_capture_input_graph_is_reviewed():
         "harness_path_syntax",
         "harness_extra_scenarios",
         "published_image_oracle_mounts",
+        "published_image_oracle_invocation",
     }
-    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v6"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v7"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
@@ -443,6 +500,9 @@ def test_historical_capture_input_graph_is_reviewed():
     assert inventory["published_image_oracle_mounts"] == published_image_oracle_mounts(
         harness_source
     ), "Published-image oracle mounts changed; review their inputs"
+    assert inventory["published_image_oracle_invocation"] == (
+        published_image_oracle_invocation(harness_source)
+    ), "Published-image oracle invocation changed; review its inputs"
 
 
 @pytest.mark.parametrize(
@@ -662,15 +722,66 @@ def test_published_image_oracle_mount_inventory_rejects_unreviewed_inputs(
     )
     with pytest.raises(AssertionError):
         published_image_oracle_mounts(changed)
-    changed = source.replace('        &scenarios_mount,\n', '', 1)
+    changed = source.replace("        &scenarios_mount,\n", "", 1)
     with pytest.raises(AssertionError, match="Docker mounts"):
         published_image_oracle_mounts(changed)
     original_is_symlink = Path.is_symlink
     monkeypatch.setattr(
         Path,
         "is_symlink",
-        lambda path: path.name == "run_canvas_provider_configuration_oracle.py"
-        or original_is_symlink(path),
+        lambda path: (
+            path.name == "run_canvas_provider_configuration_oracle.py"
+            or original_is_symlink(path)
+        ),
     )
     with pytest.raises(AssertionError, match="symlinked oracle input"):
         published_image_oracle_mounts(source)
+
+
+def test_published_image_oracle_invocation_rejects_unreviewed_changes():
+    source = HARNESS.read_text(encoding="utf-8")
+    invocation = published_image_oracle_invocation(source)
+    assert invocation["script_target"] == (
+        "/verification/scripts/run_canvas_provider_configuration_oracle.py"
+    )
+    assert invocation["callable"] == "run"
+
+    changed = source.replace(
+        "runpy.run_path('/verification/scripts/run_canvas_provider_configuration_oracle.py')",
+        "runpy.run_path('/verification/scripts/other_oracle.py')",
+        1,
+    )
+    with pytest.raises(AssertionError, match="mounted script"):
+        published_image_oracle_invocation(changed)
+    changed = source.replace("['run']()", "['other']()", 1)
+    assert published_image_oracle_invocation(changed) != invocation
+    changed = source.replace(
+        '        "-c",\n        PROVIDER_ORACLE_COMMAND,',
+        '        "-m",\n        PROVIDER_ORACLE_COMMAND,',
+        1,
+    )
+    with pytest.raises(AssertionError, match="Docker invocation"):
+        published_image_oracle_invocation(changed)
+    changed = source.replace(
+        "        PROVIDER_ORACLE_COMMAND,\n    ])?;",
+        "        OTHER_COMMAND,\n    ])?;",
+        1,
+    )
+    with pytest.raises(AssertionError, match="Docker invocation"):
+        published_image_oracle_invocation(changed)
+    changed = source.replace(
+        'serde_json::json!(["-c", PROVIDER_ORACLE_COMMAND])',
+        'serde_json::json!(["-m", PROVIDER_ORACLE_COMMAND])',
+        1,
+    )
+    with pytest.raises(AssertionError, match="checked command"):
+        published_image_oracle_invocation(changed)
+    changed = source.replace("    owner.checked(&inspect(&id)?, &id)?;\n", "", 1)
+    with pytest.raises(AssertionError, match="post-create identity check"):
+        published_image_oracle_invocation(changed)
+    changed = source.replace("        owner.checked(&state, &id)?;\n", "", 1)
+    with pytest.raises(AssertionError, match="poll identity check"):
+        published_image_oracle_invocation(changed)
+    changed = source.replace("            self.checked(&inspect(id)?, id)?;\n", "", 1)
+    with pytest.raises(AssertionError, match="cleanup identity check"):
+        published_image_oracle_invocation(changed)
