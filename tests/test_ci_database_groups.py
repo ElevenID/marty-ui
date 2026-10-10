@@ -380,6 +380,39 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
     assert private in (tmp_path / "rust-db.log").read_text()
 
 
+def test_target_relay_phase_reaches_artifact_without_changing_contract_result(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    script = (
+        "print('MARTY_CI_TARGET_PHASE_V1 composition "
+        '{"phase":"migration_seed","name":"published_probe","duration_ms":12,"status":"ok"}'
+        "', flush=True)"
+    )
+    assert GROUPS.run_groups(
+        {"published-canvas": [sys.executable, "-c", script]}, tmp_path
+    ) == {"published-canvas": 0}
+    progress = capsys.readouterr().out
+    assert "target=composition phase=migration_seed name=published_probe" in progress
+    evidence = [
+        json.loads(line)
+        for line in (tmp_path / "rust-build-evidence/db-contract-timing.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert evidence[0] == {
+        "schema": "marty.ci.db-phase/v1",
+        "group": "published-canvas",
+        "target": "composition",
+        "phase": "migration_seed",
+        "name": "published_probe",
+        "duration_ms": 12,
+        "status": "ok",
+    }
+    assert evidence[1]["phase"] == "contract"
+    assert evidence[1]["status"] == "ok"
+
+
 @pytest.mark.parametrize(
     "marker",
     [
@@ -392,6 +425,37 @@ def test_phase_telemetry_is_live_allowlisted_and_does_not_mask_failure(
 )
 def test_phase_parser_rejects_non_schema_or_oversized_values(marker: str) -> None:
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+
+
+def test_target_relay_tags_only_fixed_published_canvas_phase_owners() -> None:
+    marker = '{"phase":"migration_seed","name":"published_probe","duration_ms":12,"status":"ok"}'
+    for target in GROUPS.TARGET_NAMES:
+        assert GROUPS._safe_phase(
+            GROUPS.TARGET_TIMING_PREFIX + target + " " + marker,
+            "published-canvas",
+        ) == {
+            "schema": "marty.ci.db-phase/v1",
+            "group": "published-canvas",
+            "target": target,
+            "phase": "migration_seed",
+            "name": "published_probe",
+            "duration_ms": 12,
+            "status": "ok",
+        }
+    for bad in (
+        GROUPS.TARGET_TIMING_PREFIX + "unreviewed " + marker,
+        GROUPS.TARGET_TIMING_PREFIX + "worker" + marker,
+        GROUPS.TARGET_TIMING_PREFIX + "worker " + marker + "private-payload",
+        GROUPS.TARGET_TIMING_PREFIX
+        + 'worker {"phase":"canvas_target","name":"worker","duration_ms":12,"status":"ok"}',
+    ):
+        assert GROUPS._safe_phase(bad, "published-canvas") is None
+    assert (
+        GROUPS._safe_phase(
+            GROUPS.TARGET_TIMING_PREFIX + "worker " + marker, "rust-db"
+        )
+        is None
+    )
 
 
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:

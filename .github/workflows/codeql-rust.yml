@@ -58,7 +58,7 @@ jobs:
             const testOnlyCandidate = files.length > 0 && files.every(
               ({ filename, status, previous_filename }) =>
                 status === 'modified' && !previous_filename &&
-                /^rust\/crates\/(?:canvas-worker|flow|selfhost)-acceptance\/tests\/[a-z0-9_/-]+\.rs$/.test(filename)
+                /^rust\/crates\/(?:canvas-worker|flow|selfhost|service)-acceptance\/tests\/[a-z0-9_/-]+\.rs$/.test(filename)
             );
             core.info(analyze
               ? 'Rust-relevant changes require CodeQL analysis.'
@@ -124,6 +124,7 @@ jobs:
               '--emit-verified-worker-tests',
               '--emit-verified-flow-tests',
               '--emit-verified-selfhost-tests',
+              '--emit-verified-service-acceptance-tests',
             ]) {
               const result = spawnSync('python3', [
                 'tests/test_rust_test_only_docker_context.py', flag,
