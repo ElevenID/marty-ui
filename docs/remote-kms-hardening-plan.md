@@ -13112,3 +13112,17 @@ contained accepted raw-key authcrypt vectors and had no current consumer.
 provenance as historical and names the native test owners. Verify the affected
 Rust and Python contract suites, review for any lost behavior coverage, and
 keep this removal local until it can join a substantive CI batch.
+
+The published `7b8c81631` Release Contract Tests job failed 7 of 6,221
+tests: all failures were `tests/test_conformance_native.py` calls to
+`assert_beta_shared_setting_repairs`, a helper retired when the raw-key
+Compose baseline was removed. The held correction replaces those stale
+synthetic-before comparisons with the current `complete_common`,
+`assert_native_inputs`, and exact KMS-only snapshot checks. Self-review also
+found `test_conformance_native.py::model` still supplied a synthetic raw
+integration-secret master key to both services; it is removed. The native
+conformance validator now explicitly rejects raw master-key values or files
+for both service owners, with four negative cases. All 166 tests in that file,
+the full Compose binding script, Ruff, and diff checks pass locally. The
+published failure remains immutable; await remaining leaf jobs before the next
+grouped push.

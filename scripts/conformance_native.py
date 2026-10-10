@@ -149,6 +149,12 @@ def validate_model(
         env = POLICY["environment_mapping"](native["environment"])
         previous = POLICY["environment_mapping"](legacy["environment"])
         edge = POLICY["environment_mapping"](gateway["environment"])
+        for owner in (env, previous):
+            require(
+                "INTEGRATION_SECRET_MASTER_KEY" not in owner
+                and "INTEGRATION_SECRET_MASTER_KEY_FILE" not in owner,
+                "Local integration-secret master-key custody is forbidden",
+            )
         require(
             edge.get("ISSUANCE_NATIVE_SERVICE_URL") == NATIVE_URL,
             "Native gateway selection must be explicit",
