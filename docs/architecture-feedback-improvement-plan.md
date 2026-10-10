@@ -3153,6 +3153,16 @@ reached its scoped gate in 1m37s, and the full
 passed before merge. The edge is diagnostic metadata, not a narrower selector
 or a whole-repository speedup claim.
 
+A5 published-image input follow-up (2026-10-10): the historical script
+inventory covered mounts inside `start_probe_with_scope` but not the separate
+network-none provider-configuration image oracle. The bounded v6 inventory
+records that oracle's script and scenario bind mounts and fails on changed
+source/target, mount count, symlink, or non-regular Git mode. It does not
+establish complete host/image input closure or authorize another historical
+qualification skip. The three related Python test modules pass 26 cases
+locally; Ruff and diff checks pass. Independent re-review found no remaining
+P1–P3 issue.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

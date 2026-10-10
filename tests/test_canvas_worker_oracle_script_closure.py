@@ -8,6 +8,7 @@ import ast
 import json
 from pathlib import Path
 import re
+import subprocess
 
 import pytest
 
@@ -263,6 +264,65 @@ def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
     return groups
 
 
+def published_image_oracle_mounts(source: str) -> list[dict[str, str]]:
+    """Inventory the separate, network-none published-image oracle mounts."""
+    marker = "pub(super) async fn provider_configuration_image_oracle()"
+    assert source.count(marker) == 1, "Review published-image oracle owner"
+    body = source.split(marker, 1)[1]
+    sources = dict(
+        re.findall(
+            r'let (\w+)_source = root\s*\.join\("([^"]+)"\)', body
+        )
+    )
+    assert len(sources) == len(re.findall(r"\.join\s*\(", body)), (
+        "Review published-image oracle source paths"
+    )
+    assert set(sources) == {"script", "scenarios"}
+    mounts = re.findall(
+        r'let (\w+)_mount = format!\(\s*'
+        r'"type=bind,source=\{\},target=\{(PROVIDER_ORACLE_\w+)\},readonly",\s*'
+        r'(\w+)_source\s*\)',
+        body,
+    )
+    assert len(mounts) == body.count("type=bind,source=") == 2, (
+        "Review published-image oracle mount shape"
+    )
+    consts = dict(
+        re.findall(
+            r'const (PROVIDER_ORACLE_\w+): &str =\s*"([^"]+)";', source
+        )
+    )
+    create = body.split("let id = docker(&[", 1)[1].split("])?;", 1)[0]
+    assert create.count('"--mount"') == 2, (
+        "Review published-image oracle Docker mount count"
+    )
+    assert re.findall(r'"--mount",\s*&(\w+)_mount,', create) == [
+        "script", "scenarios"
+    ], "Review published-image oracle Docker mounts"
+    result = []
+    for name, constant, source_name in mounts:
+        assert name == source_name and constant in consts
+        path = sources[name]
+        target = consts[constant]
+        assert path.startswith(("scripts/", "contracts/"))
+        candidate = ROOT / path
+        assert ".." not in Path(path).parts and candidate.is_file()
+        assert not candidate.is_symlink(), f"Review symlinked oracle input: {path}"
+        staged = subprocess.run(
+            ["git", "ls-files", "--stage", "--", path],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        assert re.fullmatch(rf"100644 [0-9a-f]{{40}} 0\t{re.escape(path)}", staged), (
+            f"Review non-regular or untracked oracle input: {path}"
+        )
+        assert target == f"/verification/{path}"
+        result.append({"source": path, "target": target})
+    return result
+
+
 def test_historical_capture_input_graph_is_reviewed():
     producers = json.loads(PRODUCERS.read_text(encoding="utf-8"))
     runners = {
@@ -297,8 +357,9 @@ def test_historical_capture_input_graph_is_reviewed():
         "scenario_templates",
         "harness_path_syntax",
         "harness_extra_scenarios",
+        "published_image_oracle_mounts",
     }
-    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v5"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v6"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
@@ -348,8 +409,8 @@ def test_historical_capture_input_graph_is_reviewed():
     assert inventory["harness_path_syntax"] == {
         "scope": (
             "Static path literals and root.join syntax inside start_probe_with_scope "
-            "only; caller-supplied values and mounts built elsewhere are not "
-            "inventoried. This is not complete host-mount closure."
+            "only; caller-supplied values and other mounts remain outside this "
+            "bounded inventory. This is not complete host-mount closure."
         ),
         **harness,
     }, "Published-process harness path syntax changed; review the bounded inventory"
@@ -379,6 +440,9 @@ def test_historical_capture_input_graph_is_reviewed():
     assert inventory["harness_extra_scenarios"] == harness_extra_scenario_mounts(
         harness_source
     ), "Scenario-dependent harness mounts changed; review the inventory"
+    assert inventory["published_image_oracle_mounts"] == published_image_oracle_mounts(
+        harness_source
+    ), "Published-image oracle mounts changed; review their inputs"
 
 
 @pytest.mark.parametrize(
@@ -580,3 +644,33 @@ def test_dynamic_helper_mount_inventory_rejects_unreviewed_inputs():
     )
     with pytest.raises(AssertionError):
         harness_dynamic_helper_mounts(changed)
+
+
+def test_published_image_oracle_mount_inventory_rejects_unreviewed_inputs(
+    monkeypatch,
+):
+    source = HARNESS.read_text(encoding="utf-8")
+    mounts = published_image_oracle_mounts(source)
+    assert [item["source"] for item in mounts] == [
+        "scripts/run_canvas_provider_configuration_oracle.py",
+        "contracts/canvas-provider-configuration-scenarios.json",
+    ]
+    changed = source.replace(
+        '.join("scripts/run_canvas_provider_configuration_oracle.py")',
+        '.join("scripts/unreviewed_oracle.py")',
+        1,
+    )
+    with pytest.raises(AssertionError):
+        published_image_oracle_mounts(changed)
+    changed = source.replace('        &scenarios_mount,\n', '', 1)
+    with pytest.raises(AssertionError, match="Docker mounts"):
+        published_image_oracle_mounts(changed)
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path.name == "run_canvas_provider_configuration_oracle.py"
+        or original_is_symlink(path),
+    )
+    with pytest.raises(AssertionError, match="symlinked oracle input"):
+        published_image_oracle_mounts(source)
