@@ -3124,6 +3124,27 @@ back to analysis on any unknown, mixed, renamed, added or proof-drift input.
 Protected merge-group, scheduled and manual CodeQL analyses remain full.
 This is a candidate, not a measured saving, until hosted qualification.
 
+## October 10 follow-through
+
+The checkpoint above predates merges: [#1228](https://github.com/ElevenID/marty-ui/pull/1228),
+[#1229](https://github.com/ElevenID/marty-ui/pull/1229) and
+[#1230](https://github.com/ElevenID/marty-ui/pull/1230) are now on `main`.
+#1229 implements the narrowly proven PR-only CodeQL skip; merge groups and
+scheduled/manual runs keep analysis. #1230 reports slow release pytest cases
+without changing their execution. Neither is a controlled speedup measurement.
+
+[#1232](https://github.com/ElevenID/marty-ui/pull/1232) adds per-target
+Canvas phase attribution without changing coverage and passed exact-head PR
+CI. Its hosted sample found the published-canvas group at 629s, with worker
+and composition targets at 488s and 471s. Their phases overlap in parallel;
+the sums are not wall-clock savings. It merged through the protected queue
+after full merge-group qualification.
+
+Next A0/A3 candidate: source-witness the existing Applicant-to-Notification
+internal ingest edge (URL fallback, token, publisher call, provider route and
+guards, Compose wiring) while retaining full-workspace fallback. This is
+diagnostic metadata and a mutation-checked test, not a narrower selector.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

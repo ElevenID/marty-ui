@@ -537,11 +537,33 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-notification": [
         {
+            # Applicant's event publisher calls the authenticated internal
+            # Notification route before publishing to Event Stream. There is
+            # no Cargo dependency on the Notification service.
             "package": "marty-applicant",
             "evidence": "rust/services/applicant/src/main.rs",
             "binding": "NOTIFICATION_EVENT_INGEST_URL",
+            "default_binding_marker": 'env::var("NOTIFICATION_SERVICE_URL")',
+            "default_path_marker": 'format!("{}/internal/events", url.trim_end_matches(\'/\'))',
+            "token_marker": 'optional_secret("NOTIFICATION_APPLICANT_EVENT_TOKEN")?',
+            "startup_marker": "GrpcEventPublisher::new(",
+            "startup_url_marker": "notification_url,",
+            "startup_token_marker": "notification_token,",
             "runtime_evidence": "rust/services/applicant/src/providers.rs",
             "runtime_marker": ".post(url)",
+            "token_header_marker": '.header("x-service-token", token)',
+            "producer_header_marker": '.header("x-marty-event-producer", "applicant")',
+            "payload_marker": ".json(&notification_wire(event, &event.event_id))",
+            "provider_evidence": "rust/services/notification/src/http.rs",
+            "provider_identity_marker": 'const APPLICANT_PRODUCER: &str = "applicant";',
+            "provider_route_marker": '.route("/internal/events", post(ingest_event))',
+            "provider_producer_guard_marker": "!= Some(APPLICANT_PRODUCER)",
+            "provider_expected_token_marker": "let expected = match configured_token() {",
+            "provider_token_guard_marker": "provided.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() != 1",
+            "provider_call_marker": "state.service.ingest_event(request).await",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "NOTIFICATION_SERVICE_URL: http://notification:8007",
+            "deployment_token_marker": "NOTIFICATION_APPLICANT_EVENT_TOKEN: ${NOTIFICATION_APPLICANT_EVENT_TOKEN:-dev-notification-applicant-event-token}",
         },
         {
             "package": "marty-gateway",

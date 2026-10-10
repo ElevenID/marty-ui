@@ -444,6 +444,98 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     {dep["name"] for dep in packages[edge["package"]]["dependencies"]},
                 )
 
+    def test_applicant_notification_ingest_witness_is_scoped_and_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/notification/src/http.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-notification"
+            and edge["package"] == "marty-applicant"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertNotIn(
+            "marty-notification",
+            {dep["name"] for dep in packages["marty-applicant"]["dependencies"]},
+        )
+        main = (ROOT / edge["evidence"]).read_text(encoding="utf-8")
+        request = (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8")
+        provider = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
+        compose = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        scopes = {
+            "config": main.split("let notification_url =", 1)[1].split(
+                "let persistence =", 1
+            )[0],
+            "startup": main.split("let service =", 1)[1].split(
+                "let event_delivery_service =", 1
+            )[0],
+            "request": request.split("impl EventPublisher for GrpcEventPublisher", 1)[
+                1
+            ].split("let wire = event_stream_wire", 1)[0],
+            "provider_identity": provider.split("const PRODUCER_HEADER", 1)[1].split(
+                "#[derive(Clone)]", 1
+            )[0],
+            "route": provider.split("pub fn router", 1)[1].split(
+                "pub fn validate_internal_auth_config", 1
+            )[0],
+            "handler": provider.split("async fn ingest_event", 1)[1].split(
+                "async fn health", 1
+            )[0],
+            "applicant": compose.split("\n  applicant:\n", 1)[1].split(
+                "\n  notification:\n", 1
+            )[0],
+            "notification": compose.split("\n  notification:\n", 1)[1].split(
+                "\n  compliance-profile:\n", 1
+            )[0],
+        }
+        witnesses = {
+            "config": (
+                "binding",
+                "default_binding_marker",
+                "default_path_marker",
+                "token_marker",
+            ),
+            "startup": ("startup_marker", "startup_url_marker", "startup_token_marker"),
+            "request": (
+                "runtime_marker",
+                "token_header_marker",
+                "producer_header_marker",
+                "payload_marker",
+            ),
+            "provider_identity": ("provider_identity_marker",),
+            "route": ("provider_route_marker",),
+            "handler": (
+                "provider_producer_guard_marker",
+                "provider_expected_token_marker",
+                "provider_token_guard_marker",
+                "provider_call_marker",
+            ),
+            "applicant": ("deployment_marker", "deployment_token_marker"),
+            "notification": ("deployment_token_marker",),
+        }
+
+        def assert_witnesses(source_scopes: dict[str, str]) -> None:
+            for scope, markers in witnesses.items():
+                for marker in markers:
+                    self.assertIn(edge[marker], source_scopes[scope])
+
+        assert_witnesses(scopes)
+        for scope, markers in witnesses.items():
+            for marker in markers:
+                modified = dict(scopes)
+                modified[scope] = modified[scope].replace(
+                    edge[marker], "removed-source-witness", 1
+                )
+                with self.subTest(scope=scope, marker=marker):
+                    with self.assertRaises(AssertionError):
+                        assert_witnesses(modified)
+
     def test_notification_edge_diagnostic_does_not_replace_unknown_service_fallback(
         self,
     ) -> None:
