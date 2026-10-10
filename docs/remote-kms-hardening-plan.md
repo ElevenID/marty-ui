@@ -13538,3 +13538,18 @@ PR body now describes the native startup retirement and remaining gates.
 and [Rust CodeQL 38096048618](https://github.com/ElevenID/marty-ui/actions/runs/38096048618)
 started for this exact head; no completion is claimed yet. The previous
 `e61ae2569` success is evidence only for that prior head.
+
+Next K8 oracle-retirement seam: the existing
+`worker_rest_matches_frozen_published_process` already runs the native Rust
+worker through `scripts/test_canvas_worker_rest_https.py` against four frozen
+REST observations and a remote integration-secret test service. A separate
+`worker_rest_reference_matches_published_process` test still starts the
+legacy Python REST worker solely to regenerate that corpus, and full-main
+`canvas-rest-fresh-run.json` attests this Python comparison. The coordinated
+replacement should attach the full-main attestation to the successful native
+HTTPS replay, bind its compiled worker/test executable and reviewed inputs,
+retire the preparer's REST-oracle selector and capture CLI route, and update
+the sidecar, producer inventory and CI test-name guards together. Do not
+delete the frozen expected observations or weaken the four durable native
+checks. Other Python oracles still import the REST/startup helper modules,
+so their shared helper removal is a later coordinated step.
