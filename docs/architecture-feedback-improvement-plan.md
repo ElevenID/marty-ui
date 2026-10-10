@@ -270,6 +270,15 @@ Flow's runtime edge is active, not just a configuration string: `connect_provide
 
 2026-10-06 local A3 candidate (not merged): add observed non-Cargo Organization, Presentation Policy, and Issuance gRPC producer-to-Flow consumer edges alongside the already recorded Credential Template edge. Each new edge is backed by Flow's configured target, channel construction, concrete gRPC request, source call site, response-identity handling where present, and the provider's server implementation. Organization membership checks that returned identifiers are nonempty; it does not currently prove they equal the requested principal and tenant, so this inventory must not claim that stronger guard. These observations do not prove every Flow HTTP/proto/deployment input or cross-service compatibility obligation. The shadow planner still selects the full Rust workspace for any service change, and no CI gate, skip, release tier, or measured speedup changes in this candidate.
 
+2026-10-10 local A3 candidate: Credential Template's issuer-resolution
+request uses `SIGNING_KEYS_INTERNAL_URL` through Gateway's authenticated
+`/internal/signing-keys/resolve-issuer-did` compatibility route. Compose binds
+that URL to `gateway:8000`; Cargo has no Gateway-to-Credential-Template edge.
+The shadow planner now records the source-backed runtime consumer and a
+regression test checks the configuration, request, Gateway dispatch, and
+deployed endpoint. It remains fail-closed for all service changes. This is
+input-closure progress, not a narrower CI selection or measured speedup.
+
 Completion evidence: selector regression tests, representative dependency cases, shadow results, and reviewer agreement on every newly omitted group. No GitHub gate may treat an unexpectedly missing required group as success.
 
 Current-main embedded-Markdown check (2026-10-03): a same-line search of Rust `include_str!`/`include_bytes!` call sites surfaced `rust/services/issuance/src/canvas_sync_worker.rs` embedding `canvas_sync_processor_contract.md`, and the classifier already has a dedicated Rust case for that path. This addresses that known documentation false negative, not the broader non-Cargo runtime edge inventory; multiline macros, generated inputs, and indirect reads need a stronger input map before selective validation.
