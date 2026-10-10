@@ -3153,6 +3153,28 @@ reached its scoped gate in 1m37s, and the full
 passed before merge. The edge is diagnostic metadata, not a narrower selector
 or a whole-repository speedup claim.
 
+October 10 residual-owner audit on `main` `1b37f12bb`: the inspected
+`gateway/tests/redis_runtime.rs`, `revocation-profile/tests/runtime_contract.rs`,
+`event-stream/tests/grpc_contract.rs`, and
+`issuance/tests/canvas_sync_worker_behavior.rs` do not justify another A1
+cross-service move. The Gateway test exercises its own Redis providers; the
+Revocation Profile executable test uses a local Organization gRPC stub while
+checking its own PostgreSQL/Redis, HTTP, and gRPC contract; Event Stream runs
+its own process and protocol; and the Canvas worker test checks its own
+configuration, frozen vectors, and shutdown. The separately owned
+`service-acceptance`, `flow-acceptance`, `canvas-worker-acceptance`, and
+`canvas-acceptance` targets retain the actual cross-service obligations.
+This is a scoped source-ownership audit, not proof that every remaining test
+has been classified or that any gate can be skipped.
+
+An A3 candidate was rejected before editing: Applicant's
+`ES_GRPC_TARGET`/`EventStreamServiceClient::publish` path is already a direct
+Cargo dependency on `marty-event-stream`; the planner's Event Stream test
+asserts that exact dependency and the three additional non-Cargo consumers.
+Adding Applicant as a shadow runtime edge would duplicate established Cargo
+closure, not improve selection. Continue the non-Cargo audit with consumers
+that are absent from both Cargo and the source-witnessed graph.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
