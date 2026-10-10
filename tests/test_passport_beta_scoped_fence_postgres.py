@@ -700,6 +700,22 @@ def test_one_shot_migration_role_preserves_fence_at_rest(
 
 
 def test_direct_writer_probe_uses_valid_candidates_and_fence_errors(database: str):
+    # Match the deployed beta table, where these legacy columns have no defaults.
+    sql(database, """
+        ALTER TABLE flow_service.flow_definitions
+            ALTER COLUMN organization_id SET NOT NULL,
+            ALTER COLUMN name SET NOT NULL,
+            ALTER COLUMN status SET NOT NULL,
+            ALTER COLUMN steps SET NOT NULL,
+            ALTER COLUMN transitions SET NOT NULL,
+            ALTER COLUMN default_timeout_seconds SET NOT NULL,
+            ALTER COLUMN max_retries SET NOT NULL,
+            ALTER COLUMN enable_resume SET NOT NULL,
+            ALTER COLUMN version SET NOT NULL,
+            ALTER COLUMN deployment_profile_ids SET NOT NULL,
+            ALTER COLUMN approval_strategy SET NOT NULL,
+            ALTER COLUMN hooks SET NOT NULL;
+    """)
     container_id = docker("inspect", database, "--format", "{{.Id}}").stdout.strip()
     system_id = sql(database, "SELECT system_identifier FROM pg_control_system()").strip()
     database_oid = sql(database, "SELECT oid FROM pg_database WHERE datname='marty'").strip()
