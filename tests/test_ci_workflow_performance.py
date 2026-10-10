@@ -17,6 +17,7 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_TEST_COMMAND = "python -m pytest tests -v --tb=short --durations=20"
 
 
 def test_selfhost_operator_guide_is_a_packaged_input() -> None:
@@ -44,7 +45,7 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
     assert {"pytest", "sqlalchemy"} <= set(command.split())
     assert (
         steps["Run repository release checks"]["run"]
-        == "python -m pytest tests -v --tb=short"
+        == RELEASE_TEST_COMMAND
     )
 
 
@@ -1596,7 +1597,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     ), "The release lane must still execute the inventory tests"
     inventory_consumers = {
@@ -1816,7 +1817,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     paths = (
@@ -1914,7 +1915,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     )
     assert CI_PATH.read_text(encoding="utf-8").count(helper) == 1
@@ -1977,7 +1978,7 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     ), "The release lane must still execute the runner policy tests"
 
@@ -2050,7 +2051,7 @@ def test_release_contract_test_sources_keep_their_release_owner(
     _, workflow = _workflow(CI_PATH)
     release = workflow["jobs"]["test-release-contracts"]
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in release["steps"]
     ), "The release lane must execute every narrowed test module"
 
@@ -2108,7 +2109,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     assert any(
@@ -2296,7 +2297,7 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     candidates = (
@@ -2366,7 +2367,7 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
     assert "needs.changes.outputs.release == 'true'" in release["if"]
     release_steps = {step.get("name"): step for step in release["steps"]}
     assert release_steps["Run repository release checks"]["run"] == (
-        "python -m pytest tests -v --tb=short"
+        RELEASE_TEST_COMMAND
     )
     shadow = release_steps["Report affected Rust packages in shadow mode"]
     assert shadow["if"] == "github.event_name == 'pull_request'"
@@ -2538,7 +2539,7 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         assert steps[name]["if"] == full_only
         assert not steps[name].get("continue-on-error", False)
     assert steps["Run repository release checks"]["run"] == (
-        "python -m pytest tests -v --tb=short"
+        RELEASE_TEST_COMMAND
     )
 
 
@@ -2617,7 +2618,7 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     )
     assert steps["Run repository release checks"]["if"] == complete_only
     assert steps["Run repository release checks"]["run"] == (
-        "python -m pytest tests -v --tb=short"
+        RELEASE_TEST_COMMAND
     )
     for name in (
         "Replay Canvas mirror oracle in exact Credentials release image",
@@ -2720,7 +2721,7 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "--tb=short",
     ]
     assert steps["Run repository release checks"]["run"] == (
-        "python -m pytest tests -v --tb=short"
+        RELEASE_TEST_COMMAND
     )
     full_only = (
         "needs.changes.outputs.planner_only != 'true' && "
@@ -2765,7 +2766,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
 ) -> None:
     _, workflow = _workflow(CI_PATH)
     assert any(
-        step.get("run") == "python -m pytest tests -v --tb=short"
+        step.get("run") == RELEASE_TEST_COMMAND
         for step in workflow["jobs"]["test-release-contracts"]["steps"]
     )
     paths = (
