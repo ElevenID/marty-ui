@@ -12815,3 +12815,14 @@ this repository's `packages` directory to `PYTHONPATH` resolves the in-tree
 `tests/test_canvas_worker_deployment.py` pass on the grouped head. This
 supersedes the earlier local collection limitation; hosted release-contract
 qualification is still required.
+
+On grouped head `577cd5320`, the [new exact-head CI run](https://github.com/ElevenID/marty-ui/actions/runs/38074488225)
+has passed Rust Lint and Packaging, Rust Feature Regression Probe, Rust
+Supply Chain, all four UI test shards, browser lifecycle, security scanning,
+Python lint, fast feedback, public protocol and service tests. Its Rust
+contract/Canvas/image, release-contract and OpenBao plugin/recovery jobs are
+still active at this checkpoint. [Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38074488223)
+is likewise active. A local full Python `tests` run reached the early suite
+without failures but slowed substantially; it was stopped rather than treated
+as evidence of full-suite success. The focused 236 plus 103 affected Python
+tests remain the local passing evidence.
