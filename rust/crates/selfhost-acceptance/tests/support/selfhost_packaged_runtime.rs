@@ -587,12 +587,21 @@ fn write_synthetic_secrets(
         ),
         ("grpc_service_token", SERVICE_TOKEN),
         ("workload_identity_ca_cert", kms_ca_pem),
+        (
+            "signing_keys_issuer_sign_key",
+            "synthetic-selfhost-issuer-sign-key-00000001",
+        ),
     ];
-    if case == SecretCase::Empty {
-        values[5].1 = "";
-    }
-    if case == SecretCase::Placeholder {
-        values[5].1 = "change-me-synthetic-placeholder-service-token";
+    if matches!(case, SecretCase::Empty | SecretCase::Placeholder) {
+        let service_token = values
+            .iter_mut()
+            .find(|(name, _)| *name == "grpc_service_token")
+            .expect("synthetic service token fixture");
+        service_token.1 = if case == SecretCase::Empty {
+            ""
+        } else {
+            "change-me-synthetic-placeholder-service-token"
+        };
     }
     for (name, value) in &values {
         let path = directory.join(name);

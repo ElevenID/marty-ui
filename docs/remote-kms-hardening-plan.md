@@ -11428,3 +11428,17 @@ so direct repinning alone resolves two Core revisions. Its attempted local
 repin was reverted cleanly. Qualify and publish Verifier's new Core pin first,
 then pin Authenticator to that Verifier head plus the same Core head in one
 consumer update. No dependent repin has been pushed yet.
+
+UI run `38022411673` at published head `c644f6ef4` completed with every job
+green except Canvas and its CI Gate. Canvas passed image-free preflights,
+Kubernetes/Compose configuration, packaged image build and most database
+contracts, then its self-host bundle fixture exposed one missing file:
+`signing_keys_issuer_sign_key`. The isolated public-image loader also stopped
+at `correct:create` with an incomplete native-create operation, consistent
+with that missing required mount; the child deliberately hides its sensitive
+Docker output, so this causal link needs local packaged proof. The synthetic
+secret writer now supplies a distinct, 32-plus-character issuer-sign API
+credential and locates the negative-case service-token fixture by name. The
+focused mount-roster test passes locally. The source image builds locally;
+the isolated Linux packaged run remains to be verified by the next exact-head
+Canvas gate after the grouped UI repin/correction push.
