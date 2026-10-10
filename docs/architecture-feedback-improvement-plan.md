@@ -67,6 +67,10 @@ lane and its first exact-source pilot. UI #1218 merged exact-digest Docker Hub
 mirror/cache fallback with all required PR and protected checks; it addresses
 registry-throttling reliability, not a measured CI speedup. The protected
 one-reviewer rule was restored after the merges.
+UI #1220, #1222, and #1223 then merged provider-app reuse and JSON-depth
+timing, a Gateway-to-Credential-Template shadow edge, and the status-provider
+native-seed fixture. All passed exact-head and protected merge-group checks;
+main's one-reviewer requirement was restored and verified after #1223.
 
 ## Objective and scope
 
@@ -3043,7 +3047,23 @@ work, not a wall-clock saving: the Canvas job was 30m48s versus 29m05s and
 composition target 469s versus 350s. Unchanged scenario durations were also
 1.36x higher on the new run, so runner variation prevents causal attribution.
 The PR was rebased after #1220 and #1222 merged; its rewritten head still
-requires fresh exact-head validation and protected queue qualification.
+required fresh exact-head validation and protected queue qualification.
+The rebased [PR run 38032487415](https://github.com/ElevenID/marty-ui/actions/runs/38032487415)
+passed all required jobs, including Canvas (31m14s), Release Contract Tests,
+Rust analysis, security, and the aggregate gate. The protected [merge-group
+run 38034389609](https://github.com/ElevenID/marty-ui/actions/runs/38034389609)
+also passed; #1223 merged as `bd2594845` on 2026-10-10. No comparable
+whole-pipeline speedup is established by these different hosted runs.
+
+Self-host diagnostic preparation (2026-10-10, local draft): a separate
+label-triggered PR rehearsal is being built for the existing ten-case
+`marty-selfhost-acceptance` target. The scoped artifact verifier requires its
+exact Bookworm-compiled test harness; the runner reuses the full lane's ten-ID
+roster, pinned PostgreSQL image, immutable public image ID, packager,
+standalone Compose renderer, owned database cleanup, and complete test-result
+check. The ordinary PR matrix and every protected merge-group lane remain
+unchanged. This is not yet hosted evidence or a selective skip; measure the
+additional lane before considering an exact self-host test-source selector.
 
 ## Design references
 

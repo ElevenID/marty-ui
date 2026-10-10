@@ -1362,6 +1362,9 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "github.event_name == 'pull_request'" in matrix
     assert "ci-worker-diagnostic" in matrix
     assert '\'["canvas","contracts","worker"]\'' in matrix
+    assert "ci-selfhost-diagnostic" in matrix
+    assert '\'["canvas","contracts","selfhost"]\'' in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
     canvas = {
@@ -1371,9 +1374,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
         "Prepare required rendered base executable acceptance",
-        "Expose public image compiler cache credentials",
-        "Build public selfhost image",
-        "Prepare public selfhost image loader acceptance",
         "Verify default passport test-mode boundary",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
@@ -1395,6 +1395,13 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
         assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+    ):
+        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+        assert not steps[name].get("continue-on-error", False)
     assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
         "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     )
@@ -1403,7 +1410,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert not steps[name].get("continue-on-error", False)
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
-    ] == "matrix.lane == 'contracts' || matrix.lane == 'flow'"
+    ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
     renderer = steps["Prepare pinned standalone Compose renderer for Rust contracts"]
     assert "bash scripts/ci/install-compose-renderer.sh" in renderer["run"]
     assert "MARTY_BASE_COMPOSE_BINARY=%s" in renderer["run"]

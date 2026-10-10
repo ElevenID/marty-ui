@@ -503,6 +503,15 @@ def main(mode: str = "database") -> int:
                 published_mode,
             ]
         }
+    elif mode == "selfhost-canvas":
+        # Additive diagnostic owner; the full Canvas group remains required.
+        commands = {
+            "published-selfhost": [
+                "bash",
+                str(scripts / "run-published-canvas-contracts.sh"),
+                "selfhost-only",
+            ]
+        }
     elif mode in ("preflights", "worker-preflights"):
         evidence = _preflight_evidence()
         if evidence is not None:
@@ -555,9 +564,10 @@ if __name__ == "__main__":
         ["rust-db"],
         ["worker-preflights"],
         ["worker-canvas"],
+        ["selfhost-canvas"],
     ):
         raise SystemExit(
             "Usage: run-db-contract-groups.py "
-            "[preflights|canvas|rust-db|worker-preflights|worker-canvas]"
+            "[preflights|canvas|rust-db|worker-preflights|worker-canvas|selfhost-canvas]"
         )
     raise SystemExit(main(sys.argv[1] if sys.argv[1:] else "database"))
