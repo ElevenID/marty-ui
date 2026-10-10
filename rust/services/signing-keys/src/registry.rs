@@ -6,6 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
 use redis::{aio::ConnectionManager, AsyncCommands};
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,8 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::domain::{key_purposes, service_capabilities, service_type, service_types};
+use crate::flow_envelope::OpenBaoEnvelopeProvider;
+use crate::integration_secret_envelope::{self, DecryptRequest, EncryptRequest};
 use crate::kms;
 use crate::profiles::ProfileStore;
 
@@ -253,6 +256,145 @@ pub struct RegistryStore {
     connection: ConnectionManager,
     managed_openbao_endpoint: Option<String>,
     managed_inventory: ManagedInventoryCache,
+    auth_envelopes: Option<OpenBaoEnvelopeProvider>,
+}
+
+const AUTH_ENVELOPE_FIELD: &str = "auth_reference_envelope";
+const AUTH_ENVELOPE_PURPOSE: &str = "signing-service-auth";
+pub(crate) const AUTH_CONNECTION_FIELDS: [&str; 8] = [
+    "provider",
+    "service_type",
+    "protocol",
+    "endpoint",
+    "region",
+    "auth_mode",
+    "mount",
+    "namespace",
+];
+
+fn auth_secret_id(service: &Value) -> Result<String, RegistryError> {
+    let id = service
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if id.trim().is_empty() {
+        return Err(RegistryError::Corrupt("signing service has no ID".into()));
+    }
+    let binding = std::iter::once(service.get("id").cloned().unwrap_or(Value::Null))
+        .chain(
+            AUTH_CONNECTION_FIELDS
+                .iter()
+                .map(|field| service.get(*field).cloned().unwrap_or(Value::Null)),
+        )
+        .collect::<Vec<_>>();
+    let digest = Sha256::digest(
+        serde_json::to_vec(&binding)
+            .map_err(|_| RegistryError::Corrupt("signing credential binding is invalid".into()))?,
+    );
+    Ok(format!("signing-service-auth:{digest:x}"))
+}
+
+async fn seal_auth_references(
+    registry: &Value,
+    organization_id: &str,
+    provider: Option<&OpenBaoEnvelopeProvider>,
+) -> Result<Value, RegistryError> {
+    let mut sealed = registry.clone();
+    let Some(services) = sealed.get_mut("services").and_then(Value::as_array_mut) else {
+        return Ok(sealed);
+    };
+    for service in services {
+        let reference = service
+            .get("auth_reference")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if reference.is_empty() {
+            continue;
+        }
+        let provider = provider.ok_or_else(|| {
+            RegistryError::Storage("KMS credential envelope is unavailable".into())
+        })?;
+        let secret_id = auth_secret_id(service)?;
+        let service_type = service
+            .get("service_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let envelope = integration_secret_envelope::encrypt(
+            provider,
+            EncryptRequest {
+                organization_id: organization_id.into(),
+                secret_id,
+                provider: service_type,
+                purpose: AUTH_ENVELOPE_PURPOSE.into(),
+                plaintext_b64: STANDARD.encode(reference),
+            },
+        )
+        .await
+        .map_err(|_| RegistryError::Storage("KMS credential encryption failed".into()))?;
+        service["auth_reference"] = Value::String(String::new());
+        service[AUTH_ENVELOPE_FIELD] = envelope;
+    }
+    Ok(sealed)
+}
+
+async fn unseal_auth_references(
+    registry: &Value,
+    organization_id: &str,
+    provider: Option<&OpenBaoEnvelopeProvider>,
+) -> Result<Value, RegistryError> {
+    let mut unsealed = registry.clone();
+    let Some(services) = unsealed.get_mut("services").and_then(Value::as_array_mut) else {
+        return Ok(unsealed);
+    };
+    for service in services {
+        if service
+            .get("auth_reference")
+            .and_then(Value::as_str)
+            .is_some_and(|reference| !reference.is_empty())
+        {
+            return Err(RegistryError::Corrupt(
+                "plaintext signing credential is unsupported".into(),
+            ));
+        }
+        let Some(envelope) = service.get(AUTH_ENVELOPE_FIELD).cloned() else {
+            continue;
+        };
+        let provider = provider.ok_or_else(|| {
+            RegistryError::Storage("KMS credential envelope is unavailable".into())
+        })?;
+        let response = integration_secret_envelope::decrypt(
+            provider,
+            DecryptRequest {
+                organization_id: organization_id.into(),
+                secret_id: auth_secret_id(service)?,
+                provider: service
+                    .get("service_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .into(),
+                purpose: AUTH_ENVELOPE_PURPOSE.into(),
+                envelope,
+            },
+        )
+        .await
+        .map_err(|_| RegistryError::Storage("KMS credential decryption failed".into()))?;
+        let encoded = response
+            .get("plaintext_b64")
+            .and_then(Value::as_str)
+            .ok_or_else(|| RegistryError::Corrupt("signing credential is malformed".into()))?;
+        let bytes = STANDARD
+            .decode(encoded)
+            .map_err(|_| RegistryError::Corrupt("signing credential is malformed".into()))?;
+        let reference = String::from_utf8(bytes)
+            .map_err(|_| RegistryError::Corrupt("signing credential is malformed".into()))?;
+        service["auth_reference"] = Value::String(reference);
+        service
+            .as_object_mut()
+            .expect("service object")
+            .remove(AUTH_ENVELOPE_FIELD);
+    }
+    Ok(unsealed)
 }
 
 impl RegistryStore {
@@ -459,12 +601,19 @@ impl RegistryStore {
             connection,
             managed_openbao_endpoint: None,
             managed_inventory: Arc::new(RwLock::new(BTreeMap::new())),
+            auth_envelopes: None,
         })
     }
 
     #[must_use]
     pub fn with_managed_openbao(mut self, endpoint: Option<String>) -> Self {
         self.managed_openbao_endpoint = endpoint;
+        self
+    }
+
+    #[must_use]
+    pub fn with_auth_envelopes(mut self, provider: Option<OpenBaoEnvelopeProvider>) -> Self {
+        self.auth_envelopes = provider;
         self
     }
 
@@ -661,7 +810,10 @@ impl RegistryStore {
             Some(payload) => {
                 let parsed = serde_json::from_str(&payload)
                     .map_err(|error| RegistryError::Corrupt(error.to_string()))?;
-                normalize_stored_registry(&parsed)?
+                let unsealed =
+                    unseal_auth_references(&parsed, organization_id, self.auth_envelopes.as_ref())
+                        .await?;
+                normalize_stored_registry(&unsealed)?
             }
             None => empty_registry(),
         };
@@ -709,7 +861,10 @@ impl RegistryStore {
             return Err(RegistryError::Conflict);
         }
         let normalized = normalize_requested_registry(registry)?;
-        let payload = serde_json::to_string(&normalized)
+        let sealed =
+            seal_auth_references(&normalized, organization_id, self.auth_envelopes.as_ref())
+                .await?;
+        let payload = serde_json::to_string(&sealed)
             .map_err(|error| RegistryError::Invalid(error.to_string()))?;
         let mut connection = self.connection.clone();
         let saved: i32 = redis::Script::new(
@@ -1926,12 +2081,83 @@ mod tests {
     use axum::{
         extract::{Path, State},
         http::StatusCode,
-        routing::get,
+        routing::{get, post},
         Json, Router,
     };
     use std::sync::{Arc, Mutex};
 
     static BAO_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    #[tokio::test]
+    async fn signing_credentials_are_sealed_and_bound_to_tenant_and_service() {
+        #[derive(Clone, Default)]
+        struct Fixture(Arc<Mutex<String>>);
+        async fn key_metadata() -> Json<Value> {
+            Json(json!({"data": {
+                "type": "aes256-gcm96", "exportable": false,
+                "allow_plaintext_backup": false
+            }}))
+        }
+        async fn encrypt(State(fixture): State<Fixture>, Json(body): Json<Value>) -> Json<Value> {
+            *fixture.0.lock().unwrap() = body["plaintext"].as_str().unwrap().into();
+            Json(json!({"data": {"ciphertext": "vault:v1:fixture"}}))
+        }
+        async fn decrypt(State(fixture): State<Fixture>) -> Json<Value> {
+            Json(json!({"data": {"plaintext": fixture.0.lock().unwrap().clone()}}))
+        }
+        let app = Router::new()
+            .route(
+                "/v1/transit/keys/integration-secret-envelope-marty-aes256",
+                get(key_metadata),
+            )
+            .route(
+                "/v1/transit/encrypt/integration-secret-envelope-marty-aes256",
+                post(encrypt),
+            )
+            .route(
+                "/v1/transit/decrypt/integration-secret-envelope-marty-aes256",
+                post(decrypt),
+            )
+            .with_state(Fixture::default());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider = OpenBaoEnvelopeProvider::new(endpoint, "fixture-token").unwrap();
+        let plain = json!({"services": [{
+            "id": "service-1", "service_type": "openbao-transit",
+            "provider": "openbao", "protocol": "vault-transit",
+            "endpoint": "https://bao.example", "region": "",
+            "auth_mode": "token", "mount": "transit", "namespace": "",
+            "auth_reference": "tenant-token"
+        }]});
+        let sealed = seal_auth_references(&plain, "org-1", Some(&provider))
+            .await
+            .unwrap();
+        assert!(!sealed.to_string().contains("tenant-token"));
+        assert_eq!(sealed["services"][0]["auth_reference"], "");
+        assert_eq!(
+            unseal_auth_references(&sealed, "org-1", Some(&provider))
+                .await
+                .unwrap(),
+            plain
+        );
+        assert!(unseal_auth_references(&sealed, "org-2", Some(&provider))
+            .await
+            .is_err());
+        let mut rebound = sealed.clone();
+        rebound["services"][0]["endpoint"] = json!("https://other.example");
+        assert!(unseal_auth_references(&rebound, "org-1", Some(&provider))
+            .await
+            .is_err());
+        assert!(unseal_auth_references(&plain, "org-1", Some(&provider))
+            .await
+            .is_err());
+        assert!(unseal_auth_references(&sealed, "org-1", None)
+            .await
+            .is_err());
+        assert!(seal_auth_references(&plain, "org-1", None).await.is_err());
+        server.abort();
+    }
 
     #[test]
     fn requested_registry_rejects_private_material_before_normalization() {

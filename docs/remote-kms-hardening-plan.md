@@ -11675,3 +11675,24 @@ force role credentials. Sources: [AWS credential providers](https://docs.aws.ama
 [GCP workload identity federation](https://docs.cloud.google.com/iam/docs/workload-identity-federation),
 [GCP ADC credential risks](https://docs.cloud.google.com/docs/authentication/application-default-credentials),
 [Azure Key Vault authentication](https://learn.microsoft.com/en-us/azure/key-vault/general/developers-guide).
+
+2026-10-10 K6 Rust custody correction, local UI batch: `RegistryStore` now
+encrypts nonempty signing-service `auth_reference` values through the existing
+non-exportable OpenBao integration-secret Transit envelope before Redis write,
+with a purpose-specific envelope bound to the organization and a digest of
+service ID plus provider, endpoint, region, auth mode, mount, and namespace.
+On load it rejects plaintext values, requires the KMS envelope, decrypts only
+under the matching binding, and then normalizes the in-memory registry. The
+public configuration still masks the credential; the unchanged-connection
+preservation list now shares the same Rust binding constant to avoid drift.
+A focused fake-provider test verified no plaintext in the persisted JSON,
+round-trip, cross-tenant and endpoint rebinding rejection, and unavailable-KMS
+failure. The full Signing Keys library suite passed 145 tests with eight
+expected opt-in ignores. After the shared-constant refactor, the focused
+credential-envelope and redacted-config round-trip tests, all-target
+warnings-denied Clippy, and Rustfmt check passed.
+This removes plaintext registry persistence for new writes but is not K6
+completion: the UI still accepts literal tokens for some modes, cloud-native
+identity resolution is absent, and real Redis/OpenBao/cloud-provider acceptance
+has not yet run. No legacy Redis credential migration is planned for the
+unreleased cutover; existing plaintext rows fail closed and must be cleared.

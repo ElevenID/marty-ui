@@ -65,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (provider, None) => provider,
         (None, Some(_)) => unreachable!("configuration requires BAO_ADDR for HAIP token"),
     };
+    let registry_store = registry_store.with_auth_envelopes(flow_envelopes.clone());
     if let Some(holder_proofs) = holder_proofs {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));

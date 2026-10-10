@@ -6279,16 +6279,6 @@ fn public_service_config(service: &Value) -> Value {
 // unchanged. An explicit null clears it; changing the endpoint or auth mode
 // must never silently forward the old credential to another destination.
 fn preserve_unchanged_auth_references(request: &mut Value, existing: &Value) {
-    const BINDING: [&str; 8] = [
-        "provider",
-        "service_type",
-        "protocol",
-        "endpoint",
-        "region",
-        "auth_mode",
-        "mount",
-        "namespace",
-    ];
     let Some(requested) = request.get_mut("services").and_then(Value::as_array_mut) else {
         return;
     };
@@ -6313,7 +6303,7 @@ fn preserve_unchanged_auth_references(request: &mut Value, existing: &Value) {
         }) {
             continue;
         }
-        if BINDING
+        if registry::AUTH_CONNECTION_FIELDS
             .iter()
             .any(|field| fields.get(*field) != previous.get(*field))
         {
