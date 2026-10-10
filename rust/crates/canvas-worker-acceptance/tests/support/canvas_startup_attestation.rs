@@ -11,7 +11,8 @@ use std::{
 };
 
 const ARTIFACT: &str = "canvas-startup-fresh-run.json";
-const INPUTS: [&str; 2] = [
+const INPUTS: [&str; 3] = [
+    "contracts/canvas-worker-startup-expected.json",
     "contracts/canvas-worker-startup-scenarios.json",
     "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs",
 ];
@@ -411,7 +412,16 @@ mod tests {
         for name in INPUTS {
             let target = root.path().join(name);
             fs::create_dir_all(target.parent().unwrap()).unwrap();
-            if name.ends_with(".json") {
+            if name.ends_with("-expected.json") {
+                fs::write(
+                    &target,
+                    serde_json::to_vec(
+                        &json!({"schema":"marty.canvas-worker-startup-expected/v1"}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            } else if name.ends_with(".json") {
                 fs::write(
                     &target,
                     serde_json::to_vec(&json!({"cases": &cases})).unwrap(),

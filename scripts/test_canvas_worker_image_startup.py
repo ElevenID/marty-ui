@@ -1,4 +1,4 @@
-"""Packaged native startup against the frozen published schema and observations."""
+"""Packaged native startup against the published schema and reviewed behavior."""
 
 import json
 import os
@@ -113,13 +113,17 @@ def configuration(case, mode):
     return worker_id, environment
 
 
-def assert_observation(observed, expected):
-    assert expected["exit_code_after_interrupt"] == -2
-    # Same explicit native SIGINT mapping as the existing actual-process gate.
-    assert observed == {**expected, "exit_code_after_interrupt": 130}
+def assert_observation(observed, case_name):
+    expected = contract("canvas-worker-startup-expected.json")
+    assert expected["schema"] == "marty.canvas-worker-startup-expected/v1"
+    assert expected["alive_after_idle"] is True
+    assert expected["job_count"] == 0
+    assert expected["exit_code_after_interrupt"] == 130
+    expected = {key: value for key, value in expected.items() if key != "schema"}
+    assert observed == {"name": case_name, **expected}
 
 
-def exercise(image, postgres, directory, case, mode, expected):
+def exercise(image, postgres, directory, case, mode):
     worker_id, environment = configuration(case, mode)
     with owned_container(
         "--pull=never",
@@ -161,7 +165,7 @@ def exercise(image, postgres, directory, case, mode, expected):
                 )
             ),
         }
-        assert_observation(observed, expected)
+        assert_observation(observed, case["name"])
         logs = docker("logs", worker)
         assert all(value not in logs for value in SECRETS.values()), (
             "Synthetic secret in startup logs"
@@ -173,10 +177,8 @@ def run(image):
     spec = contract("canvas-worker-image-startup-scenarios.json")
     pins = contract(spec["schema_reference"])
     cases = contract(spec["startup_scenarios"])["cases"]
-    expected = {
-        case["name"]: case for case in contract(spec["startup_reference"])["cases"]
-    }
-    assert set(expected) == {case["name"] for case in cases}
+    assert len(cases) == 8
+    assert len({case["name"] for case in cases}) == len(cases)
     for pin in (pins["observed_image"], pins["observed_postgres_image"]):
         assert re.fullmatch(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}", pin)
     docker("pull", pins["observed_image"], timeout=120)
@@ -350,9 +352,7 @@ def run(image):
                 )
                 for mode in spec["modes"]:
                     for case in cases:
-                        exercise(
-                            image, postgres, directory, case, mode, expected[case["name"]]
-                        )
+                        exercise(image, postgres, directory, case, mode)
 
 
 if __name__ == "__main__":

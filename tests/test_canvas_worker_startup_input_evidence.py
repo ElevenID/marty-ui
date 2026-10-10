@@ -11,6 +11,7 @@ from scripts.ci.canvas_oracle_current_inputs import normalized_sha256
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "contracts/canvas-worker-startup-current-inputs.json"
 INPUTS = {
+    "contracts/canvas-worker-startup-expected.json",
     "contracts/canvas-worker-startup-scenarios.json",
     "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs",
 }
@@ -32,6 +33,7 @@ def test_current_startup_capture_inputs_match_explicit_hashes() -> None:
 @pytest.mark.parametrize(
     "name",
     [
+        "contracts/canvas-worker-startup-expected.json",
         "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs",
         "contracts/canvas-worker-startup-scenarios.json",
     ],

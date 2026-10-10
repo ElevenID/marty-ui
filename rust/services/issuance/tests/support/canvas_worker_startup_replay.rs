@@ -12,6 +12,17 @@ pub async fn replay(pool: &PgPool, database_url: &str) {
     .unwrap();
     let cases = scenarios["cases"].as_array().unwrap();
     assert_eq!(cases.len(), 8);
+    let expected: Value = serde_json::from_str(include_str!(
+        "../../../../../contracts/canvas-worker-startup-expected.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        expected["schema"],
+        "marty.canvas-worker-startup-expected/v1"
+    );
+    assert_eq!(expected["alive_after_idle"], true);
+    assert_eq!(expected["job_count"], 0);
+    assert_eq!(expected["exit_code_after_interrupt"], 130);
     for case in cases {
         let name = case["name"].as_str().unwrap();
         eprintln!("Actual native startup case: {name}");
@@ -54,11 +65,7 @@ pub async fn replay(pool: &PgPool, database_url: &str) {
                 panic!("actual worker must reach idle: case={name}, last phase={phase:?}");
             }
         };
-        assert_eq!(
-            heartbeat,
-            json!({"role":"canvas_sync","metadata":{"leased_jobs":0,"phase":"idle","process":"standalone","processor_configured":true}}),
-            "startup case {name}"
-        );
+        assert_eq!(heartbeat, expected["heartbeat"], "startup case {name}");
         assert!(
             worker.0.try_wait().unwrap().is_none(),
             "startup case {name}"
@@ -68,11 +75,19 @@ pub async fn replay(pool: &PgPool, database_url: &str) {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        assert_eq!(jobs, 0, "startup case {name}");
+        assert_eq!(
+            jobs,
+            expected["job_count"].as_i64().unwrap(),
+            "startup case {name}"
+        );
         if cfg!(unix) {
             worker.signal("SIGINT");
             let status = worker.wait().await;
-            assert_eq!(status.code(), Some(130), "startup case {name}");
+            assert_eq!(
+                status.code().map(i64::from),
+                expected["exit_code_after_interrupt"].as_i64(),
+                "startup case {name}"
+            );
         } else {
             // Windows proves actual boot/heartbeat only. POSIX exit evidence is
             // mandatory in the configured Linux CI run, never fabricated here.

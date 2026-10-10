@@ -13500,3 +13500,19 @@ previously had one Windows-only `git bash` subprocess timeout after 185
 passes; its inventory consumer check was corrected and passed in the focused
 rerun. Hosted exact-head qualification remains required after this grouped
 candidate is published.
+
+K8 packaged-startup follow-up (local, unpublished): the exact-image
+`test_canvas_worker_image_startup.py` no longer reads
+`canvas-worker-startup-oracle.json`. Its 16 image/mode/case observations and
+the Rust eight-case replay now use one reviewed
+`canvas-worker-startup-expected.json` contract for idle heartbeat, process
+liveness, zero jobs and native SIGINT exit. The Rust full-main startup input
+inventory pins that public contract, scenarios and replay source. The
+historical Python corpus remains only for separate legacy fixture/logging
+evidence, and the packaged probe still uses a synthetic remote integration-
+secret service; this does not qualify live OpenBao or retire the other Python
+worker oracles. After the shared expectation change, the real native
+eight-case run passed again; warnings-denied Canvas acceptance Clippy,
+32 focused packaged/startup/closure checks, 45 surrounding inventory and
+current-input checks, and Ruff passed. Hosted exact-image execution of this
+new head is still required.
