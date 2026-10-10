@@ -11,7 +11,7 @@ import subprocess
 import pytest
 
 from scripts.qualify_selfhost_migrations import (
-    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_JSON_QUERY,
+    ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_CONTENT_QUERY,
     PRIVATE_KEY_SCHEMA_QUERY, SCHEMA_INVENTORY_QUERY,
     QualificationError,
     _assert_run, native_command, qualify,
@@ -233,7 +233,7 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
     assert sum("psql" in args for args in calls) == 10
-    assert sum(args[-1] == PRIVATE_KEY_JSON_QUERY for args in calls) == 2
+    assert sum(args[-1] == PRIVATE_KEY_CONTENT_QUERY for args in calls) == 2
     assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
     assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2
     assert all("marty-device-registration verify-owned-schema" in " ".join(args)
@@ -251,7 +251,7 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize(("blocked_query", "failure"), [
     (PRIVATE_KEY_SCHEMA_QUERY, "created private-key storage"),
-    (PRIVATE_KEY_JSON_QUERY, "Private-key JSON storage scan failed"),
+    (PRIVATE_KEY_CONTENT_QUERY, "Private-key content storage scan failed"),
 ])
 def test_private_key_storage_fails_qualification_and_cleans(
     blocked_query: str, failure: str,
@@ -275,7 +275,7 @@ def test_private_key_storage_fails_qualification_and_cleans(
         if args[-1:] == [PRIVATE_KEY_SCHEMA_QUERY]:
             return result(args, "column:issuance_service.issuer_signing_keys.encrypted_jwk_json\n"
                           if blocked_query == PRIVATE_KEY_SCHEMA_QUERY else "")
-        if args[-1:] == [PRIVATE_KEY_JSON_QUERY] and blocked_query == PRIVATE_KEY_JSON_QUERY:
+        if args[-1:] == [PRIVATE_KEY_CONTENT_QUERY] and blocked_query == PRIVATE_KEY_CONTENT_QUERY:
             return result(args, status=1)
         return result(args)
 

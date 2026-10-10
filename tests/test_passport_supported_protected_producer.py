@@ -55,7 +55,7 @@ def test_disposable_schema_gate_fails_closed_without_exposing_rows() -> None:
     assert "ON_ERROR_STOP=1" in args
     assert "issuer_signing_keys" in args[-1]
     assert "jsonb_path_exists" in args[-1]
-    assert "private-key JSON storage" in args[-1]
+    assert "private-key content storage" in args[-1]
     assert "RAISE EXCEPTION" in args[-1]
     assert environment == {"DOCKER_HOST": "local"} and timeout == 60
     with pytest.raises(ProducerError, match="PostgreSQL container is unavailable"):
