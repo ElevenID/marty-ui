@@ -13167,6 +13167,18 @@ Rust integration-secret PostgreSQL/Raft restore, Canvas and the final CI Gate
 remain active at this checkpoint; do not infer their results from earlier
 steps.
 
+The published head's OpenBao plugin job subsequently completed successfully,
+including coordinated Rust integration-secret PostgreSQL/Raft restore after
+the live Raft snapshot and recovery probe. That closes the prior container
+name-race failure on `7b8c81631`; it does not qualify the seven held local
+commits or the still-running Canvas job.
+
+The same published head's Rust Contracts lane later completed successfully,
+including the self-host closed-model test and signing/database contract
+groups. Rust Service Images also passed. These are evidence for `7b8c81631`
+only; the seven held local commits changing conformance and native beta wiring
+still require a new grouped exact-head run.
+
 Adjacent DIDComm authcrypt root gap (not fixed by the envelope correction):
 the shared beta/conformance native service still receives an opt-in policy
 directory from `docker-compose.profile.didcomm-native-authcrypt.yml`, whose
