@@ -3206,6 +3206,18 @@ Adding Applicant as a shadow runtime edge would duplicate established Cargo
 closure, not improve selection. Continue the non-Cargo audit with consumers
 that are absent from both Cargo and the source-witnessed graph.
 
+A5 published-image invocation follow-up (2026-10-10): the v6 mount inventory
+did not witness the Python command that executes the mounted provider oracle.
+The v7 candidate records the exact `python -c` command, ties its `runpy`
+script target to the inventoried read-only mount, and checks the Docker create,
+post-create, polling, and cleanup identity-check call sites. Mutations of the
+script target, callable, command mode/constant, and guard calls require
+inventory review. The edited closure module passes 13 focused tests; Ruff,
+format, and diff checks pass. Independent review found no remaining P1-P3
+issue after a guard-call finding was corrected. This is bounded input
+inventory only: no execution gate, historical reuse decision, or CI speed
+claim changes; hosted exact-head qualification remains pending.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
