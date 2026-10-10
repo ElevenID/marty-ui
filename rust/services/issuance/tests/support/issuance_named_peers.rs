@@ -41,9 +41,10 @@ pub(super) const TEMPLATE: &str = "didcomm-template";
 pub(super) const PROFILE: &str = "didcomm-status";
 pub(super) const TOKEN: &str = "synthetic-renewal-fresh-main-service-token";
 pub(super) const API_KEY: &str = "synthetic-renewal-fresh-main-management-key";
-// Issuance uses this same internal service token for Signing Keys and its
-// remote integration-secret endpoint. Keep both owned peers on one token.
+// Signing and integration-secret envelope peers use separate credentials.
 pub(super) const SIGNING_KEY: &str = super::issuance_process::remote_integration_secret::API_KEY;
+const ENVELOPE_KEY: &str =
+    super::issuance_process::remote_integration_secret::INTEGRATION_SECRET_KEY;
 pub(super) const ISSUER_SIGN_KEY: &str = "synthetic-issuance-issuer-sign-key-32-chars";
 pub(super) const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";
 pub(super) const CLIENT_KEY: &str = "synthetic-base-gateway-client-key";
@@ -472,7 +473,7 @@ pub(super) async fn start_peers(state: PeerState) -> OwnedHttp {
         Router::new()
             .fallback(peer)
             .with_state(state)
-            .merge(super::issuance_process::remote_integration_secret::router_for(super::issuance_process::remote_integration_secret::INTEGRATION_SECRET_KEY)),
+            .merge(super::issuance_process::remote_integration_secret::router_for(ENVELOPE_KEY)),
     )
     .await
 }

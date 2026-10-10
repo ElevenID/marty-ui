@@ -12728,3 +12728,11 @@ started and are not yet terminal. The PR body records this head. Hosted
 exact-head CI and live recovery qualification still need evidence before this
 authority reduction is final. Keep this tracker-only correction local until
 the next substantive grouped push to avoid another hosted run.
+
+The `b1540254c` exact-head UI CI exposed a Rust formatting failure in
+`issuance_named_peers.rs`, which is also included by the Canvas and Flow
+acceptance crates. The earlier package-scoped local format check missed those
+include paths. The helper now names the distinct envelope credential through
+a short constant; formatting checks pass from both acceptance crates. The
+remaining hosted jobs are still active, so this correction stays local for a
+single grouped follow-up after terminal CI evidence.
