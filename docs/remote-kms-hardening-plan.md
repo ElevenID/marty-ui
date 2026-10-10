@@ -12826,3 +12826,15 @@ is likewise active. A local full Python `tests` run reached the early suite
 without failures but slowed substantially; it was stopped rather than treated
 as evidence of full-suite success. The focused 236 plus 103 affected Python
 tests remain the local passing evidence.
+
+The `577cd5320` Rust Contracts job failed one self-host bundle executable
+test after five sibling cases passed. Its closed runtime model still expected
+the pre-envelope issuance-native secret mount set; the rendered production
+Compose model correctly includes `signing_keys_integration_secret_key`.
+The held correction adds that secret to the exact expected mount set, maps
+its `_FILE` environment field to the mount, and forbids the raw environment
+variant. Targeted Rust formatting passes. The local Windows replay reaches
+the bundle packager but its `docker compose config` probe fails before the
+closed-model assertion, so only a hosted Linux replay can qualify this fix.
+This immutable CI failure should be grouped with any other new failures
+before the next push.
