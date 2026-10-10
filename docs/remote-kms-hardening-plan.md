@@ -11007,3 +11007,12 @@ Non-generated line coverage remains above the protected gate at **90.35%
 injected test provider does not prove server-issued or
 KMS-backed custody; there is still no production challenge endpoint or
 authenticated submission path. This local commit remains batched for PR #57.
+
+2026-10-09 UI grouped publication: the reconciled UI batch was pushed once
+to draft [PR #1192](https://github.com/ElevenID/marty-ui/pull/1192) at exact
+source head `5df61d68e7e042bcc5d4cb920a77b5e60b108bf7`. GitHub now reports
+the PR mergeable; it is still draft and protected review is required. Hosted
+CI run `38010917323` queued and policy/CodeQL/quality workflows started at
+this head; the prior green `148d85b8f` result must not be treated as this
+new head's qualification. The local
+untracked Canvas `%SystemDrive%` artifact was neither staged nor pushed.
