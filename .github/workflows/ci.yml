@@ -1975,6 +1975,18 @@ jobs:
             nonce="$(openssl rand -hex 16)"
             docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
             export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
+            bao_nonce="$(openssl rand -hex 16)"
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
+              --data "{\"data\":{\"nonce\":\"$bao_nonce\"}}" \
+              http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \
+              | jq -e '.data.exportable == false' >/dev/null
+            export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200
+            export MARTY_TEST_OPENBAO_TOKEN=test-only
+            export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"
+            export BAO_TOKEN=test-only
           fi
           if [[ "${{ matrix.lane }}" == worker ]]; then
             python3 ../scripts/ci/run-db-contract-groups.py worker-preflights
