@@ -13403,3 +13403,12 @@ GitHub now reports the PR mergeable, and [exact-head PR CI run
 38091624927](https://github.com/ElevenID/marty-ui/actions/runs/38091624927)
 plus Rust CodeQL started for `e61ae2569`. The previous `95284232a` failure
 remains immutable evidence; the new head must qualify on its own.
+
+The `e61ae2569` [PR-event CI run
+38091624927](https://github.com/ElevenID/marty-ui/actions/runs/38091624927)
+passed Release Contract Tests, including the corrected mixed-roster signer
+fixture. Rust feature regression, lint/packaging, browser, public protocol,
+UI and service tests also passed at this checkpoint. OpenBao recovery, Rust
+Contracts, Canvas and service images were still running, so the full run and
+exact release artifacts remain unqualified. Exact-head Rust CodeQL was also
+still active.
