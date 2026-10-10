@@ -12649,3 +12649,16 @@ Credentials PR #313 remains green, mergeable and draft; a source scan of its
 Python, Rust and SQL files found only absence assertions, with no
 private-key/keypair implementation definitions in those file types. That
 source scan is narrower than assembled artifact and database proof.
+
+2026-10-10 focused DIDComm custody self-review: rechecked the Go plugin's
+create/rotate/read/pack routes, versioned storage loading, public response,
+plaintext-party validation and JWE agreement boundary, together with the
+Rust native envelope's resolved recipient document, sender-document public
+key binding and frozen recipient key list. The plugin generates X25519 inside
+OpenBao and returns public metadata or an encrypted envelope; the Rust caller
+selects recipient keys from the resolved DID document before the pack call.
+No new private-key export path or regression was found in this focused pass.
+It does not cover the full 510-file UI PR diff or replace live holder,
+multi-tenant authorization and release-artifact acceptance. Local Go tooling
+is unavailable on this Windows host; the exact-head packaged plugin and
+Canvas lanes passed hosted CI.
