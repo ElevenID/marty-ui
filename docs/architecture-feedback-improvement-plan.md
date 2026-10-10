@@ -2982,6 +2982,17 @@ merge group remains full. It is one scoped observation, not a pipeline-wide
 average or a speedup caused by the added edge. The PR remains open pending
 merge authorization at this checkpoint.
 
+The same #1220 Canvas artifact has 83 default `published_probe`
+`migration_seed` rows totaling 361,983 ms across concurrently run tests.
+`PublishedDatabase::start_probe_with_scope` gives each probe its own
+tmpfs-backed PostgreSQL container and fixed
+`canvas_published_schema_test` database; the pinned Python oracles use that
+same fixed name inside the container network namespace. A shared-server
+template would need a new namespace/database and cleanup contract, not just
+`CREATE DATABASE ... TEMPLATE`, and would alter the current isolation proof.
+The 107,223 ms timeout and 111,803 ms lease-expiry preflights retain live
+deadline/lease behavior. Neither aggregate sum is a sequential CI saving.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
