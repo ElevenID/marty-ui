@@ -969,10 +969,10 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
     let mut result = CapabilityResult::ok();
     match request.send().await {
         Ok(response) if response.status() == StatusCode::OK => {
-            let supports = response
-                .json::<Value>()
+            let supports = bounded_response_body(response, 4 * 1024 * 1024)
                 .await
                 .ok()
+                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
                 .and_then(|value| {
                     value
                         .pointer("/data/supports_signing")
@@ -2110,6 +2110,28 @@ pub(crate) fn secret_value(name: &str) -> Option<String> {
         })
 }
 
+const MAX_PROVIDER_JSON_BYTES: usize = 4 * 1024 * 1024;
+
+async fn bounded_response_body(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Vec<u8>, KmsError> {
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| KmsError::Provider(format!("Provider response failed: {error}")))?
+    {
+        if body.len().saturating_add(chunk.len()) > max_bytes {
+            return Err(KmsError::InvalidResponse(
+                "Provider response exceeds the size limit.".into(),
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
 async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> {
     let response = builder
         .send()
@@ -2117,13 +2139,14 @@ async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> 
         .map_err(|error| KmsError::Provider(format!("Provider request failed: {error}")))?;
     let status = response.status();
     if !status.is_success() {
-        let detail = response.text().await.unwrap_or_default();
+        let detail = bounded_response_body(response, MAX_PROVIDER_ERROR_BYTES).await?;
         return Err(KmsError::ProviderStatus {
             status,
-            detail: bounded(&detail),
+            detail: bounded(&String::from_utf8_lossy(&detail)),
         });
     }
-    response.json().await.map_err(|error| {
+    let body = bounded_response_body(response, MAX_PROVIDER_JSON_BYTES).await?;
+    serde_json::from_slice(&body).map_err(|error| {
         KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
     })
 }
@@ -2134,10 +2157,12 @@ async fn send_json_or_empty(builder: reqwest::RequestBuilder) -> Result<Value, K
         .await
         .map_err(|error| KmsError::Provider(format!("Provider request failed: {error}")))?;
     let status = response.status();
-    let body = response
-        .bytes()
-        .await
-        .map_err(|error| KmsError::Provider(format!("Provider response failed: {error}")))?;
+    let max_bytes = if status.is_success() {
+        MAX_PROVIDER_JSON_BYTES
+    } else {
+        MAX_PROVIDER_ERROR_BYTES
+    };
+    let body = bounded_response_body(response, max_bytes).await?;
     if !status.is_success() {
         return Err(KmsError::ProviderStatus {
             status,
@@ -2294,6 +2319,39 @@ fn bounded(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn provider_http_rejects_oversized_success_and_error_bodies() {
+        let app = axum::Router::new()
+            .route(
+                "/success",
+                axum::routing::get(|| async {
+                    axum::Json(json!({"padding": "x".repeat(MAX_PROVIDER_JSON_BYTES)}))
+                }),
+            )
+            .route(
+                "/error",
+                axum::routing::get(|| async {
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        "x".repeat(MAX_PROVIDER_ERROR_BYTES + 1),
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = Client::new();
+        assert!(matches!(
+            send_json(client.get(format!("{endpoint}/success"))).await,
+            Err(KmsError::InvalidResponse(_))
+        ));
+        assert!(matches!(
+            send_json_or_empty(client.get(format!("{endpoint}/error"))).await,
+            Err(KmsError::InvalidResponse(_))
+        ));
+        server.abort();
+    }
 
     #[test]
     fn cloud_provider_endpoints_cannot_route_credentials_to_tenant_hosts() {

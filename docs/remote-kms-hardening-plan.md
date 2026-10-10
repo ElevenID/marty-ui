@@ -11996,3 +11996,13 @@ and verifies the public resolve suite remains there. The two focused workflow
 tests passed, Ruff passed, workflow YAML parsed, Rustfmt and all-target
 warnings-denied Clippy passed. The other hosted lanes and next exact-head
 qualification are still pending.
+
+The same response-bound review found that the lower-level Signing Keys KMS
+adapter also called unbounded `Response::json()`, `text()` and `bytes()` on
+provider success and error bodies. Its shared response reader now caps JSON
+at 4 MiB and error bodies at the existing 2 KiB error-detail limit before
+parsing; capability probes use that bound as well. A local oversized success
+and error response test passed, as did 166 library tests (nine opt-in ignores),
+five provider vectors, Rustfmt and all-target warnings-denied Clippy. This
+local fix is held with the other corrections until the published CI run
+finishes; its own exact-head hosted proof is still due.
