@@ -11016,3 +11016,18 @@ CI run `38010917323` queued and policy/CodeQL/quality workflows started at
 this head; the prior green `148d85b8f` result must not be treated as this
 new head's qualification. The local
 untracked Canvas `%SystemDrive%` artifact was neither staged nor pushed.
+
+2026-10-09 applicant liveness assertion self-review: local UI commit
+`6e346dba6` removes the public biometric enrollment request's client-owned
+`is_live_capture` flag and the same field from the stored Rust `Biometric`
+model. The route previously defaulted that flag to true and returned it as
+`liveness_verified`, allowing an ordinary upload to claim verification.
+Biometric enrollment now reports `liveness_verified: false` until a real
+server-issued challenge and authenticated verification result exist; an
+attempt to supply the retired flag is rejected by the request schema. A Rust
+regression test covers both boundaries. `cargo +1.95.0 test --locked -p
+marty-applicant --lib` passed all four tests, warnings-denied all-target
+Clippy passed, and Rust formatting and diff checks passed. This correction
+remains local while published UI head `5df61d68e` runs hosted CI; that run
+does not qualify `6e346dba6`. The backend KMS challenge, capture proof,
+single-use submission, and honest verified result remain required.
