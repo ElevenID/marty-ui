@@ -12219,9 +12219,14 @@ that omit an external Transit token to fail before rotation.
 The `be8fb4198` Release Contracts lane also failed one of 6,203 selected
 Python tests: a newly merged self-host test's expected change-classifier map
 omits the `openbao: false` output present on this feature branch. This is
-workflow-test drift, not a reason to drop OpenBao change classification. Merge
-the current `main` test and update that expectation, then rerun the focused
-and broader checks before the next grouped push. Hosted CodeQL Rust analysis
+workflow-test drift, not a reason to drop OpenBao change classification. The
+current `main` is now merged locally and the expectation includes that field.
+Both focused cases and the complete workflow-performance/Canvas-scope pair
+passed (179 tests). The repaired Signing Keys source passed its full serial
+`--tests` selection (172 library cases, nine expected ignores, all non-live
+targets), warnings-denied all-target Clippy, Rustfmt and YAML parsing. This
+batch remains local until the running Canvas lane reaches a terminal result.
+Hosted CodeQL Rust analysis
 passed but its PR check still reports three high alerts: intentional Azure
 metadata HTTP and two shared request-send taint reports. The Azure client-secret
 HTTP and cleartext-transfer alerts cleared; review the remaining paths before

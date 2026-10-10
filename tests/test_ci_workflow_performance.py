@@ -931,6 +931,7 @@ def test_verified_selfhost_test_sources_select_only_selfhost_on_pr(
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["selfhost"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
