@@ -2993,6 +2993,17 @@ template would need a new namespace/database and cleanup contract, not just
 The 107,223 ms timeout and 111,803 ms lease-expiry preflights retain live
 deadline/lease behavior. Neither aggregate sum is a sequential CI saving.
 
+There are 14 `start_with_status_provider()` call sites in the Canvas
+composition target. Only `status_provider_matches_published_python` directly
+compares its oracle to the frozen reference; the other 13 use the resulting
+database for native Gateway/status assertions. The constructor also applies
+the review-recovery migration, and the Python oracle seeds issued/delivery
+rows before exercising mutable provider and credential-route cases. A future
+seed-only fixture could reuse the existing checked-in scenario SQL while
+retaining the one full independent oracle, but it must prove the native
+tests' exact required initial/final rows, recovery migration, pinned-input
+closure, and cleanup before replacing any call. No skip or saving is claimed.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
