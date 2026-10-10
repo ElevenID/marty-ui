@@ -4599,6 +4599,7 @@ name = "marty-signing-keys"
 version = "0.1.0"
 dependencies = [
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-kms",
  "aws-smithy-http-client",
  "axum",

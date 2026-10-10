@@ -27,6 +27,7 @@ test = false
 axum.workspace = true
 axum-server.workspace = true
 aws-config.workspace = true
+aws-credential-types.workspace = true
 aws-sdk-kms.workspace = true
 aws-smithy-http-client.workspace = true
 base64.workspace = true

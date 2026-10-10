@@ -3,6 +3,7 @@
 use std::{env, fs, time::Duration};
 
 use aws_config::BehaviorVersion;
+use aws_credential_types::Credentials;
 use aws_sdk_kms::config::Region;
 use aws_sdk_kms::primitives::Blob;
 use aws_sdk_kms::types::{MessageType, SigningAlgorithmSpec};
@@ -1120,7 +1121,117 @@ async fn verify_gcp(config: &Value) -> CapabilityResult {
     .await
 }
 
-async fn aws_client(config: &Value) -> aws_sdk_kms::Client {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AwsAccessKey {
+    access_key_id: String,
+    secret_access_key: String,
+    #[serde(default)]
+    session_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AwsAssumeRole {
+    role_arn: String,
+    #[serde(default)]
+    external_id: Option<String>,
+}
+
+enum AwsAuth {
+    IamRole,
+    AccessKey(AwsAccessKey),
+    AssumeRole(AwsAssumeRole),
+}
+
+fn parse_aws_auth(config: &Value) -> Result<AwsAuth, KmsError> {
+    match string(config, "auth_mode").unwrap_or("iam_role") {
+        "iam_role" => {
+            if string(config, "auth_reference").is_some_and(|reference| !reference.is_empty()) {
+                return Err(KmsError::InvalidConfig(
+                    "AWS IAM role mode does not accept a credential reference.".into(),
+                ));
+            }
+            Ok(AwsAuth::IamRole)
+        }
+        "access_key" => {
+            let encoded = required(
+                config,
+                "auth_reference",
+                "AWS access key credential is required",
+            )?;
+            if encoded.len() > 16_384 {
+                return Err(KmsError::InvalidConfig(
+                    "AWS access key credential is invalid.".into(),
+                ));
+            }
+            let credential: AwsAccessKey = serde_json::from_str(encoded).map_err(|_| {
+                KmsError::InvalidConfig("AWS access key credential is invalid.".into())
+            })?;
+            if credential.access_key_id.trim().is_empty()
+                || credential.secret_access_key.trim().is_empty()
+            {
+                return Err(KmsError::InvalidConfig(
+                    "AWS access key credential is invalid.".into(),
+                ));
+            }
+            Ok(AwsAuth::AccessKey(credential))
+        }
+        "assume_role" => {
+            let encoded = required(config, "auth_reference", "AWS role reference is required")?;
+            if encoded.len() > 4096 {
+                return Err(KmsError::InvalidConfig(
+                    "AWS role reference is invalid.".into(),
+                ));
+            }
+            let role: AwsAssumeRole = serde_json::from_str(encoded)
+                .map_err(|_| KmsError::InvalidConfig("AWS role reference is invalid.".into()))?;
+            if !valid_aws_role_arn(&role.role_arn) {
+                return Err(KmsError::InvalidConfig("AWS role ARN is invalid.".into()));
+            }
+            Ok(AwsAuth::AssumeRole(role))
+        }
+        _ => Err(KmsError::InvalidConfig(
+            "AWS authentication mode is unsupported.".into(),
+        )),
+    }
+}
+
+pub(crate) fn validate_aws_auth_config(config: &Value) -> Result<(), KmsError> {
+    parse_aws_auth(config).map(|_| ())
+}
+
+fn aws_role_source(loader: aws_config::ConfigLoader) -> Result<aws_config::ConfigLoader, KmsError> {
+    let present = |name: &str| env::var(name).is_ok_and(|value| !value.trim().is_empty());
+    let web_identity = present("AWS_WEB_IDENTITY_TOKEN_FILE") || present("AWS_ROLE_ARN");
+    if web_identity {
+        if !present("AWS_WEB_IDENTITY_TOKEN_FILE") || !present("AWS_ROLE_ARN") {
+            return Err(KmsError::InvalidConfig(
+                "AWS workload role identity is incomplete.".into(),
+            ));
+        }
+        return Ok(loader.credentials_provider(
+            aws_config::web_identity_token::WebIdentityTokenCredentialsProvider::builder().build(),
+        ));
+    }
+    if present("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+        || present("AWS_CONTAINER_CREDENTIALS_FULL_URI")
+    {
+        return Ok(
+            loader.credentials_provider(aws_config::ecs::EcsCredentialsProvider::builder().build())
+        );
+    }
+    if env::var("AWS_EC2_METADATA_DISABLED").is_ok_and(|value| value.eq_ignore_ascii_case("true")) {
+        return Err(KmsError::InvalidConfig(
+            "AWS IAM role identity is unavailable.".into(),
+        ));
+    }
+    Ok(loader.credentials_provider(
+        aws_config::imds::credentials::ImdsCredentialsProvider::builder().build(),
+    ))
+}
+
+async fn aws_client(config: &Value) -> Result<aws_sdk_kms::Client, KmsError> {
     let region = string(config, "region").unwrap_or("us-east-1").to_string();
     let mut loader = aws_config::defaults(BehaviorVersion::latest()).region(Region::new(region));
     if let Some(endpoint) = string(config, "endpoint").filter(|value| !value.is_empty()) {
@@ -1129,7 +1240,53 @@ async fn aws_client(config: &Value) -> aws_sdk_kms::Client {
             loader = loader.http_client(aws_smithy_http_client::Builder::new().build_http());
         }
     }
-    aws_sdk_kms::Client::new(&loader.load().await)
+    let sdk_config = match parse_aws_auth(config)? {
+        AwsAuth::IamRole => aws_role_source(loader)?.load().await,
+        AwsAuth::AccessKey(credential) => {
+            loader
+                .credentials_provider(Credentials::new(
+                    credential.access_key_id,
+                    credential.secret_access_key,
+                    credential.session_token,
+                    None,
+                    "marty-tenant-credential",
+                ))
+                .load()
+                .await
+        }
+        AwsAuth::AssumeRole(role) => {
+            let source = aws_role_source(aws_config::defaults(BehaviorVersion::latest()).region(
+                Region::new(string(config, "region").unwrap_or("us-east-1").to_string()),
+            ))?
+            .load()
+            .await;
+            let mut builder = aws_config::sts::AssumeRoleProvider::builder(role.role_arn)
+                .session_name("marty-signing-keys")
+                .configure(&source);
+            if let Some(external_id) = role.external_id.filter(|value| !value.is_empty()) {
+                builder = builder.external_id(external_id);
+            }
+            loader
+                .credentials_provider(builder.build().await)
+                .load()
+                .await
+        }
+    };
+    Ok(aws_sdk_kms::Client::new(&sdk_config))
+}
+
+fn valid_aws_role_arn(value: &str) -> bool {
+    let parts = value.split(':').collect::<Vec<_>>();
+    parts.len() == 6
+        && parts[0] == "arn"
+        && matches!(parts[1], "aws" | "aws-us-gov" | "aws-cn")
+        && parts[2] == "iam"
+        && parts[3].is_empty()
+        && parts[4].len() == 12
+        && parts[4].bytes().all(|byte| byte.is_ascii_digit())
+        && parts[5].starts_with("role/")
+        && parts[5].len() > 5
+        && !value.chars().any(char::is_whitespace)
 }
 
 async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
@@ -1149,7 +1306,7 @@ async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
     // pre-hashed input without hashing it a second time.
     let (_, digest) = signing_digest(jose_algorithm, payload)?;
     let output = aws_client(config)
-        .await
+        .await?
         .sign()
         .key_id(key_id)
         .message(Blob::new(digest))
@@ -1192,7 +1349,7 @@ async fn public_key_aws(config: &Value) -> Result<Value, KmsError> {
         "aws-kms adapter requires 'key_reference' in service_config",
     )?;
     let output = aws_client(config)
-        .await
+        .await?
         .get_public_key()
         .key_id(key_id)
         .send()
@@ -1225,13 +1382,11 @@ async fn verify_aws(config: &Value) -> CapabilityResult {
         None => return CapabilityResult::fail("Key reference", "key_reference is required"),
     };
     let mut result = CapabilityResult::ok();
-    match aws_client(config)
-        .await
-        .describe_key()
-        .key_id(key_id)
-        .send()
-        .await
-    {
+    let client = match aws_client(config).await {
+        Ok(client) => client,
+        Err(error) => return CapabilityResult::fail("Authentication", error.to_string()),
+    };
+    match client.describe_key().key_id(key_id).send().await {
         Ok(_) => result.add_check(
             "Key exists",
             "pass",

@@ -80,13 +80,24 @@ struct ManagedTransitState {
 }
 
 fn fixture() -> Fixture {
-    // Fixed process-local credentials keep the official AWS client offline and
-    // make its signed HTTP request observable by the same provider stub.
-    std::env::set_var("AWS_ACCESS_KEY_ID", "test-access-key");
-    std::env::set_var("AWS_SECRET_ACCESS_KEY", "test-secret-key");
+    // Process credentials deliberately differ from the tenant credential.
+    // AWS requests must use the selected auth mode, not the ambient chain.
+    std::env::set_var("AWS_ACCESS_KEY_ID", "wrong-process-key");
+    std::env::set_var("AWS_SECRET_ACCESS_KEY", "wrong-process-secret");
     std::env::set_var("AWS_EC2_METADATA_DISABLED", "true");
     serde_json::from_str(include_str!("fixtures/kms_provider_vectors.json"))
         .expect("valid KMS provider vectors")
+}
+
+fn assert_selected_aws_credential(name: &str, headers: &BTreeMap<String, String>) {
+    if name.starts_with("aws_") {
+        assert!(
+            headers
+                .get("authorization")
+                .is_some_and(|value| value.contains("Credential=test-access-key/")),
+            "{name} must use the tenant-selected access key"
+        );
+    }
 }
 
 async fn capture(State(state): State<StubState>, request: Request<Body>) -> Response {
@@ -312,6 +323,7 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
             .await
             .take()
             .unwrap_or_else(|| panic!("{} did not call the provider", case.name));
+        assert_selected_aws_credential(&case.name, &captured.headers);
         assert_eq!(
             captured.method, case.expected_request.method,
             "{} method",
@@ -358,6 +370,7 @@ async fn public_key_discovery_matches_language_neutral_http_vectors() {
             .await
             .take()
             .unwrap_or_else(|| panic!("{} did not call the provider", case.name));
+        assert_selected_aws_credential(&case.name, &captured.headers);
         assert_eq!(
             captured.method, case.expected_request.method,
             "{} method",

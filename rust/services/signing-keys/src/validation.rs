@@ -270,10 +270,26 @@ fn append_provider_auth(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     let provider = string(payload, "provider");
     let auth_mode = string(payload, "auth_mode");
     let has_reference = !string(payload, "auth_reference").is_empty();
+    if provider == "aws" {
+        match kms::validate_aws_auth_config(payload) {
+            Ok(()) => add(
+                checks,
+                "Provider auth policy",
+                "pass",
+                "AWS credential configuration matches the selected auth mode.",
+                "provider",
+            ),
+            Err(error) => add(
+                checks,
+                "Provider auth policy",
+                "fail",
+                error.to_string(),
+                "provider",
+            ),
+        }
+        return;
+    }
     let result = match (provider, auth_mode, has_reference) {
-        ("aws", "iam_role", _) => Some(("pass", "IAM role mode selected; ensure gateway runtime identity has kms:Sign permissions.")),
-        ("aws", "access_key" | "assume_role", true) => Some(("pass", "Credential reference provided for AWS auth mode.")),
-        ("aws", "access_key" | "assume_role", false) => Some(("warning", "Provide an auth reference for access_key/assume_role modes.")),
         ("azure", "managed_identity", _) => Some(("pass", "Managed identity mode selected; ensure Key Vault sign permissions are granted.")),
         ("azure", "client_secret" | "certificate", true) => Some(("pass", "Credential reference provided for Azure auth mode.")),
         ("azure", "client_secret" | "certificate", false) => Some(("warning", "Provide an auth reference for client_secret/certificate modes.")),
@@ -802,5 +818,32 @@ mod tests {
             .checks
             .iter()
             .any(|check| check.name == "Algorithm coverage" && check.status == "fail"));
+    }
+
+    #[tokio::test]
+    async fn aws_validation_rejects_auth_mode_reference_mismatch() {
+        for (mode, reference) in [
+            ("access_key", "opaque-reference-only"),
+            ("assume_role", r#"{"role_arn":"not-an-arn"}"#),
+            ("iam_role", "unexpected-credential"),
+        ] {
+            let config = json!({
+                "service_type": "aws-kms",
+                "auth_mode": mode,
+                "auth_reference": reference,
+                "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test",
+                "algorithms": ["ES256"]
+            });
+            let result = validate(ValidationRequest {
+                service_config: config.as_object().unwrap().clone(),
+                live_probe: false,
+            })
+            .await;
+            assert!(!result.ok, "{mode} must fail");
+            assert!(result
+                .checks
+                .iter()
+                .any(|check| { check.name == "Provider auth policy" && check.status == "fail" }));
+        }
     }
 }

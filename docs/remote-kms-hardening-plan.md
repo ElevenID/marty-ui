@@ -11711,3 +11711,24 @@ released image.
 The existing hosted contracts lane now provisions that non-exportable Transit
 key and runs the guarded Rust test after its disposable Redis/OpenBao sentinels
 are set. Hosted evidence is pending the next grouped UI push and CI run.
+
+2026-10-10 K6 AWS auth selection, local UI batch: the Rust AWS adapter now
+chooses credentials from the registered mode instead of allowing every mode
+to fall into the AWS SDK default chain. `iam_role` accepts only role-native
+web-identity, container, or IMDSv2 providers and rejects an attached
+credential value. `access_key` parses a bounded access-key/session-token JSON
+document from the KMS-enveloped tenant field and pins that credential for
+KMS requests. `assume_role` validates a role ARN/external-ID document and
+uses a role-native source to obtain scoped STS credentials. The shared Rust
+auth parser also drives registration validation, so a mere nonempty field no
+longer passes malformed AWS modes. AWS HTTP golden vectors deliberately set
+incorrect process credentials and assert the signed request uses the selected
+tenant key. The provider vectors (five), service validation vector, focused
+negative test, complete Signing Keys library suite (146 passed, nine expected
+opt-in ignores), all-target warnings-denied Clippy, and Rustfmt passed.
+This is not live AWS acceptance: IAM role and STS paths still need real
+provider identity and key enrollment/sign/public-key/certificate tests.
+The wizard also needs mode-specific credential fields and precise wording;
+`access_key` currently expects JSON rather than an opaque reference. Those
+provider authentication credentials remain separate from KMS-held issuer
+private keys and are encrypted at rest by the registry envelope.
