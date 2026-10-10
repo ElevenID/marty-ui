@@ -528,8 +528,7 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
     let response = request.send().await;
     match response {
         Ok(response) if response.status().is_success() => {
-            let has_signature = response
-                .json::<Value>()
+            let has_signature = kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES)
                 .await
                 .ok()
                 .and_then(|value| {
@@ -653,7 +652,9 @@ async fn validate_bridge(payload: &Value, validator_url: &str, checks: &mut Vec<
     }
     match request.send().await {
         Ok(response) if response.status().as_u16() == 200 => {
-            let body = response.json::<Value>().await.unwrap_or_default();
+            let body = kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES)
+                .await
+                .unwrap_or_default();
             if body.get("ok").and_then(Value::as_bool) == Some(true) {
                 add(
                     checks,

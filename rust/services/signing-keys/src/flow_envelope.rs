@@ -12,37 +12,14 @@ use base64::{
     Engine,
 };
 use marty_oid4vp_contract::haip_key::{matches_public_jwk, valid_version as valid_haip_version};
-use reqwest::{Client, Response as HttpResponse};
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
 
+use crate::kms::{self, KmsError};
+
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_OPENBAO_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-
-#[derive(Debug, Error)]
-pub(crate) enum OpenBaoTransportError {
-    #[error("OpenBao request failed")]
-    Http(#[from] reqwest::Error),
-    #[error("OpenBao response exceeds the size limit")]
-    Oversized,
-    #[error("OpenBao response is invalid")]
-    InvalidResponse,
-}
-
-async fn bounded_json(
-    mut response: HttpResponse,
-    max_bytes: usize,
-) -> Result<Value, OpenBaoTransportError> {
-    let mut body = Vec::new();
-    while let Some(chunk) = response.chunk().await? {
-        if body.len().saturating_add(chunk.len()) > max_bytes {
-            return Err(OpenBaoTransportError::Oversized);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| OpenBaoTransportError::InvalidResponse)
-}
 
 #[derive(Clone)]
 pub struct OpenBaoEnvelopeProvider {
@@ -205,11 +182,7 @@ impl OpenBaoEnvelopeProvider {
         }))
     }
 
-    pub(crate) async fn post(
-        &self,
-        path: &str,
-        body: Value,
-    ) -> Result<Value, OpenBaoTransportError> {
+    pub(crate) async fn post(&self, path: &str, body: Value) -> Result<Value, KmsError> {
         self.post_with_token(path, body, &self.token).await
     }
 
@@ -233,7 +206,7 @@ impl OpenBaoEnvelopeProvider {
             .map_err(|_| FlowEnvelopeError::HaipFailed)?
             .error_for_status()
             .map_err(|_| FlowEnvelopeError::HaipFailed)?;
-        bounded_json(response, MAX_OPENBAO_RESPONSE_BYTES)
+        kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES)
             .await
             .map_err(|_| FlowEnvelopeError::HaipFailed)
     }
@@ -262,7 +235,7 @@ impl OpenBaoEnvelopeProvider {
         path: &str,
         body: Value,
         token: &str,
-    ) -> Result<Value, OpenBaoTransportError> {
+    ) -> Result<Value, KmsError> {
         let response = self
             .client
             .post(format!("{}{path}", self.endpoint))
@@ -271,12 +244,14 @@ impl OpenBaoEnvelopeProvider {
             .header("accept", "application/json")
             .json(&body)
             .send()
-            .await?
-            .error_for_status()?;
-        bounded_json(response, MAX_OPENBAO_RESPONSE_BYTES).await
+            .await
+            .map_err(|_| KmsError::Provider("OpenBao request failed".into()))?
+            .error_for_status()
+            .map_err(|_| KmsError::Provider("OpenBao request failed".into()))?;
+        kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES).await
     }
 
-    pub(crate) async fn get(&self, path: &str) -> Result<Value, OpenBaoTransportError> {
+    pub(crate) async fn get(&self, path: &str) -> Result<Value, KmsError> {
         let response = self
             .client
             .get(format!("{}{path}", self.endpoint))
@@ -284,9 +259,11 @@ impl OpenBaoEnvelopeProvider {
             .header("X-Vault-Token", &self.token)
             .header("accept", "application/json")
             .send()
-            .await?
-            .error_for_status()?;
-        bounded_json(response, MAX_OPENBAO_RESPONSE_BYTES).await
+            .await
+            .map_err(|_| KmsError::Provider("OpenBao request failed".into()))?
+            .error_for_status()
+            .map_err(|_| KmsError::Provider("OpenBao request failed".into()))?;
+        kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES).await
     }
 }
 
@@ -365,12 +342,12 @@ mod tests {
         let client = Client::new();
         let response = client.get(&url).send().await.unwrap();
         assert!(matches!(
-            bounded_json(response, 16).await,
-            Err(OpenBaoTransportError::Oversized)
+            kms::bounded_provider_json(response, 16).await,
+            Err(KmsError::InvalidResponse(_))
         ));
         let response = client.get(&url).send().await.unwrap();
         assert_eq!(
-            bounded_json(response, 128).await.unwrap()["data"],
+            kms::bounded_provider_json(response, 128).await.unwrap()["data"],
             "x".repeat(64)
         );
         server.abort();

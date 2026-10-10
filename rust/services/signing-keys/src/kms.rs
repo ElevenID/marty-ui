@@ -969,10 +969,9 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
     let mut result = CapabilityResult::ok();
     match request.send().await {
         Ok(response) if response.status() == StatusCode::OK => {
-            let supports = bounded_response_body(response, 4 * 1024 * 1024)
+            let supports = bounded_provider_json(response, MAX_PROVIDER_JSON_BYTES)
                 .await
                 .ok()
-                .and_then(|body| serde_json::from_slice::<Value>(&body).ok())
                 .and_then(|value| {
                     value
                         .pointer("/data/supports_signing")
@@ -2110,7 +2109,7 @@ pub(crate) fn secret_value(name: &str) -> Option<String> {
         })
 }
 
-const MAX_PROVIDER_JSON_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_PROVIDER_JSON_BYTES: usize = 4 * 1024 * 1024;
 
 async fn bounded_response_body(
     mut response: reqwest::Response,
@@ -2132,6 +2131,16 @@ async fn bounded_response_body(
     Ok(body)
 }
 
+pub(crate) async fn bounded_provider_json(
+    response: reqwest::Response,
+    max_bytes: usize,
+) -> Result<Value, KmsError> {
+    let body = bounded_response_body(response, max_bytes).await?;
+    serde_json::from_slice(&body).map_err(|error| {
+        KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
+    })
+}
+
 async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> {
     let response = builder
         .send()
@@ -2145,10 +2154,7 @@ async fn send_json(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> 
             detail: bounded(&String::from_utf8_lossy(&detail)),
         });
     }
-    let body = bounded_response_body(response, MAX_PROVIDER_JSON_BYTES).await?;
-    serde_json::from_slice(&body).map_err(|error| {
-        KmsError::InvalidResponse(format!("Provider returned invalid JSON: {error}"))
-    })
+    bounded_provider_json(response, MAX_PROVIDER_JSON_BYTES).await
 }
 
 async fn send_json_or_empty(builder: reqwest::RequestBuilder) -> Result<Value, KmsError> {

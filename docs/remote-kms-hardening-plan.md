@@ -12006,3 +12006,11 @@ and error response test passed, as did 166 library tests (nine opt-in ignores),
 five provider vectors, Rustfmt and all-target warnings-denied Clippy. This
 local fix is held with the other corrections until the published CI run
 finishes; its own exact-head hosted proof is still due.
+
+The response-bound review also covered Signing Keys validation probes and
+holder-proof stale-key listing. These paths now use the same bounded JSON
+reader as the KMS adapter and OpenBao envelope client, replacing remaining
+unbounded provider JSON reads without duplicating parsing logic. The shared
+Signing Keys library suite passed (166 tests, nine expected opt-in ignores),
+as did all-target warnings-denied Clippy. This extension remains local until
+the current published CI run finishes; exact-head hosted proof is still due.

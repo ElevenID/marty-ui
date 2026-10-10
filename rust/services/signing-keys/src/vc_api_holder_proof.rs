@@ -180,8 +180,7 @@ impl OpenBaoHolderProofProvider {
         let response = response
             .error_for_status()
             .map_err(|_| HolderProofError::Provider)?;
-        let body: Value = response
-            .json()
+        let body = kms::bounded_provider_json(response, kms::MAX_PROVIDER_JSON_BYTES)
             .await
             .map_err(|_| HolderProofError::Provider)?;
         let keys = body["data"]["keys"]
