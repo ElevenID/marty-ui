@@ -119,6 +119,9 @@ def test_source_guard_rejects_config_drift(fault):
 def modeled(tmp_path):
     # This deliberately small input tests the closed comparator, not rendering.
     # The separate mandatory Compose script supplies actual complete models.
+    (tmp_path / "didcomm-encryption-policy.json").write_text(
+        '{"version":1,"issuers":{}}', encoding="utf-8"
+    )
     baseline = {
         "services": {
             name: {"environment": {}} for name in GATE["NATIVE"]["TOKEN_CONSUMERS"]
@@ -134,6 +137,7 @@ def modeled(tmp_path):
     baseline["services"]["openbao-init"] = {
         "image": "synthetic.invalid/openbao-base",
         "environment": {},
+        "volumes": [],
     }
     baseline["services"]["issuance"]["environment"] = {
         "ALLOWED_REDIRECT_URIS": "",

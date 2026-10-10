@@ -133,7 +133,12 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                 url = urlsplit(self.path)
                 assert url.path == "/internal/signing-keys/" + path
                 assert parse_qs(url.query) == expected_query
-                assert self.headers.get("X-API-Key") == "synthetic-startup-api-key"
+                expected_key = (
+                    "synthetic-mixed-roster-issuer-sign-key-0001"
+                    if path == "issuer-dids/sign"
+                    else "synthetic-startup-api-key"
+                )
+                assert self.headers.get("X-API-Key") == expected_key
 
             def do_GET(self):
                 try:

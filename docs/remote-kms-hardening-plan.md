@@ -13292,3 +13292,40 @@ atomic operator replacement, yet no automated rotation/reissue path has been
 qualified. The probe now requires finite renewable lifetime and denies
 current-key metadata reads and sender-key rotation in addition to the earlier
 administrative negatives.
+
+Exact-head manual [CI run
+38087722833](https://github.com/ElevenID/marty-ui/actions/runs/38087722833)
+failed Release Contract Tests after 6,169 passing cases, 8 skips and 30
+fixture-setup errors. All 30 errors came from the same small
+`tests/test_base_native_issuance_compose.py` model: it omitted the exact
+authcrypt policy file and OpenBao init token volume now required by the
+shared native model. The held fixture correction adds those inputs; all 65
+cases in that file pass locally. This is test setup, not an accepted custody
+regression. The other hosted jobs were still running at this checkpoint.
+
+The UI branch was also 11 mainline commits behind strict protected `main`.
+They merged locally without conflict at `dc59f1f8d`; the merged classifier
+exceeded its 21,000-byte source limit (21,503 bytes), so redundant comments
+were condensed to 20,466 bytes without changing selection. A newly merged
+source-selector test expected no OpenBao output despite this branch's
+`openbao` classifier dimension; its expected false field is corrected, and
+it now requires the new scoped-token probe in the plugin lane. The affected
+selector reached 58 passing local cases before a Windows Git Bash 30-second
+source-proof timeout; the Docker bind-mount run was also too slow and stopped.
+The classifier source test and full merged-head hosted qualification remain
+outstanding. The base, DIDComm and four-composition/five-rate Compose model
+scripts passed after merging main.
+
+The same manual head's Canvas lane failed a mixed-roster HTTPS preflight at
+stage zero. The native child returned `canvas_authoritative_read_failed` after
+one signer request and no accepted signer operation. Source review found the
+fixture still required the shared startup key for both issuer resolution and
+the `issuer-dids/sign` route, while the hardened worker uses a distinct
+`SIGNING_KEYS_ISSUER_SIGN_KEY` for signing. The held correction gives the
+mixed-roster worker an explicit internal key and a distinct issuer-sign key;
+the synthetic signer checks each route's appropriate credential. It preserves
+the real dedicated-key behavior instead of reusing the shared key. Rustfmt,
+Ruff, Python syntax and the two focused CI-selector tests pass locally.
+Rust Contracts passed on the hosted `cf27e0e88` head; the OpenBao coordinated
+restore step was still running at this checkpoint. The Canvas and Release
+failures remain immutable evidence for that exact head.

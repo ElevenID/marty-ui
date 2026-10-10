@@ -807,6 +807,7 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["contracts"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
@@ -1124,6 +1125,7 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         storage_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"] == "marty-openbao-didcomm:ci"
     )
     for probe in (
+        "probe_didcomm_issuance_token.py",
         "probe_didcomm_openbao_file_storage.py",
         "probe_selfhost_openbao_raft_bootstrap.py",
         "probe_didcomm_openbao_ha.py",
