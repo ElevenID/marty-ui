@@ -12385,3 +12385,9 @@ The local candidate binds the fixture to `BAO_ADDR`/`BAO_TOKEN` and requests
 Clippy and Rustfmt. The exact ignored CSR test passed locally against a fresh
 disposable pinned OpenBao instance with non-exportable ES256/ES384/ES512
 Transit keys and a read/sign-only scoped token; the instance was removed.
+The shared disposable Signing Keys policy probe now also provisions
+non-exportable `cred-dsc-csr-contract-*` keys through its managed policy and
+runs the exact three-curve CSR test in the hosted Rust Contracts lane. The
+entire probe, including this addition, passed locally against fresh owned
+OpenBao, Redis and PostgreSQL containers, which were removed. Hosted
+qualification remains pending the next grouped UI head.

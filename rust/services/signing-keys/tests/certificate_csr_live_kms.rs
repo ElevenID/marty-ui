@@ -23,7 +23,7 @@ async fn csr_is_signed_and_verified_for_every_passport_ecdsa_curve_in_kms() {
             "service_type": "openbao-transit",
             "endpoint": endpoint,
             "mount": "transit",
-            "key_reference": format!("marty-csr-contract-{}", algorithm.to_ascii_lowercase()),
+            "key_reference": format!("cred-dsc-csr-contract-{}", algorithm.to_ascii_lowercase()),
             "algorithm": algorithm,
             "auth_mode": "service_token",
         });

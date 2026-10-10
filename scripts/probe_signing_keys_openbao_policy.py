@@ -440,6 +440,39 @@ def qualify(*, rust_adapter: bool = False) -> None:
                 raise RuntimeError(
                     f"Rust managed-key adapter failed:\n{detail[-2000:]}"
                 )
+            for algorithm, key_type in (
+                ("es256", "ecdsa-p256"),
+                ("es384", "ecdsa-p384"),
+                ("es512", "ecdsa-p521"),
+            ):
+                reference = f"cred-dsc-csr-contract-{algorithm}"
+                ensure(
+                    call("POST", f"transit/keys/{reference}", managed,
+                         {"type": key_type})[0] == 200,
+                    f"create non-exportable CSR key {algorithm}",
+                )
+                status, metadata = call("GET", f"transit/keys/{reference}", managed)
+                ensure(
+                    status == 200
+                    and metadata["data"]["type"] == key_type
+                    and metadata["data"]["exportable"] is False
+                    and metadata["data"]["allow_plaintext_backup"] is False,
+                    f"non-exportable CSR key metadata {algorithm}",
+                )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-signing-keys",
+                    "--test", "certificate_csr_live_kms", "--locked", "--offline",
+                    "-j2", "csr_is_signed_and_verified_for_every_passport_ecdsa_curve_in_kms",
+                    "--", "--ignored", "--exact", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                raise RuntimeError(f"Rust live CSR custody failed:\n{detail[-2000:]}")
             result = subprocess.run(
                 [
                     "cargo", "+1.95", "test", "-p", "marty-device-registration",
@@ -626,7 +659,7 @@ def qualify(*, rust_adapter: bool = False) -> None:
         )
         if rust_adapter:
             print(
-                "Rust managed-key adapter, holder service/DB/OpenBao lifecycle, credential durability, Redis pairing tickets, tenant routes, and managed-profile routes passed"
+                "Rust managed-key adapter, ES256/ES384/ES512 CSR custody, holder service/DB/OpenBao lifecycle, credential durability, Redis pairing tickets, tenant routes, and managed-profile routes passed"
             )
     finally:
         if postgres_started:
