@@ -838,6 +838,7 @@ def run() -> None:
                 "sys/init",
                 "",
                 {"secret_shares": 1, "secret_threshold": 1},
+                timeout=60,
             )
             require_status(
                 restored_bao_url,

@@ -12838,3 +12838,25 @@ the bundle packager but its `docker compose config` probe fails before the
 closed-model assertion, so only a hosted Linux replay can qualify this fix.
 This immutable CI failure should be grouped with any other new failures
 before the next push.
+
+Cross-repository PR state checked during this hosted wait: Core
+[PR #355](https://github.com/ElevenID/marty-core/pull/355) is now marked
+ready for review, mergeable, and at head `7f276a427b28ecc43fb2941b60a3884a731401e0`;
+its reported required CI/CodeQL checks pass, but GitHub still reports
+`REVIEW_REQUIRED`. Credentials [PR #313](https://github.com/ElevenID/marty-credentials/pull/313)
+remains draft and mergeable at `d5627393ea34502e36f84a8e9061a2da12a46af4`.
+UI [PR #1192](https://github.com/ElevenID/marty-ui/pull/1192) remains draft
+at `577cd5320abad2b7df13b0d1c42e352075421149`. These states do not
+replace release-artifact or assembled KMS-only acceptance.
+
+The `577cd5320` OpenBao plugin job failed in the coordinated restore probe:
+the live Rust Issuance DIDComm/HAIP and integration-secret restore-phase
+tests passed, but the replacement disposable OpenBao process did not answer
+the first `POST sys/init` within the shared helper's 10-second HTTP timeout.
+This is not proof that recovery succeeded on this head, nor proof of a
+cryptographic failure. The held follow-up gives this one non-idempotent
+replacement initialization request 60 seconds, without automatic retry or
+masking an initialization failure; the ordinary probe HTTP default remains
+10 seconds. Python syntax and diff checks pass. Hosted live recovery must be
+replayed, and a repeated timeout needs container-level diagnosis rather than
+further blind timeout increases.

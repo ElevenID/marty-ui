@@ -50,7 +50,13 @@ def docker(*args: str, timeout: int = 90) -> str:
 
 
 def request(
-    base: str, method: str, path: str, body: dict | None = None, token: str = ""
+    base: str,
+    method: str,
+    path: str,
+    body: dict | None = None,
+    token: str = "",
+    *,
+    timeout: float = 10,
 ) -> tuple[int, dict]:
     payload = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
@@ -60,7 +66,7 @@ def request(
         f"{base}/v1/{path}", data=payload, method=method, headers=headers
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:  # noqa: S310 - loopback only
+        with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - loopback only
             raw = response.read()
             return response.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as error:
@@ -82,9 +88,15 @@ def wait_for(operation: str, check, seconds: float = 30) -> object:
 
 
 def require_status(
-    base: str, method: str, path: str, token: str, body: dict | None = None
+    base: str,
+    method: str,
+    path: str,
+    token: str,
+    body: dict | None = None,
+    *,
+    timeout: float = 10,
 ) -> dict:
-    status, response = request(base, method, path, body, token)
+    status, response = request(base, method, path, body, token, timeout=timeout)
     if status not in (200, 204):
         raise RuntimeError(
             f"Disposable HA probe failed: {method} {path} status {status}"
