@@ -12860,3 +12860,19 @@ masking an initialization failure; the ordinary probe HTTP default remains
 10 seconds. Python syntax and diff checks pass. Hosted live recovery must be
 replayed, and a repeated timeout needs container-level diagnosis rather than
 further blind timeout increases.
+
+The same head's Canvas job failed only
+`selfhost_public_image_loader_isolated` after its database suite reached the
+packaged self-host preflight. The child exited with an incomplete packager
+operation and the parent correctly withheld cleanup. Source tracing shows
+that preflight calls the *same* `resolved_selfhost_runtime::qualify` closed
+model that failed explicitly in Rust Contracts. The child's stderr is
+intentionally not promoted to the parent log, and no owned-runtime artifact
+was uploaded, so the precise inner rejection is not directly observed.
+The new envelope-secret mount expectation is the leading common cause, but
+both hosted lanes must pass on the grouped follow-up before treating it as
+confirmed. All other completed jobs on
+[run 38074488225](https://github.com/ElevenID/marty-ui/actions/runs/38074488225)
+passed; CI Gate inherited the three leaf failures (Rust Contracts, Canvas,
+OpenBao plugin/recovery). [Exact-head Rust CodeQL](https://github.com/ElevenID/marty-ui/actions/runs/38074488223)
+passed. The failed run is immutable and does not qualify the local fixes.
