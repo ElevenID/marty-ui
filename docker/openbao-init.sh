@@ -51,6 +51,20 @@ path "didcomm/pack/+/+/+" {
   capabilities = ["update"]
 }
 POLICY
+    if [ -n "${DIDCOMM_ISSUANCE_TOKEN_FILE:-}" ]; then
+        token_dir="$(dirname "${DIDCOMM_ISSUANCE_TOKEN_FILE}")"
+        mkdir -p "${token_dir}"
+        umask 077
+        token_temp="$(mktemp "${DIDCOMM_ISSUANCE_TOKEN_FILE}.XXXXXX")"
+        if ! bao token create -address="${BAO_ADDR}" -policy=didcomm-issuance \
+            -no-default-policy -orphan -field=token > "${token_temp}"; then
+            rm -f "${token_temp}"
+            echo "Could not create scoped DIDComm issuance token." >&2
+            exit 1
+        fi
+        chmod 0444 "${token_temp}"
+        mv -f "${token_temp}" "${DIDCOMM_ISSUANCE_TOKEN_FILE}"
+    fi
 fi
 
 # ── Transit Engine (credential signing, encryption) ──────────────────

@@ -897,6 +897,7 @@ jobs:
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
         run: |
+          python3 scripts/probe_didcomm_issuance_token.py
           python3 scripts/probe_didcomm_openbao_file_storage.py
           python3 scripts/probe_selfhost_openbao_raft_bootstrap.py
           python3 scripts/probe_didcomm_openbao_ha.py

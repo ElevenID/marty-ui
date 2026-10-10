@@ -26,10 +26,9 @@ GHCR_FILE = "docker-compose.profile.ghcr.yml"
 LOCAL_BUILD_FILE = "docker-compose.profile.local-build.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
-DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-authcrypt.yml"
+DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.issuance-native-authcrypt.yml"
 NATIVE_FILE = "docker-compose.profile.conformance-native.yml"
 NATIVE_IMAGES_FILE = "docker-compose.profile.issuance-native-images.yml"
-NATIVE_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-native-authcrypt.yml"
 NATIVE_CA_FILE = "docker-compose.profile.didcomm-native-conformance.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
@@ -99,9 +98,9 @@ def compose_command(
         if use_ghcr:
             files.append(NATIVE_IMAGES_FILE)
     if include_didcomm_authcrypt:
+        if issuance_owner != "native":
+            raise ValueError("DIDComm authcrypt requires the native issuance owner")
         files.append(DIDCOMM_AUTHCRYPT_FILE)
-        if issuance_owner == "native":
-            files.append(NATIVE_AUTHCRYPT_FILE)
     if issuance_owner == "native":
         files.append(NATIVE_CA_FILE)
     files.append(ISOLATION_FILE)

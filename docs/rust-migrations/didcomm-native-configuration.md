@@ -60,14 +60,15 @@ capabilities and language-neutral reference fixtures remain.
 
 ## Explicit overlays
 
-`docker-compose.profile.didcomm-native-authcrypt.yml` requires an existing
-`issuance-native` service and `DIDCOMM_ENCRYPTION_POLICY_DIR`. It mounts only that
-exact directory read-only at `/run/secrets/didcomm-authcrypt`, with automatic
-host-path creation disabled. `DIDCOMM_ENCRYPTION_POLICY_FILE` points to
-`didcomm-encryption-policy.json` there. No gateway or unrelated service receives
-this material. Preserve the same issuer-specific policy used by legacy delivery:
-absent policy means anoncrypt, but a configured policy with an absent issuer or
-invalid authcrypt key must fail closed, never silently choose anoncrypt.
+`docker-compose.profile.issuance-native-authcrypt.yml` requires native Issuance,
+the reviewed OpenBao extension image digest, and an existing
+`DIDCOMM_ENCRYPTION_POLICY_DIR`. It mounts only the reference-only
+`didcomm-encryption-policy.json` file into native Issuance, read-only without
+host-path creation. OpenBao init installs the extension and mints a scoped
+read/pack token into a dedicated project volume. Native Issuance waits for
+init and mounts that volume read-only. No legacy Issuance, Gateway or unrelated
+service receives the policy or token. An issuer omitted from the configured
+policy fails closed; the Rust parser rejects private-key fields.
 
 `docker-compose.profile.didcomm-native-conformance.yml` additionally requires the
 existing project-isolation conformance overlay. It is for disposable tests only:
@@ -76,26 +77,26 @@ read-only file mount, enables private wallet endpoints, and provides
 `host.docker.internal:host-gateway` only to native issuance. It neither creates a
 standalone native service nor isolates an entire project by itself.
 
-Both native overlays are explicit additions. Existing legacy authcrypt and
-conformance overlays retain their standalone behavior. The beta release runner's
-`-EnableDidcommAuthcrypt` switch selects both legacy and native authcrypt profiles;
-it never selects conformance networking or a private CA. Without that switch the
-selected profile list stays empty. The legacy conformance launcher is unchanged.
+Both native overlays are explicit additions. The beta release runner's
+`-EnableDidcommAuthcrypt` switch selects only the shared remote-authcrypt
+overlay; it never selects conformance networking or a private CA. Without
+that switch the selected profile list stays empty. Legacy authcrypt selection
+is forbidden.
 
-## Beta deployment pairing gate
+## Beta remote-custody gate
 
 An optional overlay alone is not downgrade prevention. The beta runner now uses
-`scripts/beta-didcomm-configuration.ps1` to pair both profiles and calls the shared
+`scripts/beta-didcomm-configuration.ps1` to select the native profile and calls the shared
 stdlib validator in `scripts/validate_beta_didcomm_configuration.py`. It validates
 the actual complete rendered model, including the generated image override,
 before image pulls, builds, backups or service mutations, then revalidates before
 entering maintenance. Local release metadata/runtime-file staging precedes this
 gate; it does not stop or recreate services.
 
-Validation rejects selected-but-missing policies, legacy-only configuration,
-unexpected policy configuration without explicit opt-in, different policy
-sources, writable native mounts, automatic native host-path creation, and the
-same policy source mounted into unrelated services. Policy file contents are
+Validation rejects selected-but-missing policies, legacy key custody,
+unexpected policy configuration without explicit opt-in, missing or reused
+token volumes, unpinned plugin images, writable policy mounts, automatic host
+path creation and policy or token mounts into unrelated services. Policy contents are
 never read by this gate. Compose output stays in process memory with a 30-second
 timeout and an 8 MiB accepted JSON limit; errors and success output contain no
 model or environment values. `-PlanOnly` reports the boolean and profile names,
@@ -108,10 +109,10 @@ receive runner enforcement automatically. This change does not switch routes or
 perform a deployment.
 
 Native CA startup/error/rotation parity is separately qualified in
-[`didcomm-consumer-cutover-readiness.md`](didcomm-consumer-cutover-readiness.md);
-the configuration gate itself does not execute the Rust service. DIDComm KMS corrections
-remain deferred under `DIDCOMM-KMS-001`. Compatibility policy files can contain
-local sender private keys and are not a KMS-only solution.
+[`didcomm-consumer-cutover-readiness.md`](didcomm-consumer-cutover-readiness.md).
+The configuration gate itself does not execute Rust Issuance. A live
+beta/conformance authcrypt exchange and token-scope probe remain required
+before treating this composition as KMS custody acceptance.
 
 ## Read-only qualification
 

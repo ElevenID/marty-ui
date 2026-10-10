@@ -13225,3 +13225,28 @@ and [Rust CodeQL run
 started on 2026-10-10 at 20:59 UTC. The PR description now records the
 KMS-only conformance and renewal-test retirement batch. Hosted results for
 this new head are pending; prior green leaf jobs do not qualify it.
+
+On `b67bf4c1b`, Rust CodeQL, OpenBao plugin/coordinated recovery, service
+images, UI, protocol, security and most other CI jobs passed. Release Contract
+Tests failed one full-beta physical provider render because its fixture omitted
+the newly required `SIGNING_KEYS_ISSUER_SIGN_KEY`; the held local fixture fix
+passed its focused test. Canvas and Rust Contracts were still running at this
+checkpoint. Preserve the hosted failure and wait for those terminal results
+before the next grouped push.
+
+Held native authcrypt correction: base, beta and conformance now select one
+reference-only Rust Issuance overlay. It mounts only the exact policy JSON,
+selects the reviewed OpenBao DIDComm plugin image and config, and waits for
+OpenBao init to mint a no-default-policy, orphan `didcomm-issuance` token into
+a dedicated project volume. The legacy dual-owner and raw-key directory
+overlays are retired. The validator rejects missing or leaked policy/token
+mounts, stock backend, and legacy owner selection. A disposable plugin run
+of the actual init script proved the minted token can read a versioned public
+sender key and pack an authcrypt envelope, but cannot create a DIDComm key,
+read Transit, create tokens, or administer mounts. The new probe is wired to
+the plugin CI lane and passed locally against the locally built Go plugin
+image. Also passed locally: 419 focused Python tests, 12 base native complete
+Compose models, native DIDComm Compose gates, four conformance compositions
+across five token-rate inputs, Ruff and diff checks. This proves the scoped
+OpenBao operation in isolation; live beta/conformance end-to-end authcrypt and
+exact-head hosted qualification remain outstanding.

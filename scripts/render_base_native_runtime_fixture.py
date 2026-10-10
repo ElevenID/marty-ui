@@ -237,7 +237,7 @@ def render(spec, command):
             selected_native = selected["services"]["issuance-native"]["environment"]
             assert selected_native["DIDCOMM_KMS_ADDR"] == "http://openbao:8200"
             assert selected_native["DIDCOMM_KMS_TOKEN_FILE"] == (
-                "/run/secrets/didcomm-authcrypt/openbao-token"
+                "/run/secrets/didcomm-kms/openbao-token"
             )
         overlay = fixture_overlay(spec, selected)
         overlay_file = directory / "owned-process-addresses.json"

@@ -35,20 +35,65 @@ def model(enabled):
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
     }
     if enabled:
-        for name in ("issuance", "issuance-native"):
-            services[name]["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = (
-                "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
-            )
-            services[name]["volumes"] = [
+        native = services["issuance-native"]
+        native["environment"].update(
+            DIDCOMM_ENCRYPTION_POLICY_FILE="/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
+            DIDCOMM_KMS_ADDR="http://openbao:8200",
+            DIDCOMM_KMS_TOKEN_FILE="/run/secrets/didcomm-kms/openbao-token",
+        )
+        native["volumes"] = [
+            {
+                "type": "bind",
+                "source": f"/synthetic-owned-policy/{name}",
+                "target": f"/run/secrets/didcomm-authcrypt/{name}",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            }
+            for name in ("didcomm-encryption-policy.json",)
+        ]
+        native["volumes"].append(
+            {
+                "type": "volume",
+                "source": "didcomm_issuance_token",
+                "target": "/run/secrets/didcomm-kms",
+                "read_only": True,
+            }
+        )
+        native["depends_on"] = {
+            "openbao-init": {"condition": "service_completed_successfully"}
+        }
+        image = "synthetic.invalid/openbao-didcomm@sha256:" + "a" * 64
+        services["openbao"] = {
+            "image": image,
+            "command": ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"],
+            "volumes": [
                 {
                     "type": "bind",
-                    "source": "/synthetic-owned-policy",
-                    "target": "/run/secrets/didcomm-authcrypt",
+                    "source": "/synthetic/docker/openbao-didcomm-dev.hcl",
+                    "target": "/bao/config/didcomm-plugin.hcl",
                     "read_only": True,
-                    "bind": {"create_host_path": name == "issuance"},
+                    "bind": {"create_host_path": False},
                 }
-            ]
-    return {"services": services}
+            ],
+        }
+        services["openbao-init"] = {
+            "image": image,
+            "environment": {
+                "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
+                "DIDCOMM_ISSUANCE_TOKEN_FILE": "/run/didcomm-token/openbao-token",
+            },
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "didcomm_issuance_token",
+                    "target": "/run/didcomm-token",
+                }
+            ],
+        }
+    return {
+        "services": services,
+        "volumes": {"didcomm_issuance_token": {}} if enabled else {},
+    }
 
 
 @pytest.mark.parametrize(
@@ -141,27 +186,35 @@ def test_validator_captures_actual_model_with_closed_output(validator, enabled, 
     "case",
     (
         "legacy-only",
-        "native-only",
+        "legacy-policy",
         "disabled",
         "missing",
         "source",
         "writable",
         "auto-create",
         "gateway",
+        "wrong-token-path",
+        "writable-token-volume",
+        "wrong-token-volume",
+        "token-mounted-into-gateway",
+        "external-token-volume",
+        "missing-init-dependency",
+        "missing-mint",
+        "stock-openbao",
         "malformed",
     ),
 )
-def test_invalid_pairing_fails_closed_without_secret_values(validator, case):
+def test_invalid_native_kms_custody_fails_closed_without_secret_values(validator, case):
     candidate = model(True)
     enabled = True
     if case == "legacy-only":
         candidate["services"]["issuance-native"]["environment"].pop(
             "DIDCOMM_ENCRYPTION_POLICY_FILE"
         )
-    elif case == "native-only":
-        candidate["services"]["issuance"]["environment"].pop(
+    elif case == "legacy-policy":
+        candidate["services"]["issuance"]["environment"][
             "DIDCOMM_ENCRYPTION_POLICY_FILE"
-        )
+        ] = "synthetic-private-value"
     elif case == "disabled":
         enabled = False
     elif case == "missing":
@@ -178,8 +231,32 @@ def test_invalid_pairing_fails_closed_without_secret_values(validator, case):
         ] = True
     elif case == "gateway":
         candidate["services"]["gateway"]["volumes"] = deepcopy(
-            candidate["services"]["issuance"]["volumes"]
+            candidate["services"]["issuance-native"]["volumes"]
         )
+    elif case == "wrong-token-path":
+        candidate["services"]["issuance-native"]["environment"][
+            "DIDCOMM_KMS_TOKEN_FILE"
+        ] = "synthetic-private-value"
+    elif case == "writable-token-volume":
+        candidate["services"]["issuance-native"]["volumes"][1]["read_only"] = False
+    elif case == "wrong-token-volume":
+        candidate["services"]["issuance-native"]["volumes"][1]["source"] = (
+            "synthetic-private-value"
+        )
+    elif case == "token-mounted-into-gateway":
+        candidate["services"]["gateway"]["volumes"] = [
+            deepcopy(candidate["services"]["issuance-native"]["volumes"][1])
+        ]
+    elif case == "external-token-volume":
+        candidate["volumes"]["didcomm_issuance_token"] = {"external": True}
+    elif case == "missing-init-dependency":
+        candidate["services"]["issuance-native"]["depends_on"].clear()
+    elif case == "missing-mint":
+        candidate["services"]["openbao-init"]["environment"].pop(
+            "DIDCOMM_ISSUANCE_TOKEN_FILE"
+        )
+    elif case == "stock-openbao":
+        candidate["services"]["openbao"]["image"] = "quay.io/openbao/openbao:2"
     else:
         candidate = {"services": "synthetic-private-value"}
     with pytest.raises(validator["DidcommConfigurationError"]) as error:
@@ -213,8 +290,7 @@ def test_compose_failures_are_bounded_and_closed(validator, case):
 @pytest.mark.parametrize("source", ("/", "C:\\", "\\\\server\\share\\"))
 def test_policy_sources_cannot_be_filesystem_roots(validator, source):
     candidate = model(True)
-    for name in ("issuance", "issuance-native"):
-        candidate["services"][name]["volumes"][0]["source"] = source
+    candidate["services"]["issuance-native"]["volumes"][0]["source"] = source
     with pytest.raises(validator["DidcommConfigurationError"]):
         validator["validate_model"](candidate, authcrypt_enabled=True)
 
@@ -309,8 +385,7 @@ ConvertTo-Json -InputObject @($reports) -Depth 8 -Compress
     reports = json.loads(result.stdout)
     assert reports[0]["profiles"] == []
     assert reports[1]["profiles"] == [
-        "docker-compose.profile.didcomm-authcrypt.yml",
-        "docker-compose.profile.didcomm-native-authcrypt.yml",
+        "docker-compose.profile.issuance-native-authcrypt.yml",
     ]
     for report in reports:
         assert report["rejected"] is True

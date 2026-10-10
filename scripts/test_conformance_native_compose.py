@@ -65,14 +65,21 @@ PASSPORT_SHARED_INPUTS = (
 PASSPORT_NATIVE_ONLY = {
     "PASSPORT_NATIVE_HTTP_ENABLED": ("${PASSPORT_NATIVE_HTTP_ENABLED:-false}", "false"),
     "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": (
-        "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}", "false"
+        "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
+        "false",
     ),
     "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": (
         "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
         "false",
     ),
-    "PASSPORT_KMS_ARTIFACTS_ENABLED": ("${PASSPORT_KMS_ARTIFACTS_ENABLED:-false}", "false"),
-    "PASSPORT_KMS_CALLBACKS_ENABLED": ("${PASSPORT_KMS_CALLBACKS_ENABLED:-false}", "false"),
+    "PASSPORT_KMS_ARTIFACTS_ENABLED": (
+        "${PASSPORT_KMS_ARTIFACTS_ENABLED:-false}",
+        "false",
+    ),
+    "PASSPORT_KMS_CALLBACKS_ENABLED": (
+        "${PASSPORT_KMS_CALLBACKS_ENABLED:-false}",
+        "false",
+    ),
     "PASSPORT_TENANT_API_KEYS": ("${PASSPORT_TENANT_API_KEYS:-}", ""),
     "PASSPORT_TENANT_API_KEYS_FILE": ("${PASSPORT_TENANT_API_KEYS_FILE:-}", ""),
     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": (
@@ -105,6 +112,8 @@ def synthetic_values(model, directory):
         MARTY_SERVICES_IMAGE=IMAGE,
         MARTY_ISSUANCE_IMAGE="synthetic.invalid/issuance@sha256:" + "b" * 64,
         MARTY_UI_IMAGE="synthetic.invalid/ui@sha256:" + "c" * 64,
+        MARTY_OPENBAO_DIDCOMM_IMAGE="synthetic.invalid/openbao-didcomm@sha256:"
+        + "d" * 64,
         SIGNING_KEYS_INTEGRATION_SECRET_KEY="synthetic-dedicated-conformance-envelope-key-0001",
         SIGNING_KEYS_ISSUER_SIGN_KEY="synthetic-dedicated-conformance-issuer-sign-key-0001",
         OIDF_PUBLIC_BASE_URL="https://conformance.example:9443",
@@ -123,6 +132,13 @@ def assert_native_delta(legacy, actual):
     # The native owner is validated separately in full; this comparison guards
     # the explicitly enumerated authentication and selection differences.
     expected["services"]["issuance-native"] = actual["services"]["issuance-native"]
+    if "x-native-issuance-policy" in actual:
+        expected["x-native-issuance-policy"] = actual["x-native-issuance-policy"]
+        expected["volumes"]["didcomm_issuance_token"] = actual["volumes"][
+            "didcomm_issuance_token"
+        ]
+        for name in ("openbao", "openbao-init"):
+            expected["services"][name] = actual["services"][name]
     token = actual["services"]["issuance-native"]["environment"]["GRPC_SERVICE_TOKEN"]
     for name in NATIVE["TOKEN_CONSUMERS"]:
         expected["services"][name]["environment"]["GRPC_SERVICE_TOKEN"] = token
@@ -157,12 +173,26 @@ def assert_native_inputs(common, base_source):
     assert "INTEGRATION_SECRET_MASTER_KEY" not in native
     assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
     assert native["DATABASE_URL"].startswith("postgresql://")
-    assert native["SIGNING_KEYS_ISSUER_SIGN_KEY"] == "${SIGNING_KEYS_ISSUER_SIGN_KEY:?SIGNING_KEYS_ISSUER_SIGN_KEY must be set for beta}"
-    assert native["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] == "${SIGNING_KEYS_INTEGRATION_SECRET_KEY:?SIGNING_KEYS_INTEGRATION_SECRET_KEY must be set for beta}"
+    assert (
+        native["SIGNING_KEYS_ISSUER_SIGN_KEY"]
+        == "${SIGNING_KEYS_ISSUER_SIGN_KEY:?SIGNING_KEYS_ISSUER_SIGN_KEY must be set for beta}"
+    )
+    assert (
+        native["SIGNING_KEYS_INTEGRATION_SECRET_KEY"]
+        == "${SIGNING_KEYS_INTEGRATION_SECRET_KEY:?SIGNING_KEYS_INTEGRATION_SECRET_KEY must be set for beta}"
+    )
     assert native["INTEGRATION_SECRET_KMS_URL"] == "https://signing-keys:8018/internal"
-    assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == "/run/secrets/dev_integration_secret_ca"
-    assert common["services"]["issuance-native"]["secrets"] == ["dev_integration_secret_ca"]
-    assert base_source["secrets"]["dev_integration_secret_ca"]["file"] == "./.dev-integration-secret-tls/ca.crt"
+    assert (
+        native["INTEGRATION_SECRET_KMS_CA_FILE"]
+        == "/run/secrets/dev_integration_secret_ca"
+    )
+    assert common["services"]["issuance-native"]["secrets"] == [
+        "dev_integration_secret_ca"
+    ]
+    assert (
+        base_source["secrets"]["dev_integration_secret_ca"]["file"]
+        == "./.dev-integration-secret-tls/ca.crt"
+    )
     for setting in SHARED_SETTING_REPAIRS:
         assert setting in shared and setting in native
         if setting == "CANVAS_MIRROR_WORKER_ENABLED":
@@ -202,8 +232,12 @@ def run(command):
         yaml.safe_load((ROOT / COMMON).read_text(encoding="utf-8")),
         yaml.safe_load((ROOT / RUNTIME).read_text(encoding="utf-8")),
     )
-    approved_common = yaml.safe_load((ROOT / APPROVED_COMMON).read_text(encoding="utf-8"))
-    assert common == approved_common, "Shared native service changed outside the reviewed KMS-only model"
+    approved_common = yaml.safe_load(
+        (ROOT / APPROVED_COMMON).read_text(encoding="utf-8")
+    )
+    assert common == approved_common, (
+        "Shared native service changed outside the reviewed KMS-only model"
+    )
     base_source = yaml.safe_load(
         (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
     )
@@ -228,6 +262,7 @@ def run(command):
 
     with tempfile.TemporaryDirectory(prefix="conformance-native-render-") as temporary:
         directory = Path(temporary)
+
         def beta_binding(effective):
             (directory / "images.env").write_text(
                 "".join(f"{key}={value}\n" for key, value in sorted(effective.items())),
@@ -255,9 +290,10 @@ def run(command):
             assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
             for setting in SHARED_SETTING_REPAIRS + PASSPORT_SHARED_INPUTS:
                 if setting != "CANVAS_MIRROR_WORKER_ENABLED":
-                    assert native[setting] == actual["services"]["issuance"][
-                        "environment"
-                    ][setting]
+                    assert (
+                        native[setting]
+                        == actual["services"]["issuance"]["environment"][setting]
+                    )
             for setting, (_, default) in PASSPORT_NATIVE_ONLY.items():
                 assert native[setting] == (effective.get(setting) or default)
         for configured, expected_rate in TOKEN_RATE_CASES:
@@ -299,7 +335,7 @@ def run(command):
                     baseline = BIND["render_binding"](
                         directory,
                         command,
-                        *files(native=False, local=local, authcrypt=authcrypt),
+                        *files(native=False, local=local, authcrypt=False),
                         project=PROJECT,
                     )
                     selected = BIND["render_binding"](

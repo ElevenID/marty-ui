@@ -22,7 +22,9 @@ stack = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(stack)
 
 
-def _assert_unique_yaml_keys(node: yaml.Node, path: Path, location: str = "root") -> None:
+def _assert_unique_yaml_keys(
+    node: yaml.Node, path: Path, location: str = "root"
+) -> None:
     if isinstance(node, MappingNode):
         seen: dict[str, int] = {}
         for key_node, value_node in node.value:
@@ -327,34 +329,40 @@ def test_didcomm_authcrypt_overlay_is_explicit_and_isolation_is_last() -> None:
     files = [
         command[index + 1] for index, value in enumerate(command) if value == "--file"
     ]
-    assert [Path(path).name for path in files[-4:]] == [
+    assert [Path(path).name for path in files[-3:]] == [
         stack.DIDCOMM_AUTHCRYPT_FILE,
-        stack.NATIVE_AUTHCRYPT_FILE,
         stack.NATIVE_CA_FILE,
         stack.ISOLATION_FILE,
     ]
 
 
-def test_didcomm_authcrypt_policy_is_mounted_only_into_issuance() -> None:
+def test_didcomm_authcrypt_policy_and_token_are_mounted_only_into_native_issuance() -> (
+    None
+):
     overlay = yaml.safe_load(
         (ROOT / stack.DIDCOMM_AUTHCRYPT_FILE).read_text(encoding="utf-8")
     )
-    assert set(overlay["services"]) == {"issuance"}
-    issuance = overlay["services"]["issuance"]
+    assert set(overlay["services"]) == {"openbao", "openbao-init", "issuance-native"}
+    issuance = overlay["services"]["issuance-native"]
     assert issuance["environment"] == {
         "DIDCOMM_ENCRYPTION_POLICY_FILE": (
             "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
-        )
+        ),
+        "DIDCOMM_KMS_ADDR": "http://openbao:8200",
+        "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm-kms/openbao-token",
     }
-    assert issuance["volumes"] == [
-        {
-            "type": "bind",
-            "source": "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}",
-            "target": "/run/secrets/didcomm-authcrypt",
-            "read_only": True,
-            "bind": {"create_host_path": False},
-        }
+    assert [mount["target"] for mount in issuance["volumes"]] == [
+        "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
+        "/run/secrets/didcomm-kms",
     ]
+    assert issuance["volumes"][0]["read_only"] is True
+    assert issuance["volumes"][0]["bind"] == {"create_host_path": False}
+    assert issuance["volumes"][1] == {
+        "type": "volume",
+        "source": "didcomm_issuance_token",
+        "target": "/run/secrets/didcomm-kms",
+        "read_only": True,
+    }
 
 
 def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
@@ -376,10 +384,12 @@ def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
         assert "host.docker.internal:host-gateway" not in (
             ROOT / production_file
         ).read_text(encoding="utf-8")
-        assert "DIDCOMM_TLS_CA_FILE" not in (
-            ROOT / production_file
-        ).read_text(encoding="utf-8")
-    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text(encoding="utf-8"))
+        assert "DIDCOMM_TLS_CA_FILE" not in (ROOT / production_file).read_text(
+            encoding="utf-8"
+        )
+    base = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
     issuance_environment = base["services"]["issuance"]["environment"]
     assert issuance_environment["DIDCOMM_ALLOW_PRIVATE_IPS"] == (
         "${DIDCOMM_ALLOW_PRIVATE_IPS:-false}"
@@ -395,7 +405,9 @@ def test_trust_registry_private_adapter_is_conformance_only() -> None:
         "  deployment-profile:\n", 1
     )[0]
 
-    assert "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    assert (
+        "TRUST_REGISTRY_PRIVATE_HOST_ALLOWLIST: trust-registry-fixture" in trust_profile
+    )
     assert "TRUST_REGISTRY_TLS_CA_FILE:" in trust_profile
     assert 'TRUST_REGISTRY_SYNC_POLL_SECONDS: "86400"' in trust_profile
     assert "trust-registry-conformance-root-ca.pem:ro" in trust_profile
@@ -420,7 +432,9 @@ def test_local_build_defines_ui_without_release_image_overlays() -> None:
     ]
 
     assert files[-1].endswith("docker-compose.profile.conformance.yml")
-    assert any(path.endswith("docker-compose.profile.local-build.yml") for path in files)
+    assert any(
+        path.endswith("docker-compose.profile.local-build.yml") for path in files
+    )
     assert not any(path.endswith("docker-compose.profile.ghcr.yml") for path in files)
     assert not any(
         path.endswith("docker-compose.profile.conformance-images.yml") for path in files
@@ -439,9 +453,9 @@ def test_local_ui_image_is_reproducible_and_installs_postinstall_script() -> Non
 
     assert "oven/bun:1.3.14-alpine@sha256:" in dockerfile
     assert "nginx:1.29.1-alpine@sha256:" in dockerfile
-    assert dockerfile.index("COPY scripts/patch-prerenderer-ts-deepmerge.cjs") < dockerfile.index(
-        "RUN bun install --frozen-lockfile"
-    )
+    assert dockerfile.index(
+        "COPY scripts/patch-prerenderer-ts-deepmerge.cjs"
+    ) < dockerfile.index("RUN bun install --frozen-lockfile")
     assert "node_modules" in dockerignore.splitlines()
     assert "dist" in dockerignore.splitlines()
     assert ".env" in dockerignore.splitlines()
@@ -505,7 +519,9 @@ def test_local_build_requires_digest_pinned_bootstrap_artifacts(
 def test_only_python_migrations_receive_verified_python_artifacts() -> None:
     """Rust services must not inherit Python artifact inputs or runtime residue."""
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
-    assert "x-marty-migration-build-artifacts: &marty_migration_build_artifacts" in compose
+    assert (
+        "x-marty-migration-build-artifacts: &marty_migration_build_artifacts" in compose
+    )
     migration = re.search(
         r"(?ms)^  db-migrate:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)", compose
     )
@@ -797,9 +813,10 @@ def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
     )
 
     assert "image: ${MARTY_UI_IMAGE:?" in profile
-    assert "condition: service_healthy" in profile.split("  ui:\n", 1)[1].split(
-        "\n  db-migrate:\n", 1
-    )[0]
+    assert (
+        "condition: service_healthy"
+        in profile.split("  ui:\n", 1)[1].split("\n  db-migrate:\n", 1)[0]
+    )
     assert "  ui:\n        condition: service_healthy" in oidf
     assert "console(?:/|$)" in proxy
     assert "locales/" in proxy

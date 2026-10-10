@@ -80,7 +80,10 @@ INTEGRATION_SECRET_MASTER_KEY_FILE
 """.split()
 )
 BETA_OVERLAY_ONLY = frozenset(
-    {"PASSPORT_BETA_RECONCILIATION_ENABLED", "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"}
+    {
+        "PASSPORT_BETA_RECONCILIATION_ENABLED",
+        "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN",
+    }
 )
 EXPLICIT_MOUNTS = frozenset({"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"})
 FILE_SELECTORS = frozenset(
@@ -93,13 +96,15 @@ FILE_SELECTORS = frozenset(
     }
 )
 NATIVE_CONFIG_META = frozenset({"CARGO_PKG_VERSION", "MARTY_ISSUANCE__"})
-FORBIDDEN_LOCAL_CUSTODY_INPUTS = frozenset({
-    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
-    "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
-    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
-    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
-    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
-})
+FORBIDDEN_LOCAL_CUSTODY_INPUTS = frozenset(
+    {
+        "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
+        "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+        "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
+        "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
+    }
+)
 
 
 def source(path):
@@ -124,7 +129,8 @@ def assert_sources(base, profile, runtime):
     signer = base["services"]["signing-keys"]
     worker = base["services"]["canvas-sync-worker"]
     assert signer["secrets"] == [
-        "dev_integration_secret_server_cert", "dev_integration_secret_server_key"
+        "dev_integration_secret_server_cert",
+        "dev_integration_secret_server_key",
     ]
     assert signer["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE"] == (
         "/run/secrets/dev_integration_secret_server_cert"
@@ -142,7 +148,8 @@ def assert_sources(base, profile, runtime):
         )
     assert native["secrets"] == ["dev_integration_secret_ca"]
     assert set(base["secrets"]) == {
-        "dev_integration_secret_ca", "dev_integration_secret_server_cert",
+        "dev_integration_secret_ca",
+        "dev_integration_secret_server_cert",
         "dev_integration_secret_server_key",
     }
     for secret, file_name in (
@@ -156,7 +163,8 @@ def assert_sources(base, profile, runtime):
     owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
     assert set(legacy) - set(env) - owner_selection == LEGACY_ONLY
     assert set(env) - set(legacy) == set(NATIVE_ONLY) - {
-        "GRPC_SERVICE_TOKEN", "SERVICE_NAME"
+        "GRPC_SERVICE_TOKEN",
+        "SERVICE_NAME",
     }
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
@@ -291,9 +299,13 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
                 "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"
             )
             or "false",
-            "PASSPORT_KMS_ARTIFACTS_ENABLED": inputs.get("PASSPORT_KMS_ARTIFACTS_ENABLED")
+            "PASSPORT_KMS_ARTIFACTS_ENABLED": inputs.get(
+                "PASSPORT_KMS_ARTIFACTS_ENABLED"
+            )
             or "false",
-            "PASSPORT_KMS_CALLBACKS_ENABLED": inputs.get("PASSPORT_KMS_CALLBACKS_ENABLED")
+            "PASSPORT_KMS_CALLBACKS_ENABLED": inputs.get(
+                "PASSPORT_KMS_CALLBACKS_ENABLED"
+            )
             or "false",
             "PASSPORT_TENANT_API_KEYS": inputs.get("PASSPORT_TENANT_API_KEYS") or "",
             "PASSPORT_TENANT_API_KEYS_FILE": inputs.get("PASSPORT_TENANT_API_KEYS_FILE")
@@ -323,7 +335,12 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "timeout": "5s",
             "retries": 3,
         },
-        "secrets": [{"source": "dev_integration_secret_ca", "target": "/run/secrets/dev_integration_secret_ca"}],
+        "secrets": [
+            {
+                "source": "dev_integration_secret_ca",
+                "target": "/run/secrets/dev_integration_secret_ca",
+            }
+        ],
         "networks": {"marty-network": None},
         "restart": "unless-stopped",
     }
@@ -348,9 +365,10 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "ISSUANCE_NATIVE_SERVICE_URL": NATIVE["NATIVE_URL"],
         }
     )
-    expected["services"]["issuance"].setdefault("depends_on", {})[
-        "issuance-native"
-    ] = {"condition": "service_healthy", "required": True}
+    expected["services"]["issuance"].setdefault("depends_on", {})["issuance-native"] = {
+        "condition": "service_healthy",
+        "required": True,
+    }
     expected["services"]["issuance"]["healthcheck"]["test"] = [
         "CMD",
         "curl",
@@ -369,48 +387,76 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
     expected["x-native-issuance-grpc-auth"] = {"GRPC_SERVICE_TOKEN": token}
     if authcrypt:
         assert policy_directory.is_dir(), "Explicit policy directory must already exist"
+        assert (policy_directory / "didcomm-encryption-policy.json").is_file(), (
+            "Exact DIDComm reference policy file must exist"
+        )
         policy = {
             "environment": {
                 "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY["POLICY_TARGET"]
                 + "/didcomm-encryption-policy.json",
                 "DIDCOMM_KMS_ADDR": "http://openbao:8200",
-                "DIDCOMM_KMS_TOKEN_FILE": POLICY["POLICY_TARGET"]
-                + "/openbao-token",
+                "DIDCOMM_KMS_TOKEN_FILE": POLICY["TOKEN_FILE"],
             },
             "volumes": [
                 {
                     "type": "bind",
-                    "source": policy_directory.as_posix(),
-                    "target": POLICY["POLICY_TARGET"],
+                    "source": (
+                        policy_directory / "didcomm-encryption-policy.json"
+                    ).as_posix(),
+                    "target": POLICY["POLICY_FILE"],
                     "read_only": True,
                     "bind": {"create_host_path": False},
-                }
+                },
+                {
+                    "type": "volume",
+                    "source": "didcomm_issuance_token",
+                    "target": POLICY["TOKEN_TARGET"],
+                    "read_only": True,
+                },
             ],
         }
-        for name in ("issuance", "issuance-native"):
-            service = expected["services"][name]
-            service["environment"].update(policy["environment"])
-            service["volumes"] = [
-                *service.get("volumes", []),
-                *deepcopy(policy["volumes"]),
-            ]
+        service = expected["services"]["issuance-native"]
+        service["environment"].update(policy["environment"])
+        service["volumes"] = [*service.get("volumes", []), *deepcopy(policy["volumes"])]
+        service["depends_on"]["openbao-init"] = {
+            "condition": "service_completed_successfully",
+            "required": True,
+        }
         expected["x-native-issuance-policy"] = policy
+        expected.setdefault("volumes", {})["didcomm_issuance_token"] = {
+            "name": f"{PROJECT}_didcomm_issuance_token"
+        }
         plugin_image = inputs["MARTY_OPENBAO_DIDCOMM_IMAGE"]
         openbao = expected["services"]["openbao"]
         openbao["image"] = plugin_image
         openbao["command"] = [
-            "server", "-config=/bao/config/didcomm-plugin.hcl", "-dev"
+            "server",
+            "-dev",
+            "-config",
+            "/bao/config/didcomm-plugin.hcl",
         ]
-        openbao["volumes"].append({
-            "type": "bind",
-            "source": "./docker/openbao-didcomm-dev.hcl",
-            "target": "/bao/config/didcomm-plugin.hcl",
-            "read_only": True,
-            "bind": {"create_host_path": False},
-        })
+        openbao["volumes"].append(
+            {
+                "type": "bind",
+                "source": "./docker/openbao-didcomm-dev.hcl",
+                "target": "/bao/config/didcomm-plugin.hcl",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            }
+        )
         bootstrap = expected["services"]["openbao-init"]
         bootstrap["image"] = plugin_image
         bootstrap["environment"]["DIDCOMM_KMS_PLUGIN_REQUIRED"] = "true"
+        bootstrap["environment"]["DIDCOMM_ISSUANCE_TOKEN_FILE"] = (
+            "/run/didcomm-token/openbao-token"
+        )
+        bootstrap["volumes"].append(
+            {
+                "type": "volume",
+                "source": "didcomm_issuance_token",
+                "target": "/run/didcomm-token",
+            }
+        )
     return expected
 
 
@@ -428,29 +474,35 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
         # Admit that one presentation difference only after proving the exact
         # source profile forbids host-path creation and the inputs exist.
         source = yaml.safe_load((ROOT / POLICY_PROFILE).read_text(encoding="utf-8"))
-        policy_mount = source["x-native-issuance-policy"]["volumes"][0]
+        policy_mounts = source["x-native-issuance-policy"]["volumes"]
         plugin_mount = source["services"]["openbao"]["volumes"][0]
-        assert policy_mount["bind"] == {"create_host_path": False}
+        assert len(policy_mounts) == 2
+        assert policy_mounts[0]["bind"] == {"create_host_path": False}
+        assert policy_mounts[1]["type"] == "volume"
         assert plugin_mount["bind"] == {"create_host_path": False}
         assert (ROOT / "docker/openbao-didcomm-dev.hcl").is_file()
         actual = deepcopy(actual)
         for name, target in (
-            ("issuance", POLICY["POLICY_TARGET"]),
-            ("issuance-native", POLICY["POLICY_TARGET"]),
+            ("issuance-native", POLICY["POLICY_FILE"]),
+            ("issuance-native", POLICY["TOKEN_TARGET"]),
             ("openbao", "/bao/config/didcomm-plugin.hcl"),
         ):
             mounts = [
-                mount for mount in actual["services"][name]["volumes"]
+                mount
+                for mount in actual["services"][name]["volumes"]
                 if mount.get("target") == target
             ]
             assert len(mounts) == 1
             if mounts[0].get("bind") == {}:
                 mounts[0]["bind"] = {"create_host_path": False}
-    assert actual == expected, "".join(difflib.unified_diff(
-        json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
-        json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
-        fromfile="expected", tofile="actual",
-    ))
+    assert actual == expected, "".join(
+        difflib.unified_diff(
+            json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
+            json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
+            fromfile="expected",
+            tofile="actual",
+        )
+    )
     POLICY["validate_model"](actual, authcrypt_enabled=authcrypt)
     assert (
         actual["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"]
@@ -505,6 +557,10 @@ def run(command):
         directory = Path(temporary)
         policy_directory = directory / "explicit-policy"
         policy_directory.mkdir()
+        (policy_directory / "didcomm-encryption-policy.json").write_text(
+            '{"version":1,"issuers":{"did:example:issuer":{"mode":"authcrypt","sender_key_ref":"didcomm/keys/tenant/flow/versions/v1"}}}',
+            encoding="utf-8",
+        )
         required = {
             key: "synthetic-required-artifact"
             for key in re.findall(
@@ -550,8 +606,8 @@ def run(command):
                 "MARTY_MIGRATIONS_IMAGE": "synthetic.invalid/migrations@sha256:"
                 + "c" * 64,
                 "DIDCOMM_ENCRYPTION_POLICY_DIR": policy_directory.as_posix(),
-                "MARTY_OPENBAO_DIDCOMM_IMAGE":
-                    "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64,
+                "MARTY_OPENBAO_DIDCOMM_IMAGE": "synthetic.invalid/openbao-didcomm@sha256:"
+                + "d" * 64,
                 **overrides,
             }
             (directory / "images.env").write_text(

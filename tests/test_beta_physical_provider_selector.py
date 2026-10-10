@@ -387,6 +387,8 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "DEVICE_REGISTRATION_GATEWAY_KEY": "synthetic-distinct-beta-device-gateway-key-32-chars",
         "DEVICE_REGISTRATION_SIGNING_KEYS_KEY": "synthetic-distinct-beta-device-signing-key-32-chars",
         "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "synthetic-beta-physical-issuer-sign-key-0001",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-beta-physical-envelope-key-0001",
     })
     digest_names = (
         "MARTY_COMMON_DIGEST", "MARTY_RS_DIGEST", "MARTY_VERIFICATION_DIGEST",
@@ -410,7 +412,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE",
         "APPLICANT_WORKLOAD_CLIENT_KEY_FILE", "FLOW_WORKLOAD_CLIENT_KEY_FILE",
         "AUTH_WORKLOAD_CLIENT_KEY_FILE", "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
-        "AUTH_WORKLOAD_CLIENT_CERT_FILE", "INTEGRATION_SECRET_MASTER_KEY",
+        "AUTH_WORKLOAD_CLIENT_CERT_FILE",
         "TOKEN_HMAC_KEY", "CORS_ORIGINS",
     )
     env.update({name: "sha256:" + "a" * 64 for name in digest_names})

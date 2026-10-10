@@ -1,21 +1,25 @@
-# Explicit remote-authcrypt policy and OpenBao token are mounted read-only.
-# The policy directory must contain didcomm-encryption-policy.json and a scoped token file.
+# Mount only the reference-only authcrypt policy. OpenBao init mints a scoped
+# token into a dedicated project volume before native Issuance starts.
 x-native-issuance-policy: &native-issuance-policy
   environment:
     DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
     DIDCOMM_KMS_ADDR: http://openbao:8200
-    DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm-authcrypt/openbao-token
+    DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm-kms/openbao-token
   volumes:
     - type: bind
-      source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}
-      target: /run/secrets/didcomm-authcrypt
+      source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}/didcomm-encryption-policy.json
+      target: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
       read_only: true
       bind:
         create_host_path: false
+    - type: volume
+      source: didcomm_issuance_token
+      target: /run/secrets/didcomm-kms
+      read_only: true
 services:
   openbao:
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
-    command: ["server", "-config=/bao/config/didcomm-plugin.hcl", "-dev"]
+    command: ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"]
     volumes:
       - type: bind
         source: ./docker/openbao-didcomm-dev.hcl
@@ -27,5 +31,15 @@ services:
     image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     environment:
       DIDCOMM_KMS_PLUGIN_REQUIRED: "true"
-  issuance: *native-issuance-policy
-  issuance-native: *native-issuance-policy
+      DIDCOMM_ISSUANCE_TOKEN_FILE: /run/didcomm-token/openbao-token
+    volumes:
+      - type: volume
+        source: didcomm_issuance_token
+        target: /run/didcomm-token
+  issuance-native:
+    <<: *native-issuance-policy
+    depends_on:
+      openbao-init:
+        condition: service_completed_successfully
+volumes:
+  didcomm_issuance_token:
