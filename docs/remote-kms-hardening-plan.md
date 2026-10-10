@@ -13215,3 +13215,13 @@ CI Gate inherited that failure. The held local KMS-only conformance test
 replacement and native shared-owner corrections require one new exact-head
 run. Preserve this failed run as evidence; its successful leaf jobs qualify
 only `7b8c81631`.
+
+The eleven held corrections were grouped into UI head `b67bf4c1b` and
+pushed to draft [PR #1192](https://github.com/ElevenID/marty-ui/pull/1192).
+Its [exact-head CI run
+38085880059](https://github.com/ElevenID/marty-ui/actions/runs/38085880059)
+and [Rust CodeQL run
+38085880096](https://github.com/ElevenID/marty-ui/actions/runs/38085880096)
+started on 2026-10-10 at 20:59 UTC. The PR description now records the
+KMS-only conformance and renewal-test retirement batch. Hosted results for
+this new head are pending; prior green leaf jobs do not qualify it.
