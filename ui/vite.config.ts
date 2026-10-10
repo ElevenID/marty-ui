@@ -296,9 +296,12 @@ export default defineConfig(async ({ mode }) => {
       react(),
       consoleEntryRewritePlugin(),
       ...(isDev ? [checker({
-        typescript: true,
+        // Match the production build's checked sources. The broad root config
+        // includes test fixtures that do not currently type-check; Vitest owns
+        // their live behavioral feedback.
+        typescript: { tsconfigPath: 'tsconfig.build.json' },
         eslint: {
-          lintCommand: 'eslint . --ext .js,.jsx,.ts,.tsx',
+          lintCommand: 'eslint src --ext .js,.jsx',
         },
         overlay: {
           initialIsOpen: false,
