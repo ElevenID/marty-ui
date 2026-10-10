@@ -3135,6 +3135,18 @@ The checkpoint above predates merges: [#1228](https://github.com/ElevenID/marty-
 scheduled/manual runs keep analysis. #1230 reports slow release pytest cases
 without changing their execution. Neither is a controlled speedup measurement.
 
+October 10 A6 follow-up candidate: the three explicit
+`marty-service-acceptance` test targets are compiled and run from checkout in
+the protected contracts lane, while the root release Docker context still
+copied their source files. An exact-file context exclusion and checked-out
+source/manifest/context proof extend the existing PR-only production-CodeQL
+shortcut to modified-only test-target PRs. Unknown, added, renamed, mixed,
+proof-drift, and changed-CodeQL-configuration inputs retain analysis; merge
+groups and scheduled/manual runs remain full. All 26 local source/context
+proof tests and the focused dynamic CodeQL policy test pass; an independent
+reviewer found no P1-P3 issue. Exact-head hosted CI and any timing benefit
+remain unproven until the candidate is published.
+
 [#1232](https://github.com/ElevenID/marty-ui/pull/1232) adds per-target
 Canvas phase attribution without changing coverage and passed exact-head PR
 CI. Its hosted sample found the published-canvas group at 629s, with worker

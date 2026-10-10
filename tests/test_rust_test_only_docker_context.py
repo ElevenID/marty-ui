@@ -73,6 +73,12 @@ SELFHOST_TEST_FILES = (
     "support/selfhost_packaged_runtime.rs",
     "support/selfhost_runtime_sidecar.rs",
 )
+SERVICE_ACCEPTANCE_TEST_ROOT = "rust/crates/service-acceptance/tests/"
+SERVICE_ACCEPTANCE_TARGETS = (
+    "passport_managed_kms_chain",
+    "passport_gateway_postgres",
+    "gateway_signing_acceptance",
+)
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -588,6 +594,93 @@ def test_verified_selfhost_test_paths_require_six_context_proof() -> None:
     ) + b"\0"
 
 
+def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
+    paths = [SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS]
+    assert _tracked_paths(ROOT, SERVICE_ACCEPTANCE_TEST_ROOT) == sorted(paths)
+    for path in paths:
+        assert (ROOT / path).is_file() and not (ROOT / path).is_symlink()
+        assert _tracked_regular_mode(ROOT, path)
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/service-acceptance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    assert manifest["package"]["name"] == "marty-service-acceptance"
+    assert manifest["package"]["autotests"] is False
+    assert "build" not in manifest["package"]
+    assert manifest["test"] == [
+        {"name": name, "path": f"tests/{name}.rs"}
+        for name in SERVICE_ACCEPTANCE_TARGETS
+    ]
+    assert not _ownership_sources(ROOT, tuple(name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS)), (
+        "Review a Rust source include of a service-acceptance target"
+    )
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for dockerfile in DOCKER_CONTEXTS:
+        recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
+        assert "--cfg test" not in recipe
+        assert "--all-targets" not in recipe
+        assert "cargo test" not in recipe
+    build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "cargo build --locked --release" in build_script
+    assert "--cfg test" not in build_script and "--all-targets" not in build_script
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for path in paths:
+            assert _is_ignored(path, lines), f"Docker COPY includes {ignore_path}: {path}"
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1
+        for path in PRODUCTION_INPUTS:
+            assert not _is_ignored(path, lines)
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "unreviewed.rs", root_lines)
+
+
+def test_verified_service_acceptance_paths_require_six_context_proof() -> None:
+    result = subprocess.run(
+        [sys.executable, __file__, "--emit-verified-service-acceptance-tests"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    assert result.stderr == b""
+    assert result.stdout == b"".join(
+        (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8") + b"\0"
+        for name in SERVICE_ACCEPTANCE_TARGETS
+    )
+
+
+def test_service_acceptance_context_proof_rejects_reincluded_test(monkeypatch) -> None:
+    import pytest
+
+    original = Path.read_text
+    target = SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs"
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+
+        def with_reincluded_test(path: Path, *args, _ignore_path=ignore_path, **kwargs) -> str:
+            source = original(path, *args, **kwargs)
+            if path == ROOT / _ignore_path:
+                return source + "\n!" + target + "\n"
+            return source
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", with_reincluded_test)
+            with pytest.raises(AssertionError, match="Docker COPY includes"):
+                test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+
+
+def test_service_acceptance_context_proof_rejects_non_test_consumer(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_ownership_sources",
+        lambda *_args: {"rust/services/issuance/src/lib.rs": "include!"},
+    )
+    with pytest.raises(AssertionError, match="Rust source include"):
+        test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+
+
 def test_flow_context_proof_rejects_reincluded_test(monkeypatch) -> None:
     import pytest
 
@@ -865,7 +958,13 @@ def test_new_copying_dockerfile_requires_context_review(tmp_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv == [sys.argv[0], "--emit-verified-selfhost-tests"]:
+    if sys.argv == [sys.argv[0], "--emit-verified-service-acceptance-tests"]:
+        test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+        for name in SERVICE_ACCEPTANCE_TARGETS:
+            sys.stdout.buffer.write(
+                (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8") + b"\0"
+            )
+    elif sys.argv == [sys.argv[0], "--emit-verified-selfhost-tests"]:
         test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
         for name in SELFHOST_TEST_FILES:
             sys.stdout.buffer.write((SELFHOST_TEST_ROOT + name).encode("utf-8") + b"\0")
@@ -896,4 +995,5 @@ if __name__ == "__main__":
             "Usage: test_rust_test_only_docker_context.py "
             "--emit-verified-leaves|--emit-verified-worker-tests|"
             "--emit-verified-flow-tests|--emit-verified-selfhost-tests"
+            "|--emit-verified-service-acceptance-tests"
         )
