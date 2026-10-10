@@ -1,5 +1,5 @@
 {
-  "schema": "marty.canvas-worker-oracle-script-imports/v5",
+  "schema": "marty.canvas-worker-oracle-script-imports/v6",
   "purpose": "Inventory only. This is not complete capture-input closure or permission to reuse historical qualification.",
   "entrypoint_roots": [
     "canvas_worker_dispatch_hooks.py",
@@ -181,8 +181,12 @@
     {"when": "\"worker_reclaimers_retry\"", "paths": ["contracts/canvas-worker-provider-recovery-scenarios.json", "contracts/canvas-worker-reclaimers-scenarios.json", "contracts/canvas-worker-concurrent-scenarios.json"]},
     {"when": "_", "paths": []}
   ],
+  "published_image_oracle_mounts": [
+    {"source": "scripts/run_canvas_provider_configuration_oracle.py", "target": "/verification/scripts/run_canvas_provider_configuration_oracle.py"},
+    {"source": "contracts/canvas-provider-configuration-scenarios.json", "target": "/verification/contracts/canvas-provider-configuration-scenarios.json"}
+  ],
   "harness_path_syntax": {
-    "scope": "Static path literals and root.join syntax inside start_probe_with_scope only; caller-supplied values and mounts built elsewhere are not inventoried. This is not complete host-mount closure.",
+    "scope": "Static path literals and root.join syntax inside start_probe_with_scope only; caller-supplied values and other mounts remain outside this bounded inventory. This is not complete host-mount closure.",
     "literal_paths": [
       "contracts/canvas-mixed-roster-oracle.json",
       "contracts/canvas-mixed-roster-scenarios.json",
