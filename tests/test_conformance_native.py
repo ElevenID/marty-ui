@@ -205,7 +205,7 @@ def test_native_conformance_rejects_local_master_key_sources(owner, secret_sourc
 
 @pytest.mark.parametrize(
     "fault",
-    ["missing-url", "downgraded-url", "missing-ca", "missing-mount", "reused-key"],
+    ["missing-url", "downgraded-url", "missing-ca", "missing-mount", "reused-key", "missing-issuer-key", "reused-issuer-key"],
 )
 def test_native_conformance_requires_remote_envelope_custody(fault):
     value = model()
@@ -221,7 +221,11 @@ def test_native_conformance_requires_remote_envelope_custody(fault):
         service["secrets"] = []
     elif fault == "reused-key":
         environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] = environment["ISSUANCE_API_KEY"]
-    with pytest.raises(ValueError, match="Native remote integration-secret"):
+    elif fault == "missing-issuer-key":
+        environment.pop("SIGNING_KEYS_ISSUER_SIGN_KEY")
+    elif fault == "reused-issuer-key":
+        environment["SIGNING_KEYS_ISSUER_SIGN_KEY"] = environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY"]
+    with pytest.raises(ValueError, match="Native remote"):
         native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
 
 
@@ -277,6 +281,7 @@ def model(*, local=False, authcrypt=False):
             **env,
             "SERVICE_NAME": "issuance_native",
             "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-dedicated-integration-secret-key-00000001",
+            "SIGNING_KEYS_ISSUER_SIGN_KEY": "synthetic-dedicated-issuer-sign-key-0000000000001",
             "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
             "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
         },

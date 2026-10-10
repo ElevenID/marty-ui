@@ -174,6 +174,17 @@ def validate_model(
             "Native remote integration-secret credential is incomplete",
         )
         require(
+            isinstance(env.get("SIGNING_KEYS_ISSUER_SIGN_KEY"), str)
+            and len(env["SIGNING_KEYS_ISSUER_SIGN_KEY"].strip()) >= 32
+            and env["SIGNING_KEYS_ISSUER_SIGN_KEY"]
+            not in {
+                env.get("SIGNING_KEYS_INTEGRATION_SECRET_KEY"),
+                env.get("SIGNING_KEYS_INTERNAL_API_KEY"),
+                env.get("ISSUANCE_API_KEY"),
+            },
+            "Native remote issuer-sign credential is incomplete",
+        )
+        require(
             any(
                 secret.get("source") == "dev_integration_secret_ca"
                 and secret.get("target") == "/run/secrets/dev_integration_secret_ca"

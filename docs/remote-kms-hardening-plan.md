@@ -13142,6 +13142,14 @@ correction; five additional negative tests check missing/downgraded remote
 custody inputs. This fixes configuration wiring, not yet a live beta or
 conformance startup proof.
 
+The same source-to-runtime audit found `SIGNING_KEYS_ISSUER_SIGN_KEY` absent
+from the shared beta/conformance native owner, although `IssuanceServiceConfig::from_env`
+requires it before serving. The held common-model and exact-snapshot correction
+now requires that dedicated credential, with distinct synthetic values and
+rendered-model checks. Negative cases reject absence and reuse of the
+integration-secret key. The combined conformance and DIDComm configuration
+tests pass 190 cases; the full four-composition/five-rate render passes again.
+
 Additional local guard evidence after the shared-owner wiring: all 171
 `tests/test_conformance_native.py` cases and 158 adjacent beta/conformance
 release and base-native Compose cases pass; the full four-composition/five-rate
