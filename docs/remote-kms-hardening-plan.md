@@ -11488,6 +11488,10 @@ qualification. The crate also has local Ed25519 PEM issuance for
 software license tokens, a separate key class from credential issuer/holder
 keys; do not treat this Core repin as KMS custody for license signing or claim
 the subscription service has no local private keys.
+The top-level Cargo-manifest scan found direct Core consumers in UI,
+Credentials, Verifier, Authenticator and Subscriptions. The similarly named
+`marty-ui-passport-*` directories share the UI Git worktree common directory
+and are preserved branch copies, not separate shipping repositories.
 
 UI branch was one upstream release-fence commit behind `main`.
 `git merge-tree` found no conflicts, and local merge `e28b6146a` incorporates
