@@ -23,7 +23,7 @@ use marty_signing_keys::{
     certificate_issuance::{prepare_csca, prepare_dsc, VerifiedDscSubject},
     csca_lifecycle::CscaLifecycleStore,
     documents::DocumentStore,
-    http::router_with_dependencies_and_dsc_key,
+    http::router_with_all_keys,
     kms::{self, ProviderRequest, SignRequest},
     profiles::{FindProfilesRequest, ProfileStore},
     registry::RegistryStore,
@@ -34,6 +34,7 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 const INTERNAL_KEY: &str = "disposable-passport-chain-internal-key";
 const DSC_GATEWAY_KEY: &str = "disposable-passport-dsc-gateway-key-32-characters";
+const ISSUER_SIGN_KEY: &str = "disposable-passport-issuer-sign-key-32-chars";
 
 async fn route(app: &Router, method: Method, path: &str, body: Value) -> Value {
     let response = app
@@ -242,7 +243,14 @@ async fn forward(app: &Router, method: Method, path: &str, body: Value) -> Respo
             Request::builder()
                 .method(method)
                 .uri(path)
-                .header("x-api-key", INTERNAL_KEY)
+                .header(
+                    "x-api-key",
+                    if path == "/internal/compat/issuer-dids/sign" {
+                        ISSUER_SIGN_KEY
+                    } else {
+                        INTERNAL_KEY
+                    },
+                )
                 .header(CONTENT_TYPE, "application/json")
                 .body(Body::from(body.to_string()))
                 .unwrap(),
@@ -363,9 +371,13 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let documents = DocumentStore::from_connection(registry.connection());
     let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
     let profiles = ProfileStore::from_connection(registry.connection());
-    let signing = router_with_dependencies_and_dsc_key(
+    let signing = router_with_all_keys(
         INTERNAL_KEY.into(),
+        None,
+        Some(ISSUER_SIGN_KEY.into()),
         Some(DSC_GATEWAY_KEY.into()),
+        None,
+        false,
         Some(registry),
         Some(documents),
         Some(lifecycle),
@@ -637,6 +649,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
             .parse()
             .unwrap(),
         Some(INTERNAL_KEY),
+        Some(ISSUER_SIGN_KEY),
     )
     .unwrap();
     let groups = BTreeMap::from([(BigUint::from(1u8), STANDARD.encode(b"disposable DG1"))]);

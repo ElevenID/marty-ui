@@ -11270,3 +11270,23 @@ targeted Rust formatting, Ruff, shell syntax, and diff checks. The disposable
 managed-key integration target compiles; the Linux-only Canvas runtime and
 hosted release-image gates remain outstanding. The unrelated untracked Canvas
 `%SystemDrive%` artifact is excluded from the grouped commit.
+
+2026-10-09 hosted UI head `dae1892ad397430002f913a0730fcf0d22da38bd`
+in draft PR #1192 started CI run `38017690907`. The run exposed three
+source/fixture issues that were missed by the focused local matrix: Clippy's
+`unnecessary_get_then_check` warning in Rust Issuance, an opt-in managed
+passport acceptance caller with the old `ManagedProfileSigner::new` arity,
+and the Kubernetes token-HMAC shell harness reusing the same synthetic value
+for the newly distinct signing credentials. All three are fixed locally;
+changed-package warnings-denied Clippy, the acceptance target compile and
+Clippy, and all 24 token-HMAC tests now pass. Run `38017690907` finished with
+those four expected failures plus the CI Gate; the OpenBao plugin image and
+Rust service images passed. Publish one follow-up commit and require its own
+exact-head CI result.
+
+The same hosted head also failed the Linux-only Canvas Kubernetes runtime
+proof. Its native Kubernetes composer had a closed Signing Keys environment
+contract that omitted both new dedicated credentials, even though the
+deployment template included them. The contract now includes both secret
+references; local release-evidence unit tests pass. This correction joins the
+same follow-up commit.

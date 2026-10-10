@@ -637,6 +637,12 @@ fn signing_template(resources: &[Value]) -> Result<()> {
         "SIGNING_KEYS_INTERNAL_API_KEY",
         secret_ref("SIGNING_KEYS_INTERNAL_API_KEY"),
     );
+    for name in [
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    ] {
+        expected.insert(name, secret_ref(name));
+    }
     // Dedicated Device Registration -> Signing Keys service authorization for
     // holder-key cleanup; this is not private signing material.
     expected.insert(

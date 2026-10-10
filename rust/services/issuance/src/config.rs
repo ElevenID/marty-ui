@@ -753,8 +753,8 @@ impl IssuanceServiceConfig {
         }
         let signing_keys_internal_api_key = secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?
             .or_else(|| issuance_api_key.clone());
-        if values.get("SIGNING_KEYS_ISSUER_SIGN_KEY").is_some()
-            && values.get("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE").is_some()
+        if values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY")
+            && values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE")
         {
             return Err(MmfError::new(
                 ErrorCode::Configuration,

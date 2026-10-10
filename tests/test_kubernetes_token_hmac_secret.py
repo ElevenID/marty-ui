@@ -107,6 +107,13 @@ def harness(tmp_path):
     env["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"] = (
         "synthetic-distinct-device-signing-key-at-least-thirty-two-bytes"
     )
+    env["ISSUANCE_API_KEY"] = "synthetic-distinct-issuance-api-key-at-least-thirty-two-bytes"
+    env["SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"] = (
+        "synthetic-distinct-service-sign-gateway-key-at-least-thirty-two-bytes"
+    )
+    env["SIGNING_KEYS_ISSUER_SIGN_KEY"] = (
+        "synthetic-distinct-issuer-sign-key-at-least-thirty-two-bytes"
+    )
     env.pop("TOKEN_HMAC_KEY")
     prelude = r"""
 set -euo pipefail
