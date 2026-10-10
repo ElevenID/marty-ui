@@ -10941,3 +10941,14 @@ this is an environment qualification gap, not a passing native test. The
 local Authenticator PR batch remains unpushed. Real server-issued KMS-backed
 liveness challenge and authenticated submission, extended SDK API cleanup,
 native release/device evidence, and final grouped hosted checks remain open.
+
+2026-10-09 extended mobile manager audit: local Authenticator commit
+`555e91a` retires unused SDK manager entry points that invented placeholder
+storage, renewal, optimization and schema key names, and removes the
+`storeCredentialSecure` interface promise. Those wrappers delegated only to
+an unsupported crypto stub and offered no real custody behavior; no live
+caller depended on them. The source guard now rejects their return. Flutter
+analysis passed and the full suite remained at 204 tests with four skips.
+Other unsupported extended SDK methods and optional `keyId` signatures still
+need a coherent interface retirement; this is not final mobile API or device
+qualification. The new commit remains local for the grouped PR #57 update.
