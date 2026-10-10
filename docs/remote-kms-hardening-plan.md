@@ -11090,3 +11090,18 @@ KMS-backed wallet proof, or production liveness from these local checks.
 UI PR #1192 run `38010917323` was still live without reported job failure at
 this checkpoint; local UI applicant correction `6e346dba6` remains outside
 its published head and must be included in the next grouped UI push.
+
+2026-10-09 unscoped signing route retirement: local UI commit `c6a183c85`
+removes `/internal/kms/sign`, which accepted arbitrary caller-supplied provider
+configuration and payload under the shared internal API key without tenant,
+purpose or registered-key authorization. Source search found no production
+caller in the UI, Core, Verifier, Credentials or Authenticator candidate roots;
+the route appeared in its Rust handler and static route contracts/tests.
+Tenant-scoped registered service and issuer-profile signing routes and their
+shared `kms::sign` kernel remain. The CSCA and Rust-cutover route contracts now
+exclude the generic endpoint, and a regression confirms it returns 404 with
+or without the internal API key. All 14 Signing Keys HTTP golden-vector tests,
+the nine focused Python cutover tests, warnings-denied all-target Signing
+Keys Clippy, targeted Rust formatting and diff checks passed locally. This
+commit is outside published UI PR #1192 head `5df61d68e` and needs the next
+grouped hosted run plus consumer/artifact verification before release.
