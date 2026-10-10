@@ -108,11 +108,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_credential_and_scope_fail_before_openbao() {
-        let provider = OpenBaoManagedHolderKeys::new(
-            "http://127.0.0.1:1".into(),
-            "disposable-provider-token-longer-than-32".into(),
-        )
-        .unwrap();
+        let provider = OpenBaoManagedHolderKeys::new("http://127.0.0.1:1".into()).unwrap();
         let app = router(
             "dedicated-device-registration-key-32-chars".into(),
             provider,

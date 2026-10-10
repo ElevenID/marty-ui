@@ -25,6 +25,10 @@ use std::sync::{
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "support/mock_bao_addr.rs"]
+mod mock_bao_addr_support;
+use mock_bao_addr_support::mock_bao_addr;
+
 #[tokio::test]
 #[ignore = "requires marked disposable OpenBao and managed signing token"]
 async fn managed_openbao_rs256_signature_matches_jose_pkcs1_profile() {
@@ -492,6 +496,7 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let _bao_addr = mock_bao_addr(&endpoint).await;
     let stored = RegistryStore::connect(&redis_url).await.unwrap();
     let managed = stored.clone().with_managed_openbao(Some(endpoint));
     for tenant in [&organization_id, &other_organization_id] {

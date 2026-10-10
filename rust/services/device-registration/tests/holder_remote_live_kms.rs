@@ -112,8 +112,8 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("Signing Keys listener");
     let origin = format!("http://{}", listener.local_addr().unwrap());
-    let provider = OpenBaoManagedHolderKeys::new(endpoint.clone(), token.clone())
-        .expect("managed OpenBao provider");
+    let provider =
+        OpenBaoManagedHolderKeys::new(endpoint.clone()).expect("managed OpenBao provider");
     let app = managed_holder_http::router(service_key.into(), provider);
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
     let client = HolderKeyClient::new(&origin, service_key.into()).expect("dedicated client");

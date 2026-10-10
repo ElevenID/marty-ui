@@ -36,9 +36,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.bao_addr.as_ref(),
         config.bao_token.as_ref(),
     ) {
-        (Some(key), Some(endpoint), Some(token)) => Some((
+        (Some(key), Some(endpoint), Some(_)) => Some((
             key.clone(),
-            OpenBaoManagedHolderKeys::new(endpoint.clone(), token.clone())?,
+            OpenBaoManagedHolderKeys::new(endpoint.clone())?,
         )),
         _ => None,
     };

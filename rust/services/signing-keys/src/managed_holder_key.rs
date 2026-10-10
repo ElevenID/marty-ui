@@ -26,11 +26,10 @@ pub enum HolderKeyError {
 #[derive(Clone)]
 pub struct OpenBaoManagedHolderKeys {
     endpoint: String,
-    token: String,
 }
 
 impl OpenBaoManagedHolderKeys {
-    pub fn new(endpoint: String, token: String) -> Result<Self, HolderKeyError> {
+    pub fn new(endpoint: String) -> Result<Self, HolderKeyError> {
         let url = Url::parse(&endpoint).map_err(|_| HolderKeyError::Unavailable)?;
         if !matches!(url.scheme(), "http" | "https")
             || !url.username().is_empty()
@@ -38,13 +37,11 @@ impl OpenBaoManagedHolderKeys {
             || url.path() != "/"
             || url.query().is_some()
             || url.fragment().is_some()
-            || token.is_empty()
         {
             return Err(HolderKeyError::Unavailable);
         }
         Ok(Self {
             endpoint: endpoint.trim_end_matches('/').into(),
-            token,
         })
     }
 
@@ -60,7 +57,7 @@ impl OpenBaoManagedHolderKeys {
             "id":"managed-openbao-transit", "service_type":"openbao-transit",
             "endpoint":self.endpoint, "mount":"transit",
             "key_reference":scope.provider_reference,
-            "algorithm":algorithm, "auth_reference":self.token,
+            "algorithm":algorithm, "auth_mode":"service_token",
         });
         if let Some(version) = version {
             config["key_version"] = json!(version);
@@ -158,11 +155,7 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_version_or_cross_registration_requests_fail_before_provider_access() {
-        let provider = OpenBaoManagedHolderKeys::new(
-            "http://127.0.0.1:1".into(),
-            "disposable-provider-token-longer-than-32".into(),
-        )
-        .unwrap();
+        let provider = OpenBaoManagedHolderKeys::new("http://127.0.0.1:1".into()).unwrap();
         let reference = new_reference("org-a", "registration-a", "holder_binding").unwrap();
         let scope = || HolderKeyScope {
             organization_id: "org-a".into(),
@@ -170,6 +163,9 @@ mod tests {
             purpose: "holder_binding".into(),
             provider_reference: reference.clone(),
         };
+        let config = provider.config(&scope(), "EdDSA", Some(1));
+        assert_eq!(config["auth_mode"], "service_token");
+        assert!(config.get("auth_reference").is_none());
         let invalid_version = SignHolderKeyRequest {
             scope: scope(),
             algorithm: "EdDSA".into(),

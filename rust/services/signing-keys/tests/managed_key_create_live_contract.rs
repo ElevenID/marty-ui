@@ -2,7 +2,6 @@
 
 use std::{
     collections::BTreeMap,
-    ffi::OsString,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
@@ -37,33 +36,9 @@ const ROTATED_ED25519_PUBLIC_B64: &str = "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC6
 
 type Keys = Arc<Mutex<BTreeMap<String, String>>>;
 
-static BAO_ADDR_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-struct MockBaoAddr {
-    previous: Option<OsString>,
-    _lock: tokio::sync::MutexGuard<'static, ()>,
-}
-
-impl Drop for MockBaoAddr {
-    fn drop(&mut self) {
-        if let Some(previous) = &self.previous {
-            std::env::set_var("BAO_ADDR", previous);
-        } else {
-            std::env::remove_var("BAO_ADDR");
-        }
-    }
-}
-
-async fn mock_bao_addr(endpoint: &str) -> MockBaoAddr {
-    // The mounted service-token adapter must be bound to this exact mock origin.
-    let lock = BAO_ADDR_LOCK.lock().await;
-    let previous = std::env::var_os("BAO_ADDR");
-    std::env::set_var("BAO_ADDR", endpoint);
-    MockBaoAddr {
-        previous,
-        _lock: lock,
-    }
-}
+#[path = "support/mock_bao_addr.rs"]
+mod mock_bao_addr_support;
+use mock_bao_addr_support::mock_bao_addr;
 
 async fn disposable_redis_url() -> String {
     let url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");

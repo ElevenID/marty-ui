@@ -12357,3 +12357,23 @@ row. The focused test passed against a fresh disposable PostgreSQL 16
 database with Rust 1.95. This is representative local write evidence, not
 final assembled-schema or exact-image qualification; the expanded assertion
 is not yet published for hosted CI.
+
+The `b2c7ea217` Rust Contracts job is terminal failed in the live Signing
+Keys managed-policy probe, after the repaired Redis contract cases passed.
+The failing version-pinned holder signature exposed a production adapter
+mismatch: `OpenBaoManagedHolderKeys` still passed its constructor token as an
+inline `auth_reference` without an `auth_mode`, while the hardened managed
+Transit path requires `service_token` at the exact configured `BAO_ADDR` and
+reads the mounted `BAO_TOKEN`/`OPENBAO_SERVICE_TOKEN`. The local correction
+removes the redundant token field and inline-config secret, emits the managed
+service-token mode, and retains the endpoint binding and non-exportable
+provider checks. A unit guard asserts no inline auth reference is generated.
+The first local disposable policy replay then exposed a test-only mock-origin
+mismatch in the cross-tenant signing route; its `BAO_ADDR` was still bound to
+the separate real OpenBao probe. Both managed-key and public-signing mock
+contracts now reuse one scoped, restoring mock-origin guard. The final full
+disposable OpenBao policy/Rust-adapter replay passed: six managed prefixes,
+provider HMAC, holder service/database/OpenBao lifecycle, credential
+durability, Redis pairing tickets, tenant routes and managed-profile routes.
+Warnings-denied Clippy passed for the changed integration targets. The other
+hosted `b2c7ea217` jobs remain live and its failed result is retained.

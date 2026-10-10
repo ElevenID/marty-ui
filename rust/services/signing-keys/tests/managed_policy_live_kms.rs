@@ -115,8 +115,7 @@ async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
     .expect("version-two public key read");
     assert_eq!(current["public_jwk"], second["public_jwk"]);
 
-    let holder = OpenBaoManagedHolderKeys::new(endpoint.clone(), scoped_token.clone())
-        .expect("scoped holder provider");
+    let holder = OpenBaoManagedHolderKeys::new(endpoint.clone()).expect("scoped holder provider");
     let holder_reference = new_reference("org-holder", "registration-holder", "holder_binding")
         .expect("scoped holder reference");
     let scope = || HolderKeyScope {
