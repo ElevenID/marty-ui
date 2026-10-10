@@ -25,6 +25,8 @@ FULL_QUALIFICATION_PREFLIGHT_MODES = (
 EVIDENCE_NAME = "canvas-published-preflights.sha256"
 RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB")
 TIMING_PREFIX = "MARTY_CI_PHASE_V1 "
+TARGET_TIMING_PREFIX = "MARTY_CI_TARGET_PHASE_V1 "
+TARGET_NAMES = frozenset({"composition", "flow", "worker", "selfhost"})
 TIMING_PHASES = {
     "container_startup",
     "database_readiness",
@@ -41,6 +43,12 @@ TIMING_PHASES = {
     "oracle_phase",
 }
 TIMING_STATUSES = {"ok", "failed"}
+TARGET_RELAY_PHASES = TIMING_PHASES - {
+    "contract",
+    "canvas_serial",
+    "canvas_target",
+    "image_pull",
+}
 REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
 MATRIX_SCENARIOS = frozenset(
     {"retry-after", "validation", "roster-failure", "resources-unavailable"}
@@ -248,6 +256,14 @@ def _timing_path() -> Path | None:
 
 
 def _safe_phase(line: str, group: str) -> dict[str, object] | None:
+    target = None
+    if line.startswith(TARGET_TIMING_PREFIX):
+        if group != "published-canvas" or len(line) > 280:
+            return None
+        target, separator, payload = line[len(TARGET_TIMING_PREFIX) :].partition(" ")
+        if separator != " " or target not in TARGET_NAMES:
+            return None
+        line = TIMING_PREFIX + payload
     if not line.startswith(TIMING_PREFIX) or len(line) > 256:
         return None
     try:
@@ -267,6 +283,7 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
     if (
         not isinstance(phase, str)
         or phase not in TIMING_PHASES
+        or (target is not None and phase not in TARGET_RELAY_PHASES)
         or not isinstance(name, str)
         or name not in TIMING_NAMES[phase]
         or not 1 <= len(name) <= 96
@@ -281,7 +298,10 @@ def _safe_phase(line: str, group: str) -> dict[str, object] | None:
         or status not in TIMING_STATUSES
     ):
         return None
-    return {"schema": "marty.ci.db-phase/v1", "group": group, **value}
+    result = {"schema": "marty.ci.db-phase/v1", "group": group, **value}
+    if target is not None:
+        result["target"] = target
+    return result
 
 
 def _run_identity() -> tuple[str, ...] | None:
@@ -400,8 +420,9 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
     timing_lock = Lock()
 
     def record(value: dict[str, object]) -> None:
+        target = f" target={value['target']}" if "target" in value else ""
         print(
-            f"[db-timing] group={value['group']} phase={value['phase']} "
+            f"[db-timing] group={value['group']}{target} phase={value['phase']} "
             f"name={value['name']} duration_ms={value['duration_ms']} status={value['status']}",
             flush=True,
         )
@@ -430,7 +451,9 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
                     assert process.stdout is not None
                     for line in process.stdout:
                         log.write(line)
-                        if not line.startswith(TIMING_PREFIX.encode("ascii")):
+                        if not line.startswith(
+                            (TIMING_PREFIX.encode("ascii"), TARGET_TIMING_PREFIX.encode("ascii"))
+                        ):
                             continue
                         try:
                             marker = line.decode("ascii").rstrip("\r\n")

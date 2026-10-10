@@ -3376,13 +3376,13 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert 'kill "$composition_pid" "$flow_pid" "$worker_pid" "$selfhost_pid"' in published
     assert 'tail --pid="$pid"' in published
     assert (
-        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" &'
+        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &'
         in published
     )
     assert (
-        'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" &' in published
+        'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" worker &' in published
     )
-    assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" &' in published
+    assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
     assert 'wait "$flow_pid" || flow_status=$?' in published
     assert 'wait "$worker_pid" || worker_status=$?' in published
