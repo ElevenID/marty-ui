@@ -1225,11 +1225,11 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier PR #154 `e42dd8d`, Credentials #313 `d562739` and Authenticator #57 `a8fdcbb` passed current-head checks. UI #1192 `f0239db18` pins the same Core graph and its exact-head Canvas/OpenBao jobs remain in progress. Final consumer artifacts and wallet cutover remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed current-head checks. UI #1192 `f0239db18` pins the same Core graph; its OpenBao/image/contract jobs passed and Canvas is still running. Final artifacts and wallet cutover remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 at `d562739` pins Core `7f276a4`; all 19 exact-head checks passed (one scorecard skipped), including Core wheels, local binding, Rust/Python/WASM tests, Clippy and retirement guard. The repository root remains an empty Python test-harness wheel; Core owns canonical native wheels. Released-artifact qualification and native UI cutover remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355, Verifier #154, Credentials #313 and Authenticator #57 have green current-head checks; Core still requires protected review. UI #1192 has Canvas and OpenBao jobs in progress. Exact release artifacts, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355, Verifier #154, Credentials #313, Authenticator #57 and Subscriptions #71 have green current-head checks; Core still requires protected review. UI #1192 Canvas remains in progress. Exact release artifacts, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. Local fresh PostgreSQL 16 checks ran Organization, Credential Template and Rust Issuance migrations twice: 47 service tables, nine Issuance ledger entries and no private-key catalog entries; injected Alembic/key state was rejected. The catalog gate and generic JSON/JSONB scan in published UI `5df61d68e` passed hosted CI. A newer local content scan also rejected synthetic PEM in generic text and JSON fields. Exact signed-image execution, final assembled table/column inventory, self-host cutover and release proof remain. |
 
 ### First execution steps
@@ -11449,8 +11449,8 @@ passed local locked metadata and `marty-sync` check and is published to PR
 the fixture's seed step, but stopped before the first secret case, where the
 WSL host needs access to the Docker Desktop bridge gateway for the disposable
 remote-secret server. This local environment result leaves the full loader
-proof to hosted Canvas CI;
-temporary diagnostic instrumentation was reverted. Authenticator now points
+proof to hosted Canvas CI; temporary diagnostic instrumentation was reverted.
+Authenticator now points
 directly at Core `7f276a4` and Verifier `e42dd8d`, with a single locked Core
 graph.
 
@@ -11481,11 +11481,12 @@ K1 production-root follow-up found one additional direct Core consumer:
 binding. A separate worktree `kms-subscriptions-core-consumer-20261009` now
 pins Core `7f276a4`; locked Linux all-feature compilation, 33 unit tests,
 four policy-vector tests, and warnings-denied all-target Clippy passed. Draft
-subscriptions PR #71 at `ce8d934` has exact-head hosted native/wheel and
-image jobs in progress. Local all-feature test linking was unavailable because
-the disposable compiler image lacks `libpython3.11`; hosted CI is the binding
-qualification. The crate also has local Ed25519 PEM issuance for
-software license tokens, a separate key class from credential issuer/holder
+subscriptions PR #71 at `ce8d934` passed both exact-head hosted checks,
+including all-feature Rust, native wheel, Python adapter, and billing image.
+Local all-feature test linking was unavailable because the disposable compiler
+image lacks `libpython3.11`; hosted CI supplies that binding qualification.
+The crate also has local Ed25519 PEM issuance for software license tokens,
+a separate key class from credential issuer/holder
 keys; do not treat this Core repin as KMS custody for license signing or claim
 the subscription service has no local private keys.
 The top-level Cargo-manifest scan found direct Core consumers in UI,
@@ -11499,3 +11500,6 @@ that release lock without touching KMS source. The affected stack release
 contract suite passed 38 tests under Python 3.12. Keep this merge and the
 current tracker commits local until the running UI head `f0239db18` has
 finished; any Canvas finding can then be batched into one final push/CI run.
+That UI run has now also passed its OpenBao plugin image, service images,
+release contracts, and Rust contracts jobs; Canvas is executing its isolated
+database suites against the newly built public self-host image.
