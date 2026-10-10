@@ -163,6 +163,8 @@ Public-protocol vector ownership follow-up (2026-10-05, `main` at `a98d7b766`): 
 
 Release-contract A0 inventory (2026-10-03): `test-release-contracts` runs on release, verification, or Rust changes. It verifies digest-pinned released Core/Verification/ISO18013/Common wheels and a fixed Credentials v0.1.76 source/image, exercises released mdoc binding behavior and OSS commerce policy, replays the Canvas mirror reference in that exact image, runs `python -m pytest tests -v --tb=short`, then proves the pinned OCI archive/backend and DIDComm/retention release compatibility. On UI #1061 the repository-test step took 405 seconds of the 7m58s job. The separate `test-services` job runs `pytest` with `working-directory: services`, not the root `tests` tree, so these two steps are not duplicate collection of the same files. The release job is not the current Rust critical path (Canvas remains longer), and its released-artifact/environment obligations are distinct. Do not split or remove its broad test step until exact case ownership and Rust-change trigger coverage are mapped.
 
+Release-test timing candidate (2026-10-10): local collection with `PYTHONPATH=packages` found 6,197 root cases in 1.36 seconds; only 22 are under `tests/unit`, which is a directory label rather than an execution-cost or obligation classification. A Windows attempt to run the 227-case Canvas published-preflight module was stopped after it did not finish promptly; no duration or failure conclusion follows from that interrupted attempt. The existing full release-test step now requests pytest's 20 slowest durations in its normal log, with the same collection, assertions, exit status, and required gate. Use hosted case/setup timing before proposing a root-suite split; this instrumentation alone claims no speedup.
+
 Browser-lifecycle A0 inventory (2026-10-03): `test-credential-lifecycle-browser` runs for UI changes and is a required `ci-gate` dependency. It installs pinned API Core/Blog tarballs by digest, UI and Playwright dependencies, and pinned Chromium; verifies production CSP restrictions, runs the public-demo browser gate, then runs `playwright.applicant-wallet.config.js`. That focused config selects the applicant wallet-selection and MIP03 specs, launches the real Vite console app, and mocks backend calls at the browser network boundary. It excludes the neighboring `application-flow.spec.js` by `testMatch`; the gate is therefore browser UX/CSP evidence, not a full-stack service/process acceptance substitute. Any future selective trigger must account for UI source, test/config scripts, dependency locks, tarball digests, and browser/runtime inputs as well as the two selected specs.
 
 Crawler/UI A0 inventory (2026-10-03): all three UI job families are selected by the broad `ui` classifier, but carry different obligations. `test-ui-crawler-artifacts` bootstraps digest-verified released API Core/Blog tarballs, checks crawler configuration and validator unit tests, then builds and validates both the normal prerendered public site and the `DISABLE_PRERENDER=1` production-image mode; it compares their crawler URL sets. `test-ui-crawler-nginx` exercises both configurations against the pinned production Nginx image. The four `test-ui` shards instead run Vitest and upload per-file timing artifacts. A code-only shard result cannot replace build-output or Nginx routing evidence. A future narrower trigger needs to cover UI source, package and lock inputs, crawler scripts/config, Docker/Nginx configuration and pinned image, the released tarball digests, and the workflow itself; merely matching `.test.*` files would be incomplete. These lanes are required through `ci-gate`, so retain them until that input closure and the planned-skip gate are proven.
@@ -3083,6 +3085,32 @@ run because its Python policy tests inspect those files; unknown, mixed,
 manifest, helper, production, and protected merge-group inputs retain full
 Canvas/contracts. Measure a real source-only PR before attributing a faster
 feedback result to this selector.
+
+[UI #1227](https://github.com/ElevenID/marty-ui/pull/1227) merged that exact
+self-host test-source selector as `3a3d6c45d` after its 32m14s full PR run
+and successful protected merge-group run. It retains the root release suite,
+Rust lint, supply-chain and protocol checks on the narrow PR path; protected
+merge groups still execute full Canvas and contracts. The first one-source
+[PR #1228](https://github.com/ElevenID/marty-ui/pull/1228) passed its scoped
+CI gate in 10m42s and all PR checks in 14m46s, including 9m24s for the exact
+ten-case self-host lane and 10m03s for release contracts. Relative to #1227's
+32m14s full PR workflow, this is an observed 21m32s CI-gate difference and
+17m28s all-check difference between different changes, not a controlled
+same-head benchmark or a whole-repository average. An independent reviewer
+caught a proposed new test ID that would violate the ten-case roster; #1228
+instead strengthens the existing recovery case without changing that roster.
+It remains open pending the required GitHub review at this checkpoint.
+
+The same source-only PR exposed a remaining feedback tail: production-focused
+Rust CodeQL took 14m46s even though its configured `paths-ignore` excludes
+`rust/**/tests/**`. The next A6 candidate limits a PR-only CodeQL skip to a
+nonempty, modified-only subset of the worker, Flow and self-host test files
+already proved to be sole target sources and outside every Rust-copying
+release context. It must re-run all three source proofs on the checked-out
+head, require the exact current production CodeQL configuration, and fall
+back to analysis on any unknown, mixed, renamed, added or proof-drift input.
+Protected merge-group, scheduled and manual CodeQL analyses remain full.
+This is a candidate, not a measured saving, until hosted qualification.
 
 ## Design references
 

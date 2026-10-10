@@ -930,7 +930,7 @@ mod recovery_tests {
         let info = json!({
             "Id":id,"Image":image,
             "Config":{"User":"10001:10001","Entrypoint":[ENTRYPOINT],"Cmd":[],"Labels":{LABEL:project,RUN_LABEL:scope.to_string(),"com.docker.compose.project":project,"com.docker.compose.service":OWNER}},
-            "HostConfig":{"NetworkMode":format!("container:{pg}"),"ReadonlyRootfs":true,"Privileged":false,"CapDrop":["ALL"],"PidMode":"","IpcMode":"private","PortBindings":{},"Tmpfs":{"/tmp":"rw,noexec,nosuid,size=33554432"},"SecurityOpt":["no-new-privileges"]},
+            "HostConfig":{"NetworkMode":format!("container:{pg}"),"ReadonlyRootfs":true,"Privileged":false,"CapDrop":["ALL"],"CapAdd":[],"Devices":[],"PidMode":"","IpcMode":"private","PortBindings":{},"Tmpfs":{"/tmp":"rw,noexec,nosuid,size=33554432"},"SecurityOpt":["no-new-privileges"]},
             "Mounts":mounts,
         });
         checked_recovery_native(&info, &id, scope, &image, &pg, &scratch).unwrap();
@@ -955,9 +955,13 @@ mod recovery_tests {
             ("/HostConfig/NetworkMode", json!("host")),
             ("/HostConfig/Privileged", json!(true)),
             ("/HostConfig/ReadonlyRootfs", json!(false)),
+            ("/HostConfig/CapDrop", json!([])),
+            ("/HostConfig/CapAdd", json!(["SYS_ADMIN"])),
+            ("/HostConfig/Devices", json!([{"PathOnHost":"/dev/kvm"}])),
             ("/HostConfig/SecurityOpt", json!([])),
             ("/HostConfig/Tmpfs", json!({"/tmp":"rw,exec"})),
             ("/HostConfig/PidMode", json!("host")),
+            ("/HostConfig/IpcMode", json!("host")),
             (
                 "/HostConfig/PortBindings",
                 json!({"8005/tcp":[{"HostIp":"0.0.0.0","HostPort":"8005"}]}),
