@@ -12787,3 +12787,31 @@ Contract Tests. The local grouped follow-up addresses each observed failure
 as described above. The CI Gate failed because those leaf jobs failed. None
 of the local corrections can retroactively qualify the prior head; re-run all
 affected lanes on the next published head before claiming completion.
+
+2026-10-10 tenant authorization implementation constraint: source review of
+`gateway/src/runtime.rs::internal_signing_compatibility_handler` and
+`signing-keys/src/http.rs::issuer_did_sign` confirms that both authorize a
+shared issuer-signing credential and then trust the caller-selected
+`organization_id`. Gateway overwrites the JSON body with the query value, but
+does not derive that value from an authenticated tenant identity. Native Flow
+and Issuance each send their request's organization ID through this path.
+The existing profile/key ownership check protects a key from being used under
+the *wrong stated* organization; it does not authorize the workload to state
+that organization. The final gate must bind each signing operation to tenant
+authority established before the call, carry that binding through Gateway,
+and verify it in Signing Keys before calling the remote signer. A candidate
+operation capability would include tenant, audience, operation/payload digest,
+short expiry and replay protection, signed by an authority that derives tenant
+from an authenticated request or tenant-scoped persisted job. A generic mint
+endpoint accepting a caller-supplied tenant would recreate the flaw. Trace
+both synchronous Issuance and asynchronous Flow/Canvas origins before choosing
+the proof format; add adversarial cross-tenant tests at Gateway and the direct
+Signing Keys listener, plus normal issuance/Flow tests. This is design
+guidance, not an implemented tenant boundary.
+
+The Canvas deployment Python suite is now locally qualified as well: adding
+this repository's `packages` directory to `PYTHONPATH` resolves the in-tree
+`marty_devops` module, and all 103 tests in
+`tests/test_canvas_worker_deployment.py` pass on the grouped head. This
+supersedes the earlier local collection limitation; hosted release-contract
+qualification is still required.
