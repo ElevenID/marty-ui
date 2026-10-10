@@ -12,6 +12,7 @@ postgres="issuance-postgres-${suffix}"
 service="issuance-service-${suffix}"
 secret_service="issuance-secret-service-${suffix}"
 secret_api_key="ci-only-signing-key-api-key-32-characters"
+envelope_api_key="ci-only-dedicated-integration-secret-key-32-chars"
 tls_dir="$(mktemp -d "$repository_root/.issuance-smoke-tls-XXXXXXXX")"
 python_image="ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
 
@@ -77,7 +78,7 @@ docker run --detach \
   --name "$secret_service" \
   --network "$network" \
   --network-alias synthetic-secret-service \
-  --env SYNTHETIC_API_KEY="$secret_api_key" \
+  --env SYNTHETIC_API_KEY="$envelope_api_key" \
   --env SYNTHETIC_TLS_CERT_FILE=/verification/tls/tls.crt \
   --env SYNTHETIC_TLS_KEY_FILE=/verification/tls/tls.key \
   --mount "type=bind,source=$repository_root/scripts/synthetic_integration_secret_service.py,target=/verification/synthetic_integration_secret_service.py,readonly" \
@@ -107,9 +108,9 @@ docker run --detach \
   --env GRPC_SERVICE_TOKEN=ci-only-grpc-service-token-at-least-32-bytes \
   --env SIGNING_KEYS_INTERNAL_API_KEY="$secret_api_key" \
   --env SIGNING_KEYS_ISSUER_SIGN_KEY=ci-only-dedicated-issuer-sign-key-32-chars \
-  --env SIGNING_KEYS_INTEGRATION_SECRET_KEY=ci-only-dedicated-integration-secret-key-32-chars \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_KEY="$envelope_api_key" \
   --env SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys \
-  --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8017/internal/signing-keys \
+  --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8017/internal \
   --env INTEGRATION_SECRET_KMS_CA_FILE=/verification/tls/ca.crt \
   --mount "type=bind,source=$tls_dir/ca.crt,target=/verification/tls/ca.crt,readonly" \
   --env DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty" \

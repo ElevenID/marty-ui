@@ -43,7 +43,7 @@ pub(super) const TOKEN: &str = "synthetic-renewal-fresh-main-service-token";
 pub(super) const API_KEY: &str = "synthetic-renewal-fresh-main-management-key";
 // Signing and integration-secret envelope peers use separate credentials.
 pub(super) const SIGNING_KEY: &str = super::issuance_process::remote_integration_secret::API_KEY;
-const ENVELOPE_KEY: &str =
+pub(super) const ENVELOPE_KEY: &str =
     super::issuance_process::remote_integration_secret::INTEGRATION_SECRET_KEY;
 pub(super) const ISSUER_SIGN_KEY: &str = "synthetic-issuance-issuer-sign-key-32-chars";
 pub(super) const FORMAT: &str = "w3c_vcdm_v2_sd_jwt";

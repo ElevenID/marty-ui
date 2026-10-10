@@ -12762,3 +12762,17 @@ suite could not be collected locally because this host lacks `marty_devops`;
 the hosted failure identified its exact static expectation, which is updated
 but still needs hosted requalification. The currently running OpenBao recovery,
 Canvas and image lanes are not yet terminal.
+The same head's Canvas lane failed at image-free renewal configuration
+because the exact Rust-rendered base/Kubernetes fixture input maps still
+omitted `SIGNING_KEYS_INTEGRATION_SECRET_KEY`. Those maps, closed Kubernetes
+secret values and isolated process environment now carry the distinct
+synthetic envelope credential. Canvas acceptance test-target compilation and
+format checks pass locally; the live runtime case awaits hosted replay.
+Rust Service Images built the service images but its Issuance smoke startup
+failed `InvalidConfig`: the synthetic TLS envelope service and smoke URL still
+used the retired Gateway `/internal/signing-keys` prefix. They now use direct
+`/internal/integration-secrets` routes, with a credential distinct from the
+shared signing key. The Canvas worker image startup fixture uses the same
+direct URL and dedicated mock credential. Shell syntax, Python syntax and
+diff checks pass; the image smoke and live integration-secret recovery need
+hosted requalification on the next grouped head.

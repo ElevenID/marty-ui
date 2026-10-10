@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlsplit
 
 
 SCHEMA = "marty.integration-secret-envelope/v1"
-PREFIX = "/internal/signing-keys/integration-secrets/"
+PREFIX = "/internal/integration-secrets/"
 store = {}
 
 

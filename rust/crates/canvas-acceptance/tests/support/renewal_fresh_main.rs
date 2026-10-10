@@ -9,8 +9,8 @@ use serde_json::{json, Value};
 use sha2::Sha256;
 
 use super::issuance_named_peers::{
-    counts, start_peers, PeerState, RemoteIssuerSigner, API_KEY, FORMAT, HOLDER, ISSUER,
-    ISSUER_SIGN_KEY, ORGANIZATION, PROFILE, SIGNING_KEY, TEMPLATE, TOKEN,
+    counts, start_peers, PeerState, RemoteIssuerSigner, API_KEY, ENVELOPE_KEY, FORMAT, HOLDER,
+    ISSUER, ISSUER_SIGN_KEY, ORGANIZATION, PROFILE, SIGNING_KEY, TEMPLATE, TOKEN,
 };
 use super::remote_didcomm_sender::RemoteSenderFixture;
 
@@ -331,6 +331,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                     "ISSUANCE_API_KEY":API_KEY, "GRPC_SERVICE_TOKEN":TOKEN,
                     "SIGNING_KEYS_INTERNAL_API_KEY":SIGNING_KEY,
                     "SIGNING_KEYS_ISSUER_SIGN_KEY":ISSUER_SIGN_KEY,
+                    "SIGNING_KEYS_INTEGRATION_SECRET_KEY":ENVELOPE_KEY,
                     "TOKEN_HMAC_KEY":TOKEN_HMAC_KEY,
                     "PUBLIC_API_URL":"https://issuer.example", "UI_BASE_URL":"http://localhost:3000",
                     "ISSUANCE_OFFER_TTL_MINUTES":"10080", "TOKEN_RATE_LIMIT":"30",
@@ -380,6 +381,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("SIGNING_KEYS_INTERNAL_URL", &origin)
                 .env("SIGNING_KEYS_INTERNAL_API_KEY", SIGNING_KEY)
                 .env("SIGNING_KEYS_ISSUER_SIGN_KEY", ISSUER_SIGN_KEY)
+                .env("SIGNING_KEYS_INTEGRATION_SECRET_KEY", ENVELOPE_KEY)
                 .env("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", &origin)
                 .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
                 .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)

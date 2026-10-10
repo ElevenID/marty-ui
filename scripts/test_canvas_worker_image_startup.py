@@ -87,7 +87,7 @@ def configuration(case, mode):
         "CANVAS_SYNC_WORKER_POLL_SECONDS": "60",
         "CANVAS_PILOT_ORGANIZATION_IDS": "bootstrap-org",
         "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:8017/internal/signing-keys",
-        "INTEGRATION_SECRET_KMS_URL": "https://127.0.0.1:8017/internal/signing-keys",
+        "INTEGRATION_SECRET_KMS_URL": "https://127.0.0.1:8017/internal",
         "INTEGRATION_SECRET_KMS_CA_FILE": "/synthetic-secrets/ca.crt",
         **case["environment"],
     }
@@ -312,7 +312,7 @@ def run(image):
                 f"container:{postgres}",
                 *HARDENED,
                 "--env",
-                f"SYNTHETIC_API_KEY={SECRETS['SIGNING_KEYS_INTERNAL_API_KEY']}",
+                f"SYNTHETIC_API_KEY={SECRETS['SIGNING_KEYS_INTEGRATION_SECRET_KEY']}",
                 "--env",
                 "SYNTHETIC_TLS_CERT_FILE=/verification/tls/tls.crt",
                 "--env",

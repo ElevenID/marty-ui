@@ -1,7 +1,7 @@
 //! Test-only Kubernetes reference resolution over actual envsubst/composer output.
 //! No Kubernetes client, secret discovery, DNS or production input is used here.
 use super::{
-    issuance_named_peers::{API_KEY, ISSUER_SIGN_KEY, SIGNING_KEY, TOKEN},
+    issuance_named_peers::{API_KEY, ENVELOPE_KEY, ISSUER_SIGN_KEY, SIGNING_KEY, TOKEN},
     resolved_runtime::{Isolation, ResolvedRuntime},
 };
 use marty_release_evidence::kubernetes_native as native;
@@ -445,6 +445,10 @@ fn checked_spec(value: &Value) -> Result<Spec> {
                     "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
                     ISSUER_SIGN_KEY.into(),
                 ),
+                (
+                    "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+                    ENVELOPE_KEY.into(),
+                ),
                 ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
                 ("PUBLIC_API_URL".into(), "https://issuer.example".into()),
                 ("UI_BASE_URL".into(), "http://localhost:3000".into()),
@@ -575,6 +579,10 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
             "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
             ISSUER_SIGN_KEY.into(),
         ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            ENVELOPE_KEY.into(),
+        ),
         ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
         (
             "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
@@ -594,6 +602,7 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
         "GRPC_SERVICE_TOKEN",
         "SIGNING_KEYS_INTERNAL_API_KEY",
         "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
         "TOKEN_HMAC_KEY",
     ] {
         require(spec.inputs.get(name) == secret_values.get(name))?;
@@ -921,6 +930,7 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
             "GRPC_SERVICE_TOKEN": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING_KEY,
             "SIGNING_KEYS_ISSUER_SIGN_KEY": ISSUER_SIGN_KEY,
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY": ENVELOPE_KEY,
             "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
             "PUBLIC_API_URL": "https://issuer.example",
             "UI_BASE_URL": "http://localhost:3000",

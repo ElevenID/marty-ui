@@ -190,6 +190,7 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
                 "GRPC_SERVICE_TOKEN": super::issuance_named_peers::TOKEN,
                 "SIGNING_KEYS_INTERNAL_API_KEY": super::issuance_named_peers::SIGNING_KEY,
                 "SIGNING_KEYS_ISSUER_SIGN_KEY": super::issuance_named_peers::ISSUER_SIGN_KEY,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY": super::issuance_named_peers::ENVELOPE_KEY,
                 "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
                 "PUBLIC_API_URL": "https://issuer.example",
                 "UI_BASE_URL": "http://localhost:3000",
