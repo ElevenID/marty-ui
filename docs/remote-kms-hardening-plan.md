@@ -13250,3 +13250,16 @@ Compose models, native DIDComm Compose gates, four conformance compositions
 across five token-rate inputs, Ruff and diff checks. This proves the scoped
 OpenBao operation in isolation; live beta/conformance end-to-end authcrypt and
 exact-head hosted qualification remain outstanding.
+
+The held beta fixture and native-only authcrypt batch was published as UI
+`cf27e0e88` to draft [PR #1192](https://github.com/ElevenID/marty-ui/pull/1192)
+at 2026-10-10 21:24 UTC, and the PR description was refreshed. The
+previous `b67bf4c1b` head had green Rust Contracts, OpenBao plugin/coordinated
+recovery, CodeQL, service images, UI, protocol, lint and security leaves;
+Release Contract Tests failed the one beta fixture now corrected. Its Canvas
+lane was still building the public self-host image when the new head was
+published, so that leaf is not a pass. Exact-head CodeQL Rust run
+[38087526683](https://github.com/ElevenID/marty-ui/actions/runs/38087526683)
+and other policy/quality runs started. An exact-head CI run had not yet
+appeared at this checkpoint; the new OpenBao probe and Release Contracts
+therefore have no hosted result yet.
