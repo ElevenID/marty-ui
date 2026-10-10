@@ -12608,3 +12608,20 @@ CodeQL run](https://github.com/ElevenID/marty-ui/actions/runs/38065804007)
 completed successfully. The local correction is now ready for one grouped
 push and a new exact-head run; neither the failed run nor the local replay
 qualifies the new head.
+
+2026-10-10 issuer-signing authorization review: Gateway's
+`/internal/signing-keys/issuer-dids/sign` and Signing Keys'
+`/internal/compat/issuer-dids/sign` check the dedicated issuer-signing
+credential, then take `organization_id` from the caller's query/body. Flow,
+Issuance and the Canvas sync worker share that credential across tenants.
+The managed-profile binding ensures a requested key belongs to the supplied
+organization, but it cannot prove the calling workload is entitled to act for
+that organization. Merely rotating or further separating this shared static
+credential would leave an authorized compromised workload able to select
+another active tenant. Release qualification needs an independent tenant-bound
+authorization proof tied to the operation, or tenant-isolated workload
+identities with corresponding signer policy; the signer must verify that proof
+before remote signing. A regression must demonstrate that a valid workload
+credential with a different tenant context cannot reach the KMS signer while
+normal Flow and Issuance issuance still succeeds. This is an open design and
+implementation item, not a claim that KMS custody itself has failed.
