@@ -13412,3 +13412,11 @@ UI and service tests also passed at this checkpoint. OpenBao recovery, Rust
 Contracts, Canvas and service images were still running, so the full run and
 exact release artifacts remain unqualified. Exact-head Rust CodeQL was also
 still active.
+
+While that hosted run remained active, `main` advanced by one commit
+(`f6416f4e5`) adding source-backed Gateway issuer-resolution consumer
+observations to the Rust CI shadow planner. It merged locally without
+conflict; the focused planner test passed with 33 subtests, and the merge diff
+passed `git diff --check`. The merge and tracker-only commits remain local to
+avoid restarting the in-flight hosted run. They require their own exact-head
+qualification before any protected landing.
