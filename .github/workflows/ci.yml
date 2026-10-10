@@ -1702,6 +1702,19 @@ jobs:
           docker exec --interactive "$MARTY_RUST_CI_POSTGRES_ID" \
             psql --username postgres --dbname marty_passport_packaged_test \
             < rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql
+      # This source-owned acceptance case has its own disposable database and
+      # needs no prior contract group. Report a regression after compilation
+      # rather than after the unrelated Redis/OpenBao and database suites.
+      - name: Test native passport Gateway signed webhook on PostgreSQL
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        env:
+          MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
+        run: |
+          set -euo pipefail
+          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
+          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1924,16 +1937,6 @@ jobs:
           MARTY_PASSPORT_RECONCILIATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_reconciliation_test
         run: |
           cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
-      - name: Test native passport Gateway signed webhook on PostgreSQL
-        if: matrix.lane == 'contracts'
-        working-directory: rust
-        env:
-          MARTY_PASSPORT_GATEWAY_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_gateway_test
-        run: |
-          set -euo pipefail
-          test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
