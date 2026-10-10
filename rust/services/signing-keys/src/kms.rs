@@ -1244,6 +1244,26 @@ async fn azure_client_secret_token(
     credential: &AzureClientSecret,
     resource: &str,
 ) -> Result<String, KmsError> {
+    let url = reqwest::Url::parse(endpoint)
+        .map_err(|_| KmsError::InvalidConfig("Azure token endpoint is invalid.".into()))?;
+    let official_path = format!("/{}/oauth2/v2.0/token", credential.tenant_id);
+    let official = url.scheme() == "https"
+        && url.host_str() == Some("login.microsoftonline.com")
+        && url.port().is_none()
+        && url.path() == official_path;
+    let local_debug = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+    if !(official || local_debug)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(KmsError::InvalidConfig(
+            "Azure token endpoint is invalid.".into(),
+        ));
+    }
     let scope = format!("{resource}/.default");
     let response = send_json(
         cloud_http_client()?
@@ -2529,6 +2549,28 @@ mod tests {
             validate_transit_auth_config(&config("http://127.0.0.1:8200")).is_ok(),
             cfg!(debug_assertions)
         );
+    }
+
+    #[tokio::test]
+    async fn azure_client_secret_never_posts_to_an_unapproved_origin() {
+        let credential = AzureClientSecret {
+            tenant_id: "11111111-1111-1111-1111-111111111111".into(),
+            client_id: "22222222-2222-2222-2222-222222222222".into(),
+            client_secret: "must-not-send".into(),
+        };
+        for endpoint in [
+            "http://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token",
+            "https://login.microsoftonline.com.attacker.example/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token",
+            "https://login.microsoftonline.com/other/oauth2/v2.0/token",
+            "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/oauth2/v2.0/token?redirect=1",
+        ] {
+            assert!(
+                azure_client_secret_token(endpoint, &credential, "https://vault.azure.net")
+                    .await
+                    .is_err(),
+                "accepted {endpoint}"
+            );
+        }
     }
 
     #[test]

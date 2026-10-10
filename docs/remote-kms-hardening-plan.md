@@ -12096,3 +12096,13 @@ internal self-host service path. The full Signing Keys library suite passed
 171 tests (nine expected ignores), five provider vectors and all-target
 warnings-denied Clippy passed after this correction. Real external Transit
 TLS acceptance remains outstanding.
+
+The Azure client-secret token helper now independently checks the fixed
+`login.microsoftonline.com` HTTPS origin and tenant-scoped OAuth path before
+it sends credentials. Debug-only loopback stubs keep its request contract
+testable; arbitrary HTTPS hosts, HTTP public hosts, path changes and query
+strings fail before transmission. This addresses the CodeQL cleartext-transfer
+finding at the sink rather than relying only on the caller. The complete
+Signing Keys library suite passed 172 tests (nine expected ignores), and
+all-target warnings-denied Clippy passed. Hosted CodeQL must still confirm
+which alerts remain on the new head.
