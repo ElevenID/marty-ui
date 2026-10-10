@@ -764,6 +764,90 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert on_main["rust_matrix"] == '["canvas","contracts"]'
 
 
+def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    [classifier] = [
+        step
+        for step in workflow["jobs"]["changes"]["steps"]
+        if step.get("id") == "classify"
+    ]
+    assert len(classifier["run"].encode("utf-8")) < 21_000
+    verified = subprocess.run(
+        [
+            sys.executable,
+            "tests/test_rust_test_only_docker_context.py",
+            "--emit-verified-service-acceptance-tests",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    assert verified[-1] == b"" and len(verified) == 4
+    service_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert service_tests == [
+        "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
+        "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
+        "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
+    ]
+    expected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "rust_runtime": "false",
+        "rust_matrix": '["contracts"]',
+        "release": "false",
+        "verification": "false",
+        "security": "false",
+    }
+    assert (
+        _classify_changed_paths(service_tests, tmp_path, include_rust_plan=True)
+        == [expected] * 3
+    )
+    assert _classify_changed_paths(
+        service_tests, tmp_path, combined=True, include_rust_plan=True
+    ) == [expected]
+    for paths in (
+        [service_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [service_tests[1], "rust/crates/service-acceptance/Cargo.toml"],
+        [service_tests[2], "rust/crates/service-acceptance/tests/unreviewed.rs"],
+        [
+            service_tests[0],
+            "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs",
+        ],
+        [service_tests[0] + "\nother"],
+    ):
+        selected = _classify_changed_paths(
+            paths, tmp_path, combined=True, include_rust_plan=True
+        )[0]
+        assert selected["rust_runtime"] == "true"
+        assert selected["rust_matrix"] == '["canvas","contracts"]'
+    unverified = _classify_changed_paths(
+        [service_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert unverified["rust_runtime"] == "true"
+    assert unverified["rust_matrix"] == '["canvas","contracts"]'
+    queued = _classify_changed_paths(
+        [service_tests[-1]], tmp_path, event="merge_group", include_rust_plan=True
+    )[0]
+    assert queued["all"] == queued["rust_runtime"] == "true"
+    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    on_main = _classify_changed_paths(
+        [service_tests[-1]], tmp_path, event="push", include_rust_plan=True
+    )[0]
+    assert on_main["rust_runtime"] == "true"
+    assert on_main["rust_matrix"] == '["canvas","contracts"]'
+    jobs = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
+    assert "test-rust-services" in jobs["ci-gate"]["needs"]
+    assert (
+        'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
+        in jobs["ci-gate"]["steps"][0]["run"]
+    )
+
+
 def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -> None:
     verified = subprocess.run(
         [

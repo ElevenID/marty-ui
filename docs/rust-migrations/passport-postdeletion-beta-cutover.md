@@ -25,6 +25,16 @@ check and is never a deployment target.
    probes without reinstalling SQL. The prior manifest proves SQL compatibility;
    it does not independently prove which process installed the fence. Preserve
    the pending markers until recovery completes and writes its receipt.
+   The v1.1.240 fence recovery completed, but its first readiness workflow run
+   wrote an artifact into the protected checkout before checking source
+   cleanliness. After the reviewed workflow fix and signed v1.1.241 release,
+   run `scripts/rebind-passport-beta-fence.ps1` on clean protected main with
+   the v1.1.241 manifest, approved beta baseline, signed v1.1.240 manifest,
+   saved preinstallation target, v1.1.240 fence receipt, and a fresh private
+   receipt path. It checks unchanged SQL and the live fence, repeats the
+   rollback-only direct write probes, and atomically replaces only the host
+   receipt record. Preserve the prior receipt and host-record backup. Use the
+   new receipt in every subsequent step.
 3. Dispatch the protected-main `passport-beta-rust-readiness.yml` workflow with
    the merged `marty-credentials` PR #305 head and the fenced receipt's WSL
    path. Download its three artifacts: the exact fence installation receipt,
