@@ -1225,11 +1225,11 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed current-head checks. UI #1192 `f0239db18` passed OpenBao/image/contract and isolated self-host loader tests; Canvas failed only in two Flow fixture cleanups, corrected and locally qualified for a grouped follow-up. Final artifacts and wallet cutover remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 `7f276a4` passed exact-head CI but still requires protected review. Verifier #154 `e42dd8d`, Credentials #313 `d562739`, Authenticator #57 `a8fdcbb` and Subscriptions #71 `ce8d934` passed current-head checks. UI #1192 `279c0bc` passed its complete exact-head CI run `38028988797`, including Canvas, OpenBao, images and contracts. Final release artifacts and wallet cutover remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed; packaged gateway, other-provider acceptance and review pending |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 at `d562739` pins Core `7f276a4`; all 19 exact-head checks passed (one scorecard skipped), including Core wheels, local binding, Rust/Python/WASM tests, Clippy and retirement guard. The repository root remains an empty Python test-harness wheel; Core owns canonical native wheels. Released-artifact qualification and native UI cutover remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; CI now requires the locked Marty Core/isomdl feature graph and the packaged OpenBao image's storage, Raft failover and recovery probes. A local shared production-Dockerfile image passed the exact-image verifier gate with separate non-exportable issuer/holder Transit keys, plus tamper/private-JWK/cross-key negatives; hosted CI, release provenance, broader artifact/binding gates and self-review remain |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355, Verifier #154, Credentials #313, Authenticator #57 and Subscriptions #71 have green current-head checks; Core still requires protected review. UI #1192 requires one final Canvas run after locally qualified Flow cleanup and release-fence merge. Exact release artifacts, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355, UI #1192, Verifier #154, Credentials #313, Authenticator #57 and Subscriptions #71 have green current-head checks; Core still requires protected review. Exact release artifacts, physical-device proof, KMS-only cutover and recovery remain. No remaining cross-repository PR is release qualified or merged. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. Local fresh PostgreSQL 16 checks ran Organization, Credential Template and Rust Issuance migrations twice: 47 service tables, nine Issuance ledger entries and no private-key catalog entries; injected Alembic/key state was rejected. The catalog gate and generic JSON/JSONB scan in published UI `5df61d68e` passed hosted CI. A newer local content scan also rejected synthetic PEM in generic text and JSON fields. Exact signed-image execution, final assembled table/column inventory, self-host cutover and release proof remain. |
 
 ### First execution steps
@@ -11526,3 +11526,72 @@ also passed locally against built Flow and Issuance binaries, disposable
 PostgreSQL and Redis, and the pinned Compose renderer. Both tests exercised
 the actual Linux fixture cleanup. Publish the roster correction, tracker
 evidence and release-fence merge together for one exact-head CI rerun.
+
+Published UI head `279c0bcebd59572273ab4a30545d5d6378cfd5c5` groups
+the Flow correction, latest `main` release fence and tracker evidence in PR
+#1192. New exact-head CI run `38028988797` is active. Keep subsequent tracker
+updates local until a required code correction or landing batch so routine
+evidence edits do not trigger extra full CI runs.
+
+K6 provider-scope review: the native signing-keys service still routes
+AWS KMS, Azure Key Vault, and GCP Cloud KMS signing and public-key reads
+through provider-specific Rust adapters; the broad provider golden vectors
+exercise their HTTP request and response contracts against stubs. The live
+external-provider enrollment, CSR, certificate, issuer binding, wrong-key and
+cross-tenant proof above is OpenBao-only. Do not infer real cloud-provider
+acceptance or remove those advertised providers to simplify qualification;
+run each supported provider's actual reference-only enrollment and signing
+contract with authorized provider credentials before declaring K6 complete.
+
+Verifier PR #154 self-review checkpoint: the production USB importer change is
+limited to removing test-only local-signing helpers; its normal signature,
+signer-id, sequence and recovery checks remain in place. The eMRTD and OBv3
+conformance suites retain signed cryptographic positives and wrong-key,
+tamper, trust-chain and data-group negatives through public-only vectors.
+The optional demo fixture generator now replays reviewed signed vectors rather
+than minting fresh trust-package sequences; its README discloses that behavior,
+and both embedded trust packages expire in October 2036. This preserves
+repeatable verifier qualification without private keys, but it does not prove
+remote fixture refresh or real-device release acceptance. Keep those gates
+open and recheck the production USB path at artifact qualification.
+
+K10 static SQL follow-up: all 34 checked-in UI `.sql` files were enumerated
+and searched for private-key or key-material identifiers. The only match is
+the OIDC `private_key_jwt` authentication-method default in the Issuance
+baseline, which is a protocol enum value rather than a stored key or table.
+This source inventory supplements the fresh PostgreSQL catalog/content scan;
+it does not replace signed-image execution or a final assembled schema audit.
+The Credentials hardening worktree contains two checked-in SQL setup files;
+neither they nor its `python`, `services`, or `packages` Python source have
+private-key/key-material identifiers. Its remaining Python unit-test schema
+is a generic synthetic fixture. These source searches strengthen the clean
+schema inventory but do not substitute for an initialized database scan.
+
+2026-10-10 exact-head UI CI: Actions run `38028988797` completed
+**success** at published PR #1192 head
+`279c0bcebd59572273ab4a30545d5d6378cfd5c5`. All reported jobs passed
+or had their expected neutral/skipped result. The OpenBao plugin image,
+coordinated PostgreSQL/Raft integration-secret recovery, Rust service images,
+Rust/release contracts, UI and MIP browser suites, public self-host image
+loader, Canvas database contracts and both corrected Flow acceptance cases
+passed. Canvas job `114145797595` passed, closing the prior run's specific
+Flow cleanup failure. PR #1192 remains draft; this run is exact-source CI
+evidence, not signed release-artifact, physical-wallet, assembled-schema,
+KMS-only cutover, or protected-review proof. The PR body now cites this run.
+
+Release-artifact gate audit after the green UI run: its downloadable artifacts
+are Rust build evidence, Docker build records, UI timing, browser evidence and
+security reports; no published, signed OCI release digest was produced. The
+stack release workflow publishes and attests `ui`, `services` and `migrations`
+digests from an explicit release claim, while the verification-candidate and
+Canvas OSS image workflows require reviewed `main` source. PR-head CI images
+therefore cannot be relabeled as the exact signed release artifacts. Land the
+protected Core and grouped consumers in dependency order, then qualify the
+released digests through the existing claim/provenance workflow and run the
+KMS-only cutover and recovery against those exact digests. Core #355 currently
+has green checks but `REVIEW_REQUIRED` and no pending reviewer request; do
+not bypass that protection or count its source CI as a merged release.
+The current Windows workspace exposes neither `adb` nor `flutter` on PATH;
+hosted Android/iOS build checks are available, but physical-device wallet
+acceptance needs a configured device/test host and the eventual exact
+released service digests.
