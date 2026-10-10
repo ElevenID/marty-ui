@@ -138,6 +138,37 @@ fn json_consumer_case_timings(report: &Value) -> Result<Vec<(String, u64)>, Stri
         .collect()
 }
 
+// The published JSON-depth probe returns elapsed phases beside its frozen
+// observation. Accept only these four fixed phases, with no payload or arbitrary label.
+fn json_depth_phase_timings(report: &Value) -> Result<Vec<(&'static str, u64)>, String> {
+    let rows = report["ci_phase_timing"]
+        .as_array()
+        .ok_or("Missing JSON-depth phase timing")?;
+    let expected = [
+        "json_depth.setup",
+        "json_depth.validation",
+        "json_depth.provider",
+        "json_depth.encoding",
+    ];
+    if rows.len() != expected.len() {
+        return Err("Incomplete JSON-depth phase timing".into());
+    }
+    rows.iter()
+        .zip(expected)
+        .map(|(row, name)| {
+            let object = row.as_object().ok_or("Invalid JSON-depth phase timing")?;
+            if object.len() != 2 || row["name"].as_str() != Some(name) {
+                return Err("Unexpected JSON-depth phase timing identity".into());
+            }
+            let duration = row["duration_ms"]
+                .as_u64()
+                .filter(|duration| *duration <= 180_000)
+                .ok_or("Invalid JSON-depth phase duration")?;
+            Ok((name, duration))
+        })
+        .collect()
+}
+
 // Only fixed phase labels and elapsed time leave the fixture. Never emit its
 // Docker IDs, database URL, SQL, oracle report, or environment in CI timing.
 pub(super) struct PhaseTimer {
@@ -749,6 +780,64 @@ impl PublishedDatabase {
             true,
         )
         .await
+    }
+
+    /// Experimental native-test initializer: preserve the pinned migrations
+    /// and recovery overlay, but do not execute the independent Python oracle.
+    pub async fn start_with_status_native_seed() -> Result<Self, String> {
+        let owned = Self::start_probe_with_migration_named(
+            None,
+            None,
+            true,
+            Some("status_native_seed".into()),
+        )
+        .await?;
+        let seed_timing = PhaseTimer::start("fixture_seed", "status_native_seed");
+        static SCENARIOS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+        let scenarios = SCENARIOS.get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-issued-review-scenarios.json"
+            ))
+            .expect("Invalid owned status scenario fixture")
+        });
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&owned.url)
+            .await
+            .map_err(|_| "Owned status fixture connection failed")?;
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|_| "Owned status fixture transaction failed")?;
+        for statement in scenarios["seed"]
+            .as_array()
+            .ok_or("Missing owned status scenario seed")?
+        {
+            sqlx::query(
+                statement
+                    .as_str()
+                    .ok_or("Invalid owned status scenario statement")?,
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| "Owned status fixture seed failed")?;
+        }
+        sqlx::query(
+            "INSERT INTO issuance_service.credential_delivery_records \
+             (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata) \
+             VALUES ('delivery-provider','credential-review','transaction-review','org-review', \
+             'canvas_credentials','mirror','delivered','{}')",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "Owned status delivery seed failed")?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| "Owned status fixture commit failed")?;
+        pool.close().await;
+        seed_timing.success();
+        Ok(owned)
     }
 
     pub async fn start_with_utf7_consumer() -> Result<Self, String> {
@@ -1881,10 +1970,10 @@ impl PublishedDatabase {
             let observation = report
                 .get(report_key)
                 .ok_or("Missing published behavior oracle")?;
-            owned.oracle = Some(if script == "json_consumer" {
+            owned.oracle = Some(if matches!(script, "json_consumer" | "json_depth") {
                 observation
                     .get("oracle")
-                    .ok_or("Missing published JSON consumer oracle")?
+                    .ok_or("Missing published JSON oracle")?
                     .clone()
             } else {
                 observation.clone()
@@ -1897,6 +1986,16 @@ impl PublishedDatabase {
             for (name, duration) in json_consumer_case_timings(observation)? {
                 eprintln!(
                     "MARTY_CI_PHASE_V1 {{\"phase\":\"oracle_case\",\"name\":\"{name}\",\"duration_ms\":{duration},\"status\":\"ok\"}}"
+                );
+            }
+        }
+        if script == "json_depth" {
+            let observation = report
+                .get(report_key)
+                .ok_or("Missing published JSON-depth diagnostics")?;
+            for (name, duration) in json_depth_phase_timings(observation)? {
+                eprintln!(
+                    "MARTY_CI_PHASE_V1 {{\"phase\":\"oracle_phase\",\"name\":\"{name}\",\"duration_ms\":{duration},\"status\":\"ok\"}}"
                 );
             }
         }

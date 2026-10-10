@@ -320,9 +320,10 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         managed_chain.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 4
+        == 5
     )
     for case in (
+        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
         "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
         "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
         "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
@@ -341,15 +342,14 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         signing_routes.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 3
+        == 2
     )
     for case in (
-        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
         "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
         "authenticated_gateway_rotates_only_a_dedicated_signing_service",
     ):
         assert case in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 3
+    assert signing_routes.count("-- --ignored --exact") == 2
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )
@@ -3432,7 +3432,7 @@ GATEWAY_REGISTRATIONS = [
     (
         "operations_gateway_candidate_preserves_review_lifecycle",
         "canvas_gateway_lifecycle_replay",
-        "start_with_status_provider",
+        "start_with_status_native_seed",
         5,
         "gateway lifecycle replay must not deadlock",
     ),
@@ -3575,7 +3575,7 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
             "wrong-specialized-database": (
                 f"{database}()",
                 "start_with_review_recovery()"
-                if database == "start_with_status_provider"
+                if database == "start_with_status_native_seed"
                 else "start_with_status_provider()",
             ),
             "cleanup": ("    owned.close().unwrap();", ""),

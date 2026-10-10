@@ -38,6 +38,7 @@ TIMING_PHASES = {
     "canvas_target",
     "image_pull",
     "oracle_case",
+    "oracle_phase",
 }
 TIMING_STATUSES = {"ok", "failed"}
 REST_SCENARIOS = frozenset({"rest", "facts", "retry"})
@@ -187,12 +188,21 @@ TIMING_NAMES = {
     | frozenset(
         {
             "published_probe",
+            "status_native_seed",
             "worker_validation_template",
         }
     ),
-    "fixture_seed": FIXTURE_NAMES,
+    "fixture_seed": FIXTURE_NAMES | frozenset({"status_native_seed"}),
     "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
     "oracle_case": JSON_CONSUMER_CASE_NAMES,
+    "oracle_phase": frozenset(
+        {
+            "json_depth.setup",
+            "json_depth.validation",
+            "json_depth.provider",
+            "json_depth.encoding",
+        }
+    ),
     "cleanup": FIXTURE_NAMES | frozenset({"published_database_removal"}),
     "contract": CONTRACT_NAMES,
     "contract_phase": frozenset(

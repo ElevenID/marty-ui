@@ -3,7 +3,9 @@
 import ast
 import json
 import re
+import runpy
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -212,6 +214,48 @@ def test_missing_current_input_requires_review() -> None:
     del evidence["sha256"]["contracts/canvas-issued-review-scenarios.json"]
     with pytest.raises(AssertionError, match="need review"):
         _assert_inputs(evidence, ROOT)
+
+
+def test_depth_phase_diagnostics_stay_outside_frozen_observation(monkeypatch) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    namespace = runpy.run_path(str(ROOT / "scripts/run_canvas_json_depth_oracle.py"))
+    globals_ = namespace["run"].__globals__
+    globals_["Path"] = lambda _path: SimpleNamespace(
+        read_text=lambda: json.dumps(
+            {
+                "schema": "marty.canvas-json-depth-scenarios/v1",
+                "leaf_json": "0",
+                "shapes": ["array", "object"],
+                "statuses": [200, 403],
+                "depths": [1],
+            }
+        )
+    )
+
+    async def observe(cases, **_kwargs):
+        return {"case_names": [case["name"] for case in cases]}
+
+    monkeypatch.setattr(globals_["validation"], "observe", observe)
+    monkeypatch.setattr(globals_["provider"], "observe", observe)
+    result = namespace["run"]()
+    assert result["oracle"]["validation"]["case_names"] == [
+        "json_depth_array_1_200",
+        "json_depth_array_1_403",
+        "json_depth_object_1_200",
+        "json_depth_object_1_403",
+    ]
+    assert (
+        result["oracle"]["provider"]["case_names"]
+        == result["oracle"]["validation"]["case_names"]
+    )
+    assert "ci_phase_timing" not in result["oracle"]
+    assert [row["name"] for row in result["ci_phase_timing"]] == [
+        "json_depth.setup",
+        "json_depth.validation",
+        "json_depth.provider",
+        "json_depth.encoding",
+    ]
+    assert all(set(row) == {"name", "duration_ms"} for row in result["ci_phase_timing"])
 
 
 def test_new_transitive_json_reference_requires_review_after_hash_refresh(

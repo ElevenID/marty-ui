@@ -39,6 +39,88 @@ GATEWAY_UPSTREAM_TARGETS = {
 
 
 class AffectedRustPlannerTests(unittest.TestCase):
+    def test_gateway_credential_template_issuer_resolution_is_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(["rust/services/gateway/src/runtime.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-gateway"
+            and edge["package"] == "marty-credential-template"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertNotIn(
+            "marty-gateway",
+            {
+                dep["name"]
+                for dep in packages["marty-credential-template"]["dependencies"]
+            },
+        )
+        markers = (
+            ("binding", "evidence"),
+            ("auth_binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("auth_runtime_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("request_base_marker", "request_evidence"),
+            ("request_method_marker", "request_evidence"),
+            ("request_auth_marker", "request_evidence"),
+            ("send_marker", "request_evidence"),
+            ("provider_route_marker", "provider_evidence"),
+            ("provider_dispatch_marker", "provider_evidence"),
+            ("provider_auth_marker", "provider_evidence"),
+            ("provider_operation_marker", "provider_operation_evidence"),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for path in {edge[source] for _, source in markers}
+        }
+        for marker, source in markers:
+            with self.subTest(marker=marker):
+                self.assertIn(edge[marker], sources[edge[source]])
+        request = (
+            sources[edge["request_evidence"]]
+            .split("async fn resolve_issuer(", 1)[1]
+            .split("\n    async fn ", 1)[0]
+        )
+        self.assertIn(edge["request_marker"], request)
+        self.assertIn(edge["request_base_marker"], request)
+        self.assertIn(edge["request_method_marker"], request)
+        self.assertIn(edge["request_auth_marker"], request)
+        self.assertIn(edge["send_marker"], request)
+        provider = (
+            sources[edge["provider_evidence"]]
+            .split("async fn internal_signing_compatibility_handler(", 1)[1]
+            .split("\nasync fn ", 1)[0]
+        )
+        self.assertIn(edge["provider_dispatch_marker"], provider)
+        self.assertIn(edge["provider_auth_marker"], provider)
+        compose = yaml.safe_load(
+            (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            compose["services"][edge["deployment_service"]]["environment"][
+                "SIGNING_KEYS_INTERNAL_URL"
+            ],
+            "http://gateway:8000/internal/signing-keys",
+        )
+        self.assertEqual(
+            compose["services"][edge["deployment_service"]]["environment"][
+                edge["deployment_auth_key"]
+            ],
+            compose["services"]["gateway"]["environment"][edge["deployment_auth_key"]],
+        )
+        self.assertIn(
+            edge["deployment_marker"],
+            (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8"),
+        )
+
     def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

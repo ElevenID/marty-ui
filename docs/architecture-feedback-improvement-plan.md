@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-09 17:33 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-10 00:26 UTC checkpoint). Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -62,6 +62,11 @@ guarded its parsed ConfigMap/container environment. Both passed full PR and
 protected queue checks and merged; main's one-reviewer rule was restored and
 verified. These are reliability and deployment-correctness changes, not
 measured CI speedups.
+UI #1216 and #1217 have now merged the bounded Kubernetes policy test-source
+lane and its first exact-source pilot. UI #1218 merged exact-digest Docker Hub
+mirror/cache fallback with all required PR and protected checks; it addresses
+registry-throttling reliability, not a measured CI speedup. The protected
+one-reviewer rule was restored after the merges.
 
 ## Objective and scope
 
@@ -269,6 +274,15 @@ Auth adds another concrete consumer cluster: `rust/services/auth/src/service_tra
 Flow's runtime edge is active, not just a configuration string: `connect_providers` constructs Organization, Credential Template, Presentation Policy, and Issuance gRPC providers, then checks Signing Keys and physical-Issuance HTTP providers and the reference catalog before marking readiness. `HttpFlowReferenceProvider::resolve` performs organization/principal-scoped GETs for Issuance application templates, Credential Template delivery destinations, Trust Profile entries, and Deployment Profile entries. Its source-local provider tests exercise controlled HTTP responses, but those do not by themselves prove cross-service wire compatibility. A change to any of these provider routes may require Flow consumer and composed acceptance coverage even when Cargo reverse dependencies omit Flow; maintain fail-closed selection until these obligations are explicitly grouped.
 
 2026-10-06 local A3 candidate (not merged): add observed non-Cargo Organization, Presentation Policy, and Issuance gRPC producer-to-Flow consumer edges alongside the already recorded Credential Template edge. Each new edge is backed by Flow's configured target, channel construction, concrete gRPC request, source call site, response-identity handling where present, and the provider's server implementation. Organization membership checks that returned identifiers are nonempty; it does not currently prove they equal the requested principal and tenant, so this inventory must not claim that stronger guard. These observations do not prove every Flow HTTP/proto/deployment input or cross-service compatibility obligation. The shadow planner still selects the full Rust workspace for any service change, and no CI gate, skip, release tier, or measured speedup changes in this candidate.
+
+2026-10-10 local A3 candidate: Credential Template's issuer-resolution
+request uses `SIGNING_KEYS_INTERNAL_URL` through Gateway's authenticated
+`/internal/signing-keys/resolve-issuer-did` compatibility route. Compose binds
+that URL to `gateway:8000`; Cargo has no Gateway-to-Credential-Template edge.
+The shadow planner now records the source-backed runtime consumer and a
+regression test checks the configuration, request, Gateway dispatch, and
+deployed endpoint. It remains fail-closed for all service changes. This is
+input-closure progress, not a narrower CI selection or measured speedup.
 
 Completion evidence: selector regression tests, representative dependency cases, shadow results, and reviewer agreement on every newly omitted group. No GitHub gate may treat an unexpectedly missing required group as success.
 
@@ -843,6 +857,19 @@ still had a 17.1m feature-matrix lane alongside 16.9m preflight and 15.7m
 Windows. A7 remains deferred until a post-#355 representative run and a
 no-duplicate-compilation split design show an actual critical-path benefit;
 all security, feature, benchmark, and platform obligations remain required.
+
+The later exact-head [#355 PR run 38001294613](https://github.com/ElevenID/marty-core/actions/runs/38001294613)
+passed. Preflight took 726 seconds, affected Rust tests 472 seconds, and the
+parallel Native ZKP Security Boundary 757 seconds. The latter spent 473
+seconds on the disposable OpenBao issuance proof, 110 seconds on vendored
+Longfellow regressions, and 64 seconds on a real prove/verify round trip.
+Security started earlier and took longer, but preflight finished 32 seconds
+later and was the last required job before the gate. Thus this run still puts
+preflight at the PR tail, with only a 32-second observed tail to remove before
+security becomes limiting; it does not establish a beneficial no-duplicate
+split. A7 remains deferred. The current Core main selector includes deleted and
+renamed files, package-owned non-Rust fixtures, and unknown-input fallback;
+an older local checkout must not be used to reimplement those fixes.
 
 ## Next renewal decomposition: bounded obligations (unpublished)
 
@@ -2776,8 +2803,8 @@ unrelated Rust/image/browser/UI matrices, executed all 273 selected cases
 release job took 2m14s. This observed gate is 5m09s shorter than #1214's
 9m17s source-only gate, but the heads, runners, and changes differ; it is a
 scoped feedback observation, not a controlled attribution or whole-pipeline
-average. #1217's full protected merge-group validation and main merge are
-still pending at this checkpoint.
+average. Full protected merge-group validation was still pending at that
+checkpoint; it later passed and #1217 merged.
 
 The first #1217 protected
 [run 37987570280](https://github.com/ElevenID/marty-ui/actions/runs/37987570280)
@@ -2792,7 +2819,7 @@ unchanged PostgreSQL service, cargo-deny action, and several image builds;
 Nginx integration also failed during its Docker build, though its helper did
 not expose the underlying registry error. The required gate failed and GitHub
 removed the entry. This is an external registry failure, not a test regression or
-permission to bypass the image proof; #1217 remains open and unmerged.
+permission to bypass the image proof; #1217 remained open at that checkpoint.
 
 The initial [mirror PR #1218](https://github.com/ElevenID/marty-ui/pull/1218)
 preserves canonical digest-pinned service references and configures a Docker
@@ -2805,10 +2832,124 @@ Passport Fence PostgreSQL tests hit 429 after the daemon mirror step, and the
 Docker-based cargo-deny action hit 429 for its pinned Rust base. The separate
 organization Workflow Quality job also failed pulling its pinned Python
 runtime image. Nginx integration passed, but that alone cannot attribute a
-cache improvement. #1218 was marked draft; do not merge or claim a speedup
-until the required hosted and protected gates pass. Next work must cover
-pre-step services and repository/organization runtime-image pulls with
-digest-preserving, fallback-safe distribution; maintain the full checks.
+cache improvement. #1218 was marked draft at that checkpoint. The follow-up
+revisions covered pre-step services and repository/organization runtime-image
+pulls with digest-preserving, fallback-safe distribution while retaining the
+full checks.
+
+Final October 10 UTC reconciliation: #1217 passed full protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38006523302)
+and merged at 00:16:56 UTC. #1218's exact-head
+[PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38004610964)
+passed, including Canvas (23m20s), and its post-#1217
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38006633615)
+passed all required jobs before merge at 00:25:52 UTC. The implementation
+preserves oracle-pinned OCI digests and canonical fallback, carries the
+selected PostgreSQL image into the isolated self-host child, and pins the
+rendered-base Redis pull; independent review found no P1-P3 issue. The first
+#1218 queue attempt was invalidated by a subsequent source push, causing a
+CodeQL upload to fail against the deleted queue ref; the final queue run
+passed. Main's one-reviewer rule is restored. No attributable pipeline-wide
+speedup is claimed from #1218 without comparable before/after runs.
+
+The final #1218 [Canvas timing artifact](https://github.com/ElevenID/marty-ui/actions/runs/38006633615)
+records 600 seconds compiling reusable Rust test executables, 387 seconds
+building the public self-host image, and 581 seconds in database contracts.
+The database phase started 106 exact-owned PostgreSQL containers, with 330
+seconds of aggregate readiness and 783 seconds of aggregate migration/seed
+time across concurrently executed cases. These sums are not critical-path
+durations: worker, composition, self-host, and Flow targets overlap. The
+three stages remain the largest observed Canvas contributors. Compared with
+#1212's 618/375/647 seconds, this different combined head gives no clean
+attribution for the change; investigate fixture/setup reuse with isolation
+proof before changing the required case inventory.
+The artifact's host `sccache` counters show zero hits and misses, but the
+Bookworm compile runs inside a separate network-disabled container without
+the host `RUSTC_WRAPPER`; these counters do not measure its compilations.
+Do not claim a cache regression or add a new cache layer from that artifact.
+
+Follow-up ownership audit of that same artifact: 77 of the 106
+`migration_seed` events are the default `published_probe`; 14 are
+`status_provider` (99.2 seconds summed, 5.3–8.4 seconds each). The latter
+serve separate mutable native database/process/HTTP contracts and one
+published-Python/frozen-reference comparison. The worker repository-only
+matrices already use an owned migrated template with independent database
+clones, so extending that pattern to every probe is neither a new general
+optimization nor an isolation-safe default. In this run, the single
+`json_depth` published oracle took 104.6 seconds; `json_consumer` took 44.4
+seconds and `worker_startup` 41.0 seconds. Those are individual probe
+durations, while the status-provider sum overlaps other test work. The
+JSON-depth probe invokes both published validation and provider observations
+under a 180-second bound, and its test compares the full independent frozen
+observation. Do not remove or shorten that oracle merely because it is slow.
+Next measure its internal validation/provider phases and the target's
+critical-path overlap before proposing a fixture or qualification change;
+keep the current required case inventory and exact-owned cleanup meanwhile.
+
+The next local A0/A6 candidate records four bounded JSON-depth oracle
+subphases—setup, published validation, published provider, and observation
+encoding—beside the unchanged frozen observation. The Rust fixture admits
+only the ordered payload-free rows and relays fixed labels to the existing
+CI timing artifact. The current-checkout input hashes are refreshed after
+source review; historical captures are untouched. Fifty-three focused
+Python timing/selector tests, Ruff, rustfmt, and targeted Rust package
+`cargo check` pass locally; independent review found no P1–P3 issue and its
+stale-comment nit was fixed. Real published-container execution and protected
+CI are still required before any phase attribution or speed claim.
+
+Exact-head [UI #1220 PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38010182064)
+passed the real Canvas suite and final gate. Its JSON-depth oracle emitted
+four successful, bounded phase rows: setup 4 ms, validation 29,556 ms,
+provider 90,435 ms, and encoding 195 ms. The enclosing published probe took
+126,817 ms and the concurrently executed database group 678,172 ms. This is
+one run, not an attributable before/after improvement. The provider oracle
+iterates 64 depth/shape/status cases, each exercising suspend, reinstate,
+and revoke through a real app with isolated row resets. It currently creates
+an app for each route (192 constructions). A network-disabled local run of
+20 `create_app()` calls in the exact pinned published image took 1,753 ms
+after import, suggesting avoidable repeated setup but not proving CI savings.
+The next local candidate reuses one app only within each case, preserving
+fresh app identity between cases, mutable database resets, the three route
+assertions, and the frozen full observation. Its 55 focused tests and Ruff
+pass; independent review found no P1–P3 issue after adding a three-route
+wiring guard. It is folded into the timing PR so one subsequent exact-head
+hosted run can check pinned-image parity and compare phase timing. That run
+is still required before merge; no speedup is claimed from the local probe.
+
+The new exact-head [#1220 run 38013171013](https://github.com/ElevenID/marty-ui/actions/runs/38013171013)
+passed all required jobs and the final gate. The published JSON-depth and
+status-provider frozen-oracle tests are explicitly `ok` in the Canvas log.
+Provider time was 29,887 ms versus 90,435 ms on the preceding passing head
+(60,548 ms, 67% lower); the enclosing JSON-depth probe was 56,664 versus
+126,817 ms. Canvas job wall time was 29m05s versus 32m27s, but compilation,
+image-build, scheduling, and overlapping database work vary; do not attribute
+that whole-job difference solely to app reuse. Fourteen status-provider
+database probes summed 81,644 versus 97,658 ms, also across different runs.
+The provider oracle seeds `credential-review` and related rows consumed by
+native status tests. Removing its repeated execution without separately
+preserving those seed and final-state effects would change the tests; defer
+that proposed deduplication until the fixture boundary is independently
+proved. [Protected run 38029895146](https://github.com/ElevenID/marty-ui/actions/runs/38029895146)
+passed and #1220 merged into main as `ae7cfc797` on 2026-10-10.
+
+The same exact-head compile artifact separates the 599-second pinned-Bookworm
+container phase into test targets 253 seconds, issuance binaries 206 seconds,
+Gateway binary 109 seconds, and Flow binary 29 seconds. The three binary
+commands therefore account for 344 seconds in this run. They deliberately
+retain package-specific feature resolution; combining them is not yet a
+qualified optimization. The host `sccache` counters do not measure this
+network-disabled container, so they cannot justify a cache-hit claim.
+
+The public self-host image is a distinct release-profile build of the complete
+service binary list in `services/Dockerfile` and
+`scripts/build-rust-service-binaries.sh`; the Canvas acceptance executables
+and helper binaries are test/development-profile artifacts from a host-mounted
+target directory. Copying those binaries into the production image would
+change the qualified artifact, so the 402-second image build cannot be
+eliminated by that reuse. The image
+already uses a cargo-chef dependency stage, BuildKit cache scope, and the
+repository's filtered Docker context. A narrower image or changed cache mode
+needs its own runtime/packaging equivalence proof and comparable timing.
 
 Latest protected timing comparison: #1210's Canvas run `37955004959` spent
 482 seconds compiling reusable tests, 318 seconds building the public
@@ -2819,6 +2960,90 @@ slowed together; #1211 also changed the combined head. These are different
 load/code conditions, not an attributable regression or a reason to delete
 one named case. A further fixture-reuse change needs case ownership and
 isolation proof under comparable runs.
+
+The #1220 timing artifact puts `json_consumer` at 27,853 ms for migration/seed
+and 29,491 ms for its serial probe. Its 66 validation cases sum to 12,466 ms;
+its 66 provider cases sum to 12,350 ms. Provider routes already reuse one app
+within each case. Validation constructs an app per case while patching
+case-specific environment, repository, file, and HTTP boundaries; cross-case
+reuse is not safe without proving app configuration does not capture those
+inputs. `worker_startup` took 21,902 ms in migration/seed; its oracle starts
+real child processes and checks their heartbeat, which remains its purpose.
+Neither is a
+justified next coverage reduction or a measured end-to-end speedup.
+
+[UI #1222](https://github.com/ElevenID/marty-ui/pull/1222) records the
+source-backed Gateway-to-Credential-Template issuer-resolution consumer in
+the fail-closed shadow planner. Its exact-head [PR run
+38016397675](https://github.com/ElevenID/marty-ui/actions/runs/38016397675)
+passed the planner-owned release tests, including the new named regression,
+and the final gate in 2m08s from workflow start to gate completion. This
+planner-only input legitimately selected the narrow PR lane; the protected
+merge group remains full. It is one scoped observation, not a pipeline-wide
+average or a speedup caused by the added edge.
+[Protected run 38029925495](https://github.com/ElevenID/marty-ui/actions/runs/38029925495)
+passed and #1222 merged into main as `ab721eee6` on 2026-10-10.
+
+The same #1220 Canvas artifact has 83 default `published_probe`
+`migration_seed` rows totaling 361,983 ms across concurrently run tests.
+`PublishedDatabase::start_probe_with_scope` gives each probe its own
+tmpfs-backed PostgreSQL container and fixed
+`canvas_published_schema_test` database; the pinned Python oracles use that
+same fixed name inside the container network namespace. A shared-server
+template would need a new namespace/database and cleanup contract, not just
+`CREATE DATABASE ... TEMPLATE`, and would alter the current isolation proof.
+The 107,223 ms timeout and 111,803 ms lease-expiry preflights retain live
+deadline/lease behavior. Neither aggregate sum is a sequential CI saving.
+
+There are 14 `start_with_status_provider()` call sites in the Canvas
+composition target. Only `status_provider_matches_published_python` directly
+compares its oracle to the frozen reference; the other 13 use the resulting
+database for native Gateway/status assertions. The constructor also applies
+the review-recovery migration, and the Python oracle seeds issued/delivery
+rows before exercising mutable provider and credential-route cases. A future
+seed-only fixture could reuse the existing checked-in scenario SQL while
+retaining the one full independent oracle, but it must prove the native
+tests' exact required initial/final rows, recovery migration, pinned-input
+closure, and cleanup before replacing any call. No skip or saving is claimed.
+
+Source follow-up: a bare replay of `shared.seed` is **not** equivalent to the
+current fixture. The published status oracle additionally inserts
+`delivery-provider`, iterates provider cases, and can persist credential and
+delivery changes (including credential-route writes). Native runtime setup
+updates those same rows, while review tests snapshot the initial delivery row
+and compare unaffected rows across cases. Therefore first compare the
+post-oracle and seed-only database states for the columns each native case
+reads, then test any narrower initializer against all 13 native cases on
+disposable, isolated published-schema databases. Retain the one full oracle
+and its frozen comparison; do not switch constructors based on source reading
+alone.
+
+Native-seed pilot (2026-10-09,
+[UI #1223](https://github.com/ElevenID/marty-ui/pull/1223)):
+a new constructor retains the pinned published migrations, review-recovery
+overlay, isolated PostgreSQL
+container and owned cleanup, then executes the nine existing issued-review
+seed statements plus the delivery row without the provider oracle. Thirteen
+native composition cases use it; the independent published-Python/frozen
+comparison still runs once and now checks the seeded and published resulting
+rows across all ten fixture tables, ignoring generated timestamps only.
+Twelve available native cases passed on Windows, including the two packaged
+process cases. The exact-head [Linux PR run 38019790357](https://github.com/ElevenID/marty-ui/actions/runs/38019790357)
+passed the Unix-only mirror-worker lifecycle, independent published/frozen
+oracle, Release Contract Tests, Canvas, Analyze Rust/Actions, and final gate. The comparison
+and the 22 current-input hash tests also passed locally.
+Separate fixed `migration_seed` and `fixture_seed` labels now cover the new
+constructor; the timing collector accepts only those exact labels. Its 53
+targeted policy/current-input tests and Docker-backed parity test passed
+locally. The Linux timing artifact recorded one full status-provider migration
+(6,810 ms), 14 native-seed migrations (69,336 ms total, including parity),
+and 14 native fixture seeds (3,769 ms total). The #1220 baseline had 14 full
+provider migrations totaling 81,644 ms. This proves less repeated oracle
+work, not a wall-clock saving: the Canvas job was 30m48s versus 29m05s and
+composition target 469s versus 350s. Unchanged scenario durations were also
+1.36x higher on the new run, so runner variation prevents causal attribution.
+The PR was rebased after #1220 and #1222 merged; its rewritten head still
+requires fresh exact-head validation and protected queue qualification.
 
 ## Design references
 

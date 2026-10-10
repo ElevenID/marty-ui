@@ -14,6 +14,17 @@ check and is never a deployment target.
    approved beta baseline manifest, and a new absolute Windows receipt path.
    It installs the passport-scoped write fence, verifies direct database write
    rejection, and records the exact old beta and production generation.
+   If the 2026-10-10 v1.1.237 installation stopped after creating the host
+   intent markers, use the same installer from a newer signed protected-main
+   release with `-CompatiblePriorStackManifest` pointing to the signed
+   v1.1.237 manifest and `-PreinstallTargetFile` pointing to the saved approved
+   target observation. Run first with `-RecoveryPreflightOnly` to check the
+   signed source, intent markers, live target, and SQL verifier without writing
+   a receipt or changing markers. Then run without that switch. Recovery
+   verifies the existing fence and all write
+   probes without reinstalling SQL. The prior manifest proves SQL compatibility;
+   it does not independently prove which process installed the fence. Preserve
+   the pending markers until recovery completes and writes its receipt.
 3. Dispatch the protected-main `passport-beta-rust-readiness.yml` workflow with
    the merged `marty-credentials` PR #305 head and the fenced receipt's WSL
    path. Download its three artifacts: the exact fence installation receipt,

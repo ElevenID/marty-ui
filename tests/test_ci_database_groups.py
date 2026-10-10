@@ -401,6 +401,16 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
             {"phase": "oracle_case", "name": name, "duration_ms": 1, "status": "ok"}
         )
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+    for name in (
+        "json_depth.setup",
+        "json_depth.validation",
+        "json_depth.provider",
+        "json_depth.encoding",
+    ):
+        marker = json.dumps(
+            {"phase": "oracle_phase", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for name in GROUPS.PUBLISHED_MATRIX_PROBE_NAMES:
         marker = json.dumps(
             {"phase": "migration_seed", "name": name, "duration_ms": 1, "status": "ok"}
@@ -413,7 +423,9 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for phase, name in (
         ("migration_seed", "published_probe"),
+        ("migration_seed", "status_native_seed"),
         ("migration_seed", "worker_validation_template"),
+        ("fixture_seed", "status_native_seed"),
         ("scenario", "retry-after.http_date_future"),
         ("scenario", "repository_roster_metadata"),
         ("scenario", "repository_roster_expired_before_write"),
@@ -433,6 +445,8 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
     marker = '{"phase":"scenario","name":"secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
     marker = '{"phase":"oracle_case","name":"json_consumer.validation.secret123","duration_ms":1,"status":"ok"}'
+    assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
+    marker = '{"phase":"oracle_phase","name":"json_depth.secret123","duration_ms":1,"status":"ok"}'
     assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas") is None
     for phase in ("fixture_seed", "cleanup"):
         marker = json.dumps(
@@ -491,6 +505,8 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         'return Err("unsupported owned worker matrix case".into());'
     ) < (support.index("worker_matrix_timing_name(scenario, case)?"))
     assert "Self::start_probe_with_migration_named(" in support
+    assert support.count('Some("status_native_seed".into())') == 1
+    assert support.count('PhaseTimer::start("fixture_seed", "status_native_seed")') == 1
     assert 'strip_prefix("worker-")' in support
     # Every Rust wrapper that reaches the shared case constructor must have
     # an exact checked-in scenario family in the timing collector. This also

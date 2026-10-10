@@ -11873,3 +11873,9 @@ provider, registry, and service-validation golden vectors passed; Signing
 Keys and service-acceptance all-target warnings-denied Clippy passed; the
 Gateway acceptance test compiled. Its disposable OpenBao/Redis runtime proof
 is delegated to the next hosted contracts lane.
+
+`main` advanced while this draft PR ran. The branch is merging current
+`main`; its only textual conflict was an added case in the retired Python
+passport beta SQL-bundle test. The Rust migration deliberately removed that
+test and its bundle assembly, so the merge retains the deletion. The newer
+fence recovery scripts and their separate tests from `main` remain included.

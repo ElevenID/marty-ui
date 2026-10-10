@@ -18,6 +18,33 @@ RUST = ROOT / "rust"
 OBSERVED_NON_CARGO_CONSUMERS = {
     "marty-gateway": [
         {
+            # Credential Template resolves issuer DIDs through the stack's
+            # Gateway signing-compatibility route, not directly through Cargo.
+            "package": "marty-credential-template",
+            "evidence": "rust/services/credential-template/src/config.rs",
+            "binding": '"SIGNING_KEYS_INTERNAL_URL"',
+            "auth_binding": '"SIGNING_KEYS_INTERNAL_API_KEY"',
+            "runtime_evidence": "rust/services/credential-template/src/main.rs",
+            "runtime_marker": "config.signing_keys_internal_url.clone()",
+            "auth_runtime_marker": "config.signing_keys_internal_api_key.as_deref()",
+            "request_evidence": "rust/services/credential-template/src/control_plane.rs",
+            "request_marker": '"{}/resolve-issuer-did"',
+            "request_base_marker": "self.signing_keys_internal_url",
+            "request_method_marker": "self.http.get(endpoint)",
+            "request_auth_marker": 'request.header("x-api-key", api_key.as_ref())',
+            "send_marker": ".send()",
+            "provider_evidence": "rust/services/gateway/src/runtime.rs",
+            "provider_route_marker": 'request.uri().path().starts_with("/internal/signing-keys")',
+            "provider_dispatch_marker": "forward_resolve_issuer_did(&state, &organization_id, &query).await",
+            "provider_auth_marker": "constant_time_header_matches(",
+            "provider_operation_evidence": "rust/services/gateway/src/signing_compat.rs",
+            "provider_operation_marker": '(HttpMethod::Get, "resolve-issuer-did")',
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "credential-template",
+            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys",
+            "deployment_auth_key": "SIGNING_KEYS_INTERNAL_API_KEY",
+        },
+        {
             # Trust Profile resolves issuer did:web documents through the
             # stack-owned Gateway unless the internal base URL is overridden.
             "package": "marty-trust-profile",
