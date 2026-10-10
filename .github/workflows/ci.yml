@@ -938,6 +938,9 @@ jobs:
           image=$(bash scripts/ci/pull-pinned-dockerhub-image.sh "$MARTY_CI_BUILDKIT_PIN")
           echo "MARTY_CI_BUILDKIT_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Start digest-pinned Rust test services after registry setup
+        # Self-host acceptance creates its own isolated PostgreSQL container;
+        # it never uses the shared PostgreSQL/Redis/OpenBao fixture services.
+        if: matrix.lane != 'selfhost'
         shell: bash
         run: |
           set -euo pipefail
@@ -1947,7 +1950,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Remove owned Rust test services and volumes
-        if: always()
+        if: always() && matrix.lane != 'selfhost'
         shell: bash
         run: |
           set -euo pipefail

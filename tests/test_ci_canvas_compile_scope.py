@@ -208,6 +208,18 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert "rust_matrix='[\"worker\"]'" in classifier["run"]
     assert "--emit-verified-worker-tests" in classifier["run"]
     steps = {step.get("name"): step for step in job["steps"]}
+    assert steps["Start digest-pinned Rust test services after registry setup"]["if"] == (
+        "matrix.lane != 'selfhost'"
+    )
+    assert steps["Remove owned Rust test services and volumes"]["if"] == (
+        "always() && matrix.lane != 'selfhost'"
+    )
+    selfhost_source = (
+        ROOT / "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
+    ).read_text(encoding="utf-8")
+    assert "PublishedDatabase::start_with_scope" in selfhost_source
+    assert "MARTY_RUST_CI_POSTGRES_ID" not in selfhost_source
+    assert "MARTY_RUST_CI_REDIS_ID" not in selfhost_source
     compile_run = steps["Compile reusable Rust test executables"]["run"]
     assert "cargo test --locked --workspace --no-run" in compile_run
     assert "--exclude" not in compile_run
