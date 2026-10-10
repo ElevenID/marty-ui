@@ -15,6 +15,8 @@ use x509_cert::request::CertReq;
 async fn csr_is_signed_and_verified_for_every_passport_ecdsa_curve_in_kms() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    assert_eq!(std::env::var("BAO_ADDR").as_deref(), Ok(endpoint.as_str()));
+    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok(token.as_str()));
     for algorithm in ["ES256", "ES384", "ES512"] {
         let config = json!({
             "id": "managed-openbao-transit",
@@ -23,7 +25,7 @@ async fn csr_is_signed_and_verified_for_every_passport_ecdsa_curve_in_kms() {
             "mount": "transit",
             "key_reference": format!("marty-csr-contract-{}", algorithm.to_ascii_lowercase()),
             "algorithm": algorithm,
-            "auth_reference": token,
+            "auth_mode": "service_token",
         });
         let provider = kms::public_key(ProviderRequest {
             service_config: config.clone(),

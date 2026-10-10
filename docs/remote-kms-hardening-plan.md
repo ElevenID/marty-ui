@@ -12377,3 +12377,11 @@ provider HMAC, holder service/database/OpenBao lifecycle, credential
 durability, Redis pairing tickets, tenant routes and managed-profile routes.
 Warnings-denied Clippy passed for the changed integration targets. The other
 hosted `b2c7ea217` jobs remain live and its failed result is retained.
+
+Static follow-up found the opt-in passport CSR live fixture still constructed
+managed Transit requests with an inline token and no authentication mode.
+The local candidate binds the fixture to `BAO_ADDR`/`BAO_TOKEN` and requests
+`service_token` without an inline reference. Its target passes warnings-denied
+Clippy and Rustfmt. The exact ignored CSR test passed locally against a fresh
+disposable pinned OpenBao instance with non-exportable ES256/ES384/ES512
+Transit keys and a read/sign-only scoped token; the instance was removed.
