@@ -275,7 +275,10 @@ impl OpenBaoEnvelopeProvider {
     fn provider_url(&self, path: &str) -> Result<reqwest::Url, KmsError> {
         if !path.starts_with("/v1/")
             || path.len() > 512
-            || path.split('/').any(|part| part == "." || part == "..")
+            || path
+                .split('/')
+                .skip(1)
+                .any(|part| part.is_empty() || part == "." || part == "..")
             || !path
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'-' | b'_'))
@@ -391,6 +394,7 @@ mod tests {
         for path in [
             "//attacker.example/v1/transit/keys",
             "/v1/../sys/health",
+            "/v1//sys/health",
             "/v1/transit/keys?list=true",
             "/v1/transit/keys#fragment",
             "/v1/transit/%2e%2e/sys/health",

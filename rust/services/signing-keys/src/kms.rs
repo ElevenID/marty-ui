@@ -239,6 +239,7 @@ fn cloud_http_client() -> Result<Client, KmsError> {
 pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsError> {
     match string(config, "auth_mode") {
         Some("token") => {
+            validate_external_transit_endpoint(config)?;
             let token = string(config, "auth_reference").unwrap_or_default();
             if token.trim().is_empty() || token.len() > 16_384 {
                 return Err(KmsError::InvalidConfig(
@@ -266,6 +267,31 @@ pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsErro
                 "Transit authentication mode is unsupported.".into(),
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_external_transit_endpoint(config: &Value) -> Result<(), KmsError> {
+    let endpoint = string(config, "endpoint")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| KmsError::InvalidConfig("External Transit endpoint is required.".into()))?;
+    let url = reqwest::Url::parse(endpoint)
+        .map_err(|_| KmsError::InvalidConfig("External Transit endpoint is invalid.".into()))?;
+    let host = url.host_str().unwrap_or_default();
+    let local_debug = cfg!(debug_assertions)
+        && url.scheme() == "http"
+        && matches!(host, "127.0.0.1" | "localhost" | "::1");
+    if !(url.scheme() == "https" || local_debug)
+        || host.is_empty()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return Err(KmsError::InvalidConfig(
+            "External Transit endpoint must be a root HTTPS origin.".into(),
+        ));
     }
     Ok(())
 }
@@ -2477,6 +2503,35 @@ mod tests {
     }
 
     #[test]
+    fn external_transit_token_requires_https_origin() {
+        let config = |endpoint: &str| {
+            json!({
+                "service_type": "custom-transit-compatible",
+                "endpoint": endpoint,
+                "auth_mode": "token",
+                "auth_reference": "fixture-token"
+            })
+        };
+        assert!(validate_transit_auth_config(&config("https://kms.example")).is_ok());
+        for endpoint in [
+            "http://kms.example",
+            "https://user:pass@kms.example",
+            "https://kms.example/v1/transit",
+            "https://kms.example?token=secret",
+            "https://kms.example#fragment",
+        ] {
+            assert!(
+                validate_transit_auth_config(&config(endpoint)).is_err(),
+                "accepted {endpoint}"
+            );
+        }
+        assert_eq!(
+            validate_transit_auth_config(&config("http://127.0.0.1:8200")).is_ok(),
+            cfg!(debug_assertions)
+        );
+    }
+
+    #[test]
     fn cloud_provider_endpoints_cannot_route_credentials_to_tenant_hosts() {
         for (service_type, auth_mode, endpoint) in [
             ("aws-kms", "iam_role", "https://attacker.example"),
@@ -3200,6 +3255,11 @@ mod tests {
             };
             let endpoint = if service_type == "azure-key-vault" {
                 "https://fixture.vault.azure.net"
+            } else if matches!(
+                service_type,
+                "openbao-transit" | "hashicorp-vault-transit" | "custom-transit-compatible"
+            ) {
+                "https://kms.example"
             } else {
                 ""
             };

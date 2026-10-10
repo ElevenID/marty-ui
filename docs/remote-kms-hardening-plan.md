@@ -12086,3 +12086,13 @@ Five provider vectors passed, and all-target warnings-denied Clippy passed
 after this security correction. The published run's OpenBao plugin and
 service-image lanes passed; its Canvas lane is still building the public
 self-host image, so no next grouped push has started yet.
+
+Further K6 review found tenant-supplied external Transit tokens could still
+target a plaintext HTTP endpoint. Registration and runtime now require a root
+HTTPS origin for external token mode, with only a loopback HTTP exception in
+debug builds for disposable fixtures. The separately configured managed
+OpenBao service-token endpoint remains bound to `BAO_ADDR`, preserving the
+internal self-host service path. The full Signing Keys library suite passed
+171 tests (nine expected ignores), five provider vectors and all-target
+warnings-denied Clippy passed after this correction. Real external Transit
+TLS acceptance remains outstanding.
