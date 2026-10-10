@@ -11197,3 +11197,25 @@ aggregate CI Gate all passed. This qualifies only the published head; the
 newer local applicant-liveness and dedicated service-signing commits, including
 the Gateway acceptance fixture, remain unpublished and require their own
 grouped exact-head hosted qualification.
+
+2026-10-09 next grouped UI publication: the 16-commit batch through
+`551da5875d6294ee7d567eb1bb9dd56c6a5edddd` was pushed once to draft PR
+#1192, and its description was rewritten for the complete current change.
+The previous green CI result does not qualify this new head; its fresh hosted
+jobs are running. The unrelated untracked Canvas `%SystemDrive%` artifact was
+not staged.
+
+2026-10-09 issuer-DID signing least-privilege audit: Flow and Rust Issuance
+still call Gateway's `/internal/signing-keys/issuer-dids/sign` route in
+production, and the Signing Keys backend retains
+`/internal/compat/issuer-dids/sign`. Gateway authenticates the former with the
+shared internal signing-service key and forwards that same key to Signing Keys;
+the backend handler also accepts it directly. The signing kernel resolves an
+active organization/DID/purpose/format/algorithm profile and checks current
+managed public-key binding, but the shared credential alone is sufficient to
+request a signature for any organization with such a profile and any supplied
+payload. Retiring this route outright would break real Flow and Issuance
+callers. A further grouped correction must scope ingress authorization and
+backend signing credentials to the actual issuer-signing workloads and prove
+that unrelated holders of the shared key cannot invoke either route. This is
+an open security finding, not final least-privilege qualification.
