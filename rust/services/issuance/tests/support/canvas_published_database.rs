@@ -782,6 +782,56 @@ impl PublishedDatabase {
         .await
     }
 
+    /// Experimental native-test initializer: preserve the pinned migrations
+    /// and recovery overlay, but do not execute the independent Python oracle.
+    pub async fn start_with_status_native_seed() -> Result<Self, String> {
+        let owned = Self::start_with_review_recovery().await?;
+        static SCENARIOS: std::sync::OnceLock<Value> = std::sync::OnceLock::new();
+        let scenarios = SCENARIOS.get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../../../contracts/canvas-issued-review-scenarios.json"
+            ))
+            .expect("Invalid owned status scenario fixture")
+        });
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&owned.url)
+            .await
+            .map_err(|_| "Owned status fixture connection failed")?;
+        let mut transaction = pool
+            .begin()
+            .await
+            .map_err(|_| "Owned status fixture transaction failed")?;
+        for statement in scenarios["seed"]
+            .as_array()
+            .ok_or("Missing owned status scenario seed")?
+        {
+            sqlx::query(
+                statement
+                    .as_str()
+                    .ok_or("Invalid owned status scenario statement")?,
+            )
+            .execute(&mut *transaction)
+            .await
+            .map_err(|_| "Owned status fixture seed failed")?;
+        }
+        sqlx::query(
+            "INSERT INTO issuance_service.credential_delivery_records \
+             (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,metadata) \
+             VALUES ('delivery-provider','credential-review','transaction-review','org-review', \
+             'canvas_credentials','mirror','delivered','{}')",
+        )
+        .execute(&mut *transaction)
+        .await
+        .map_err(|_| "Owned status delivery seed failed")?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| "Owned status fixture commit failed")?;
+        pool.close().await;
+        Ok(owned)
+    }
+
     pub async fn start_with_utf7_consumer() -> Result<Self, String> {
         Self::start_probe_with_migration(
             Some((

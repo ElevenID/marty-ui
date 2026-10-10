@@ -3016,6 +3016,19 @@ disposable, isolated published-schema databases. Retain the one full oracle
 and its frozen comparison; do not switch constructors based on source reading
 alone.
 
+Local native-seed pilot (2026-10-09, unpublished): a new constructor retains
+the pinned published migrations, review-recovery overlay, isolated PostgreSQL
+container and owned cleanup, then executes the nine existing issued-review
+seed statements plus the delivery row without the provider oracle. Thirteen
+native composition cases use it; the independent published-Python/frozen
+comparison still runs once and now checks the seeded and published resulting
+rows across all ten fixture tables, ignoring generated timestamps only.
+Twelve available native cases passed on Windows, including the two packaged
+process cases; the mirror-worker lifecycle case is Unix-only and still needs
+Linux CI. The comparison and the 22 current-input hash tests passed locally.
+No CI speedup is claimed until a full exact-head Canvas run measures this
+change and verifies the Unix case.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
