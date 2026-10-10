@@ -12776,3 +12776,14 @@ shared signing key. The Canvas worker image startup fixture uses the same
 direct URL and dedicated mock credential. Shell syntax, Python syntax and
 diff checks pass; the image smoke and live integration-secret recovery need
 hosted requalification on the next grouped head.
+
+The `b1540254c` [exact-head CI run](https://github.com/ElevenID/marty-ui/actions/runs/38073204986)
+is terminal **failure**. Its OpenBao plugin image job succeeded, including
+the live coordinated PostgreSQL/Raft integration-secret recovery step; Rust
+CodeQL also succeeded on its [separate exact-head run](https://github.com/ElevenID/marty-ui/actions/runs/38073205041).
+The five failing leaf jobs were Rust Lint and Packaging, Rust Service Tests
+(contracts), Rust Service Tests (canvas), Rust Service Images, and Release
+Contract Tests. The local grouped follow-up addresses each observed failure
+as described above. The CI Gate failed because those leaf jobs failed. None
+of the local corrections can retroactively qualify the prior head; re-run all
+affected lanes on the next published head before claiming completion.
