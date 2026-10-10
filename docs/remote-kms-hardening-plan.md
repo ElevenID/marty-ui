@@ -13126,3 +13126,18 @@ for both service owners, with four negative cases. All 166 tests in that file,
 the full Compose binding script, Ruff, and diff checks pass locally. The
 published failure remains immutable; await remaining leaf jobs before the next
 grouped push.
+
+KMS-only production-root correction found during the conformance self-review:
+the shared beta/conformance `issuance-native` Compose owner lacked the remote
+integration-secret URL, its dedicated credential, and the TLS CA mount, even
+though Rust Issuance requires a live remote encrypt/decrypt proof at startup.
+The default development profile and self-host model had those inputs; the
+shared native owner did not. The held fix adds the required dedicated
+credential, HTTPS Signing Keys endpoint, CA path and base-stack CA secret to
+the common model, updates its exact KMS-only snapshot, and requires all four
+at the rendered conformance boundary. Synthetic render inputs now give the
+dedicated credential a distinct value. The full four-composition/five-rate
+Compose binding script and 171 conformance tests pass locally after the
+correction; five additional negative tests check missing/downgraded remote
+custody inputs. This fixes configuration wiring, not yet a live beta or
+conformance startup proof.

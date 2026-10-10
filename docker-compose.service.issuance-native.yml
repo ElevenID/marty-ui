@@ -17,6 +17,9 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set for beta}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:?TOKEN_HMAC_KEY must be set for beta}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
+      SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:?SIGNING_KEYS_INTEGRATION_SECRET_KEY must be set for beta}
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/dev_integration_secret_ca
       PASSPORT_NATIVE_HTTP_ENABLED: ${PASSPORT_NATIVE_HTTP_ENABLED:-false}
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: ${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: ${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}
@@ -100,5 +103,7 @@ services:
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    secrets:
+      - dev_integration_secret_ca
     networks:
       - marty-network

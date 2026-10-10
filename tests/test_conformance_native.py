@@ -203,6 +203,28 @@ def test_native_conformance_rejects_local_master_key_sources(owner, secret_sourc
         native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
 
 
+@pytest.mark.parametrize(
+    "fault",
+    ["missing-url", "downgraded-url", "missing-ca", "missing-mount", "reused-key"],
+)
+def test_native_conformance_requires_remote_envelope_custody(fault):
+    value = model()
+    service = value["services"]["issuance-native"]
+    environment = service["environment"]
+    if fault == "missing-url":
+        environment.pop("INTEGRATION_SECRET_KMS_URL")
+    elif fault == "downgraded-url":
+        environment["INTEGRATION_SECRET_KMS_URL"] = "http://signing-keys:8017/internal"
+    elif fault == "missing-ca":
+        environment.pop("INTEGRATION_SECRET_KMS_CA_FILE")
+    elif fault == "missing-mount":
+        service["secrets"] = []
+    elif fault == "reused-key":
+        environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] = environment["ISSUANCE_API_KEY"]
+    with pytest.raises(ValueError, match="Native remote integration-secret"):
+        native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
+
+
 def model(*, local=False, authcrypt=False):
     env = {
         key: "synthetic"
@@ -251,7 +273,14 @@ def model(*, local=False, authcrypt=False):
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
     }
     candidate = {
-        "environment": {**env, "SERVICE_NAME": "issuance_native"},
+        "environment": {
+            **env,
+            "SERVICE_NAME": "issuance_native",
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-dedicated-integration-secret-key-00000001",
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
+        },
+        "secrets": [{"source": "dev_integration_secret_ca", "target": "/run/secrets/dev_integration_secret_ca"}],
         "volumes": [ca],
         "entrypoint": ["/app/services/entrypoint.sh"],
         "command": [],

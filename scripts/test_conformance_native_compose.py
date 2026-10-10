@@ -105,6 +105,7 @@ def synthetic_values(model, directory):
         MARTY_SERVICES_IMAGE=IMAGE,
         MARTY_ISSUANCE_IMAGE="synthetic.invalid/issuance@sha256:" + "b" * 64,
         MARTY_UI_IMAGE="synthetic.invalid/ui@sha256:" + "c" * 64,
+        SIGNING_KEYS_INTEGRATION_SECRET_KEY="synthetic-dedicated-conformance-envelope-key-0001",
         OIDF_PUBLIC_BASE_URL="https://conformance.example:9443",
         OIDF_PUBLIC_PORT="9443",
         OIDF_TLS_INTERNAL_PORT="9443",
@@ -155,6 +156,11 @@ def assert_native_inputs(common, base_source):
     assert "INTEGRATION_SECRET_MASTER_KEY" not in native
     assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in native
     assert native["DATABASE_URL"].startswith("postgresql://")
+    assert native["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] == "${SIGNING_KEYS_INTEGRATION_SECRET_KEY:?SIGNING_KEYS_INTEGRATION_SECRET_KEY must be set for beta}"
+    assert native["INTEGRATION_SECRET_KMS_URL"] == "https://signing-keys:8018/internal"
+    assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == "/run/secrets/dev_integration_secret_ca"
+    assert common["services"]["issuance-native"]["secrets"] == ["dev_integration_secret_ca"]
+    assert base_source["secrets"]["dev_integration_secret_ca"]["file"] == "./.dev-integration-secret-tls/ca.crt"
     for setting in SHARED_SETTING_REPAIRS:
         assert setting in shared and setting in native
         if setting == "CANVAS_MIRROR_WORKER_ENABLED":
@@ -176,7 +182,7 @@ def complete_common(common, runtime):
     assert wrapper.pop("extends") == {"file": RUNTIME, "service": "issuance-native"}
     structural = runtime["services"]["issuance-native"]
     assert set(structural) == {"build", "depends_on", "healthcheck", "restart"}
-    assert set(wrapper) == {"environment", "networks"}
+    assert set(wrapper) == {"environment", "networks", "secrets"}
     return {"services": {"issuance-native": {**deepcopy(structural), **wrapper}}}
 
 

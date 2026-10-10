@@ -156,6 +156,32 @@ def validate_model(
                 "Local integration-secret master-key custody is forbidden",
             )
         require(
+            env.get("INTEGRATION_SECRET_KMS_URL")
+            == "https://signing-keys:8018/internal",
+            "Native remote integration-secret URL is incomplete",
+        )
+        require(
+            env.get("INTEGRATION_SECRET_KMS_CA_FILE")
+            == "/run/secrets/dev_integration_secret_ca",
+            "Native remote integration-secret trust is incomplete",
+        )
+        require(
+            isinstance(env.get("SIGNING_KEYS_INTEGRATION_SECRET_KEY"), str)
+            and len(env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"].strip()) >= 32
+            and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"]
+            != env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] != env.get("ISSUANCE_API_KEY"),
+            "Native remote integration-secret credential is incomplete",
+        )
+        require(
+            any(
+                secret.get("source") == "dev_integration_secret_ca"
+                and secret.get("target") == "/run/secrets/dev_integration_secret_ca"
+                for secret in native.get("secrets", [])
+            ),
+            "Native remote integration-secret CA mount is incomplete",
+        )
+        require(
             edge.get("ISSUANCE_NATIVE_SERVICE_URL") == NATIVE_URL,
             "Native gateway selection must be explicit",
         )
