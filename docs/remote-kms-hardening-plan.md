@@ -11948,3 +11948,14 @@ at `33c729d5478b303e43d2718277b5db476d657033`. Its description records
 the corrected local live proofs and remaining real-provider/release gates.
 Exact-head CI [`38039685822`](https://github.com/ElevenID/marty-ui/actions/runs/38039685822)
 is in progress; a successful previous head cannot qualify this one.
+
+That run's contracts lane next reached the dedicated-service rotation Gateway
+case and failed before its first route assertion: registry persistence now
+requires a KMS credential envelope, but this case still supplied only Redis.
+The local correction gives the case the same disposable, non-exportable
+OpenBao integration-secret envelope used by the neighboring Gateway case and
+moves its hosted invocation after that key is provisioned. The exact case
+passed locally with fresh disposable Redis and OpenBao containers and their
+guard sentinels; both containers were stopped. This correction is held for a
+grouped push after the remaining hosted lanes complete. A separate local test
+also verifies both Key Vault and Managed HSM OAuth request scopes; it passed.

@@ -1579,11 +1579,12 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
 }
 
 #[tokio::test]
-#[ignore = "requires a marked disposable Redis database"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     use std::sync::atomic::AtomicUsize;
 
     let redis_url = disposable_signing_redis_url().await;
+    let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let key_reference = format!("gateway-rotation-key-{}", uuid::Uuid::new_v4().simple());
     let version = Arc::new(AtomicUsize::new(1));
@@ -1637,7 +1638,12 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
     let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let mut registry = marty_signing_keys::registry::empty_registry();
     registry["services"].as_array_mut().unwrap().push(json!({
