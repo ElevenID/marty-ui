@@ -254,9 +254,6 @@ async fn csca_signing_surface_matches_the_language_neutral_contract() {
             .replace("{certificate_id}", "csca-a")
             .replace("{event_id}", "event-a");
         let body = match contract_path {
-            "/internal/kms/sign" => {
-                serde_json::json!({"service_config": {}, "payload_b64": ""})
-            }
             "/internal/kms/public-key" | "/internal/kms/verify" => {
                 serde_json::json!({"service_config": {}})
             }
@@ -433,6 +430,27 @@ async fn internal_kms_routes_require_the_service_api_key() {
         .await
         .unwrap();
     assert_eq!(authorized.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn arbitrary_provider_signing_route_is_retired() {
+    let body = serde_json::json!({
+        "service_config": {"service_type": "openbao-transit", "key_reference": "foreign-key"},
+        "payload_b64": "cGF5bG9hZA"
+    })
+    .to_string();
+    for api_key in [None, Some("dev-signing-keys-internal-api-key")] {
+        let mut request =
+            Request::post("/internal/kms/sign").header("content-type", "application/json");
+        if let Some(api_key) = api_key {
+            request = request.header("x-api-key", api_key);
+        }
+        let response = marty_signing_keys::http::router()
+            .oneshot(request.body(Body::from(body.clone())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
 
 #[tokio::test]

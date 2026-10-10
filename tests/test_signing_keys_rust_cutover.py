@@ -43,7 +43,6 @@ def test_signing_key_kernels_and_internal_http_surface_have_one_rust_owner() -> 
     profiles = read("rust/services/signing-keys/src/profiles.rs")
 
     for path in (
-        "/internal/kms/sign",
         "/internal/kms/public-key",
         "/internal/kms/verify",
         "/internal/config/validate",

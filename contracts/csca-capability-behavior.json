@@ -74,7 +74,6 @@
         "subject_filter": "subject"
       },
       "internal_routes": [
-        {"method": "POST", "path": "/internal/kms/sign"},
         {"method": "POST", "path": "/internal/kms/public-key"},
         {"method": "POST", "path": "/internal/kms/verify"},
         {"method": "POST", "path": "/internal/documents/certificate/inspect"},

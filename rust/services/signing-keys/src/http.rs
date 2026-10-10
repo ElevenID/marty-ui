@@ -301,7 +301,6 @@ pub fn router_with_dependencies_and_ceremony_keys(
                 .patch(update_public_signing_key)
                 .delete(delete_public_signing_key),
         )
-        .route("/internal/kms/sign", post(kms_sign))
         .route("/internal/kms/public-key", post(kms_public_key))
         .route("/internal/kms/verify", post(kms_verify))
         .route("/internal/vc-api/holder-proof", post(vc_api_holder_proof))
@@ -6698,15 +6697,6 @@ async fn verify_passport_callback(
     passport_callback_hmac::verify(provider, &organization_id, request)
         .await
         .map(Json)
-}
-
-async fn kms_sign(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(request): Json<SignRequest>,
-) -> Result<Json<kms::SignResponse>, kms::KmsError> {
-    authorize_internal(&state, &headers)?;
-    Ok(Json(kms::sign(request).await?))
 }
 
 async fn vc_api_holder_proof(
