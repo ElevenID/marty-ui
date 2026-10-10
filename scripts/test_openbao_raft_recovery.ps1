@@ -50,6 +50,17 @@ function Start-RaftOpenBao([string]$Name, [string]$Volume) {
     return "http://127.0.0.1:$port"
 }
 
+function Wait-ContainerRemoved([string]$Name) {
+    # `docker stop` can return before Docker finishes removing a --rm container.
+    # Reusing its name immediately would race that asynchronous cleanup.
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        docker container inspect $Name *> $null
+        if ($LASTEXITCODE -ne 0) { return }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "disposable OpenBao container was not removed: $Name"
+}
+
 try {
     docker volume create --label marty.disposable=kms-raft-recovery-probe $sourceVolume | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'source volume creation failed' }
@@ -174,6 +185,7 @@ try {
         -Headers $snapshotHeaders -ContentType 'application/octet-stream' -InFile $snapshotFile | Out-Null
     docker stop $snapshotName | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'snapshot recovery node did not stop' }
+    Wait-ContainerRemoved $snapshotName
     $snapshotUrl = Start-RaftOpenBao $snapshotName $snapshotVolume
     if (-not (Wait-InitializedApi $snapshotUrl).initialized) {
         throw 'snapshot recovery node did not reopen restored storage'

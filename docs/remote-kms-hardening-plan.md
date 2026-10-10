@@ -12964,3 +12964,16 @@ The separate self-host `selfhost-before-native-owner.yml` snapshot and its
 historical comparison remain to be replaced; do not count K8 complete.
 This local change is held for the next grouped UI feature push while the
 published `60c82efbc` exact-head CI and CodeQL runs remain active.
+
+The `60c82efbc` [UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38079882439)
+has an OpenBao plugin job failure after clean Raft bootstrap and disposable
+forwarding/rotation/failover passed. In its cold recovery probe, Docker
+reported that the `kmsrecovery-snapshot-*` container name was still occupied
+when the probe attempted to restart that `--rm` container immediately after
+`docker stop`. The local correction adds a bounded wait for Docker to finish
+removing this specific disposable container before name reuse. This is a
+probe lifecycle race, not evidence of failed KMS decryption or lost key
+versions. Local PowerShell parser validation and diff checks pass; the hosted
+recovery lane must rerun on a later grouped head. Other jobs, including
+Canvas packaged acceptance and Rust Contracts, remained active at this
+checkpoint. Preserve the failed job as immutable evidence.
