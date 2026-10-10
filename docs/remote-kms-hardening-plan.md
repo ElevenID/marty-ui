@@ -10983,9 +10983,27 @@ than restoring a second migration path. Focused workflow tests passed 15
 with 17 Windows skips; the expanded workflow/registry/native fixture and
 Kubernetes suite passed 233 with 17 skips; retired beta operator tests passed
 67. Rust formatting and Python lint/compilation checks passed on the merge
-surfaces. This is local reconciliation, not yet a new hosted PR head; Canvas
-preflight tests are still running at this checkpoint. Core PR #355 remains
+surfaces. Four merge-relevant Canvas preflight cases passed. The broader
+227-case local run was stopped before completion to avoid repeating a long
+hosted gate and is not counted as passing. This is local reconciliation, not
+yet a new hosted PR head. Core PR #355 remains
 green and mergeable but requires protected review; Verifier PR #154 and
 Credentials draft PR #313 have green published heads. A repository search
 found no server-issued liveness challenge route in the native services, so
 mobile liveness remains a cross-service implementation gap.
+
+2026-10-09 mobile remote-challenge binding correction: local Authenticator
+commit `5d265af` removes mobile-chosen gesture and TTL overrides from the
+liveness view's challenge provider contract. Capture now starts only after
+receiving a structurally valid, unexpired challenge and follows the gestures
+and expiry supplied by that challenge. Unknown, duplicate or empty gestures,
+missing identity/signature/payload and invalid timestamps fail closed instead
+of silently becoming a smile or epoch default. Mock capture and expiry timers
+are canceled on disposal. A source guard rejects reintroducing local gesture
+selection in the active view. Focused model/widget tests passed 7; Flutter
+analysis found no issues and the full suite passed 202 tests with four skips.
+Non-generated line coverage remains above the protected gate at **90.35%
+(1,825/2,020)**. All three Authenticator acceptance tests also passed. The
+injected test provider does not prove server-issued or
+KMS-backed custody; there is still no production challenge endpoint or
+authenticated submission path. This local commit remains batched for PR #57.
