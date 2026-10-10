@@ -12583,3 +12583,20 @@ and [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38065804007)
 have started; neither has a terminal result yet. The PR body names the
 previous failed head, the replayed correction and outstanding release gates.
 No standalone documentation push is needed while this hosted run is live.
+
+The `7deba8a56` Rust Contracts job passed the Gateway CSR/passport chain,
+remote holder lifecycle and earlier Signing Keys checks, then failed in the
+same isolated `issuer_profile` group at the disposable Redis origin guard.
+The new fixture correctly requires Redis DB 13 or higher, but
+`run-rust-db-contracts.sh` reset `MARTY_TEST_REDIS_URL` to DB 0 for its
+general contracts and only scoped the preceding signing-document group to
+DB 14. The locally replayed fixture had used DB 14, so this exact runner
+boundary was missed. A grouped correction now shares one DB-14 URL between
+the signing-document and issuer-profile invocations while preserving DB 0
+for the general groups. Its source guard checks both scopes; the complete
+Issuance candidate suite passed 12 tests, the database-group suite and
+focused guard passed 33 tests, Bash syntax and diff checks passed, and the
+earlier isolated live issuer-profile replay passed against DB 14. The
+published failed job is immutable. The other hosted lanes remain live;
+CodeQL Rust passed on this head. Wait for terminal CI before publishing the
+runner correction in one grouped head.

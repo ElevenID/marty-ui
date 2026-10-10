@@ -29,6 +29,7 @@ resolve_contract_executable() {
 }
 export MARTY_TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/0
+signing_disposable_redis_url=redis://127.0.0.1:6379/14
 export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_TEST_REVOCATION_MIGRATION_DATABASE_NAME=marty_db_contracts_test
 export CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
@@ -57,14 +58,15 @@ if (( ${#document_contracts[@]} != 1 )); then
   printf 'Expected one signing document contract executable, found %s.\n' "${#document_contracts[@]}" >&2
   exit 1
 fi
-MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14 \
+MARTY_TEST_REDIS_URL="$signing_disposable_redis_url" \
   run_timed signing_document "${document_contracts[0]}" --ignored --test-threads=1
 mapfile -t issuer_profile_contracts < <(resolve_contract_executable issuer_profile_storage_contract)
 if (( ${#issuer_profile_contracts[@]} != 1 )); then
   printf 'Expected one issuer profile contract executable, found %s.\n' "${#issuer_profile_contracts[@]}" >&2
   exit 1
 fi
-run_timed issuer_profile "${issuer_profile_contracts[0]}" --ignored --test-threads=1
+MARTY_TEST_REDIS_URL="$signing_disposable_redis_url" \
+  run_timed issuer_profile "${issuer_profile_contracts[0]}" --ignored --test-threads=1
 test -x target/debug/credential-template-postgres-contract
 test -x target/debug/presentation-policy-postgres-contract
 run_timed credential_template target/debug/credential-template-postgres-contract --test-threads=1
