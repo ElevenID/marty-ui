@@ -13329,3 +13329,21 @@ Ruff, Python syntax and the two focused CI-selector tests pass locally.
 Rust Contracts passed on the hosted `cf27e0e88` head; the OpenBao coordinated
 restore step was still running at this checkpoint. The Canvas and Release
 failures remain immutable evidence for that exact head.
+
+The `cf27e0e88` manual [CI run
+38087722833](https://github.com/ElevenID/marty-ui/actions/runs/38087722833)
+is terminal failure: Release Contracts and Canvas failed as diagnosed above;
+CI Gate inherited them. The packaged OpenBao plugin job passed the new
+init-minted scoped-token read/pack/deny probe, file/Raft and HA probes, live
+Raft snapshot recovery, and coordinated Rust integration-secret PostgreSQL/
+Raft restore. Rust Contracts, service images, lint, UI, browser, protocol,
+security and supply-chain leaves passed; exact-head [Rust CodeQL run
+38087526683](https://github.com/ElevenID/marty-ui/actions/runs/38087526683)
+also passed. These results qualify only the failed `cf27e0e88` head. The
+locally merged mainline and held Release/Canvas fixture fixes require a fresh
+full PR-event run. After merging main, 65 base-native fixture tests, 144 of
+145 workflow-policy tests (one Windows-only 30-second source-scan timeout),
+118 planner/database/release tests with one skip and 404 subtests, two focused
+OpenBao/service selector cases, complete base/beta/conformance Compose models,
+Ruff and Rustfmt passed locally. The broader Canvas source scan was stopped
+after slow OneDrive filesystem progress; it is not a suite pass.
