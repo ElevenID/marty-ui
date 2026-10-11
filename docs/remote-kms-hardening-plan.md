@@ -13665,3 +13665,11 @@ remaining segment). Rust compile, Clippy, the issuance capture example,
 rustfmt, Ruff, JSON parsing, Bash syntax, and diff hygiene also pass locally.
 The native Rust worker and real PostgreSQL/HTTPS cases still require hosted
 Linux execution on this new head.
+
+The OAuth retirement batch was published as UI #1192 head
+`e21d1c7434c51b80a50bb1cbd73aae8b4842423b` after the prior head's CI
+and CodeQL succeeded. The PR description now identifies the 134-case guard
+and ten frozen native OAuth owners. At this checkpoint GitHub reports no
+check suite or workflow run for the new head; exact-head qualification remains
+pending. Keep this evidence update in the next grouped local batch rather
+than spending a separate CI run on documentation alone.
