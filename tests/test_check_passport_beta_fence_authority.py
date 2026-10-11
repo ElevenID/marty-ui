@@ -23,6 +23,37 @@ LEGACY_IMAGE = ("ghcr.io/elevenid/marty-credentials-issuance@sha256:"
                 "9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176")
 
 
+@pytest.mark.parametrize("status,behind,merge_base,accepted", [
+    ("identical", 0, HEAD, True),
+    ("ahead", 0, HEAD, True),
+    ("diverged", 1, "c" * 40, False),
+    ("behind", 1, HEAD, False),
+])
+def test_release_source_must_remain_on_protected_main_history(
+    status: str, behind: int, merge_base: str, accepted: bool,
+) -> None:
+    remote = "d" * 40 if status != "identical" else HEAD
+
+    def runner(command: list[str]) -> str:
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return HEAD
+        if command[-2:] == ["branch", "--show-current"]:
+            return "main"
+        if "status" in command:
+            return ""
+        if command[-1] == "repos/ElevenID/marty-ui/branches/main":
+            return json.dumps({"protected": True, "commit": {"sha": remote}})
+        assert command[-1] == f"repos/ElevenID/marty-ui/compare/{HEAD}...{remote}"
+        return json.dumps({"status": status, "behind_by": behind,
+                           "merge_base_commit": {"sha": merge_base}})
+
+    if accepted:
+        assert authority.protected_source(runner) == HEAD
+    else:
+        with pytest.raises(HostProbeError, match="not an ancestor"):
+            authority.protected_source(runner)
+
+
 def test_deletion_lineage_requires_approved_commit_in_pr_history():
     def runner(command):
         if command[:3] == ["gh", "api", "--paginate"]:
@@ -339,6 +370,9 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         if command[:3] == ["gh", "api", "repos/ElevenID/marty-ui/branches/main"]:
             return json.dumps({"protected": values["protected"],
                                "commit": {"sha": values["remote_head"]}})
+        if command[:3] == ["gh", "api", f"repos/ElevenID/marty-ui/compare/{HEAD}...{values['remote_head']}"]:
+            return json.dumps({"status": "identical" if values["remote_head"] == HEAD else "ahead",
+                               "behind_by": 0, "merge_base_commit": {"sha": HEAD}})
         if command[:2] == ["git", "ls-remote"]:
             return (f"{values['published_tag_object']}\trefs/tags/v1.2.3\n"
                     f"{values['published_tag_commit']}\trefs/tags/v1.2.3^{{}}")
@@ -505,7 +539,7 @@ def test_hidden_worktree_change_cannot_replace_verifier(
 
 @pytest.mark.parametrize("field,value", [
     ("branch", "topic"), ("status", " M script.py"),
-    ("protected", False), ("remote_head", "2" * 40),
+    ("protected", False),
     ("tracked", False), ("custom_filter", True),
     ("published_tag_object", "2" * 40),
     ("published_tag_commit", "2" * 40), ("deletion_head", "2" * 40),
