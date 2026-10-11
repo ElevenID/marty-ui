@@ -13995,6 +13995,23 @@ Gateway path and the existing purpose/algorithm/reference checks while
 closing this sibling route; do not infer its safety from removal of the old
 internal service-sign alias.
 
+K6 tenant-signing grant acceptance matrix for the next cohesive Rust feature:
+
+| Signing origin | Authority fact to preserve | Pre-KMS verification |
+| --- | --- | --- |
+| Gateway public service-sign | Authorized principal has `signing-key:create` in the Gateway-selected organization. | Signing Keys verifies a one-use grant for that organization, service, algorithm and exact payload; direct use of the transport key alone fails. |
+| Flow wallet request object | Authorized verification start persisted the organization, principal, instance and issuer identity before the later public wallet GET. | Signing Keys verifies a one-use grant bound to that instance and exact JWS input before signing; concurrent GETs cannot both consume it. |
+| Issuance credential, Canvas LTI/readiness and passport SOD | Each machine or user entry point has its own authorized tenant and operation record. | Signing Keys verifies the specific origin, tenant, key purpose, algorithm and exact bytes; a generic Issuance service credential cannot select another tenant. |
+| Gateway issuer-DID compatibility route | No independent tenant authority currently accompanies the query tenant. | Remove this route if unused by supported clients, or require the same verified grant; static credential plus query scope is insufficient. |
+
+The grant must have an independently trusted issuer, bounded lifetime and
+atomic one-use record before KMS invocation. A second shared service key or
+HMAC over caller-selected fields alone is not tenant authorization. Negative
+acceptance must cover wrong tenant, altered payload/purpose/key reference,
+replay, concurrent consumption, expired grant, direct backend bypass and
+backend outage. Keep public wallet retrieval and authorized machine flows
+working through the new proof rather than reverting to local signing.
+
 K6 Azure signature-format qualification finding: the Signing Keys adapter
 currently labels every ECDSA provider response as DER, and its Azure ES256
 golden vector supplies a synthetic DER response. Microsoft's [Key Vault
