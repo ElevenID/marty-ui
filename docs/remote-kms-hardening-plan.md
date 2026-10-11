@@ -15027,3 +15027,15 @@ operation ID to encode that nonce. This means its scoped token cannot mint
 a valid grant for arbitrary credential-signing bytes. A positive and altered
 prefix/tenant/nonce regression now pass; the focused suite is 18 passing,
 three live-only ignored, with warnings-denied all-target Clippy clean.
+
+Hosted run 38129327296 reached `Rust Service Tests (contracts)` and its
+extracted self-host bundle failed the exact secret-roster guard at
+`resolved_selfhost_runtime.rs:511`. The earlier update added the new Gateway
+and Flow grant mounts but retained `openbao_service_token` in Gateway's
+expected roster. The current self-host Compose model mounts that token on
+other services, not Gateway: direct Docker Compose 5.4.0 rendering shows
+Gateway's seven sources are precisely the seven in the corrected Rust
+fixture, while Flow's twelve and issuance-native's nine also match. This
+removes one stale expected source; the Linux hosted rerun still needs to
+prove the full extracted-bundle test. Do not push while the rest of run
+38129327296 remains active.

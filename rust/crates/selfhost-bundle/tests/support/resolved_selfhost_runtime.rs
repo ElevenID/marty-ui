@@ -357,7 +357,6 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "sign_grant_mint_gateway_service_token",
             "sign_grant_mint_gateway_issuer_did_token",
             "signing_keys_issuer_sign_key",
-            "openbao_service_token",
             "grpc_service_token",
             "device_registration_gateway_key",
         ]
