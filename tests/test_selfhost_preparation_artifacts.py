@@ -114,6 +114,10 @@ def test_downstream_workflow_is_separate_unqualified_and_cannot_publish() -> Non
     assert "run_attempt" not in source  # enforced by the tested checker
     assert "check_prepared_selfhost_consumer.py" in source
     assert source.index("--verify-archive-only") < source.index("unzip -q")
+    assert "probe_selfhost_installed_bootstrap.py" in source
+    assert source.index("probe_selfhost_installed_bootstrap.py") < source.index("probe_selfhost_installed_signing_keys.py")
+    assert '"marty.selfhost-bootstrap-handoff-probe/v1"' in source
+    assert "selfhost-installed-bootstrap.json" in str(job)
     assert "probe_selfhost_installed_signing_keys.py" in source
     assert "probe_selfhost_installed_migrations.py" not in source
     assert '"marty.selfhost-signing-runtime-probe/v1"' in source

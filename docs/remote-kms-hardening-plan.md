@@ -15498,3 +15498,13 @@ Canvas lane, and only Rust service contracts plus their dependent CI Gate
 failed on the previously identified missing-grant expectation. The grouped
 local head `d23bb7de1` includes that correction and the fully passing
 disposable-stack probe. Push this batch once and review its exact-head gate.
+
+That batch was pushed at `29806d9f1`. Immediately afterward, `main`
+advanced through #1266 and made UI #1192 conflicting in the shared self-host
+bootstrap helper. The local reconciliation retains all five runtime token
+roles and eight grant-token files, applies upstream's private atomic token
+replacement to every one of them, and preserves the inherited-environment
+bootstrap token handoff. The focused bootstrap/preparation suite passes 44
+tests locally (three POSIX-only cases skip on Windows); shell syntax and diff
+checks pass. This merge remains local until the new exact-head CI result can
+be inspected, to avoid another premature CI cycle.
