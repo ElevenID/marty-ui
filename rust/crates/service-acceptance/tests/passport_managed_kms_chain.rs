@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, fs, process::Command, time::SystemTime};
 use axum::{
     body::{to_bytes, Body},
     extract::Query,
-    http::{header::CONTENT_TYPE, Method, Request, StatusCode},
+    http::{header::CONTENT_TYPE, HeaderMap, Method, Request, StatusCode},
     response::Response,
     routing::{get, post},
     Json, Router,
@@ -19,11 +19,15 @@ use base64::{
 use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
 use marty_crypto::jwk::certificate_pem_to_jwk;
 use marty_issuance_service::passport_signer::{ManagedProfileSigner, SignerError};
+use marty_signing_grant::{
+    ceremony::IssuerCsrIntent, minter::GrantMinter, replay::RedisGrantReplayStore,
+    verifier::GrantVerifier, GrantBinding, SigningOrigin, HEADER_NAME,
+};
 use marty_signing_keys::{
     certificate_issuance::{prepare_csca, prepare_dsc, VerifiedDscSubject},
     csca_lifecycle::CscaLifecycleStore,
     documents::DocumentStore,
-    http::router_with_all_keys,
+    http::router_with_all_keys_and_grants,
     kms::{self, ProviderRequest, SignRequest},
     profiles::{FindProfilesRequest, ProfileStore},
     registry::RegistryStore,
@@ -52,6 +56,58 @@ async fn route(app: &Router, method: Method, path: &str, body: Value) -> Value {
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1_048_576).await.unwrap();
     assert_eq!(status, StatusCode::OK, "{path} returned {status}");
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+async fn issuer_csr(
+    app: &Router,
+    path: &str,
+    body: Value,
+    minter: &GrantMinter,
+    operation_id: &str,
+) -> Value {
+    let intent: IssuerCsrIntent = serde_json::from_value(body.clone()).unwrap();
+    let payload = intent.bound_payload();
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayIssuerDid,
+        operation_id,
+        organization_id: intent.organization_id.as_deref().unwrap(),
+        route: "/v1/signing-keys/issuer-identities/certificate-csr",
+        service_id: None,
+        issuer_did: Some(&intent.issuer_did),
+        key_reference: None,
+        key_purpose: &intent.key_purpose,
+        algorithm: &intent.algorithm,
+        payload: &payload,
+    };
+    let grant = minter
+        .mint(&binding)
+        .await
+        .unwrap()
+        .to_header_value()
+        .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::PUT)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/json")
+                .header("x-api-key", ISSUER_SIGN_KEY)
+                .header(HEADER_NAME, grant)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1_048_576).await.unwrap();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "{path} returned {status}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
     serde_json::from_slice(&bytes).unwrap()
 }
 
@@ -209,15 +265,19 @@ fn internal_gateway_adapter(signing: Router) -> Router {
             "/internal/signing-keys/issuer-dids/sign",
             post(
                 move |Query(query): Query<BTreeMap<String, String>>,
+                      headers: HeaderMap,
                       Json(mut body): Json<Value>| {
                     let signing = signer.clone();
                     async move {
                         body["organization_id"] = json!(query.get("organization_id"));
-                        forward(
+                        forward_with_grant(
                             &signing,
                             Method::POST,
                             "/internal/compat/issuer-dids/sign",
                             body,
+                            headers
+                                .get(HEADER_NAME)
+                                .and_then(|value| value.to_str().ok()),
                         )
                         .await
                     }
@@ -238,23 +298,33 @@ fn internal_gateway_adapter(signing: Router) -> Router {
 }
 
 async fn forward(app: &Router, method: Method, path: &str, body: Value) -> Response {
-    app.clone()
-        .oneshot(
-            Request::builder()
-                .method(method)
-                .uri(path)
-                .header(
-                    "x-api-key",
-                    if path == "/internal/compat/issuer-dids/sign" {
-                        ISSUER_SIGN_KEY
-                    } else {
-                        INTERNAL_KEY
-                    },
-                )
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(body.to_string()))
-                .unwrap(),
+    forward_with_grant(app, method, path, body, None).await
+}
+
+async fn forward_with_grant(
+    app: &Router,
+    method: Method,
+    path: &str,
+    body: Value,
+    grant: Option<&str>,
+) -> Response {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(
+            "x-api-key",
+            if path == "/internal/compat/issuer-dids/sign" {
+                ISSUER_SIGN_KEY
+            } else {
+                INTERNAL_KEY
+            },
         )
+        .header(CONTENT_TYPE, "application/json");
+    if let Some(grant) = grant {
+        request = request.header(HEADER_NAME, grant);
+    }
+    app.clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap()
 }
@@ -371,7 +441,45 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let documents = DocumentStore::from_connection(registry.connection());
     let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
     let profiles = ProfileStore::from_connection(registry.connection());
-    let signing = router_with_all_keys(
+    let passport_mint_token = std::env::var("MARTY_TEST_GRANT_PASSPORT_MINT_TOKEN")
+        .expect("scoped Issuance passport mint token");
+    let issuer_mint_token = std::env::var("MARTY_TEST_GRANT_ISSUER_MINT_TOKEN")
+        .expect("scoped Gateway issuer CSR mint token");
+    let verify_token =
+        std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN").expect("scoped Signing Keys verify token");
+    assert_ne!(passport_mint_token, issuer_mint_token);
+    for token in [&passport_mint_token, &issuer_mint_token, &verify_token] {
+        assert_ne!(token, &bao_token);
+    }
+    assert_eq!(
+        std::env::var("BAO_ADDR").ok().as_deref(),
+        Some(bao_url.as_str())
+    );
+    let passport_mint_file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(passport_mint_file.path(), &passport_mint_token).unwrap();
+    let issuer_mint_file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(issuer_mint_file.path(), &issuer_mint_token).unwrap();
+    let verify_file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(verify_file.path(), &verify_token).unwrap();
+    let passport_minter = GrantMinter::for_managed_openbao(
+        &bao_url,
+        SigningOrigin::IssuancePassport,
+        passport_mint_file.path().to_path_buf(),
+    )
+    .unwrap();
+    let issuer_minter = GrantMinter::for_managed_openbao(
+        &bao_url,
+        SigningOrigin::GatewayIssuerDid,
+        issuer_mint_file.path().to_path_buf(),
+    )
+    .unwrap();
+    let verifier = GrantVerifier::for_managed_openbao(
+        &bao_url,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(registry.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         INTERNAL_KEY.into(),
         None,
         Some(ISSUER_SIGN_KEY.into()),
@@ -385,6 +493,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         Some(profiles.clone()),
         None,
         Some("beta.example".into()),
+        Some(verifier),
     );
     let scoped = |path: &str| format!("{path}?organization_id={organization_id}");
     let identity = |purpose: &str| {
@@ -411,18 +520,20 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     dsc_request["country"] = json!("US");
     dsc_request["organization"] = json!("ElevenID Beta");
     dsc_request["common_name"] = json!("Disposable DSC");
-    let csca_csr = route(
+    let csca_csr = issuer_csr(
         &signing,
-        Method::PUT,
         &scoped("/v1/signing-keys/issuer-identities/certificate-csr"),
         csca_request,
+        &issuer_minter,
+        &format!("csca-csr-{suffix}"),
     )
     .await;
-    let dsc_csr = route(
+    let dsc_csr = issuer_csr(
         &signing,
-        Method::PUT,
         &scoped("/v1/signing-keys/issuer-identities/certificate-csr"),
         dsc_request,
+        &issuer_minter,
+        &format!("dsc-csr-{suffix}"),
     )
     .await;
     let csca_profile = profiles
@@ -645,17 +756,24 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, gateway).await.unwrap() });
-    let signer = ManagedProfileSigner::new(
+    let signer = ManagedProfileSigner::new_with_grant(
         format!("http://{address}/internal/signing-keys")
             .parse()
             .unwrap(),
         Some(INTERNAL_KEY),
         Some(ISSUER_SIGN_KEY),
+        passport_minter,
     )
     .unwrap();
     let groups = BTreeMap::from([(BigUint::from(1u8), STANDARD.encode(b"disposable DG1"))]);
     let signed = signer
-        .sign("USA", &organization_id, &issuer_did, &groups)
+        .sign(
+            "USA",
+            &organization_id,
+            &issuer_did,
+            &format!("sod-{suffix}"),
+            &groups,
+        )
         .await
         .unwrap();
     signed.verify_data_groups(&groups).unwrap();
@@ -680,7 +798,13 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     assert_eq!(signed.dsc_cert_pem, dsc_pem);
     assert_eq!(signed.csca_cert_pem.as_deref(), Some(csca_pem.as_str()));
     assert!(signer
-        .sign("USA", "another-organization", &issuer_did, &groups)
+        .sign(
+            "USA",
+            "another-organization",
+            &issuer_did,
+            &format!("wrong-org-{suffix}"),
+            &groups
+        )
         .await
         .is_err());
     let revoked = forward(
@@ -708,7 +832,13 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     );
     assert!(matches!(
         signer
-            .sign("USA", &organization_id, &issuer_did, &groups)
+            .sign(
+                "USA",
+                &organization_id,
+                &issuer_did,
+                &format!("revoked-{suffix}"),
+                &groups
+            )
             .await,
         Err(SignerError::UntrustedDsc)
     ));

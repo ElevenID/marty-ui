@@ -15199,3 +15199,18 @@ Transit mount inspection (403), before the route; the final run separated
 setup authority and passed. This is route-level grant and live KMS evidence,
 not proof that the production service token has root privileges or that the
 packaged release wiring is correct. Disposable containers were removed.
+
+The grouped Rust UI feature branch was pushed at `21a0c55e7` for draft PR
+#1192. The first hosted run (`38134947832`) exposed stale CI workflow,
+feature-probe lockfile, deployment inventory, and acceptance wiring. The
+follow-up local batch fixes those checks and a real Issuance signing defect:
+the DID signer minted a grant bound to a managed key reference but omitted
+that reference from its HTTP request, so Signing Keys correctly denied it.
+The managed passport acceptance now uses scoped Gateway issuer CSR and
+Issuance passport mint tokens, a verify-only token, and the real Signing Keys
+router. Against disposable OpenBao and Redis, the full CSCA/DSC/SOD chain
+passes with no private-key export. The live probe cleans up both containers.
+The affected Python deployment suites (including beta physical isolation,
+Canvas worker, native issuance, native DIDComm) passed locally; hosted
+revalidation of this correction batch is still required. Keep PR #1192 in
+draft until the grouped Linux checks and remaining release review pass.

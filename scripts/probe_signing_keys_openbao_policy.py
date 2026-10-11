@@ -414,7 +414,10 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
                 "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
                 "MARTY_TEST_OPENBAO_TOKEN": root_token,
+                "BAO_TOKEN": root_token,
                 "MARTY_TEST_GRANT_MINT_TOKEN": grant_mint_tokens["gateway-service"],
+                "MARTY_TEST_GRANT_ISSUER_MINT_TOKEN": grant_mint_tokens["gateway-issuer-did"],
+                "MARTY_TEST_GRANT_PASSPORT_MINT_TOKEN": grant_mint_tokens["issuance-passport"],
                 "MARTY_TEST_GRANT_VERIFY_TOKEN": grant_verify_token,
                 "MARTY_TEST_REDIS_URL": f"redis://127.0.0.1:{redis_port}/13",
                 "MARTY_TEST_REDIS_DISPOSABLE_NONCE": redis_nonce,
@@ -450,6 +453,20 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     grant_mint_tokens["gateway-service"], "[mint]",
                 )
                 raise RuntimeError(f"Rust live Signing Keys route failed:\n{detail[-2000:]}")
+            result = subprocess.run(
+                ["cargo", "+1.95.0", "test", "-p", "marty-service-acceptance",
+                 "--test", "passport_managed_kms_chain", "--locked", "--offline",
+                 "-j1", "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys",
+                 "--", "--ignored", "--exact", "--nocapture"],
+                cwd=ROOT / "rust", env=environment, capture_output=True,
+                text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(grant_verify_token, "[verify]")
+                for token in grant_mint_tokens.values():
+                    detail = detail.replace(token, "[mint]")
+                raise RuntimeError(f"Rust live managed passport chain failed:\n{detail[-2000:]}")
         if rust_adapter:
             require_docker(
                 "run",
@@ -805,7 +822,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 "Rust managed-key adapter, ES256/ES384/ES512 CSR custody, holder service/DB/OpenBao lifecycle, credential durability, Redis pairing tickets, tenant routes, and managed-profile routes passed"
             )
         if grant_verifier:
-            print("Rust grant verifier consumed one live OpenBao grant; Signing Keys public service CSR route passed with scoped grants and disposable Redis")
+            print("Rust grant verifier, Signing Keys public CSR route, and managed passport CSCA/DSC/SOD chain passed with scoped grants and disposable Redis")
     finally:
         if postgres_started:
             docker("rm", "-f", postgres_name, timeout=30)

@@ -253,16 +253,23 @@ def test_kubernetes_wiring_and_migration_order_are_frozen_separately() -> None:
         "CANVAS_SYNC_PROCESSOR": "",
         "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
         "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/integration-secret-ca/ca.crt",
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE": "/var/run/secrets/marty/issuance-canvas-sign-grant/token",
     }
-    assert container["volumeMounts"] == [{
-        "name": "integration-secret-ca",
-        "mountPath": "/run/secrets/integration-secret-ca",
-        "readOnly": True,
-    }]
-    assert deployment["spec"]["template"]["spec"]["volumes"] == [{
-        "name": "integration-secret-ca",
-        "secret": {"secretName": "signing-keys-integration-secret-ca"},
-    }]
+    assert container["volumeMounts"] == [
+        {"name": "integration-secret-ca", "mountPath": "/run/secrets/integration-secret-ca",
+         "readOnly": True},
+        {"name": "issuance-canvas-sign-grant",
+         "mountPath": "/var/run/secrets/marty/issuance-canvas-sign-grant",
+         "readOnly": True},
+    ]
+    assert deployment["spec"]["template"]["spec"]["volumes"] == [
+        {"name": "integration-secret-ca",
+         "secret": {"secretName": "signing-keys-integration-secret-ca"}},
+        {"name": "issuance-canvas-sign-grant",
+         "secret": {"secretName": "marty-secrets",
+                    "items": [{"key": "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN",
+                               "path": "token"}]}},
+    ]
 
     migration = yaml_document("k8s/oracle/06a-issuance-migrations.yaml")
     assert migration["kind"] == "Job"

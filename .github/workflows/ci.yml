@@ -1804,17 +1804,19 @@ jobs:
           }
           create_disposable_grant_mint_role gateway-service MARTY_TEST_GRANT_MINT_TOKEN
           create_disposable_grant_mint_role gateway-issuer-did MARTY_TEST_GRANT_ISSUER_MINT_TOKEN
-          verify_policy="$(for origin in gateway-service gateway-issuer-did; do
+          create_disposable_grant_mint_role issuance-passport MARTY_TEST_GRANT_PASSPORT_MINT_TOKEN
+          verify_policy="$(for origin in gateway-service gateway-issuer-did issuance-passport; do
             printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "$origin"
           done)"
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
             --header 'Content-Type: application/json' --request PUT \
             --data "$(jq -nc --arg policy "$verify_policy" '{policy:$policy}')" \
             "${BAO_ADDR}/v1/sys/policies/acl/test-sign-grant-verify" >/dev/null
-          export MARTY_TEST_GRANT_VERIFY_TOKEN="$(curl --silent --show-error --fail \
+          MARTY_TEST_GRANT_VERIFY_TOKEN="$(curl --silent --show-error --fail \
             --header 'X-Vault-Token: test-only' --header 'Content-Type: application/json' \
             --request POST --data '{"policies":["test-sign-grant-verify"],"no_default_policy":true}' \
             "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
+          export MARTY_TEST_GRANT_VERIFY_TOKEN
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
             --header 'Content-Type: application/json' --request POST \
             --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \

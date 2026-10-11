@@ -479,9 +479,15 @@ def validate_physical_model(model, files, provider_registry=None):
         physical_require(isinstance(actual, dict) and set(actual) == expected,
                          "Beta physical provider service network membership is invalid")
     grant_volumes = {
-        "gateway": ("openbao_gateway_grant", "/bao/gateway-grant"),
-        "flow": ("openbao_flow_grant", "/bao/flow-grant"),
-        "signing-keys": ("openbao_verify_grant", "/bao/verify-grant"),
+        "gateway": [("openbao_gateway_grant", "/bao/gateway-grant")],
+        "flow": [("openbao_flow_grant", "/bao/flow-grant")],
+        "issuance-native": [
+            ("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
+            ("openbao_issuance_canvas_grant", "/bao/issuance-canvas-grant"),
+            ("openbao_issuance_readiness_grant", "/bao/issuance-readiness-grant"),
+            ("openbao_issuance_passport_grant", "/bao/issuance-passport-grant"),
+        ],
+        "signing-keys": [("openbao_verify_grant", "/bao/verify-grant")],
     }
     for name, service in (("gateway", services["gateway"]),
                           ("flow", services["flow"]),
@@ -489,10 +495,9 @@ def validate_physical_model(model, files, provider_registry=None):
                           ("signing-keys", services["signing-keys"]),
                           ("callback-signer", signer_service),
                           ("provider-ingress", ingress_service)):
-        expected_grant = grant_volumes.get(name)
-        allowed_volumes = ([{"type": "volume", "source": expected_grant[0],
-                            "target": expected_grant[1], "read_only": True,
-                            "volume": {}}] if expected_grant else [])
+        allowed_volumes = [{"type": "volume", "source": source,
+                            "target": target, "read_only": True, "volume": {}}
+                           for source, target in grant_volumes.get(name, [])]
         physical_require(service.get("volumes", []) in ([], allowed_volumes),
                          "Beta physical provider service escaped isolation")
         physical_require(not any(service.get(field) for field in (

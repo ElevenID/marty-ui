@@ -473,6 +473,7 @@ struct SignBody<'a> {
     issuer_did: &'a str,
     credential_format: &'a str,
     key_purpose: &'a str,
+    key_reference: &'a str,
     payload_b64: String,
     algorithm: &'a str,
 }
@@ -527,6 +528,7 @@ impl DidSigner for HttpDidSigner {
                 issuer_did: &request.issuer_did,
                 credential_format: &request.credential_format,
                 key_purpose: &request.key_purpose,
+                key_reference: &request.signing_key_reference,
                 payload_b64: URL_SAFE_NO_PAD.encode(&request.payload),
                 algorithm: &request.algorithm,
             });
@@ -1554,6 +1556,7 @@ mod tests {
             body["payload_b64"],
             URL_SAFE_NO_PAD.encode(b"exact-signing-input")
         );
+        assert_eq!(body["key_reference"], "transit/keys/issuer-1");
         assert!(body.get("issuer_profile_id").is_none());
         assert!(body.get("service_id").is_none());
         let missing_key = signer

@@ -31,6 +31,12 @@ POLICY_FILE = POLICY_TARGET + "/didcomm-encryption-policy.json"
 TOKEN_TARGET = "/run/secrets/didcomm-kms"
 TOKEN_FILE = TOKEN_TARGET + "/openbao-token"
 CA_TARGET = "/run/secrets/didcomm-conformance-root-ca.pem"
+NATIVE_GRANT_MOUNTS = {
+    ("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
+    ("openbao_issuance_canvas_grant", "/bao/issuance-canvas-grant"),
+    ("openbao_issuance_readiness_grant", "/bao/issuance-readiness-grant"),
+    ("openbao_issuance_passport_grant", "/bao/issuance-passport-grant"),
+}
 INITIATION_CONTROL_PLANE = {
     "ORG_GRPC_TARGET": "organization:9002",
     "CT_GRPC_TARGET": "credential-template:9003",
@@ -305,7 +311,7 @@ def assert_bindings(model, compose_command):
             item["target"]: item["source"].replace("\\", "/")
             for item in default.get("volumes", [])
         }
-        expected_sources = {}
+        expected_sources = {target: source for source, target in NATIVE_GRANT_MOUNTS}
         if has_policy:
             expected_sources[POLICY_FILE] = (
                 values["DIDCOMM_ENCRYPTION_POLICY_DIR"]
@@ -414,7 +420,13 @@ def run(compose_command=None):
     )
     for name in ("DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"):
         assert name not in native["environment"]
-    assert not native.get("volumes") and not native.get("extra_hosts")
+    assert {
+        (item["source"], item["target"])
+        for item in native.get("volumes", [])
+        if item.get("type") == "volume" and item.get("read_only") is True
+    } == NATIVE_GRANT_MOUNTS
+    assert len(native["volumes"]) == len(NATIVE_GRANT_MOUNTS)
+    assert not native.get("extra_hosts")
     assert_bindings(base, compose_command)
     for authcrypt, conformance in ((True, False), (False, True), (True, True)):
         files = [BASE, BETA, *([ISOLATION] if conformance else [])]
