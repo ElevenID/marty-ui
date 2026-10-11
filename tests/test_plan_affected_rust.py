@@ -1839,6 +1839,120 @@ class AffectedRustPlannerTests(unittest.TestCase):
             {dep["name"] for dep in packages["marty-flow"]["dependencies"]},
         )
 
+    def test_credential_template_issuance_canvas_readiness_http_is_shadow_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/credential-template/src/http_service.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-credential-template"
+            and edge["package"] == "marty-issuance-service"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        scopes = {
+            "config": (
+                "let credential_template_service_url = validate_http_base_url(",
+                "if settings.initiation.related_resource_max_bytes",
+            ),
+            "startup": (
+                "let canvas_readiness = Arc::new(",
+                "let canvas_management = CanvasPlatformManagementHttpService",
+            ),
+            "registration": (
+                "let canvas_management = CanvasPlatformManagementHttpService",
+                ".with_application_approval(",
+            ),
+            "inputs": (
+                "impl CanvasReadinessInputProvider for CanvasReadinessRuntime {",
+                "pub struct PostgresCanvasReadinessStateProvider",
+            ),
+            "request": (
+                "impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {",
+                "fn append_segments(",
+            ),
+            "get": (
+                "async fn object(&self, endpoint: Option<Url>)",
+                "impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {",
+            ),
+            "route": ("pub fn credential_template_router(", "async fn create_template("),
+            "handler": (
+                "async fn get_internal_issuance_context(",
+                "async fn get_internal_credential_configurations(",
+            ),
+            "base_compose": ("\n  issuance:\n", "\n  issuance-native:\n"),
+            "native_compose": ("\n  issuance-native:\n", None),
+        }
+        markers = (
+            ("readiness_binding", "evidence", "config"),
+            ("readiness_startup_marker", "readiness_startup_evidence", "startup"),
+            ("readiness_url_marker", "readiness_startup_evidence", "startup"),
+            ("readiness_registration_marker", "readiness_startup_evidence", "registration"),
+            ("readiness_callsite_marker", "readiness_request_evidence", "inputs"),
+            ("readiness_object_marker", "readiness_request_evidence", "request"),
+            ("readiness_base_marker", "readiness_request_evidence", "request"),
+            ("readiness_endpoint_marker", "readiness_request_evidence", "request"),
+            ("readiness_get_marker", "readiness_request_evidence", "get"),
+            ("readiness_response_marker", "readiness_request_evidence", "get"),
+            ("readiness_provider_route_marker", "readiness_provider_evidence", "route"),
+            ("readiness_provider_method_marker", "readiness_provider_evidence", "route"),
+            ("readiness_provider_handler_marker", "readiness_provider_evidence", "handler"),
+            ("readiness_deployment_marker", "readiness_deployment_evidence", "base_compose"),
+            (
+                "readiness_deployment_marker",
+                "readiness_native_deployment_evidence",
+                "native_compose",
+            ),
+        )
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for _, source, _ in markers
+            if (path := edge[source])
+        }
+
+        def scoped_parts(content: str, scope: str) -> tuple[str, str, str]:
+            start, end = scopes[scope]
+            self.assertIn(start, content)
+            before, tail = content.split(start, 1)
+            if end is None:
+                return before + start, tail, ""
+            self.assertIn(end, tail)
+            body, after = tail.split(end, 1)
+            return before + start, body, end + after
+
+        def assert_markers(snapshot: dict[str, str]) -> None:
+            for marker, source, scope in markers:
+                _, body, _ = scoped_parts(snapshot[edge[source]], scope)
+                if marker == "readiness_object_marker":
+                    self.assertEqual(body.count(edge[marker]), 2, marker)
+                else:
+                    self.assertIn(edge[marker], body, marker)
+
+        assert_markers(sources)
+        for marker, source, scope in markers:
+            with self.subTest(marker=marker, scope=scope):
+                path = edge[source]
+                before, body, after = scoped_parts(sources[path], scope)
+                changed = dict(sources)
+                changed[path] = (
+                    before + body.replace(edge[marker], "removed-edge", 1) + after
+                )
+                with self.assertRaises(AssertionError):
+                    assert_markers(changed)
+        self.assertNotIn(
+            "marty-credential-template",
+            {dep["name"] for dep in packages["marty-issuance-service"]["dependencies"]},
+        )
+
     def test_issuance_initiation_control_plane_consumers_are_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
