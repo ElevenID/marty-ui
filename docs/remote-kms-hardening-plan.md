@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 head `46d5a63` pins reviewed Core `6acba9d` and has 19 successful exact-head checks with no failures. Protected review, released-artifact qualification and native UI cutover remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 head `0fbfe3864` includes scoped grant enforcement, private-material/schema guards, all six Gateway cases and holder credential rotation through public managed-signing routes. The full local disposable OpenBao/Redis/PostgreSQL probe passed after merging main #1268. [Exact-head CI 38157856593](https://github.com/ElevenID/marty-ui/actions/runs/38157856593) is active; real cloud, physical device, assembled artifact and final full review remain. |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355 is green and requires protected review; Credentials #313 and UI #1192 are draft. UI head `0fbfe3864` is mergeable against main #1268 and undergoing [exact-head CI 38157856593](https://github.com/ElevenID/marty-ui/actions/runs/38157856593). Exact release artifacts, real cloud providers, physical-device proof, KMS-only cutover and recovery remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. Fresh PostgreSQL checks of Organization, Credential Template and all nine Rust Issuance SQL files found no private-key catalog entries or historical Issuance Alembic ledger. The published catalog/content gates and Device Registration raw-row assertion passed earlier hosted runs. Exact signed-image execution, final assembled table/column and content inventory, self-host cutover and release proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. All 22 native Rust SQL migration files applied to a disposable fresh PostgreSQL 16 database: 82 tables and 1,091 columns, with zero private-key catalog matches and a passing JSON/text content scan on seed writes. The full source-install table/column inventory is in `artifacts/kms-native-fresh-schema-audit-20261011.json`. Runtime writes, historical Python metadata, exact signed-image execution, self-host cutover and release proof remain. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
@@ -15662,3 +15662,16 @@ The grouped batch was pushed as UI #1192 head `0fbfe3864`; GitHub reports it
 mergeable against main `42dd1329f`. Exact-head CI run `38157856593` started,
 alongside policy, Organization Quality and CodeQL. PR #1192 remains draft
 pending this head's full gate and the assembled release/cutover qualification.
+
+K10 fresh native-source schema audit on the current branch: all 22 SQL files
+under `rust/services/**/migrations` applied in order to an empty disposable
+PostgreSQL 16 database isolated from the network. The result contained 82
+tables and 1,091 columns across ten schemas. The shared catalog query found
+zero private-key tables/columns; the shared JSON/text content query passed on
+the migration seed rows. A second independent disposable run reproduced the
+same normalized catalog digest
+`4f4590397f2e64160416fd7f75a0890e508bed869e14c4fdd0ab1c94b1ff50ad`.
+The full table/column inventory, source-file digests and explicit limits are
+recorded in `artifacts/kms-native-fresh-schema-audit-20261011.json`; both
+containers were removed. This does not prove runtime writes, historical Python
+metadata or the exact release image; those K10 gates remain open.
