@@ -532,6 +532,13 @@ async fn verify_open_badge_document(
             store.extend(profile_store.clone());
         }
     } else if signed_ob2 {
+        let Some(creator) = credential
+            .get("verification")
+            .and_then(|value| value.get("creator"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(rejected("Open Badge signing key is not governed"));
+        };
         let mut signed_body = credential.clone();
         let signature = signed_body
             .remove("signature")
@@ -541,27 +548,40 @@ async fn verify_open_badge_document(
             .and_then(|signature| signature.split('.').nth(1))
             .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
             .and_then(|payload| serde_json::from_slice::<Value>(&payload).ok());
-        if authenticated_body != Some(Value::Object(signed_body)) {
-            return Ok(rejected(
-                "Open Badge signed body differs from presented assertion",
-            ));
+        if authenticated_body.as_ref() != Some(&Value::Object(signed_body.clone())) {
+            // Older OB2 assertions added only {type, creator} after signing.
+            // Mirror Core's bounded compatibility form, never unsigned claims.
+            let legacy_instructions = authenticated_body
+                .as_ref()
+                .is_some_and(|payload| payload.get("verification").is_none())
+                && credential
+                    .get("verification")
+                    .and_then(Value::as_object)
+                    .is_some_and(|verification| {
+                        verification.len() == 2
+                            && verification.get("creator").and_then(Value::as_str) == Some(creator)
+                            && verification
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|kind| {
+                                    kind.eq_ignore_ascii_case("signed")
+                                        || kind.eq_ignore_ascii_case("signedbadge")
+                                })
+                    });
+            if legacy_instructions {
+                signed_body.remove("verification");
+            }
+            if !legacy_instructions || authenticated_body != Some(Value::Object(signed_body)) {
+                return Ok(rejected(
+                    "Open Badge signed body differs from presented assertion",
+                ));
+            }
         }
-        let Some(creator) = credential
-            .get("verification")
-            .and_then(|value| value.get("creator"))
-            .and_then(Value::as_str)
-        else {
-            return Ok(rejected("Open Badge signing key is not governed"));
-        };
         let Some(method) = governed_methods.get(creator) else {
             return Ok(rejected("Open Badge signing key is not governed"));
         };
         if let Some(issuer) = issuer_id(&credential) {
-            if method
-                .get("controller")
-                .and_then(Value::as_str)
-                .is_none_or(|controller| normalize_issuer(controller) != normalize_issuer(issuer))
-            {
+            if method.get("controller").and_then(Value::as_str) != Some(issuer) {
                 return Ok(rejected("Open Badge signing key is not bound to issuer"));
             }
         }

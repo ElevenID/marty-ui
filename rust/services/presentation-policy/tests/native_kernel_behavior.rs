@@ -142,9 +142,23 @@ async fn signed_ob2_uses_governed_key_but_preserves_badge_reference_resolution()
     input.trust_profile.as_mut().unwrap().document["resolved_verification_methods"][0]
         ["controller"] = json!("did:example:another-issuer");
     assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
+    input.trust_profile.as_mut().unwrap().document["resolved_verification_methods"][0]
+        ["controller"] = json!("did:example:Issuer");
+    assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
 
     input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV2, &fixture);
     input.token["assertion"]["id"] = json!("urn:uuid:tampered");
+    assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
+
+    // Legacy OB2 signs all assertion claims, then appends only the exact
+    // verification instructions. It remains valid, but claim changes do not.
+    input = governed_badge_context(DetectedCredentialFormat::OpenbadgeV2, &fixture);
+    input.token["assertion"]["signature"] = json!("eyJhbGciOiJFZERTQSJ9.eyJAY29udGV4dCI6Imh0dHBzOi8vdzNpZC5vcmcvb3BlbmJhZGdlcy92MiIsInR5cGUiOiJBc3NlcnRpb24iLCJpZCI6InVybjp1dWlkOmFzc2VydGlvbi0xIiwiYmFkZ2UiOiJ1cm46dXVpZDpiYWRnZS0xIiwiaXNzdWVyIjoiZGlkOmV4YW1wbGU6aXNzdWVyIn0.vbiDS-q6erlX5NCirefzxx-7Z4H6-pFDYWilOA5UnSCCE6nRruNtQO0T8uG-1P7GVnH5atk6mQvQJf0JdBjzAg");
+    assert!(RustCredentialKernel.verify(&input).await.unwrap().verified);
+    input.token["assertion"]["badge"] = json!("urn:uuid:forged-badge");
+    assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
+    input.token["assertion"]["badge"] = json!("urn:uuid:badge-1");
+    input.token["assertion"]["verification"]["extra"] = json!("unsigned-option");
     assert!(!RustCredentialKernel.verify(&input).await.unwrap().verified);
 
     // Standard OB2 may sign a badge reference without a direct issuer field.
