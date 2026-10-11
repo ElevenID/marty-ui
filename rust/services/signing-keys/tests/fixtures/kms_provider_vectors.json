@@ -149,7 +149,7 @@
           "value": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU"
         }
       },
-      "provider_response": { "kid": "$STUB/keys/issuer-key/version-1", "value": "MAYCAQECAQI" },
+      "provider_response": { "kid": "$STUB/keys/issuer-key/version-1", "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg" },
       "expected_response": {
         "signature_b64": "MAYCAQECAQI",
         "signature_encoding": "der",

@@ -1370,7 +1370,16 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
                 "Azure Key Vault sign response did not include signature value".to_string(),
             )
         })?;
-    decode_urlsafe(value, "Azure signature")
+    let signature = decode_urlsafe(value, "Azure signature")?;
+    if matches!(algorithm, "ES256" | "ES384" | "ES512") {
+        // Key Vault's ES algorithms follow RFC 7518 (fixed-width r || s).
+        // The service's ECDSA signature contract and certificate consumers use DER.
+        marty_crypto::ecdsa::raw_signature_to_der(&signature, algorithm).map_err(|_| {
+            KmsError::InvalidResponse("Azure Key Vault returned an invalid ECDSA signature.".into())
+        })
+    } else {
+        Ok(signature)
+    }
 }
 
 fn require_azure_response_key(

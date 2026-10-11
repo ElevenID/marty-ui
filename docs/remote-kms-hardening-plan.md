@@ -14171,3 +14171,26 @@ This hosted failure remains immutable evidence. The run is now terminal: 20
 jobs passed, Rust Contracts and its dependent CI Gate failed. Rust CodeQL
 passed. The grouped local fixture and provider-binding corrections can now be
 published for exact-head qualification.
+
+UI #1192 head `7baec03ee75544d48b22d74ef7b054d250c27af2` published the
+grouped Azure origin/path comparison, AWS pinned-key response/DescribeKey
+checks, and managed-key fixture correction. Its [CI
+38115174182](https://github.com/ElevenID/marty-ui/actions/runs/38115174182)
+and [Rust CodeQL
+38115174177](https://github.com/ElevenID/marty-ui/actions/runs/38115174177)
+are exact-head runs; qualification remains pending.
+
+K6 Azure ECDSA interoperability follow-up: the [Key Vault key algorithm
+documentation](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details)
+specifies ES256/ES384/ES512 according to RFC 7518. Those signatures use
+fixed-width JOSE `r || s`, while the Signing Keys certificate consumers require
+DER. Core PR #355 head `aa69c9ca31b5c6cda7bdcc9040d462b4015f4428`
+adds one shared raw-to-DER verifier-only helper for all three curves, rejecting
+wrong widths and invalid scalars. Its feature-enabled round-trip test and
+warnings-denied Clippy pass locally; exact-head hosted checks are running.
+The UI branch locally pins this Core head, converts Azure ECDSA output to DER
+at the provider boundary, and updates the Azure HTTP golden vector to return
+raw JOSE bytes; all five provider golden tests pass. The UI correction is held
+locally until the current published-head run is terminal, preserving one
+grouped follow-up and its exact failed/passed evidence. A real Azure HSM
+signature and certificate chain are still required for K6 acceptance.
