@@ -15903,3 +15903,12 @@ the next grouped push after current exact-head CI completes.
 The OpenBao DIDComm plugin image job on pushed head `828bc6ecd` also passed
 in exact-head run `38164123792`. Canvas is the sole remaining live job at this
 checkpoint; the aggregate CI Gate has not yet completed.
+
+K10 Canvas platform follow-up: platform records also persist JWKS, OpenID,
+connection and capability JSON. The local repository now reuses the same
+shared policy before all five platform write methods (create, configuration,
+registration state, LTI installation and LTI probe metadata); a synthetic
+private JWK is rejected and a public JWK plus remote reference remains valid.
+The focused Canvas management suite passed 39 tests. This local change remains
+batched with the binding and Application Template guards pending the hosted
+Canvas result.
