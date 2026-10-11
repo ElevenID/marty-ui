@@ -15675,3 +15675,10 @@ The full table/column inventory, source-file digests and explicit limits are
 recorded in `artifacts/kms-native-fresh-schema-audit-20261011.json`; both
 containers were removed. This does not prove runtime writes, historical Python
 metadata or the exact release image; those K10 gates remain open.
+The five key/secret-named tables in that inventory were reviewed by column:
+three Device Registration holder-key tables contain provider references,
+version/public coordinates or deletion/provision state; Organization API keys
+contain a prefix and hash; Issuance integration secrets contain application
+secret ciphertext and metadata under the separate remote master-key boundary.
+The inventory includes 142 JSON columns. The seed-row content scan passed,
+while runtime writes to those columns still require assembled-artifact proof.
