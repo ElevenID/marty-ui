@@ -3440,12 +3440,35 @@ gate until that declaration mismatch is resolved. The next
 opt-in consumer candidate checks each exact locked image's Linux/amd64 pull
 and inspected digest association, but does not run or qualify the stack.
 
+[UI #1260](https://github.com/ElevenID/marty-ui/pull/1260) merged as
+`8447b39c3` after exact-head and protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38131319840)
+passed. The opt-in prepared-bundle consumer now anonymously pulls every unique
+locked image for Linux/amd64 and checks the selected platform and repository
+digest association. It remains a no-start preflight, not installed-runtime
+qualification. [UI #1261](https://github.com/ElevenID/marty-ui/pull/1261)
+is the independently reviewed follow-on for names-only self-host secret
+declaration closure; its protected checks were still running at this update.
+A separate local scoped-OpenBao migration probe draft has no current-main
+prepared ZIP/lock/receipt/descriptor for a full artifact-bound run. It must
+remain unqualified and outside release gates until that evidence exists.
+
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
 Rust lanes executed. Canvas also has SHA-sensitive self-host steps. Therefore
 do not skip protected merge-group Rust checks yet. Any later pilot needs
 authenticated exact-tree and job evidence, authoritative single-PR queue
 membership, and full-run fallback on unknown or mismatched inputs.
+The October 11 local provenance-only pilot passed 170 focused/workflow tests
+and independent review, but is deferred without a PR: GitHub's documented
+[`merge_group` payload](https://docs.github.com/en/webhooks/webhook-events-and-payloads#merge_group)
+and [queue entry API](https://docs.github.com/en/graphql/reference/pulls#mergequeueentry)
+do not expose an immutable PR-membership list for the event head SHA, and
+Canvas retains SHA-sensitive image/revision
+proof. The record alone cannot justify skipping either protected Rust lane;
+shipping it now would add artifact/workflow maintenance without a demonstrated
+reuse path. Revisit only with authoritative group membership and a validated
+consumer, or a different measured reuse strategy. No gate was changed.
 
 ## Design references
 
