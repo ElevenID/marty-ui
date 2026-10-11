@@ -329,6 +329,7 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         "services/common/events.py",
         "services/common/grpc_event_bus.py",
     ):
+        assert not (ROOT / path).exists(), path
         assert _is_ignored(path, public_lines), path
 
 
@@ -865,6 +866,7 @@ def test_public_context_rejects_reincluded_python_event_adapter() -> None:
         .splitlines()
     )
     path = "services/common/grpc_event_bus.py"
+    assert not (ROOT / path).exists()
     assert _is_ignored(path, lines)
     assert not _is_ignored(path, [*lines, "!**"])
     assert not _is_ignored(path, [*lines, "!services/common/**"])

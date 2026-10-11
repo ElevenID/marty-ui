@@ -174,14 +174,7 @@
         "paths": ["marty-verification/src/flow.rs", "marty-didcomm/src"],
         "binding_paths": ["marty-bindings/src/flow.rs", "marty-bindings/src/lib.rs"]
       },
-      "legacy": [
-        {
-          "repository": "ElevenID/marty-ui",
-          "paths": ["services/common/did_resolution.py"],
-          "language": "python",
-          "disposition": "did-adapter-only"
-        }
-      ]
+      "legacy": []
     },
     {
       "id": "oid4vp-request-construction",
@@ -722,6 +715,20 @@
       {"path": "scripts/export_canvas_lti_public_jwks.py", "statement": "from cryptography.hazmat.primitives.asymmetric import rsa"}
     ],
     "text_rules": [
+      {
+        "id": "no-retired-python-protocol-version",
+        "glob": "services/protocol_version.py",
+        "pattern": "\\A",
+        "expected_matches": {},
+        "reason": "Unimported Python protocol constant was retired; public protocol version is governed by deployed Rust metadata and protocol contract checks."
+      },
+      {
+        "id": "no-retired-python-common-adapters",
+        "glob": "services/common/*.py",
+        "pattern": "\\A",
+        "expected_matches": {},
+        "reason": "The shared Python adapter cluster had no deployed or migration-entrypoint imports after Rust service cutover; it and its adapter-only tests were retired together."
+      },
       {
         "id": "no-retired-python-webhook-signatures",
         "glob": "services/common/webhook_signatures.py",
