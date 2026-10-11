@@ -15796,3 +15796,10 @@ KMS-only release paths. Eight affected passport/release contract files passed
 157 tests with one existing skip; Ruff, workflow YAML parsing, JavaScript
 syntax and diff checks passed. This upstream merge is held with #1270 until
 the running hosted head yields its full result.
+
+The corrected Release Contract Tests job passed on pushed UI head
+`5d25ac629` in run `38161151027`, clearing the stale Gateway command-count
+failure from the prior head. At this checkpoint the run has 17 successful
+jobs and four still running, including Rust service contracts, Canvas, service
+images and the OpenBao DIDComm plugin recovery job. This does not yet close
+the exact-head CI gate.
