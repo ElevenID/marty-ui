@@ -3496,10 +3496,22 @@ for unknown or mixed inputs and full protected merge-group validation (A6).
 acceptance earlier; [#1253](https://github.com/ElevenID/marty-ui/pull/1253)
 serializes the Flow port handoff without dropping tests. The #1254 public
 builder linker and #1257 dev-debug changes have no attributable steady-state
-speedup yet. The manual-only migrated-base pilot is reviewed locally but
-unmerged: sequential eight-database local timings of 39.43s off versus 23.22s
-on do not establish hosted parallel Canvas improvement. Compare complete
-Linux CI case inventory and wall time before any routine or release promotion.
+speedup yet. The manual-only migrated-base pilot [#1268](https://github.com/ElevenID/marty-ui/pull/1268)
+merged as `42dd1329f` after exact-head and full protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38154361829)
+passed. Sequential eight-database local timings were 39.43s off versus
+23.22s on, with an independent repeat of 37.90s versus 24.18s. The
+pilot remains opt-in; these timings do not establish hosted parallel Canvas
+improvement. Compare complete Linux CI case inventory and wall time before
+any routine or release promotion. The next A6 candidate assigns three exact
+DIDComm/retention Python test sources to a focused Release Contract Tests PR
+path: 56 owned cases plus the actual-Bash classifier/collection proof. Only a
+single existing regular test file in a PR qualifies; mixed, unknown, missing,
+renamed, protected merge-group, scheduled and manual inputs keep the full
+path. Released-wheel bootstrap, mdoc binding, OSS boundary and final gate
+remain mandatory. Local focused tests passed (57 cases, 12.48s), as did 146
+workflow-policy cases and independent review. This is not yet hosted timing
+or a measured CI speedup.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
