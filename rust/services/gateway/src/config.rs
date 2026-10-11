@@ -110,6 +110,7 @@ pub struct GatewayConfig {
     pub service_sign_gateway_key: String,
     pub sign_grant_bao_addr: Option<String>,
     pub sign_grant_mint_token_file: Option<PathBuf>,
+    pub issuer_csr_grant_mint_token_file: Option<PathBuf>,
     pub issuer_sign_key: String,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
@@ -157,6 +158,10 @@ impl fmt::Debug for GatewayConfig {
             .field(
                 "sign_grant_mint_token_file",
                 &self.sign_grant_mint_token_file,
+            )
+            .field(
+                "issuer_csr_grant_mint_token_file",
+                &self.issuer_csr_grant_mint_token_file,
             )
             .field("issuer_sign_key_configured", &true)
             .field(
@@ -565,6 +570,11 @@ impl GatewayConfig {
             sign_grant_bao_addr: value(values, "BAO_ADDR"),
             sign_grant_mint_token_file: value(values, "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE")
                 .map(PathBuf::from),
+            issuer_csr_grant_mint_token_file: value(
+                values,
+                "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            )
+            .map(PathBuf::from),
             issuer_sign_key,
             dsc_issue_gateway_key,
             csca_issue_gateway_key,

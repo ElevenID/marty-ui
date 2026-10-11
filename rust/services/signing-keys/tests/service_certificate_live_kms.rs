@@ -14,6 +14,7 @@ use marty_signing_grant::{
 };
 use marty_signing_keys::{
     documents::DocumentStore,
+    flow_envelope::OpenBaoEnvelopeProvider,
     http::{router_with_all_keys_and_grants, router_with_dependencies},
     profiles::ProfileStore,
     registry::RegistryStore,
@@ -176,15 +177,19 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
 
     let registry = RegistryStore::connect(&redis_url)
         .await
-        .expect("Redis registry");
+        .expect("Redis registry")
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url.clone(), bao_token.clone())
+                .expect("disposable credential envelope"),
+        ));
     let registration = json!({
         "services": [{
             "id": "service-a", "name": "Test Passport Signer",
             "service_type": "openbao-transit", "endpoint": bao_url,
             "mount": "transit", "auth_mode": "token", "auth_reference": bao_token,
             "key_reference": key_name, "algorithms": ["ES256"],
-            "key_purposes": ["vc_jwt_issuer"],
-            "credential_formats": ["dc+sd-jwt"]
+            "key_purposes": ["vc_jwt_issuer", "x509_doc_signer"],
+            "credential_formats": ["dc+sd-jwt", "ICAO_EMRTD"]
         }],
         "default_service_id": "service-a"
     });

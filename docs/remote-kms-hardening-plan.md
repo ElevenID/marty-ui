@@ -14815,3 +14815,50 @@ token and producer, Signing Keys still needs to consume this grant and carry
 the proof to its final sign, and disposable OpenBao acceptance remains. The
 current hosted Canvas lane is still active, so keep these local changes in the
 next grouped push rather than starting overlapping hosted CI.
+
+The issuer CSR producer/consumer batch is now wired locally. Gateway uses a
+separate GatewayIssuerDid HMAC mint token, replaces any caller grant, and binds
+the authenticated tenant, issuer DID, purpose, algorithm, subject and exact
+public route. Signing Keys requires its dedicated issuer action credential,
+resolves the active profile and KMS public key, consumes the one-use grant,
+then carries a move-only approval for the profile-selected service/key and
+generated CSR bytes into the final remote-sign check. The development OpenBao
+bootstrap, self-host and Kubernetes secret mounts, catalog, executable smoke
+fixture and disposable hosted contract setup now provision the separate
+issuer mint role. Rust Gateway (163 active), Signing Keys (185 active), three
+Gateway executable smoke tests, and 177 workflow/Kubernetes/self-host Python
+tests passed before the final local review corrections; the opt-in live CSR
+acceptance was compiled but has not yet executed against disposable services.
+
+That review also found a certificate regression in the existing exact-sign
+authorization: the lower-level service signer has no issuer-DID field, so its
+old final check would reject certificate ceremony signs. The DID is now
+checked at the `sign_with_issuer_did` request boundary, while the final KMS
+check retains the tenant, selected service/key, purpose, algorithm and exact
+payload. Focused regression and warnings-denied Clippy checks are pending for
+this correction. Do not publish or claim issuer CSR acceptance until those
+checks and disposable OpenBao integration pass.
+
+Local review and acceptance are now complete for this grouped CSR batch. The
+certificate-authority regression test and full Signing Keys library suite
+(185 active, nine ignored) pass; Gateway grant minting and warnings-denied
+Clippy for Gateway, Signing Keys and service acceptance pass. All 177 targeted
+workflow/Kubernetes/self-host tests pass. On independently marked disposable
+loopback OpenBao and Redis instances, the real Gateway-to-Signing-Keys issuer
+CSR test passed for both CSCA and document signer profiles, the dedicated
+service CSR test passed, and the Signing Keys direct service CSR test passed
+with one-use grant replay denied. Those runs used distinct scoped mint and
+verify tokens and non-exportable Transit keys; the disposable containers were
+removed after each run. This proves these CSR paths locally, not every
+remaining KMS signing path or a release artifact.
+
+The published `5db9a4b7f` hosted run has now ended in failure. Its Contracts
+and Rust Service Images failures have local fixture corrections in the next
+batch. Canvas failed in `selfhost_public_image_loader_isolated` after an
+incomplete packager operation and withheld recovery, while 11 neighboring
+self-host tests passed. The child emitted only a generic bounded failure, so
+the cause is not yet established; retain the failed run as evidence and
+investigate if it recurs on the grouped head. The next push can now proceed
+without overlapping that run. The wider goal remains open for issuer
+certificate ceremonies, issuance signing producers, kernel-wide enforcement,
+artifact qualification and protected PR landing.

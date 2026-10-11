@@ -8,13 +8,18 @@ fn scoped_grant_token() -> tempfile::NamedTempFile {
     file
 }
 
-fn production_command() -> (std::process::Command, tempfile::NamedTempFile) {
+fn production_command() -> (std::process::Command, Vec<tempfile::NamedTempFile>) {
     let token = scoped_grant_token();
+    let issuer_token = scoped_grant_token();
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_marty-gateway"));
     command
         .env("ENVIRONMENT", "production")
         .env("BAO_ADDR", "http://127.0.0.1:8200")
         .env("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE", token.path())
+        .env(
+            "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            issuer_token.path(),
+        )
         .env(
             "GRPC_SERVICE_TOKEN",
             "production-grpc-token-at-least-32-characters",
@@ -40,7 +45,7 @@ fn production_command() -> (std::process::Command, tempfile::NamedTempFile) {
         .env_remove("REDIS_URL")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
-    (command, token)
+    (command, vec![token, issuer_token])
 }
 
 #[tokio::test]
@@ -50,10 +55,15 @@ async fn executable_starts_and_serves_gateway_health() {
     drop(reservation);
 
     let token = scoped_grant_token();
+    let issuer_token = scoped_grant_token();
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_marty-gateway"))
         .env("ENVIRONMENT", "test")
         .env("BAO_ADDR", "http://127.0.0.1:8200")
         .env("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE", token.path())
+        .env(
+            "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            issuer_token.path(),
+        )
         .env("GATEWAY_PORT", port.to_string())
         .env("RATE_LIMIT_RPM", "0")
         .env_remove("REDIS_URL")

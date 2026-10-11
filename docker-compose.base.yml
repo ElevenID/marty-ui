@@ -226,6 +226,7 @@ services:
       BAO_FLOW_GRANT_TOKEN_FILE: /bao/flow-grant/token
       BAO_VERIFY_GRANT_TOKEN_FILE: /bao/verify-grant/token
       BAO_GATEWAY_GRANT_TOKEN_FILE: /bao/gateway-grant/token
+      BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE: /bao/gateway-grant/issuer-csr-token
     depends_on:
       openbao:
         condition: service_healthy
@@ -415,6 +416,7 @@ services:
       HSM_PROVIDER: openbao
       SIGNING_KEY_SOURCE: openbao-transit
       GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE: /bao/gateway-grant/token
+      GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE: /bao/gateway-grant/issuer-csr-token
     volumes:
       - openbao_gateway_grant:/bao/gateway-grant:ro
     ports:

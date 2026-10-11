@@ -9,7 +9,7 @@ use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_S
 use base64::Engine;
 use marty_signing_grant::{
     payload_digest,
-    replay::{ConsumedGrant, FinalSignBinding},
+    replay::{ApprovedIssuerCsrSign, ConsumedGrant, FinalSignBinding},
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -42,6 +42,10 @@ pub(crate) enum SignAuthorization {
         route: String,
         issuer_did: Option<String>,
     },
+    IssuerCsr {
+        approved: ApprovedIssuerCsrSign,
+        issuer_did: String,
+    },
     Certificate {
         organization_id: String,
         issuer_did: String,
@@ -54,6 +58,24 @@ pub(crate) enum SignAuthorization {
 }
 
 impl SignAuthorization {
+    fn authorizes_issuer_request(&self, request: &IssuerDidSignRequest) -> bool {
+        match self {
+            Self::Grant {
+                issuer_did: Some(issuer_did),
+                ..
+            }
+            | Self::IssuerCsr { issuer_did, .. } => issuer_did == &request.issuer_did,
+            Self::Certificate {
+                organization_id,
+                issuer_did,
+                ..
+            } => organization_id == &request.organization_id && issuer_did == &request.issuer_did,
+            Self::Grant {
+                issuer_did: None, ..
+            } => false,
+        }
+    }
+
     pub(crate) fn grant(
         consumed: ConsumedGrant,
         route: impl Into<String>,
@@ -62,6 +84,13 @@ impl SignAuthorization {
         Self::Grant {
             consumed,
             route: route.into(),
+            issuer_did,
+        }
+    }
+
+    pub(crate) fn issuer_csr(approved: ApprovedIssuerCsrSign, issuer_did: String) -> Self {
+        Self::IssuerCsr {
+            approved,
             issuer_did,
         }
     }
@@ -103,6 +132,14 @@ impl SignAuthorization {
                 issuer_did: issuer_did.as_deref(),
                 ..actual
             }),
+            Self::IssuerCsr {
+                approved,
+                issuer_did,
+            } => approved.authorizes(&FinalSignBinding {
+                route: "/v1/signing-keys/issuer-identities/certificate-csr",
+                issuer_did: Some(&issuer_did),
+                ..actual
+            }),
             Self::Certificate {
                 organization_id,
                 issuer_did,
@@ -113,7 +150,8 @@ impl SignAuthorization {
                 payload_sha256_b64,
             } => {
                 organization_id == actual.organization_id
-                    && Some(issuer_did.as_str()) == actual.issuer_did
+                    && actual.issuer_did.is_none()
+                    && !issuer_did.is_empty()
                     && Some(service_id.as_str()) == actual.service_id
                     && Some(key_reference.as_str()) == actual.key_reference
                     && key_purpose == actual.key_purpose
@@ -580,6 +618,9 @@ impl SigningCompatibilityService {
         request: &IssuerDidSignRequest,
         authorization: SignAuthorization,
     ) -> Result<Value, CompatibilityError> {
+        if !authorization.authorizes_issuer_request(request) {
+            return Err(CompatibilityError::Unauthorized);
+        }
         if request.credential_format.trim().is_empty() {
             return Err(CompatibilityError::Invalid(
                 "credential_format is required for DID-mediated signing.".into(),
@@ -2273,7 +2314,7 @@ mod tests {
             organization_id: "tenant-1",
             route: "/v1/signing-keys/services/managed-openbao-transit/sign",
             service_id: Some("managed-openbao-transit"),
-            issuer_did: Some("did:web:issuer.example"),
+            issuer_did: None,
             key_reference: Some("csca-key-1"),
             key_purpose: "csca",
             algorithm: "ES256",
@@ -2282,6 +2323,15 @@ mod tests {
         assert!(SignAuthorization::certificate(&request, &profile)
             .unwrap()
             .authorizes(actual));
+        assert!(SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes_issuer_request(&request));
+        assert!(!SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes_issuer_request(&IssuerDidSignRequest {
+                issuer_did: "did:web:other.example".into(),
+                ..request.clone()
+            }));
         assert!(!SignAuthorization::certificate(&request, &profile)
             .unwrap()
             .authorizes(FinalSignBinding {

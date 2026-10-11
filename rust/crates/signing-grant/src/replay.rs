@@ -60,6 +60,7 @@ pub struct ApprovedServiceCsrSign {
 pub struct ApprovedIssuerCsrSign {
     organization_id: String,
     route: String,
+    service_id: String,
     issuer_did: String,
     key_reference: String,
     key_purpose: String,
@@ -73,7 +74,7 @@ impl ApprovedIssuerCsrSign {
         chrono::Utc::now().timestamp() <= self.expires_at
             && self.organization_id == actual.organization_id
             && self.route == actual.route
-            && actual.service_id.is_none()
+            && Some(self.service_id.as_str()) == actual.service_id
             && Some(self.issuer_did.as_str()) == actual.issuer_did
             && Some(self.key_reference.as_str()) == actual.key_reference
             && self.key_purpose == actual.key_purpose
@@ -164,7 +165,7 @@ impl ConsumedGrant {
             || bound_input(&self.claims, intent, chrono::Utc::now().timestamp()).is_err()
             || actual.organization_id != intent.organization_id
             || actual.route != intent.route
-            || actual.service_id.is_some()
+            || actual.service_id.is_none()
             || actual.issuer_did != intent.issuer_did
             || actual.key_reference.is_none()
             || actual.key_purpose != intent.key_purpose
@@ -175,6 +176,7 @@ impl ConsumedGrant {
         Some(ApprovedIssuerCsrSign {
             organization_id: actual.organization_id.to_owned(),
             route: actual.route.to_owned(),
+            service_id: actual.service_id?.to_owned(),
             issuer_did: actual.issuer_did?.to_owned(),
             key_reference: actual.key_reference?.to_owned(),
             key_purpose: actual.key_purpose.to_owned(),
@@ -271,7 +273,7 @@ mod tests {
         let actual = FinalSignBinding {
             organization_id: "tenant-1",
             route,
-            service_id: None,
+            service_id: Some("managed-openbao-transit"),
             issuer_did: Some(&csr.issuer_did),
             key_reference: Some("resolved-remote-key"),
             key_purpose: "csca",

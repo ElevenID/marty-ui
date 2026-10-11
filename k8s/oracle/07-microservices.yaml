@@ -57,6 +57,8 @@ spec:
               value: "8000"
             - name: GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE
               value: /var/run/secrets/marty/gateway-sign-grant/token
+            - name: GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/gateway-issuer-csr-grant/token
             - name: AUTH_GRPC_TARGET
               value: "auth:9001"
             - name: ISSUANCE_API_KEY
@@ -171,12 +173,21 @@ spec:
             - name: gateway-sign-grant
               mountPath: /var/run/secrets/marty/gateway-sign-grant
               readOnly: true
+            - name: gateway-issuer-csr-grant
+              mountPath: /var/run/secrets/marty/gateway-issuer-csr-grant
+              readOnly: true
       volumes:
         - name: gateway-sign-grant
           secret:
             secretName: marty-secrets
             items:
               - key: GATEWAY_SIGN_GRANT_MINT_TOKEN
+                path: token
+        - name: gateway-issuer-csr-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN
                 path: token
 ---
 apiVersion: v1

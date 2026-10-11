@@ -872,15 +872,30 @@ async fn disposable_signing_openbao() -> (String, String) {
 #[tokio::test]
 #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
-    use std::str::FromStr;
+    use std::{io::Write, str::FromStr};
 
     use der::{DecodePem, Encode};
+    use marty_signing_grant::{
+        minter::GrantMinter, replay::RedisGrantReplayStore, verifier::GrantVerifier, SigningOrigin,
+    };
+    use marty_signing_keys::http::router_with_all_keys_and_grants;
     use x509_cert::name::Name;
     use x509_cert::request::CertReq;
 
     let redis_url = disposable_signing_redis_url().await;
     let organization_id = format!("gateway-csr-{}", uuid::Uuid::new_v4().simple());
     let (endpoint, token) = disposable_signing_openbao().await;
+    let mint_token = std::env::var("MARTY_TEST_GRANT_ISSUER_MINT_TOKEN")
+        .expect("scoped GatewayIssuerDid mint token for disposable OpenBao");
+    let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN")
+        .expect("scoped grant verify token for disposable OpenBao");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, token);
+    assert_ne!(verify_token, token);
+    let mut mint_file = tempfile::NamedTempFile::new().unwrap();
+    mint_file.write_all(mint_token.as_bytes()).unwrap();
+    let mut verify_file = tempfile::NamedTempFile::new().unwrap();
+    verify_file.write_all(verify_token.as_bytes()).unwrap();
     let registry = SigningRegistryStore::connect(&redis_url)
         .await
         .unwrap()
@@ -888,20 +903,46 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
     let cleanup_store = registry.clone();
     let profiles = SigningProfileStore::from_connection(registry.connection());
     let documents = SigningDocumentStore::from_connection(registry.connection());
-    let signing = signing_router(
+    let verifier = GrantVerifier::for_managed_openbao(
+        &endpoint,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(registry.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         "internal-signing-key".into(),
         Some("dedicated-service-sign-gateway-key-000001".into()),
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
+        None,
+        None,
+        false,
         Some(registry),
         Some(documents),
         None,
         Some(profiles.clone()),
         None,
         Some("issuer.example".into()),
+        Some(verifier),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let signing_url = format!("http://{}", listener.local_addr().unwrap());
     let signing_server = tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
-    let gateway = gateway_with_signing_http(signing_url, &organization_id);
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::GatewayIssuerDid,
+        mint_file.path().to_path_buf(),
+    )
+    .unwrap();
+    let mut gateway_state = signing_gateway_state(signing_url);
+    let identity = Arc::new(SigningIdentity {
+        organization_id: organization_id.clone(),
+    });
+    let state = Arc::get_mut(&mut gateway_state).unwrap();
+    state.identities = identity.clone();
+    state.memberships = identity;
+    state.issuer_csr_grant_minter = Some(minter);
+    let gateway = gateway_router(gateway_state);
     let mut references = Vec::new();
     let mut public_keys = Vec::new();
     let mut issuer_dids = Vec::new();

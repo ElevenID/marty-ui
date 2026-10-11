@@ -30,6 +30,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let config = GatewayConfig::from_env()?;
+    if config.sign_grant_mint_token_file == config.issuer_csr_grant_mint_token_file {
+        return Err(
+            "Gateway service and issuer CSR grants require distinct scoped token files".into(),
+        );
+    }
     let service_sign_grant_minter = GrantMinter::for_managed_openbao(
         config
             .sign_grant_bao_addr
@@ -40,6 +45,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .sign_grant_mint_token_file
             .clone()
             .ok_or("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE is required")?,
+    )?;
+    let issuer_csr_grant_minter = GrantMinter::for_managed_openbao(
+        config
+            .sign_grant_bao_addr
+            .as_deref()
+            .ok_or("BAO_ADDR is required for Gateway signing grants")?,
+        SigningOrigin::GatewayIssuerDid,
+        config
+            .issuer_csr_grant_mint_token_file
+            .clone()
+            .ok_or("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE is required")?,
     )?;
     let contract = GatewayContract::load()?;
     let routes = contract.runtime_route_table_with_passport_selectors(
@@ -116,6 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
         .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
         .with_service_sign_grant_minter(service_sign_grant_minter)
+        .with_issuer_csr_grant_minter(issuer_csr_grant_minter)
         .with_issuer_sign_key(config.issuer_sign_key.clone())?
         .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
         .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?

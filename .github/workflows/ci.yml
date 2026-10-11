@@ -1784,6 +1784,37 @@ jobs:
           export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
           export BAO_ADDR=http://127.0.0.1:8200
           export BAO_TOKEN=test-only
+          create_disposable_grant_mint_role() {
+            local origin="$1" variable="$2" key="marty-sign-grant-${1}-v1" policy
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
+              --data '{"type":"hmac","key_size":32,"exportable":false,"allow_plaintext_backup":false}' \
+              "${BAO_ADDR}/v1/transit/keys/${key}" >/dev/null
+            policy="$(printf 'path "transit/hmac/%s/sha2-256" { capabilities = ["update"] }\n' "$key")"
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request PUT \
+              --data "$(jq -nc --arg policy "$policy" '{policy:$policy}')" \
+              "${BAO_ADDR}/v1/sys/policies/acl/test-sign-grant-mint-${origin}" >/dev/null
+            local token
+            token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
+              --data "$(jq -nc --arg role "test-sign-grant-mint-${origin}" '{policies:[$role],no_default_policy:true}')" \
+              "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
+            export "$variable=$token"
+          }
+          create_disposable_grant_mint_role gateway-service MARTY_TEST_GRANT_MINT_TOKEN
+          create_disposable_grant_mint_role gateway-issuer-did MARTY_TEST_GRANT_ISSUER_MINT_TOKEN
+          verify_policy="$(for origin in gateway-service gateway-issuer-did; do
+            printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "$origin"
+          done)"
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request PUT \
+            --data "$(jq -nc --arg policy "$verify_policy" '{policy:$policy}')" \
+            "${BAO_ADDR}/v1/sys/policies/acl/test-sign-grant-verify" >/dev/null
+          export MARTY_TEST_GRANT_VERIFY_TOKEN="$(curl --silent --show-error --fail \
+            --header 'X-Vault-Token: test-only' --header 'Content-Type: application/json' \
+            --request POST --data '{"policies":["test-sign-grant-verify"],"no_default_policy":true}' \
+            "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
             --header 'Content-Type: application/json' --request POST \
             --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
@@ -2490,13 +2521,16 @@ jobs:
           container=""
           trap 'if [ -n "$container" ]; then docker rm --force "$container" >/dev/null 2>&1 || true; fi; rm -rf "$token_dir"' EXIT
           printf '%s\n' 'synthetic-gateway-grant-mint-token' > "$token_dir/gateway-grant-mint-token"
+          printf '%s\n' 'synthetic-issuer-csr-grant-mint-token' > "$token_dir/issuer-csr-grant-mint-token"
           chmod 755 "$token_dir"
           chmod 644 "$token_dir/gateway-grant-mint-token"
+          chmod 644 "$token_dir/issuer-csr-grant-mint-token"
           container="$(docker run --detach \
             --env ENVIRONMENT=test \
             --env RATE_LIMIT_RPM=0 \
             --env BAO_ADDR=http://127.0.0.1:8200 \
             --env GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE=/run/secrets/gateway-grant-mint-token \
+            --env GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE=/run/secrets/issuer-csr-grant-mint-token \
             --volume "$token_dir:/run/secrets:ro" \
             --publish 127.0.0.1::8000 \
             marty-gateway:ci)"

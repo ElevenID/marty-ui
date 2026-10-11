@@ -2399,8 +2399,12 @@ fn same_managed_identity(profile: &Value, resolved: &Value) -> bool {
 async fn generate_public_issuer_csr(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
     Json(input): Json<IssuerCsrIntent>,
 ) -> Response {
+    if !authorize_issuer_sign(&state, &headers) {
+        return public_error(StatusCode::UNAUTHORIZED, "Issuer CSR authority required.");
+    }
     if !matches!(input.key_purpose.as_str(), "csca" | "x509_doc_signer") {
         return public_error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -2422,6 +2426,12 @@ async fn generate_public_issuer_csr(
         );
     };
     let algorithm = canonical_algorithm(&input.algorithm);
+    if input.algorithm != algorithm {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Issuer CSR algorithm is invalid.",
+        );
+    }
     let resolved = match compatibility
         .resolve_issuer_did(&ResolveIssuerDidRequest {
             organization_id: scope.organization_id.clone(),
@@ -2468,19 +2478,78 @@ async fn generate_public_issuer_csr(
         Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     };
     let signing_request = IssuerDidSignRequest {
-        organization_id: scope.organization_id,
+        organization_id: scope.organization_id.clone(),
         issuer_did: input.issuer_did.clone(),
-        credential_format: input.credential_format,
-        key_purpose: input.key_purpose,
-        algorithm,
+        credential_format: input.credential_format.clone(),
+        key_purpose: input.key_purpose.clone(),
+        algorithm: algorithm.clone(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
         payload_hex: None,
     };
-    let authorization = match SignAuthorization::certificate(&signing_request, &profile) {
-        Ok(authorization) => authorization,
-        Err(error) => return error.into_response(),
+    let Some(header) = headers
+        .get(HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Issuer CSR signing grant required.",
+        );
     };
+    let Ok(envelope) = GrantEnvelope::from_header_value(header) else {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Issuer CSR signing grant is invalid.",
+        );
+    };
+    let route = "/v1/signing-keys/issuer-identities/certificate-csr";
+    let payload = input.bound_payload();
+    let intent = GrantBinding {
+        origin: SigningOrigin::GatewayIssuerDid,
+        operation_id: &envelope.claims.operation_id,
+        organization_id: &scope.organization_id,
+        route,
+        service_id: None,
+        issuer_did: Some(&input.issuer_did),
+        key_reference: None,
+        key_purpose: &input.key_purpose,
+        algorithm: &input.algorithm,
+        payload: &payload,
+    };
+    let consumed = match consume_bound_signing_grant(&state, header, &intent).await {
+        Ok(consumed) => consumed,
+        Err(GrantAuthorizationError::Denied) => {
+            return public_error(
+                StatusCode::UNAUTHORIZED,
+                "Issuer CSR signing grant is denied.",
+            )
+        }
+        Err(GrantAuthorizationError::Unavailable) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Issuer CSR verifier is unavailable.",
+            )
+        }
+    };
+    let service_id = profile.get("signing_service_id").and_then(Value::as_str);
+    let key_reference = profile.get("signing_key_reference").and_then(Value::as_str);
+    let actual = marty_signing_grant::replay::FinalSignBinding {
+        organization_id: &scope.organization_id,
+        route,
+        service_id,
+        issuer_did: Some(&input.issuer_did),
+        key_reference,
+        key_purpose: &input.key_purpose,
+        algorithm: &algorithm,
+        payload: csr.signing_bytes(),
+    };
+    let Some(approved) = consumed.approve_issuer_csr(&intent, &actual) else {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "Issuer CSR signing intent changed.",
+        );
+    };
+    let authorization = SignAuthorization::issuer_csr(approved, input.issuer_did.clone());
     let signed = match compatibility
         .sign_with_issuer_did(&signing_request, authorization)
         .await
@@ -9194,7 +9263,7 @@ mod public_contract_tests {
             .oneshot(request(valid.clone()))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let mut forbidden = valid;
         forbidden["key_reference"] = json!("caller-selected-key");
         let response = router_with_internal_api_key("test-only".into())

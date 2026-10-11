@@ -117,6 +117,7 @@ def harness(tmp_path):
     for role in (
         "FLOW_SIGN_GRANT_MINT_TOKEN",
         "GATEWAY_SIGN_GRANT_MINT_TOKEN",
+        "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN",
         "SIGNING_KEYS_GRANT_VERIFY_TOKEN",
     ):
         env[role] = f"synthetic-distinct-{role.lower()}-credential"
@@ -218,6 +219,8 @@ def applications(calls):
     "first,second",
     [
         ("FLOW_SIGN_GRANT_MINT_TOKEN", "GATEWAY_SIGN_GRANT_MINT_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN"),
+        ("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("FLOW_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("FLOW_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),

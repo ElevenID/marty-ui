@@ -243,15 +243,21 @@ def assert_models(approved, actual):
         else:
             assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in environment
             assert envelope not in mounts
-    grant_roles = {
-        "gateway": (
+    grant_roles = [
+        (
+            "gateway",
             "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE",
             "sign_grant_mint_gateway_service_token",
         ),
-        "flow": ("FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_flow_wallet_token"),
-        "signing-keys": ("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "sign_grant_verify_token"),
-    }
-    for owner, (setting, secret) in grant_roles.items():
+        (
+            "gateway",
+            "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_gateway_issuer_did_token",
+        ),
+        ("flow", "FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_flow_wallet_token"),
+        ("signing-keys", "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "sign_grant_verify_token"),
+    ]
+    for owner, setting, secret in grant_roles:
         assert actual["secrets"][secret]["file"].endswith(f"/{secret}")
         for name, service in actual["services"].items():
             environment = service.get("environment", {})
