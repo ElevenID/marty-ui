@@ -7,7 +7,7 @@ use marty_presentation_policy::{
     CredentialVerificationKernel, DisplayMetadata, FreshnessPolicy, HolderBinding,
     IssuerTrustEvidence, PolicyStatus, PresentationPolicy, PresentationTrustResolver,
     PresentationVerificationError, PresentationVerificationOrchestrator, RequestPurpose,
-    RequestedClaim, ResolvedTrustProfile, VerifiedFactsOrchestrator,
+    RequestedClaim, ResolvedTrustProfile, RustCredentialKernel, VerifiedFactsOrchestrator,
 };
 use marty_verification::credential_format::DetectedCredentialFormat;
 use serde_json::{json, Value};
@@ -181,6 +181,65 @@ fn fixture() -> Value {
         "../../../../contracts/presentation-verification-facts.json"
     ))
     .unwrap()
+}
+
+#[tokio::test]
+async fn hosted_ob2_cannot_turn_parsed_claims_into_policy_trust() {
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/governed_ob2.json")).unwrap();
+    let mut assertion = fixture["assertion"].clone();
+    assertion.as_object_mut().unwrap().remove("signature");
+    assertion.as_object_mut().unwrap().remove("verification");
+    let trust = Arc::new(Trust {
+        evidence: IssuerTrustEvidence {
+            verified: true,
+            trust_level: Some(90),
+            ..Default::default()
+        },
+        fail_load: false,
+        profile_organization_id: None,
+        profile_document: Some(json!({
+            "resolved_verification_methods": [fixture["governed_method"]]
+        })),
+        loads: Mutex::new(Vec::new()),
+    });
+    let status = Arc::new(Status {
+        evidence: CredentialStatusEvidence::default(),
+        calls: Mutex::new(Vec::new()),
+    });
+    let orchestrator = VerifiedFactsOrchestrator::with_clock(
+        Arc::new(RustCredentialKernel),
+        trust,
+        status.clone(),
+        Arc::new(|| 1_787_240_300),
+    )
+    .unwrap();
+    let mut request = marty_presentation_policy::EvaluatePresentationRequest {
+        vp_token: json!({"credential": assertion, "document_store": fixture["document_store"]}),
+        trust_profile_id: None,
+        nonce: None,
+        audience: None,
+        context: serde_json::Map::new(),
+        oid4vp_transport: None,
+        trusted_internal_context: false,
+    };
+    let facts = orchestrator.verify(&policy(), &request).await.unwrap();
+    assert_eq!(facts["credentials"][0]["signature_verified"], false);
+    assert_eq!(facts["credentials"][0]["trust_profile_verified"], false);
+    assert_eq!(facts["credentials"][0]["claims"], json!({}));
+    assert!(status.calls.lock().unwrap().is_empty());
+
+    let mut referenced = fixture["assertion"].clone();
+    referenced.as_object_mut().unwrap().remove("issuer");
+    referenced["signature"] = json!("eyJhbGciOiJFZERTQSJ9.eyJAY29udGV4dCI6Imh0dHBzOi8vdzNpZC5vcmcvb3BlbmJhZGdlcy92MiIsInR5cGUiOiJBc3NlcnRpb24iLCJpZCI6InVybjp1dWlkOmFzc2VydGlvbi0xIiwiYmFkZ2UiOiJ1cm46dXVpZDpiYWRnZS0xIiwidmVyaWZpY2F0aW9uIjp7InR5cGUiOiJzaWduZWQiLCJjcmVhdG9yIjoiZGlkOmV4YW1wbGU6aXNzdWVyI2tleS0xIn19.4V1FG094iFdrKZhCbOV8-XbSD_y944YcqFR6urKJL3QqrYMbcNX4HqfWAlIXtxqHaCUjReNGPJXmrnHC7vzEBQ");
+    request.vp_token =
+        json!({"credential": referenced, "document_store": fixture["document_store"]});
+    let standard = orchestrator.verify(&policy(), &request).await.unwrap();
+    assert_eq!(standard["credentials"][0]["signature_verified"], true);
+    assert_eq!(standard["credentials"][0]["trust_profile_verified"], false);
+    assert_eq!(standard["credentials"][0]["issuer_id"], "unknown");
+    assert!(standard["credentials"][0]["claims"]
+        .get("issuer_id")
+        .is_none());
 }
 
 #[tokio::test]

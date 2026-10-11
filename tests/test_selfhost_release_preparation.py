@@ -91,8 +91,15 @@ def test_prepared_consumer_is_separate_and_cannot_qualify_or_publish() -> None:
     assert "prepared/prepared-selfhost-bundle.zip" in source
     assert "--source-checkout \"$GITHUB_WORKSPACE\"" in source
     assert 'DOCKER_CONFIG="$RUNNER_TEMP/selfhost-anonymous-docker-config"' in source
-    assert 'docker pull "$image"' in source
+    assert "scripts/check_selfhost_locked_image_platform.py" in source
+    assert "--image-lock prepared/prepared-selfhost-images.json" in source
+    assert "--output \"$RUNNER_TEMP/selfhost-image-platform-preflight.json\"" in source
     assert "docker compose --profile '*'" in source
+    assert '--install-root "$RUNNER_TEMP/selfhost-consumer/selfhost-prepared"' in source
+    assert '--state-root "$SELFHOST_STATE_DIR"' in source
+    assert '--secret-root "$SELFHOST_SECRET_DIR"' in source
+    assert 'export SELFHOST_STATE_DIR="$RUNNER_TEMP/selfhost-consumer-state"' in source
+    assert 'export SELFHOST_SECRET_DIR="$RUNNER_TEMP/selfhost-consumer-secrets"' in source
     assert "scripts/release_transaction.py validate" in source
     assert '--stack-lock release/stack-lock.json' in source
     assert '--source-sha "$GITHUB_SHA"' in source

@@ -47,7 +47,21 @@ responsibilities. The opt-in self-host preparation job uploads this unqualified
 descriptor beside the ZIP, lock, and receipt for later artifact-consumer checks;
 the separate consumer recomputes and compares that downloaded descriptor with
 the exact ZIP, lock, transaction, and receipt. It does not publish or promote
-any of them as release assets.
+any of them as release assets. Its extracted Compose preflight now renders with
+fresh per-run state and secret roots and rejects host binds outside the extracted
+ZIP or that state root. Compose secret files must reside under the disposable
+secret root, while config files may reside there or under the extracted ZIP.
+Bundled source binds must exist and be read-only. This is an isolation boundary
+for a future installed-runtime test, not a running-stack or business-journey
+qualification; no secret values are generated or uploaded by this preflight.
+The consumer also compares the complete extracted bundle tree against the
+validated ZIP, rejecting changed, missing, extra, symlink, or special entries
+before accepting its rendered Compose model. Disposable state and secret roots are
+separate from the bundle and are not mistaken for shipped files.
+The separate consumer also anonymously pulls each exact digest from the
+downloaded lock for Linux/amd64 and checks that the inspected image reports
+that platform and retains the exact digest association. This is a platform
+preflight observation, not architecture attestation or installed-runtime proof.
 
 ## Initial sequence and evidence still needed
 

@@ -15214,3 +15214,11 @@ The affected Python deployment suites (including beta physical isolation,
 Canvas worker, native issuance, native DIDComm) passed locally; hosted
 revalidation of this correction batch is still required. Keep PR #1192 in
 draft until the grouped Linux checks and remaining release review pass.
+
+The branch then had to absorb newer `main` self-host secret-closure work before
+GitHub would create checks for the new head. The merge retains both the KMS
+grant/TLS/DIDComm secrets and the upstream Notification migration token. The
+self-host catalog, stack inventory, and example filenames now enumerate the
+new scoped grants and integration-secret transport inputs. The upstream
+secret-closure suite and affected self-host/deployment suites passed locally;
+the merged Linux CI head remains the next gate.

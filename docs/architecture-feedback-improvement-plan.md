@@ -3412,6 +3412,41 @@ database suite steps took 7m03s, 10m45s, 7s, and 7m10s respectively. The
 [main cache warm-up](https://github.com/ElevenID/marty-ui/actions/runs/38117238266)
 was queued immediately after merge; steady-state timings remain unproven.
 
+Product-pipeline foundation [UI #1255](https://github.com/ElevenID/marty-ui/pull/1255)
+merged as `26f693d8f` at 07:40 UTC after exact-head and protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38120304640)
+passed. It adds an opt-in, explicitly unqualified exact-lock self-host ZIP,
+receipt, product descriptor, and separate downloaded-artifact consumer preflight;
+it does not install the runtime or promote a product. The exact-head Canvas job
+took 31m06s: reusable Rust test compilation 10m15s, public self-host image
+build 6m37s, and isolated database suites 10m28s. These are stage observations,
+not a demonstrated speedup or regression against a comparable baseline.
+
+October 11 product follow-through: [UI #1257](https://github.com/ElevenID/marty-ui/pull/1257)
+merged as `51c810a33` after full protected qualification. The self-host
+consumer's extracted bind confinement and the Bookworm-only lighter dev-debug
+pilot landed without changing required test coverage. Its PR Canvas job took
+27m57s versus 31m06s on #1255; different cache and runner conditions prevent
+attributing that difference to the pilot. Linux/amd64 self-host and the
+offline verifier remain the first independent product priorities. [UI #1259](https://github.com/ElevenID/marty-ui/pull/1259)
+merged as `bdef60bcf` after exact-head and full protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38127368351)
+passed. It binds the extracted tree exactly to the prepared ZIP and requires
+governed Open Badges proof keys; neither change qualifies a self-host runtime
+or standalone verifier artifact. A separate local no-start secret-closure
+validator still detects `flow_webhook_secret` missing from the catalog and
+three required notification secrets missing from the stack list. It is not a
+gate until that declaration mismatch is resolved. The next
+opt-in consumer candidate checks each exact locked image's Linux/amd64 pull
+and inspected digest association, but does not run or qualify the stack.
+
+Merge-queue reuse audit: current PR runs do not attest the exact checked-out
+merge tree or workflow revision, and a green aggregate run does not prove both
+Rust lanes executed. Canvas also has SHA-sensitive self-host steps. Therefore
+do not skip protected merge-group Rust checks yet. Any later pilot needs
+authenticated exact-tree and job evidence, authoritative single-PR queue
+membership, and full-run fallback on unknown or mismatched inputs.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

@@ -512,11 +512,82 @@ async fn verify_open_badge_document(
             },
         )?
     };
-    let mut store = document_store;
-    if let Some(profile_store) = trust_value(context, "document_store").and_then(Value::as_object) {
-        for (key, value) in profile_store {
-            store.entry(key.clone()).or_insert_with(|| value.clone());
+    let signed_ob2 = version == 2 && credential.get("signature").is_some();
+    let governed_methods = if authenticated_jwt.is_some() || (version == 2 && !signed_ob2) {
+        Map::new()
+    } else {
+        governed_open_badge_methods(context)?
+    };
+    let mut store = if version == 2 {
+        // OB2 badge and issuer references may be transported with the token.
+        // Their contents never establish verification-key authority.
+        document_store
+    } else {
+        Map::new()
+    };
+    if authenticated_jwt.is_some() {
+        if let Some(profile_store) =
+            trust_value(context, "document_store").and_then(Value::as_object)
+        {
+            store.extend(profile_store.clone());
         }
+    } else if signed_ob2 {
+        let Some(creator) = credential
+            .get("verification")
+            .and_then(|value| value.get("creator"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(rejected("Open Badge signing key is not governed"));
+        };
+        let mut signed_body = credential.clone();
+        let signature = signed_body
+            .remove("signature")
+            .and_then(|value| value.as_str().map(str::to_owned));
+        let authenticated_body = signature
+            .as_deref()
+            .and_then(|signature| signature.split('.').nth(1))
+            .and_then(|payload| URL_SAFE_NO_PAD.decode(payload).ok())
+            .and_then(|payload| serde_json::from_slice::<Value>(&payload).ok());
+        if authenticated_body.as_ref() != Some(&Value::Object(signed_body.clone())) {
+            // Older OB2 assertions added only {type, creator} after signing.
+            // Mirror Core's bounded compatibility form, never unsigned claims.
+            let legacy_instructions = authenticated_body
+                .as_ref()
+                .is_some_and(|payload| payload.get("verification").is_none())
+                && credential
+                    .get("verification")
+                    .and_then(Value::as_object)
+                    .is_some_and(|verification| {
+                        verification.len() == 2
+                            && verification.get("creator").and_then(Value::as_str) == Some(creator)
+                            && verification
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|kind| {
+                                    kind.eq_ignore_ascii_case("signed")
+                                        || kind.eq_ignore_ascii_case("signedbadge")
+                                })
+                    });
+            if legacy_instructions {
+                signed_body.remove("verification");
+            }
+            if !legacy_instructions || authenticated_body != Some(Value::Object(signed_body)) {
+                return Ok(rejected(
+                    "Open Badge signed body differs from presented assertion",
+                ));
+            }
+        }
+        let Some(method) = governed_methods.get(creator) else {
+            return Ok(rejected("Open Badge signing key is not governed"));
+        };
+        if let Some(issuer) = issuer_id(&credential) {
+            if method.get("controller").and_then(Value::as_str) != Some(issuer) {
+                return Ok(rejected("Open Badge signing key is not bound to issuer"));
+            }
+        }
+        store.insert(creator.to_owned(), method.clone());
+    } else if version == 3 {
+        store = governed_methods;
     }
     let request = if version == 2 {
         json!({"assertion": credential, "document_store": store})
@@ -535,11 +606,43 @@ async fn verify_open_badge_document(
     if result.get("valid").and_then(Value::as_bool) != Some(true) {
         return Ok(rejected_counted("Open Badges", error_count(&result)));
     }
+    if version == 2 && !signed_ob2 && authenticated_jwt.is_none() {
+        // Core can parse hosted OB2 and reports its unsigned warning, but a
+        // hosted assertion has no cryptographic credential or issuer evidence.
+        let mut evidence =
+            rejected("Hosted Open Badge assertion is not cryptographically verified");
+        evidence.warnings = result
+            .get("warnings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        return Ok(evidence);
+    }
     let mut claims = result
         .get("normalized")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    if version == 2 && authenticated_jwt.is_none() {
+        // Core resolves structural OB2 references from the transported store.
+        // Only the signed assertion, not those documents, may supply policy claims.
+        claims.remove("badge_id");
+        claims.remove("issuer_id");
+        let badge_id = credential.get("badge").and_then(|badge| {
+            badge
+                .as_str()
+                .or_else(|| badge.get("id").and_then(Value::as_str))
+        });
+        if let Some(badge_id) = badge_id {
+            claims.insert("badge_id".into(), Value::String(badge_id.to_owned()));
+        }
+        if let Some(issuer) = issuer_id(&credential) {
+            claims.insert("issuer_id".into(), Value::String(issuer.to_owned()));
+        }
+    }
     let subject = claims
         .get("credential_subject")
         .or_else(|| claims.get("credentialSubject"))
@@ -587,6 +690,52 @@ async fn verify_open_badge_document(
     }
     apply_open_badge_status(&mut evidence, &result);
     Ok(evidence)
+}
+
+fn governed_open_badge_methods(
+    context: &CredentialVerificationContext,
+) -> Result<JsonObject, PresentationVerificationError> {
+    let mut methods = Map::new();
+    let Some(entries) =
+        trust_value(context, "resolved_verification_methods").and_then(Value::as_array)
+    else {
+        return Ok(methods);
+    };
+    for entry in entries {
+        let Some(id) = entry.get("id").and_then(Value::as_str) else {
+            return Err(invalid_native("Governed Open Badge method omitted id"));
+        };
+        let Some(controller) = entry.get("controller").and_then(Value::as_str) else {
+            return Err(invalid_native(
+                "Governed Open Badge method omitted controller",
+            ));
+        };
+        let Some(jwk) = entry.get("public_jwk").and_then(Value::as_object) else {
+            return Err(invalid_native(
+                "Governed Open Badge method omitted public JWK",
+            ));
+        };
+        if id.trim().is_empty()
+            || controller.trim().is_empty()
+            || !public_jwk(jwk)
+            || jwk
+                .get("kid")
+                .and_then(Value::as_str)
+                .is_some_and(|kid| kid != id)
+        {
+            return Err(invalid_native("Governed Open Badge method is invalid"));
+        }
+        let method = json!({
+            "id": id,
+            "type": "JsonWebKey2020",
+            "controller": controller,
+            "publicKeyJwk": jwk,
+        });
+        if methods.insert(id.to_owned(), method).is_some() {
+            return Err(invalid_native("Governed Open Badge method id is ambiguous"));
+        }
+    }
+    Ok(methods)
 }
 
 fn credential_evidence(
@@ -1002,6 +1151,34 @@ mod tests {
                 document,
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn authenticated_ob2_jwt_keeps_its_outer_governed_evidence() {
+        let fixture: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/governed_ob2.json")).unwrap();
+        let mut credential = fixture["assertion"].as_object().unwrap().clone();
+        credential.remove("signature");
+        credential.remove("verification");
+        let mut verification_context =
+            context(json!({"document_store": fixture["document_store"]}));
+        verification_context.format = DetectedCredentialFormat::OpenbadgeV2;
+        let jwt = CredentialVerificationEvidence {
+            verified: true,
+            issuer_id: Some("did:example:issuer".into()),
+            algorithm: Some("EdDSA".into()),
+            validity_checked: true,
+            is_expired: Some(false),
+            ..Default::default()
+        };
+        let evidence =
+            verify_open_badge_document(&verification_context, 2, Some((jwt, credential)))
+                .await
+                .unwrap();
+        assert!(evidence.verified);
+        assert_eq!(evidence.issuer_id.as_deref(), Some("did:example:issuer"));
+        assert_eq!(evidence.algorithm.as_deref(), Some("EdDSA"));
+        assert!(evidence.validity_checked);
     }
 
     #[test]

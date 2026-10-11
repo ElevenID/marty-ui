@@ -70,7 +70,7 @@ the new trust root.
 
 `didcomm_issuance_openbao_token` is a separate token with only the `didcomm-issuance` policy and no default policy. Native Issuance uses it to read public sender versions and request complete authcrypt envelopes; key creation and rotation remain operator operations. The self-host OpenBao bootstrap mints it after mounting the DIDComm plugin. An external operator must provide the equivalent policy and token.
 
-`notification_openbao_token` is the narrower `notification-webhook-service` token. Only the Notification workload receives it; other services and the migration job must not mount it.
+`notification_openbao_token` is the narrower `notification-webhook-service` token. Only the Notification runtime and one-shot `db-migrate` job receive it; other services must not mount it. The migration job needs it to re-encrypt legacy webhook secrets.
 
 `haip_kms_token` is the dedicated OpenBao plugin token for HAIP response-key creation and decryption. The self-host OpenBao bootstrap mints it without the default policy from `docker/openbao-haip-workload-policy.hcl`; only signing-keys receives it. An external OpenBao operator must provision an equivalent token and policy before starting the stack.
 

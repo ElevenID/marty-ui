@@ -1,0 +1,17 @@
+{
+  "assertion": {
+    "@context": "https://w3id.org/openbadges/v2",
+    "type": "Assertion",
+    "id": "urn:uuid:assertion-1",
+    "badge": "urn:uuid:badge-1",
+    "issuer": "did:example:issuer",
+    "verification": {"type": "signed", "creator": "did:example:issuer#key-1"},
+    "signature": "eyJhbGciOiJFZERTQSJ9.eyJAY29udGV4dCI6Imh0dHBzOi8vdzNpZC5vcmcvb3BlbmJhZGdlcy92MiIsInR5cGUiOiJBc3NlcnRpb24iLCJpZCI6InVybjp1dWlkOmFzc2VydGlvbi0xIiwiYmFkZ2UiOiJ1cm46dXVpZDpiYWRnZS0xIiwiaXNzdWVyIjoiZGlkOmV4YW1wbGU6aXNzdWVyIiwidmVyaWZpY2F0aW9uIjp7InR5cGUiOiJzaWduZWQiLCJjcmVhdG9yIjoiZGlkOmV4YW1wbGU6aXNzdWVyI2tleS0xIn19.VjYfch7gZGpoUJbW5fNUy9oCikQfNZDdDBSqabgslnIdKkiCO5zZU6HAR0MUmVe0ii23ddRnVY2_gQQcyy5KBQ"
+  },
+  "document_store": {
+    "did:example:issuer#key-1": {"id": "did:example:issuer#key-1", "type": "JsonWebKey2020", "controller": "did:example:issuer", "publicKeyJwk": {"kty": "OKP", "crv": "Ed25519", "x": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w", "kid": "did:example:issuer#key-1"}},
+    "urn:uuid:badge-1": {"id": "urn:uuid:badge-1", "issuer": "did:example:issuer"},
+    "did:example:issuer": {"id": "did:example:issuer"}
+  },
+  "governed_method": {"id": "did:example:issuer#key-1", "controller": "did:example:issuer", "public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "iojj3XQJ8ZX9UtstPLpdcspnCb8dlBIb83SIAbQPb1w", "kid": "did:example:issuer#key-1"}}
+}
