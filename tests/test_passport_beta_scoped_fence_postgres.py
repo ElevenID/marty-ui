@@ -15,6 +15,7 @@ import pytest
 from scripts.probe_passport_beta_fence_direct_writes import (
     FenceProbeError, candidate_sql, probe_direct_writes, unrelated_sql,
 )
+from scripts.probe_passport_beta_host import beta_psql
 from scripts.prepare_passport_beta_native_migrations import (
     build_sql, migration_set_sha256,
 )
@@ -160,6 +161,21 @@ def database():
         yield name
     finally:
         docker("stop", name, check=False)
+
+
+def test_beta_psql_multistatement_returns_only_selected_json(database: str):
+    def runner(command: list[str]) -> str:
+        return subprocess.run(
+            command, capture_output=True, text=True, check=True, timeout=90,
+        ).stdout.strip()
+
+    output = beta_psql(
+        "SET application_name = 'marty_fence_probe'; "
+        "DO $$ BEGIN NULL; END $$; "
+        "SELECT json_build_object('ready', true)::text",
+        runner, database,
+    )
+    assert json.loads(output) == {"ready": True}
 
 
 def test_batch_acl_finalizer_requires_exact_fence_and_grants_app_access(database: str):

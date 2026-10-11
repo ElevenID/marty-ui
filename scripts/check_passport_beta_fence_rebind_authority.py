@@ -28,7 +28,7 @@ except ImportError:
 
 PRIOR_SOURCE = "1b37f12bb29285fe2d1f92f279ca41aa24ee7037"
 PRIOR_RELEASE = "marty-ui@1.1.240"
-NEXT_RELEASE = "marty-ui@1.1.241"
+NEXT_RELEASE = "marty-ui@1.1.242"
 SQL_FILES = (INSTALL, DRAIN, VERIFY)
 
 
