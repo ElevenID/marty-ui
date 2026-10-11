@@ -39,7 +39,8 @@ def transaction(*, promoted: list[str] | None = None, state: str | None = None) 
 
 
 def run_check(
-    value: dict[str, object], *, main: str = SOURCE, tag_exists: bool = False,
+    value: dict[str, object], *, main: str = SOURCE, source_is_ancestor: bool = True,
+    tag_exists: bool = False,
     release_exists: bool = False, registry_exists: tuple[str, ...] = (),
     drift_role: str | None = None,
 ) -> tuple[dict[str, bool], list[tuple[str, ...]]]:
@@ -51,6 +52,8 @@ def run_check(
             return SOURCE
         if arguments == ("rev-parse", "refs/remotes/origin/main^{commit}"):
             return main
+        if arguments == ("merge-base", SOURCE, main):
+            return SOURCE if source_is_ancestor else "c" * 40
         if arguments[0] == "ls-remote":
             return "existing" if tag_exists else ""
         return ""
@@ -91,6 +94,12 @@ def test_fresh_claim_rechecks_main_tag_release_and_all_three_images() -> None:
     assert [(call[1]) for call in calls if call[0] == "registry"] == list(IMAGES)
 
 
+def test_descendant_main_does_not_invalidate_qualified_source() -> None:
+    existing, calls = run_check(transaction(), main="b" * 40)
+    assert existing == {"ui": False, "services": False, "migrations": False}
+    assert ("git", "merge-base", SOURCE, "b" * 40) in calls
+
+
 @pytest.mark.parametrize("change,match", [
     ({"source_sha": "b" * 40}, "exact claim"),
     ({"claim_run_id": "124"}, "exact claim"),
@@ -102,7 +111,7 @@ def test_transaction_identity_must_match_claim(change: dict, match: str) -> None
 
 
 @pytest.mark.parametrize("condition,match", [
-    ({"main": "b" * 40}, "Protected main moved"),
+    ({"main": "b" * 40, "source_is_ancestor": False}, "not an ancestor"),
     ({"tag_exists": True}, "tag already exists"),
     ({"release_exists": True}, "Release already exists"),
     ({"registry_exists": (IMAGES[0],), "drift_role": "ui"}, "Unrecorded ui version tag differs"),
