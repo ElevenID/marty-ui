@@ -1399,22 +1399,6 @@ async fn worker_rest_native_child() {
 mod canvas_rest_requalification;
 
 #[tokio::test]
-async fn worker_facts_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_facts()
-        .await
-        .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-facts-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
-    owned.close().unwrap();
-}
-
-#[tokio::test]
 async fn worker_reclaimers_retry_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -1936,22 +1920,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
         assert_eq!(owned.oracle.as_ref().unwrap(), &expected[name], "{name}");
         owned.close().unwrap();
     }
-}
-
-#[tokio::test]
-async fn worker_retry_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_retry()
-        .await
-        .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-retry-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
-    owned.close().unwrap();
 }
 
 #[allow(dead_code)]

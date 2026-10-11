@@ -7,6 +7,7 @@ The existing runner still owns every invocation, skip and run-bound proof.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -62,7 +63,7 @@ def validate_package_migration(migration: dict, listed: set[str], root: Path = R
     case_ids = migration.get("case_ids")
     require(
         isinstance(case_ids, list)
-        and len(case_ids) == 146
+        and len(case_ids) == 144
         and all(isinstance(name, str) and name for name in case_ids)
         and case_ids == sorted(set(case_ids)),
         "Canvas package migration identity list drift",
@@ -107,10 +108,10 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
 
     historical = inventory["historical"]
     preflights = inventory["preflights"]
-    native_rest = inventory["native_rest"]
-    names = [entry["test"] for entry in historical + preflights] + [native_rest["test"]]
+    native_replays = inventory["native_replays"]
+    names = [entry["test"] for entry in historical + preflights + native_replays]
     require(
-        len(historical) == 32 and len(preflights) == 4,
+        len(historical) == 30 and len(preflights) == 4 and len(native_replays) == 3,
         "Canvas tier inventory count changed",
     )
     require(len(names) == len(set(names)), "Duplicate Canvas obligation")
@@ -122,20 +123,56 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         expected_historical == actual_historical,
         "Historical Canvas discovery/inventory mismatch",
     )
+    expected_native = {
+        "rest": ("worker_rest_matches_frozen_published_process", 4),
+        "facts": ("worker_facts_match_frozen_published_process", 4),
+        "retry": ("worker_retry_matches_frozen_published_process", 5),
+    }
     require(
-        native_rest["test"] == "worker_rest_matches_frozen_published_process"
-        and native_rest["test"] in listed
-        and f"fn {native_rest['test']}(" in text
-        and native_rest.get("assertion", "").strip()
-        and native_rest["inputs"]
-        == [
-            "contracts/canvas-worker-rest-oracle.json",
-            "contracts/canvas-worker-rest-scenarios.json",
-            "contracts/canvas-worker-rest-current-inputs.json",
-        ]
-        and all((root / name).is_file() for name in native_rest["inputs"]),
-        "Native REST replay obligation drift",
+        {entry["scenario"] for entry in native_replays} == set(expected_native),
+        "Native replay scenario inventory drift",
     )
+    for entry in native_replays:
+        scenario = entry["scenario"]
+        name, stages = expected_native[scenario]
+        inputs = [
+            f"contracts/canvas-worker-{scenario}-oracle.json",
+            f"contracts/canvas-worker-{scenario}-scenarios.json",
+        ]
+        if scenario == "rest":
+            inputs.append("contracts/canvas-worker-rest-current-inputs.json")
+        require(
+            entry["test"] == name
+            and entry["stages"] == stages
+            and entry["inputs"] == inputs
+            and entry.get("assertion", "").strip()
+            and name in listed
+            and f"fn {name}(" in text
+            and all((root / path).is_file() for path in inputs),
+            f"Native {scenario} replay obligation drift",
+        )
+        pinned = entry.get("sha256")
+        require(
+            isinstance(pinned, dict) and set(pinned) == {"oracle", "scenarios"},
+            f"Native {scenario} frozen pins missing",
+        )
+        for kind, path in zip(("oracle", "scenarios"), inputs[:2]):
+            source = (root / path).read_text(encoding="utf-8")
+            digest = hashlib.sha256(
+                source.replace("\r\n", "\n").replace("\r", "\n").encode()
+            ).hexdigest()
+            require(
+                pinned[kind] == digest,
+                f"Native {scenario} frozen {kind} input drift",
+            )
+        scenarios = json.loads((root / inputs[1]).read_text(encoding="utf-8"))
+        oracle = json.loads((root / inputs[0]).read_text(encoding="utf-8"))
+        require(
+            [stage["name"] for stage in scenarios["stages"]]
+            == [observation["name"] for observation in oracle["observations"]]
+            and len(scenarios["stages"]) == stages,
+            f"Native {scenario} frozen stage inventory drift",
+        )
     require(
         {entry["test"] for entry in preflights} <= listed,
         "Canvas preflight missing from compiled target",
@@ -327,8 +364,8 @@ def main() -> int:
         validate(inventory, listed)
         validate_package_migration(migration, listed)
         print(
-            "Canvas tier inventory: 32 historical references, native REST replay, and 4 native preflights discovered; "
-            "147 package-migrated cases retained"
+            "Canvas tier inventory: 30 historical references, 3 native REST-family replays, and 4 native preflights discovered; "
+            "144 package-migrated cases retained"
         )
     else:
         require(

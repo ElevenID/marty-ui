@@ -3362,9 +3362,6 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'worker_retry_reference_matches_published_process: test'" in published
-    )
-    assert (
         "grep -Fx 'worker_retry_after_reference_matches_published_process: test'"
         in published
     )
@@ -3446,9 +3443,6 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_oauth_revocation_selection_repository_matches_published",
     ]:
         assert f"grep -Fx '{name}: test'" in published
-    assert (
-        "grep -Fx 'worker_facts_reference_matches_published_process: test'" in published
-    )
     assert (
         "grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'"
         in published

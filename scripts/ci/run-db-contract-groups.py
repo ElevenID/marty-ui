@@ -174,7 +174,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "utf7_consumer",
         "validation_boundary",
         "worker_concurrent",
-        "worker_facts",
         "worker_provider_completion",
         "worker_provider_final",
         "worker_provider_generation",
@@ -183,7 +182,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "worker_provider_signals",
         "worker_reclaimers",
         "worker_reclaimers_retry",
-        "worker_retry",
     }
 )
 TIMING_NAMES = {

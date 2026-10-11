@@ -4,6 +4,7 @@ import json
 import runpy
 import shlex
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import tomllib
@@ -72,6 +73,7 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
         if kind != "lib":
             assert target in canvas_branch
     assert "verify-canvas-test-artifacts.py" in canvas_branch
+    assert "--check-worker-inventory" in canvas_branch
     assert "cargo fetch --locked" in canvas_branch
     assert "docker run --rm --network none --read-only" in canvas_branch
     assert '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"' in canvas_branch
@@ -384,6 +386,33 @@ def _verify(artifacts: Path, target_dir: Path, records: list[dict]) -> None:
 def test_exact_canvas_artifacts_are_accepted(tmp_path: Path) -> None:
     artifacts, target_dir, records = _records(tmp_path)
     _verify(artifacts, target_dir, records)
+
+
+def test_compiled_worker_inventory_runs_before_expensive_canvas_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    artifacts.write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append((command, kwargs))
+        if command[-1] == "--list":
+            return SimpleNamespace(stdout="worker_name: test\n")
+        assert command[1].endswith("check_canvas_tier_obligations.py")
+        assert kwargs["input"] == "worker_name: test\n"
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(VERIFY["verify"].__globals__["subprocess"], "run", run)
+    VERIFY["verify"](artifacts, target_dir, check_worker_inventory=True)
+    assert len(commands) == 2
+    assert commands[0][0][-1] == "--list"
+    with pytest.raises(ValueError, match="requires the compiled worker target"):
+        VERIFY["verify"](
+            artifacts, target_dir, flow_only=True, check_worker_inventory=True
+        )
 
 
 def test_worker_only_artifacts_require_real_worker_without_composition(

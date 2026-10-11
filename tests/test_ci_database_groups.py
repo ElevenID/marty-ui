@@ -558,7 +558,7 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         1
     ].split("];", 1)[0]
     fixed_names = re.findall(r'"([a-z0-9_]+)"', fixed_names)
-    assert len(fixed_names) == len(set(fixed_names)) == 23
+    assert len(fixed_names) == len(set(fixed_names)) == 21
     assert set(fixed_names) == GROUPS.TIMED_PUBLISHED_SCRIPTS
     constructor_scripts = re.findall(r'Some\(\(\s*"([a-z0-9_]+)"', support)
     assert set(constructor_scripts) == GROUPS.TIMED_PUBLISHED_SCRIPTS

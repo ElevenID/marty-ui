@@ -88,43 +88,43 @@ PINS = [
     "postgres@sha256:" + "a" * 64,
     "registry.invalid/issuance@sha256:" + "b" * 64,
 ]
-MANDATORY_REGISTRATION_COUNT = 164
+MANDATORY_REGISTRATION_COUNT = 162
 MANDATORY_REGISTRATION_SHA256 = (
-    "d09e790909ae96fdb19202f86c501996abd3637189e3f2242d2210caf53a8461"
+    "ffeaab38005de01ab87693dbebf01dcd301adbf72256104767e711e5488b2c2a"
 )
 RENDERED_CONFIG = (
     "rendered_base_process::"
     "rendered_base_renewal_config_crosses_encryption_and_private_address_policy"
 )
-CURRENT_REGISTRATION_COUNT = 165
+CURRENT_REGISTRATION_COUNT = 163
 CURRENT_REGISTRATION_SHA256 = (
-    "e8d6109e9ae578c3150ae14568d58c79be2f6f11deac3486185db6d938bbed29"
+    "35ab29dad7b58b432744749a1f931da6363349a0522f6824105f2cd5fd35282b"
 )
 PRIVATE_IP_PG = "didcomm_renewal_private_ip_refusal_preserves_published_rows"
-NEW_REGISTRATION_COUNT = 166
+NEW_REGISTRATION_COUNT = 164
 NEW_REGISTRATION_SHA256 = (
-    "9d4e1b7bcbbd0583267f5373f877bdfae090f336836007cc03a3da243b5be3cf"
+    "6c29df53307f59b207becad62a5385eb446ffadda6b6e317a59178e8b5acdadb"
 )
 K8S_RENDERED_CONFIG = (
     "resolved_kubernetes_runtime::"
     "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
 )
-PRE_ROSTER_REGISTRATION_COUNT = 167
+PRE_ROSTER_REGISTRATION_COUNT = 165
 PRE_ROSTER_REGISTRATION_SHA256 = (
-    "26b82a287ab86d7f23f0c8cee1efffdbb76b44656dee5b500857fb0b07fa4e09"
+    "c47e3220ab9fcd98429546561cb7f05562334e86574e139f5ecf881078d79a0b"
 )
 ROSTER_EXPIRY_TESTS = (
     "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
     "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
 )
 RENDERER_BOUNDS = "rendered_base_process::renderer_bounds_proof_is_image_free"
-LATEST_REGISTRATION_COUNT = 170
+LATEST_REGISTRATION_COUNT = 168
 LATEST_REGISTRATION_SHA256 = (
-    "ae8b7306fdee7e607fee81b001a65597a0ddb4143f2e255020a51f36f7e79fda"
+    "b606956206072c71b4eab8ae77295f74e3950355526570f1c0c4b3f59121c9e3"
 )
-PRE_RENDERER_REGISTRATION_COUNT = 169
+PRE_RENDERER_REGISTRATION_COUNT = 167
 PRE_RENDERER_REGISTRATION_SHA256 = (
-    "9b34839a8cddaf73f1159dd07ca9dd6ae6e9bf1da0c179ce49e14446084d2fb5"
+    "762119a7f517ec8adccac045066717e00620e6b5e433f20290983afca8edd314"
 )
 
 

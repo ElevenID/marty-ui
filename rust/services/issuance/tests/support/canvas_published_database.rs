@@ -56,7 +56,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "utf7_consumer",
     "validation_boundary",
     "worker_concurrent",
-    "worker_facts",
     "worker_provider_completion",
     "worker_provider_final",
     "worker_provider_generation",
@@ -65,7 +64,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "worker_provider_signals",
     "worker_reclaimers",
     "worker_reclaimers_retry",
-    "worker_retry",
 ];
 
 fn published_probe_timing_name(script: Option<&str>) -> String {
@@ -902,19 +900,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_facts() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_facts",
-                "worker-facts",
-                "worker_facts",
-                "MARTY_CANVAS_WORKER_FACTS_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
     pub async fn start_with_worker_provider_signal(signal: &str) -> Result<Self, String> {
         if !matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL") {
             return Err("unsupported owned worker signal".into());
@@ -1322,19 +1307,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_retry() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_retry",
-                "worker-retry",
-                "worker_retry",
-                "MARTY_CANVAS_WORKER_RETRY_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
     pub async fn start_with_validation_boundary() -> Result<Self, String> {
         Self::start_probe(Some((
             "validation_boundary",
@@ -1565,10 +1537,7 @@ impl PublishedDatabase {
         );
         let worker_https = matches!(
             script,
-            "worker_rest"
-                | "worker_facts"
-                | "worker_oauth_revocation"
-                | "worker_retry"
+            "worker_oauth_revocation"
                 | "worker_retry_after"
                 | "worker_validation"
                 | "worker_roster_failure"
@@ -1662,9 +1631,7 @@ impl PublishedDatabase {
             };
         if matches!(
             script,
-            "worker_facts"
-                | "worker_retry"
-                | "worker_oauth_revocation"
+            "worker_oauth_revocation"
                 | "worker_retry_after"
                 | "worker_validation"
                 | "worker_roster_failure"

@@ -1226,6 +1226,7 @@ jobs:
                   --message-format=json
               ' > "$artifacts"
             run_host_phase verify_artifacts python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              --check-worker-inventory \
               "$artifacts" target
           fi
       - name: Capture host compiler cache counters after compile

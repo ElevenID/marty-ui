@@ -13582,3 +13582,56 @@ capture-example compile check, Rustfmt, Ruff and Bash syntax passed. A broader
 preflight run found three obsolete REST roster/selector expectations; each was
 corrected and its exact failing test passed on rerun. Windows does not execute
 the native REST HTTPS worker gate, so Linux hosted Canvas remains mandatory.
+
+Next grouped K8 worktree batch (held while UI head `dbfdd91a7` runs): the
+four-stage Facts and five-stage Retry native HTTPS tests already compare every
+frozen stage and durable effect. Their separate live Python regeneration tests,
+preparer selectors and capture CLI routes are removed locally. The historical
+corpora remain immutable and gain explicit normalized byte pins in the shared
+native replay obligation inventory; CI registration, tier skip counts and
+consumer input hashes are updated together. This remains a candidate until
+focused regression checks, full self-review and Linux exact-head CI pass.
+Local candidate checks now pass: 126 Canvas/tier/input/database-group Python
+tests, 57 oracle-closure/validation-tier/retry-input tests, and 144 CI workflow
+tests (one known Windows Git Bash timeout case excluded),
+the three exact preflight roster/reuse/full-owner cases, three Rust REST evidence
+unit tests, Canvas acceptance Clippy, the Issuance capture-example check,
+Rustfmt, Ruff and Bash syntax. The frozen Facts/Retry hashes were measured from
+the unchanged corpora and verified by the tier guard; adversarial changed-pin
+and missing-native-owner cases fail closed. The native HTTPS worker itself
+still requires hosted Linux execution for this held head.
+
+Next K8 worker-oracle batch to evaluate after the Facts/Retry head: ten live
+Python OAuth-revocation reference tests still run the old worker through a
+single preparer selector and synthetic local master key. Nine native HTTPS
+matrices already run the Rust worker against every frozen case (revocation,
+fence, patch, Retry-After, backoff, queue, lease, counters and secrets); a
+separate native PostgreSQL repository test checks the frozen capped-selection
+observation. A 2026-10-10 corpus inventory verified matching, unique case-name
+sets for all nine matrices (7, 2, 1, 8, 5, 2, 4, 4 and 6 cases, respectively)
+and the one selection case, for 40 frozen observations in total. Retire this
+family only as one coordinated change after checking
+each native test's durable effects and full-case registration against the
+frozen corpora. Update the special lease serial lane, CI and package-migration
+counts, producer/closure inventories, preparer and capture routes, dead probe
+constructors, and frozen input pins together. Keep the independent native
+secret-reference constraints and empty-token rejection tests. Hosted Linux
+full qualification remains mandatory before claiming this family retired.
+
+The published UI head `dbfdd91a7` passed CodeQL
+[38097519543](https://github.com/ElevenID/marty-ui/actions/runs/38097519543)
+and all PR-CI leaf jobs except Canvas in
+[38097519542](https://github.com/ElevenID/marty-ui/actions/runs/38097519542).
+Canvas passed its compile, native HTTPS, two preflight groups, public image
+build, and earlier live service checks, then failed before its full published
+worker suite: the package-migration inventory retained the old startup
+attestation test name `evidence_binds_observed_corpus_inputs_images_and_executable`
+after the REST batch renamed that same test to
+`evidence_binds_native_inputs_images_and_executable`. This is an inventory
+identity failure, not a passing native REST result; the run remains failed
+evidence. The held Facts/Retry batch now corrects the name. Its locally
+compiled worker `--list` passes the exact tier and migration guard with 144
+retained cases. The CI artifact verifier now runs that compiled-list guard
+immediately after Rust compilation, before image builds and database suites,
+to catch this class of failure earlier. The focused compile-scope/tier suites
+pass 89/89 locally; exact-head hosted qualification is still required.

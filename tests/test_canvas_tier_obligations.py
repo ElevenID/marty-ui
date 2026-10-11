@@ -58,7 +58,7 @@ def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
 
 def test_worker_package_migration_accounts_for_all_original_case_ids() -> None:
     names = set(MIGRATION["case_ids"])
-    assert len(names) == 146
+    assert len(names) == 144
     assert discovered() <= names
     validate_package_migration(MIGRATION, names)
 
@@ -67,20 +67,25 @@ def test_worker_package_migration_rejects_same_count_substitution() -> None:
     names = set(MIGRATION["case_ids"])
     names.remove("worker_repository_root_is_independent_of_cargo_package_depth")
     names.add("worker_same_count_substitute")
-    assert len(names) == 146
+    assert len(names) == 144
     with pytest.raises(ValueError, match="missing a compiled case"):
         validate_package_migration(MIGRATION, names)
 
 
 def discovered() -> set[str]:
     return {
-        entry["test"] for entry in INVENTORY["historical"] + INVENTORY["preflights"]
-    } | {INVENTORY["native_rest"]["test"]}
+        entry["test"]
+        for entry in (
+            INVENTORY["historical"]
+            + INVENTORY["preflights"]
+            + INVENTORY["native_replays"]
+        )
+    }
 
 
 def test_exact_current_inventory_is_source_and_fixture_backed() -> None:
     validate(INVENTORY, discovered())
-    assert len(INVENTORY["historical"]) == 32
+    assert len(INVENTORY["historical"]) == 30
     assert len(INVENTORY["preflights"]) == 4
     assert (
         "worker_oauth_revocation_counters_reference_matches_published_cycle"
@@ -100,7 +105,7 @@ def test_compiled_list_rejects_duplicate_names() -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["missing-historical", "extra-historical", "missing-preflight"]
+    "change", ["missing-historical", "extra-historical", "missing-preflight", "missing-native"]
 )
 def test_compiled_list_drift_fails_closed(change: str) -> None:
     names = discovered()
@@ -108,14 +113,16 @@ def test_compiled_list_drift_fails_closed(change: str) -> None:
         names.remove(INVENTORY["historical"][0]["test"])
     elif change == "extra-historical":
         names.add("worker_new_reference_matches_published_process")
-    else:
+    elif change == "missing-preflight":
         names.remove(INVENTORY["preflights"][0]["test"])
-    with pytest.raises(ValueError, match="mismatch|missing"):
+    else:
+        names.remove(INVENTORY["native_replays"][0]["test"])
+    with pytest.raises(ValueError, match="mismatch|missing|drift"):
         validate(INVENTORY, names)
 
 
 @pytest.mark.parametrize(
-    "change", ["duplicate", "assertion", "corpus", "mode", "routine", "input"]
+    "change", ["duplicate", "assertion", "corpus", "mode", "routine", "input", "native-pin"]
 )
 def test_inventory_drift_fails_closed(change: str) -> None:
     inventory = deepcopy(INVENTORY)
@@ -133,8 +140,10 @@ def test_inventory_drift_fails_closed(change: str) -> None:
         inventory["preflights"][0]["routine"] = (
             "executed as a routine same-run preflight"
         )
-    else:
+    elif change == "input":
         inventory["preflights"][0]["inputs"][0] = "contracts/missing-native-input.json"
+    else:
+        inventory["native_replays"][1]["sha256"]["oracle"] = "0" * 64
     with pytest.raises(ValueError):
         validate(inventory, discovered())
 
@@ -177,7 +186,7 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
         *sorted(selected_serial),
     )
     if mode == "full-after-preflights" and qualification == "0":
-        assert len(omitted - {serial, deadline}) == 36
+        assert len(omitted - {serial, deadline}) == 34
     if mode == "full-after-preflights" and qualification == "1":
         assert len(omitted - {serial, deadline}) == 6
 
@@ -216,7 +225,7 @@ def test_same_count_wrong_selected_case_fails_closed() -> None:
     omitted = {serial, extra}
     omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
     omitted |= {entry["test"] for entry in INVENTORY["historical"][1:]}
-    assert len(omitted - {serial}) == 36
+    assert len(omitted - {serial}) == 34
     with pytest.raises(ValueError, match="selection drift"):
         validate_selection(
             INVENTORY,
