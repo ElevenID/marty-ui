@@ -15456,3 +15456,10 @@ failed. The corrected local head `b19e00274` passes
 `cargo +1.95.0 clippy --locked --offline --workspace --all-targets -- -D warnings`
 as well as the focused flow acceptance compile check. The next exact-head
 hosted run must re-prove the full failed jobs and all other gates.
+
+The grouped correction was pushed as UI #1192 head `ef446dd2b`; CI run
+`38149505674` is the new exact-head gate. The PR body now records the terminal
+prior-run result, token-custody separation, local full-workspace Clippy pass,
+and the installed consumer's remaining qualification limit. Core #355 is
+still green and mergeable with protected review required; Credentials #313 is
+green, mergeable, and draft. Neither status qualifies a release artifact.
