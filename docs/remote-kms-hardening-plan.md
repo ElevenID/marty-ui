@@ -16008,3 +16008,13 @@ now includes the crate and its Issuance edge; locked offline metadata and
 fetch pass, and the standalone probe's exact locked offline Clippy command
 passes with warnings denied. Other hosted jobs are still running, so this
 correction stays batched with the local custody changes until they finish.
+
+K10 Canvas mirror follow-up: its delivery save, claimed-delivery save and
+alert-event insert could persist caller/provider-derived metadata without
+the shared private-material policy. The local repository now rejects private
+JWK/PEM-shaped content before each write. On a fresh disposable PostgreSQL
+16 database, both mirror contract tests passed, including negative private
+delivery, claim and alert attempts with unchanged persisted metadata; the
+container was removed. Issuance all-targets warnings-denied Clippy passed.
+This is batched with the lockfile and other K10 custody corrections while
+the current hosted head finishes.

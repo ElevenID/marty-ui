@@ -259,6 +259,9 @@ impl CanvasMirrorRepository for PostgresCanvasMirrorRepository {
         &self,
         record: &CanvasMirrorDeliveryRecord,
     ) -> Result<(), CanvasMirrorRepositoryError> {
+        if marty_key_material_policy::contains_private_key_map(&record.metadata) {
+            return Err(CanvasMirrorRepositoryError);
+        }
         let affected = sqlx::query("UPDATE issuance_service.credential_delivery_records SET status=$3,canvas_account_id=$4,external_credential_id=$5,external_issuer_id=$6,last_error=$7,metadata=$8,updated_at=$9::timestamptz WHERE id=$1 AND organization_id=$2 AND credential_id=$10 AND transaction_id=$11 AND delivery_target='canvas_credentials'")
             .bind(&record.id)
             .bind(&record.organization_id)
@@ -287,6 +290,9 @@ impl CanvasMirrorRepository for PostgresCanvasMirrorRepository {
         record: &CanvasMirrorDeliveryRecord,
         claim_id: &str,
     ) -> Result<(), CanvasMirrorRepositoryError> {
+        if marty_key_material_policy::contains_private_key_map(&record.metadata) {
+            return Err(CanvasMirrorRepositoryError);
+        }
         let sql = format!("UPDATE issuance_service.credential_delivery_records SET status=$3,canvas_account_id=$4,external_credential_id=$5,external_issuer_id=$6,last_error=$7,metadata=$8,updated_at=$9::timestamptz WHERE id=$1 AND organization_id=$2 AND credential_id=$10 AND transaction_id=$11 AND delivery_target='canvas_credentials' AND metadata->>'{CLAIM_ID_KEY}'=$12");
         let affected = sqlx::query(sqlx::AssertSqlSafe(sql))
             .bind(&record.id)
@@ -339,6 +345,9 @@ impl CanvasMirrorRepository for PostgresCanvasMirrorRepository {
         &self,
         event: &CanvasMirrorAlertEvent,
     ) -> Result<(), CanvasMirrorRepositoryError> {
+        if marty_key_material_policy::contains_private_key(&event.metadata) {
+            return Err(CanvasMirrorRepositoryError);
+        }
         sqlx::query(
             "INSERT INTO issuance_service.issuance_events (id,transaction_id,application_id,event_type,metadata,created_at) VALUES ($1,$2,$3,$4,$5,$6::timestamptz)",
         )
