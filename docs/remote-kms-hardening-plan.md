@@ -15644,3 +15644,16 @@ refreshes the normalized source digest, and does not restore the retired
 passport self-signed contract step. The combined Canvas pilot/current-inputs
 suite passes 28 tests; Ruff, YAML/JSON parsing and diff checks pass. The
 merge remains local until the previous exact-head Canvas job completes.
+
+Run `38155603867` is terminal: 20 jobs passed, including Canvas, OpenBao
+plugin, Rust images, release contracts and lint. Rust service contracts failed
+at the first older Gateway envelope case because the root sentinel guard token
+was absent; CI Gate failed as its dependent aggregate. The grouped local batch
+corrects both envelope cases, runs all six Gateway acceptance cases with
+scoped disposable tokens, proves holder signing through both public key
+purposes after rotation, and merges main #1268. Post-merge local evidence:
+the full disposable OpenBao/Redis/PostgreSQL `--rust-adapter` probe passed,
+the Canvas pilot/current-inputs suite passed 28 tests, three focused CI
+workflow tests passed, the merged Canvas acceptance target compiled offline,
+and warnings-denied Clippy, Ruff, YAML/JSON and diff checks passed. This
+batch is ready for one exact-head push and a fresh CI gate.
