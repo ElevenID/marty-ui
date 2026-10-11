@@ -126,14 +126,20 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     assert {entry["scenario"] for entry in tiers["native_replays"]} == {
         "rest", "facts", "retry"
     }
-    assert len(frozen) == 13
+    assert len(frozen) == 14
     assert set(frozen) == {
         f"canvas-worker-{entry['scenario']}-oracle.json"
         for entry in tiers["native_replays"]
         if entry["scenario"] != "rest"
     } | {
         f"canvas-worker-{entry['scenario']}-oracle.json" for entry in oauth
-    } | {"canvas-worker-logging-oracle.json"}, "Frozen corpora need native Rust owners"
+    } | {
+        "canvas-worker-logging-oracle.json",
+        "canvas-worker-validation-oracle.json",
+    }, "Frozen corpora need native Rust owners"
+    assert tiers["native_validation"]["test"] == (
+        "worker_validation_matches_frozen_published_process"
+    )
     for name in frozen:
         assert (CONTRACTS / name.replace("-oracle.json", "-scenarios.json")).is_file()
 

@@ -3367,10 +3367,6 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'worker_validation_reference_matches_published_process: test'"
-        in published
-    )
-    assert (
         "grep -Fx 'worker_validation_repository_matches_frozen_errors: test'"
         in published
     )

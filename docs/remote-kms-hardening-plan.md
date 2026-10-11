@@ -13692,6 +13692,13 @@ PR as merge-blocked by its ordinary checks/review rather than conflicted;
 and [Rust CodeQL 38102036405](https://github.com/ElevenID/marty-ui/actions/runs/38102036405)
 were created for this exact head. They are not yet qualification evidence.
 
+UI head `e43c6b8960d1da5c88d66086f332cba85c3ac657` subsequently passed
+[exact-head CI 38102036415](https://github.com/ElevenID/marty-ui/actions/runs/38102036415)
+and [Rust CodeQL 38102036405](https://github.com/ElevenID/marty-ui/actions/runs/38102036405).
+CI included packaged OpenBao recovery, Rust contracts, Canvas image/database
+lanes and the final gate. This qualifies the OAuth retirement at that head,
+but not the held logging/Facts/Retry/validation cleanup below.
+
 K6 authorization implementation inventory: Flow's verification-start HTTP
 handler authorizes the principal for `verification:execute` on the requested
 organization and persists the resulting instance before its public request
@@ -13742,3 +13749,22 @@ test. Retire that group together only after checking every frozen case and
 the full-only/routine split against the native owners; then requalify on
 hosted Linux. The Facts/Retry and logging deletion above does not claim
 validation retirement.
+
+K8 validation retirement in the held UI batch: removed the live Python
+validation oracle runner, its preparer selector and Rust historical replay.
+The unchanged 20-case frozen corpus is now owned by the native HTTPS worker
+matrix, with the existing routine/full split, real PostgreSQL reference
+races, repository database cases and typed-policy fast owners retained. The
+producer/script-closure manifests classify validation as frozen native input;
+the tier and package guards require its compiled native owner and 133
+remaining migrated cases. The focused validation/inventory suite passes
+105/105, native Rust worker acceptance compiles, and its exact compiled-list
+guard passes 19 historical/one native validation owner. CI workflow tests
+pass 145/145. Bash syntax, JSON parsing, Ruff, Rustfmt and diff hygiene pass.
+Canvas acceptance Clippy with warnings denied also passes on retry; an earlier
+local Clippy invocation stopped while compiling a dependency before target
+linting and is not qualification evidence.
+The complete published-preflight suite passed 226/226 with one skipped in
+14m12s, including the six updated exact registration-roster hashes and both
+routine/full native-validation tier selections. Hosted Linux routine/full
+qualification is still required before this retirement is accepted.

@@ -21,7 +21,7 @@
       "run_canvas_worker_provider_recovery_oracle.py", "run_canvas_worker_provider_signals_oracle.py",
       "run_canvas_worker_resource_race_oracle.py", "run_canvas_worker_resources_unavailable_oracle.py",
       "run_canvas_worker_retry_after_oracle.py", "run_canvas_worker_roster_failure_oracle.py",
-      "run_canvas_worker_timeout_oracle.py", "run_canvas_worker_validation_oracle.py"
+      "run_canvas_worker_timeout_oracle.py"
     ],
     "run_canvas_operations_oracle.py": [],
     "run_canvas_worker_body_timeout_oracle.py": [
@@ -102,10 +102,6 @@
       "run_canvas_worker_provider_recovery_oracle.py", "run_canvas_worker_provider_signals_oracle.py",
       "run_canvas_worker_rest_oracle.py", "run_canvas_worker_startup_oracle.py"
     ],
-    "run_canvas_worker_validation_oracle.py": [
-      "canvas_worker_https_fixture.py", "run_canvas_worker_rest_oracle.py",
-      "run_canvas_worker_startup_oracle.py"
-    ],
     "test_canvas_lti_https.py": []
   },
   "launched_scripts": {
@@ -137,8 +133,7 @@
     "run_canvas_worker_retry_after_oracle.py": ["canvas-worker-retry-after-scenarios.json"],
     "run_canvas_worker_roster_failure_oracle.py": ["canvas-worker-roster-failure-scenarios.json"],
     "run_canvas_worker_startup_oracle.py": ["canvas-worker-startup-scenarios.json"],
-    "run_canvas_worker_timeout_oracle.py": ["canvas-worker-timeout-scenarios.json"],
-    "run_canvas_worker_validation_oracle.py": ["canvas-worker-validation-scenarios.json"]
+    "run_canvas_worker_timeout_oracle.py": ["canvas-worker-timeout-scenarios.json"]
   },
   "scenario_templates": {},
   "harness_extra_scenarios": [

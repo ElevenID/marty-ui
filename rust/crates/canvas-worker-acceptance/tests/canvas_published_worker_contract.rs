@@ -1673,11 +1673,6 @@ async fn worker_validation_repository_matches_frozen_errors() {
 }
 
 #[tokio::test]
-async fn worker_validation_reference_matches_published_process() {
-    assert_worker_matrix_reference("validation").await;
-}
-
-#[tokio::test]
 async fn worker_roster_failure_reference_matches_published_process() {
     assert_worker_matrix_reference("roster-failure").await;
 }
@@ -1700,10 +1695,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
         "retry-after" => (
             include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-retry-after-oracle.json"),
-        ),
-        "validation" => (
-            include_str!("../../../../contracts/canvas-worker-validation-scenarios.json"),
-            include_str!("../../../../contracts/canvas-worker-validation-oracle.json"),
         ),
         "roster-failure" => (
             include_str!("../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
@@ -1746,10 +1737,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
         let owned = match kind {
             "retry-after" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
-                    .await
-            }
-            "validation" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_validation(name)
                     .await
             }
             "roster-failure" => {

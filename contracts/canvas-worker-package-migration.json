@@ -146,7 +146,6 @@
     "worker_timeout_native_child",
     "worker_timeout_reference_matches_published_process",
     "worker_validation_matches_frozen_published_process",
-    "worker_validation_reference_matches_published_process",
     "worker_validation_repository_matches_frozen_errors"
   ],
   "ignored_capture_only_case_ids": [

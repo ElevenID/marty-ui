@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-worker-tier-obligations/v1",
-  "scope": "The 20 remaining historical-reference cases, three native REST-family replays, ten native OAuth-revocation corpus owners, four preflight-capable native cases, and 20 nested native-validation cases; this is not an inventory of either complete Canvas target.",
+  "scope": "The 19 remaining historical-reference cases, three native REST-family replays, ten native OAuth-revocation corpus owners, four preflight-capable native cases, and 20 native-validation cases; this is not an inventory of either complete Canvas target.",
   "package": "marty-canvas-worker-acceptance",
   "target": "canvas_published_worker_contract",
   "test_source": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
@@ -28,7 +28,6 @@
     {"test": "worker_provider_recovery_reference_matches_published_process", "assertion": "Published provider-renewal and recovery reports equal their frozen corpus."},
     {"test": "worker_provider_signals_reference_matches_published_process", "assertion": "Published SIGINT, SIGTERM and SIGKILL reports equal their frozen corpus."},
     {"test": "worker_retry_after_reference_matches_published_process", "assertion": "Published Retry-After matrix equals its frozen corpus."},
-    {"test": "worker_validation_reference_matches_published_process", "assertion": "Published target-validation report equals its frozen corpus."},
     {"test": "worker_roster_failure_reference_matches_published_process", "assertion": "Published roster-failure report equals its frozen corpus."},
     {"test": "worker_resource_race_reference_matches_published_process", "assertion": "Published resource-race report equals its frozen corpus."},
     {"test": "worker_resources_unavailable_reference_matches_published_process", "assertion": "Published unavailable-resource report equals its frozen corpus."}
@@ -58,7 +57,6 @@
   ],
   "native_validation": {
     "test": "worker_validation_matches_frozen_published_process",
-    "historical_test": "worker_validation_reference_matches_published_process",
     "policy_test": "canvas_sync_worker_postgres::validation_policy_tests::all_published_repository_validation_decisions_have_one_fast_owner",
     "repository_database_test": "worker_validation_repository_matches_frozen_errors",
     "repository_database_cases": [
@@ -92,7 +90,7 @@
       {"case": "application_missing", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]},
       {"case": "candidate_missing", "fast_owners": ["all_published_repository_validation_decisions_have_one_fast_owner", "terminal_validation_errors_reach_actual_worker_dead_letter_port"]}
     ],
-    "disposition": "Routine runs seven processor/process cases, two actual PostgreSQL lock races, and the prohibited-metadata privacy boundary. Full qualification retains all 20 native cases and the separate unchanged historical-reference test. The thirteen repository validation decisions have one fast typed-snapshot owner; five distinct released-schema PostgreSQL cases retain scope, disable, generation and reference-existence adapter proofs. The ten full-only cases also retain the actual worker-port owner. Neither lower layer proves process, HTTPS, OAuth, or lock-race behavior. Hosted routine and full qualification remain required."
+    "disposition": "Routine runs seven processor/process cases, two actual PostgreSQL lock races, and the prohibited-metadata privacy boundary. Full qualification retains all 20 native process cases against the unchanged frozen corpus. The thirteen repository validation decisions have one fast typed-snapshot owner; five distinct released-schema PostgreSQL cases retain scope, disable, generation and reference-existence adapter proofs. The ten full-only cases also retain the actual worker-port owner. Neither lower layer proves process, HTTPS, OAuth, or lock-race behavior. Hosted routine and full qualification remain required."
   },
   "historical_disposition": {
     "layer": "published-process/database compatibility integration",

@@ -148,8 +148,7 @@ def selected_validation_cases(cases, reference, inventory, tier, qualification="
     full_only = declared.get("full_only", [])
     if (
         declared.get("test") != "worker_validation_matches_frozen_published_process"
-        or declared.get("historical_test")
-        != "worker_validation_reference_matches_published_process"
+        or "historical_test" in declared
         or declared.get("policy_test")
         != "canvas_sync_worker_postgres::validation_policy_tests::all_published_repository_validation_decisions_have_one_fast_owner"
         or declared.get("repository_database_test")

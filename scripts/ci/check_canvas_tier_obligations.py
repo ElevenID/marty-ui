@@ -63,7 +63,7 @@ def validate_package_migration(migration: dict, listed: set[str], root: Path = R
     case_ids = migration.get("case_ids")
     require(
         isinstance(case_ids, list)
-        and len(case_ids) == 134
+        and len(case_ids) == 133
         and all(isinstance(name, str) and name for name in case_ids)
         and case_ids == sorted(set(case_ids)),
         "Canvas package migration identity list drift",
@@ -114,14 +114,20 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         entry["test"]
         for entry in historical + preflights + native_replays + native_oauth
     ]
+    names.append(inventory["native_validation"]["test"])
     require(
-        len(historical) == 20
+        len(historical) == 19
         and len(preflights) == 4
         and len(native_replays) == 3
         and len(native_oauth) == 10,
         "Canvas tier inventory count changed",
     )
     require(len(names) == len(set(names)), "Duplicate Canvas obligation")
+    require(
+        inventory["native_validation"]["test"] in listed
+        and 'assert_worker_https("validation")' in text,
+        "Native validation process owner missing",
+    )
     actual_historical = {
         name for name in listed if "reference_matches_published" in name
     }
@@ -282,6 +288,7 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         "canvas-worker-logging-oracle.json",
         "canvas-worker-facts-oracle.json",
         "canvas-worker-retry-oracle.json",
+        "canvas-worker-validation-oracle.json",
     }
     require(
         isinstance(frozen, list)
@@ -422,8 +429,7 @@ def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
     native = inventory.get("native_validation", {})
     require(
         native.get("test") == "worker_validation_matches_frozen_published_process"
-        and native.get("historical_test")
-        == "worker_validation_reference_matches_published_process",
+        and "historical_test" not in native,
         "Wrong native validation test owner",
     )
     require(
@@ -481,8 +487,8 @@ def main() -> int:
         validate(inventory, listed)
         validate_package_migration(migration, listed)
         print(
-            "Canvas tier inventory: 20 historical references, 3 native REST-family replays, 10 native OAuth corpus owners, and 4 native preflights discovered; "
-            "134 package-migrated cases retained"
+            "Canvas tier inventory: 19 historical references, 3 native REST-family replays, 10 native OAuth corpus owners, one native validation owner, and 4 native preflights discovered; "
+            "133 package-migrated cases retained"
         )
     else:
         require(

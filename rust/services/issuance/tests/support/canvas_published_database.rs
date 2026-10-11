@@ -928,17 +928,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_validation(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-validation-scenarios.json"),
-            "worker_validation",
-            "worker-validation",
-            "MARTY_CANVAS_WORKER_VALIDATION_CASE",
-        )
-        .await
-    }
-
     pub async fn start_with_worker_roster_failure(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -1412,7 +1401,6 @@ impl PublishedDatabase {
         let worker_https = matches!(
             script,
             "worker_retry_after"
-                | "worker_validation"
                 | "worker_roster_failure"
                 | "worker_resource_race"
                 | "worker_resources_unavailable"
@@ -1505,7 +1493,6 @@ impl PublishedDatabase {
         if matches!(
             script,
             "worker_retry_after"
-                | "worker_validation"
                 | "worker_roster_failure"
                 | "worker_resource_race"
                 | "worker_resources_unavailable"
