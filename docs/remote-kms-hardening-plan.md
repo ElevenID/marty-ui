@@ -14122,5 +14122,17 @@ container was stopped afterward. The remaining hosted jobs and CodeQL on
 that published head are now terminal: Canvas, OpenBao plugin recovery and the
 other substantive jobs passed (20 successes), Rust CodeQL passed, and CI Gate
 failed downstream of the single contracts fixture failure. This fixture
-correction and the Azure and GCP reference checks await grouped publication
-and exact-head recheck.
+correction and the Azure and GCP reference checks were grouped in the next
+published head and await exact-head qualification.
+
+UI #1192 follow-up head `ba2724cba2e37320fafc62e1333647baf667b15d`
+published the managed-signing fixture correction and the grouped Azure/GCP
+version-binding checks. [CI 38113449573](https://github.com/ElevenID/marty-ui/actions/runs/38113449573)
+and [Rust CodeQL 38113449574](https://github.com/ElevenID/marty-ui/actions/runs/38113449574)
+are the exact-head runs. A local self-review found that Azure response `kid`
+comparison at that head used a raw string, so a case-different but equivalent
+configured vault hostname could be rejected. The local correction compares
+parsed origin and exact path, still rejecting a different vault, key version,
+query or fragment. Its focused unit test, all five provider golden cases and
+changed-file Rustfmt pass. Hold this follow-up for a grouped push after the
+current exact-head run is terminal.

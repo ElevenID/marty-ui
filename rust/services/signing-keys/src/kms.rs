@@ -1374,8 +1374,23 @@ fn require_azure_response_key(
     endpoint: &str,
     key_path: &str,
 ) -> Result<(), KmsError> {
-    let expected_kid = format!("{}/keys/{key_path}", endpoint.trim_end_matches('/'));
-    if response.get("kid").and_then(Value::as_str) != Some(expected_kid.as_str()) {
+    let expected = reqwest::Url::parse(&format!(
+        "{}/keys/{key_path}",
+        endpoint.trim_end_matches('/')
+    ))
+    .map_err(|_| KmsError::InvalidConfig("Azure Key Vault endpoint is invalid.".into()))?;
+    let actual = response
+        .get("kid")
+        .and_then(Value::as_str)
+        .and_then(|value| reqwest::Url::parse(value).ok());
+    if !actual.is_some_and(|actual| {
+        actual.origin() == expected.origin()
+            && actual.path() == expected.path()
+            && actual.username().is_empty()
+            && actual.password().is_none()
+            && actual.query().is_none()
+            && actual.fragment().is_none()
+    }) {
         return Err(KmsError::InvalidResponse(
             "Azure Key Vault sign response key identifier did not match the pinned key."
                 .to_string(),
@@ -3608,10 +3623,17 @@ mod tests {
             requested,
         )
         .is_ok());
+        assert!(require_azure_response_key(
+            &json!({"kid": "https://issuer.vault.azure.net/keys/issuer/version-1"}),
+            "https://ISSUER.VAULT.AZURE.NET/",
+            requested,
+        )
+        .is_ok());
         for response in [
             json!({}),
             json!({"kid": "https://issuer.vault.azure.net/keys/issuer/version-2"}),
             json!({"kid": "https://other.vault.azure.net/keys/issuer/version-1"}),
+            json!({"kid": "https://issuer.vault.azure.net/keys/issuer/version-1?latest=true"}),
         ] {
             assert!(matches!(
                 require_azure_response_key(&response, endpoint, requested),
