@@ -3164,9 +3164,9 @@ mod tests {
                         async move {
                             *signed_body.lock().unwrap() = Some(body);
                             let version = returned_version.load(Ordering::SeqCst);
-                            axum::Json(
-                                json!({"data":{"signature":format!("vault:v{version}:AQID")}}),
-                            )
+                            axum::Json(json!({"data":{"signature":format!(
+                                "vault:v{version}:{}", STANDARD.encode([1_u8; 64])
+                            )}}))
                         }
                     }
                 }),
@@ -3195,7 +3195,7 @@ mod tests {
         })
         .await
         .unwrap();
-        assert_eq!(response.signature_b64, "AQID");
+        assert_eq!(response.signature_b64, URL_SAFE_NO_PAD.encode([1_u8; 64]));
         assert_eq!(
             signed_body.lock().unwrap().as_ref().unwrap()["key_version"],
             1

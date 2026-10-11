@@ -14226,3 +14226,8 @@ The same provider-boundary self-review also found that EdDSA accepted any
 nonempty byte sequence. The local Rust signing adapter now requires Ed25519's
 fixed 64-byte signature length before exposing it as a successful remote
 signature. Its focused negative test and all five provider golden cases pass.
+The full Signing Keys library run then found one fixed-version OpenBao unit
+stub returning a three-byte EdDSA signature. It now returns 64 bytes while
+retaining the version-mismatch assertion. The complete library suite passes
+183 tests with nine opt-in cases ignored; all-target warnings-denied Clippy
+passes.
