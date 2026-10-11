@@ -6,8 +6,9 @@ function Write-BetaFenceReboundRecord {
         [Parameter(Mandatory = $true)][byte[]]$MarkerBytes,
         [Parameter(Mandatory = $true)][byte[]]$OldMarkerBytes
     )
-    $temporary = $MarkerPath + '.rebind-v11241.tmp'
-    $backup = $MarkerPath + '.before-rebind-v11241'
+    $priorMarkerHash = Get-BytesSha256 $OldMarkerBytes
+    $temporary = $MarkerPath + '.rebind-' + $priorMarkerHash + '.tmp'
+    $backup = $MarkerPath + '.before-rebind-' + $priorMarkerHash
     if ((Test-Path -LiteralPath $Output) -or
         (Test-Path -LiteralPath $temporary) -or
         (Test-Path -LiteralPath $backup)) {
