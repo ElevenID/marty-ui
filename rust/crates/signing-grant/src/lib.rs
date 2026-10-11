@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub mod transit;
+
 const DOMAIN: &[u8] = b"marty:issuer-signing-grant:v1\n";
 const MAX_LIFETIME_SECONDS: i64 = 60;
 const MAX_FUTURE_SKEW_SECONDS: i64 = 5;

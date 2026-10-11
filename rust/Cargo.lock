@@ -4598,11 +4598,14 @@ dependencies = [
 name = "marty-signing-grant"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "base64 0.22.1",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.20",
+ "tokio",
 ]
 
 [[package]]

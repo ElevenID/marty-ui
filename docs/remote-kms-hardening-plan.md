@@ -14276,3 +14276,14 @@ contains no secret key or local HMAC implementation. Its focused tests and
 warnings-denied Clippy pass. This is contract groundwork only: producers,
 OpenBao HMAC/verify, atomic replay, policies and live sign-route enforcement
 must be implemented before claiming tenant authorization.
+
+K6 grant Transit client, local UI batch: the shared Rust crate now calls the
+mounted OpenBao `hmac` and `verify` endpoints with SHA-256, validates a
+versioned 32-byte HMAC, bounds responses, rejects redirects, and returns
+sanitized failures without local MAC keys. Its synthetic HTTP tests and
+warnings-denied Clippy pass. An opt-in test also passed against a fresh
+disposable loopback OpenBao 2 dev instance with a marked KV guard, a
+non-exportable Transit key, and distinct 10-minute mint-only and verify-only
+tokens. It proved mint/verify, altered-input denial, and cross-policy denial;
+the instance was stopped. This proves the proposed KMS primitive and policy
+split, not yet the Gateway/Flow/Issuance authorization or one-use sign path.
