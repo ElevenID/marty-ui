@@ -206,6 +206,39 @@ def assert_no_canvas_overlay_activation(compose_command=None):
     ), "Selected Canvas profile must activate the worker"
 
 
+def assert_no_canvas_issuance_secret(base, preview):
+    """The preview must omit the Canvas secret without changing other runtime inputs."""
+    for name in ("issuance", "issuance-native"):
+        original = deepcopy(base["services"][name])
+        expected = deepcopy(original)
+        original_env = environment_mapping(original["environment"])
+        expected_env = environment_mapping(expected["environment"])
+        assert original_env["CANVAS_CREDENTIALS_SHARED_SECRET_FILE"] == (
+            "/run/secrets/canvas_credentials_shared_secret"
+        )
+        expected_env.update(
+            CANVAS_PORTABLE_INTEGRATION_ENABLED="false",
+            CANVAS_LEGACY_EVENT_INGEST_ENABLED="false",
+            CANVAS_MIRROR_WORKER_ENABLED="false",
+            CANVAS_CREDENTIALS_SHARED_SECRET_FILE="",
+        )
+        expected["environment"] = expected_env
+        assert any(
+            secret["source"] == "canvas_credentials_shared_secret"
+            for secret in expected["secrets"]
+        )
+        expected["secrets"] = [
+            secret
+            for secret in expected["secrets"]
+            if secret["source"] != "canvas_credentials_shared_secret"
+        ]
+        actual = deepcopy(preview["services"][name])
+        actual["environment"] = environment_mapping(actual["environment"])
+        assert actual == expected, (
+            f"No-Canvas issuance must preserve every unrelated runtime field: {name}"
+        )
+
+
 def assert_inherited_service(base, bundle, service):
     assert bundle["services"][service] == base["services"][service], (
         f"Bundle must preserve the complete unqualified Rust {service} definition"
@@ -512,6 +545,7 @@ def run(suite="bundle", compose_command=None):
     assert_worker_preserved(base, bundle)
     preview = renderer(BASE, BUNDLE, NO_CANVAS)
     assert preview["services"][WORKER]["profiles"] == ["canvas"]
+    assert_no_canvas_issuance_secret(bundle, preview)
     assert_published_issuance_preserved(base, bundle)
     converted = assert_shared_rust_services(base, bundle)
     print(

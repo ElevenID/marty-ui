@@ -706,6 +706,7 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     for name in (
         "assert_worker_preserved",
         "assert_published_issuance_preserved",
+        "assert_no_canvas_issuance_secret",
         "assert_shared_rust_services",
         "assert_consumer_matrix",
     ):
@@ -718,9 +719,59 @@ def test_default_run_retains_only_original_bundle_issuance_and_rust_owners(
     compose_worker_gate["run"]()
     assert calls == [
         "assert_worker_preserved",
+        "assert_no_canvas_issuance_secret",
         "assert_published_issuance_preserved",
         "assert_shared_rust_services",
     ]
+
+
+@pytest.mark.parametrize("regression", [None, "secret", "legacy", "unrelated"])
+def test_no_canvas_issuance_profile_preserves_runtime_except_disabled_canvas(
+    compose_worker_gate, regression
+):
+    original_service = {
+        "environment": [
+            "CANVAS_CREDENTIALS_SHARED_SECRET_FILE=/run/secrets/canvas_credentials_shared_secret",
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED=true",
+            "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true",
+            "CANVAS_MIRROR_WORKER_ENABLED=true",
+            "ISSUER_BASE_URL=https://issuer.example.invalid",
+        ],
+        "secrets": [
+            {"source": "marty_db_password"},
+            {"source": "canvas_credentials_shared_secret"},
+        ],
+        "restart": "unless-stopped",
+    }
+    base = {
+        "services": {name: deepcopy(original_service) for name in ("issuance", "issuance-native")}
+    }
+    preview = deepcopy(base)
+    for service in preview["services"].values():
+        service["environment"] = {
+            "CANVAS_CREDENTIALS_SHARED_SECRET_FILE": "",
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
+            "CANVAS_LEGACY_EVENT_INGEST_ENABLED": "false",
+            "CANVAS_MIRROR_WORKER_ENABLED": "false",
+            "ISSUER_BASE_URL": "https://issuer.example.invalid",
+        }
+        service["secrets"] = [{"source": "marty_db_password"}]
+    if regression == "secret":
+        preview["services"]["issuance"]["secrets"].append(
+            {"source": "canvas_credentials_shared_secret"}
+        )
+    elif regression == "legacy":
+        preview["services"]["issuance-native"]["environment"][
+            "CANVAS_LEGACY_EVENT_INGEST_ENABLED"
+        ] = "true"
+    elif regression == "unrelated":
+        preview["services"]["issuance"]["restart"] = "no"
+    compare = compose_worker_gate["assert_no_canvas_issuance_secret"]
+    if regression:
+        with pytest.raises(AssertionError, match="No-Canvas issuance"):
+            compare(base, preview)
+    else:
+        compare(base, preview)
 
 
 def test_explicit_consumer_suite_runs_all_fifteen_compositions_and_no_bundle_owner(

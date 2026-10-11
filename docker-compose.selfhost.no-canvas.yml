@@ -1,5 +1,31 @@
 # Opt-in no-Canvas composition. Keep the default production worker unchanged
 # until existing installations have a qualified pre-up migration path.
+# Do not use this overlay to enable Canvas: selecting the canvas profile only
+# starts its worker, while issuance remains deliberately disabled below.
 services:
   canvas-sync-worker:
     profiles: ["canvas"]
+  issuance:
+    environment:
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: "false"
+      CANVAS_LEGACY_EVENT_INGEST_ENABLED: "false"
+      CANVAS_CREDENTIALS_SHARED_SECRET_FILE: ""
+    secrets: !override
+      - marty_db_password
+      - openbao_service_token
+      - issuance_api_key
+      - integration_secret_master_key
+      - token_hmac_key
+      - grpc_service_token
+  issuance-native:
+    environment:
+      CANVAS_PORTABLE_INTEGRATION_ENABLED: "false"
+      CANVAS_LEGACY_EVENT_INGEST_ENABLED: "false"
+      CANVAS_MIRROR_WORKER_ENABLED: "false"
+      CANVAS_CREDENTIALS_SHARED_SECRET_FILE: ""
+    secrets: !override
+      - marty_db_password
+      - issuance_api_key
+      - integration_secret_master_key
+      - token_hmac_key
+      - grpc_service_token
