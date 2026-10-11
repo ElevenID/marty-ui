@@ -1590,6 +1590,33 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
         .unwrap(),
         0
     );
+    insert_legacy_application(pool, "application-legacy-private", None).await;
+    let facts_before = table_count(pool, "evidence_facts").await;
+    let events_before = table_count(pool, "issuance_events").await;
+    let (body, headers) = signed_legacy_payload_with_achievement(
+        "application-legacy-private",
+        "legacy-event-private",
+        "course-1",
+        "-----BEGIN PRIVATE KEY-----",
+    );
+    assert_eq!(
+        service
+            .process(CanvasLegacyEventKind::Evidence, &body, &headers)
+            .await,
+        Err(CanvasLegacyIngestError::RepositoryUnavailable)
+    );
+    assert_eq!(table_count(pool, "evidence_facts").await, facts_before);
+    assert_eq!(table_count(pool, "issuance_events").await, events_before);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_event_receipts
+             WHERE provider_event_id = 'legacy-event-private'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
+    );
 }
 
 async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {

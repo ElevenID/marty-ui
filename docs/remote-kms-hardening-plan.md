@@ -16018,3 +16018,16 @@ delivery, claim and alert attempts with unchanged persisted metadata; the
 container was removed. Issuance all-targets warnings-denied Clippy passed.
 This is batched with the lockfile and other K10 custody corrections while
 the current hosted head finishes.
+
+K10 legacy Canvas ingest follow-up: its atomic receipt/evidence/Application
+commit and issuance-event insert bypassed the Internal Application repository
+guard. The local Rust adapter now checks its application, evidence, fact,
+policy and requirement JSON before opening the write transaction, and checks
+event metadata before insert. A signed synthetic Canvas event containing a
+private-key PEM marker was rejected against fresh PostgreSQL 16 with no
+receipt, evidence fact or event persisted; the full Canvas candidate/legacy
+ingest PostgreSQL contract passed. The disposable container was removed.
+The full Issuance library suite passed 582 tests with 8 ignored and
+all-targets warnings-denied Clippy passed. This is batched with the other
+K10 corrections; the previous `ec63b4de4` Rust contracts and Canvas jobs
+are still in progress at this checkpoint.
