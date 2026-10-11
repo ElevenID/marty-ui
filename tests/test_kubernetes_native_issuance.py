@@ -346,7 +346,7 @@ def native_inventory(value):
         for v in entries
         if "configMapKeyRef" in v.get("valueFrom", {})
     }
-    assert set(refs) == constants("INHERITED_SETTINGS") | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR"}
+    assert set(refs) == constants("INHERITED_SETTINGS") | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR", "BAO_ADDR"}
     assert refs == {
         name: {
             "name": "marty-config",
@@ -375,12 +375,19 @@ def native_inventory(value):
             ),
         }
     assert not any(
-        "BAO" in v["name"] or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
+        ("BAO" in v["name"] and v["name"] != "BAO_ADDR")
+        or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
     )
     assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_TOKEN_FILE") == {
         "name": "DIDCOMM_KMS_TOKEN_FILE",
         "value": "/run/secrets/didcomm-kms/token",
     }
+    for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT"):
+        name = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
+        assert next(v for v in entries if v["name"] == name) == {
+            "name": name,
+            "value": f"/run/secrets/issuance-sign-grants/{origin.lower()}",
+        }
     assert selected["volumeMounts"] == [
         {
             "name": "didcomm-kms-token",
@@ -392,6 +399,11 @@ def native_inventory(value):
             "mountPath": "/run/secrets/integration-secret-ca",
             "readOnly": True,
         },
+        {
+            "name": "issuance-sign-grants",
+            "mountPath": "/run/secrets/issuance-sign-grants",
+            "readOnly": True,
+        },
     ]
     assert value["spec"]["template"]["spec"].get("volumes") == [
         {
@@ -401,6 +413,16 @@ def native_inventory(value):
         {
             "name": "integration-secret-ca",
             "secret": {"secretName": "signing-keys-integration-secret-ca"},
+        },
+        {
+            "name": "issuance-sign-grants",
+            "secret": {
+                "secretName": "marty-secrets",
+                "items": [
+                    {"key": f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN", "path": origin.lower()}
+                    for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT")
+                ],
+            },
         },
     ]
     assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_URL")["value"] == "https://signing-keys:8018/internal"
@@ -423,7 +445,7 @@ def test_didcomm_workload_token_is_required_and_distinct_from_signing_tokens():
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret", "missing-kms-token", "wrong-kms-token"],
+    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret", "missing-kms-token", "wrong-kms-token", "missing-grant-mount", "wrong-grant-token"],
 )
 def test_native_inventory_is_complete_and_custody_free(fault):
     value = deployment(
@@ -453,6 +475,10 @@ def test_native_inventory_is_complete_and_custody_free(fault):
         value["spec"]["template"]["spec"].pop("volumes")
     elif fault == "wrong-kms-token":
         value["spec"]["template"]["spec"]["volumes"][0]["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
+    elif fault == "missing-grant-mount":
+        owner(value)["volumeMounts"].pop()
+    elif fault == "wrong-grant-token":
+        value["spec"]["template"]["spec"]["volumes"][2]["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
     if fault:
         with pytest.raises(AssertionError):
             native_inventory(value)
