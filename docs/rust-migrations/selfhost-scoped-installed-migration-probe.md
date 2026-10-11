@@ -1,7 +1,9 @@
 # Local draft: scoped installed-bundle migration probe
 
-`scripts/probe_selfhost_installed_migrations.py` is an opt-in, local-only
-experiment. It is not called from CI or release workflows and always reports
+`scripts/probe_selfhost_installed_migrations.py` is an opt-in experiment. The
+manual `selfhost-prepared-consumer.yml` workflow runs it against a successful,
+first-attempt, opt-in Stack release preparation from the same protected-main
+source SHA. It is not a release or ordinary CI gate and always reports
 `qualification: unqualified`.
 
 Supply the already-downloaded prepared ZIP, image lock, transaction, receipt,
@@ -18,6 +20,16 @@ python scripts/probe_selfhost_installed_migrations.py \
   --source-sha FULL_40_CHARACTER_SOURCE_SHA \
   --run-id NUMERIC_RUN_ID
 ```
+
+For the manual GitHub workflow, dispatch `Self-host prepared consumer
+(unqualified)` on `main` with `stack_run_id` from a successful Stack release
+whose `prepare_selfhost_lock` input was explicitly enabled. The workflow
+rejects a rerun, an artifact from another source SHA, or a preparation from an
+older `main` commit. It downloads only the exact unqualified bundle and its
+qualified Stack transaction, checks the archive before extraction, and uploads
+a sanitized unqualified probe report for 30 days. If no prepared artifact
+exists for the current `main` SHA, a new opt-in preparation is required. This
+does not publish a self-host product or change Stack release qualification.
 
 The probe rechecks the exact ZIP, descriptor, receipt, lock, and extracted
 inventory. It takes the migrations, PostgreSQL, and Redis images only from the

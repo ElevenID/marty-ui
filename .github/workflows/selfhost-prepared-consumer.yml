@@ -1,0 +1,122 @@
+name: Self-host prepared consumer (unqualified)
+
+on:
+  workflow_dispatch:
+    inputs:
+      stack_run_id:
+        description: Successful first-attempt opt-in Stack release run with a prepared self-host bundle
+        required: true
+        type: string
+
+concurrency:
+  group: selfhost-prepared-consumer-${{ inputs.stack_run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  installed-migrations:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install exact offline source parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - name: Bind the successful first-attempt producer and unique artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STACK_RUN_ID: ${{ inputs.stack_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          test "$(uname -m)" = x86_64
+          [[ "$STACK_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          bundle_name="selfhost-lock-preparation-unqualified-$STACK_RUN_ID"
+          transaction_name="stack-release-qualified-$STACK_RUN_ID"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID" > "$RUNNER_TEMP/producer-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$bundle_name" > "$RUNNER_TEMP/bundle-artifacts.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$transaction_name" > "$RUNNER_TEMP/transaction-artifacts.json"
+          python scripts/check_selfhost_preparation_artifacts.py \
+            --run "$RUNNER_TEMP/producer-run.json" \
+            --bundle "$RUNNER_TEMP/bundle-artifacts.json" \
+            --transaction "$RUNNER_TEMP/transaction-artifacts.json" \
+            --run-id "$STACK_RUN_ID" --source-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/producer-binding.json"
+          mkdir prepared transaction
+          gh run download "$STACK_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            -n "$bundle_name" -D prepared
+          gh run download "$STACK_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            -n "$transaction_name" -D transaction
+          # Reject a producer rerun or artifact replacement while downloading.
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID" > "$RUNNER_TEMP/producer-run-after.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$bundle_name" > "$RUNNER_TEMP/bundle-artifacts-after.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$STACK_RUN_ID/artifacts?name=$transaction_name" > "$RUNNER_TEMP/transaction-artifacts-after.json"
+          python scripts/check_selfhost_preparation_artifacts.py \
+            --run "$RUNNER_TEMP/producer-run-after.json" \
+            --bundle "$RUNNER_TEMP/bundle-artifacts-after.json" \
+            --transaction "$RUNNER_TEMP/transaction-artifacts-after.json" \
+            --run-id "$STACK_RUN_ID" --source-sha "$GITHUB_SHA" \
+            --output "$RUNNER_TEMP/producer-binding-after.json"
+          cmp "$RUNNER_TEMP/producer-binding.json" "$RUNNER_TEMP/producer-binding-after.json"
+      - name: Verify the exact unqualified archive before extracting
+        env:
+          STACK_RUN_ID: ${{ inputs.stack_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/release_transaction.py validate \
+            --input transaction/release-transaction.json \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --stack-lock release/stack-lock.json \
+            --claim-run-id "$(jq -er .claim_run_id transaction/release-transaction.json)" \
+            --output "$RUNNER_TEMP/validated-transaction.json"
+          jq -e '(.state == "qualified" or .state == "promoting" or .state == "promoted") and (.gates | length == 2)' \
+            "$RUNNER_TEMP/validated-transaction.json" >/dev/null
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-run-id "$STACK_RUN_ID" --verify-archive-only
+          mkdir "$RUNNER_TEMP/selfhost-installed"
+          unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-installed"
+      - name: Probe scoped installed migrations on exact Linux amd64 images
+        env:
+          STACK_RUN_ID: ${{ inputs.stack_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/probe_selfhost_installed_migrations.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --source-sha "$GITHUB_SHA" --run-id "$STACK_RUN_ID" \
+            > "$RUNNER_TEMP/selfhost-installed-migrations.json"
+          jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2' \
+            "$RUNNER_TEMP/selfhost-installed-migrations.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-installed-migrations.json" ./selfhost-installed-migrations.json
+          cp "$RUNNER_TEMP/producer-binding.json" ./selfhost-producer-binding.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: selfhost-installed-migrations-unqualified-${{ github.run_id }}
+          path: |
+            selfhost-installed-migrations.json
+            selfhost-producer-binding.json
+          if-no-files-found: error
+          retention-days: 30

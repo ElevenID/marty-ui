@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only, exact-bundle migration probe with disposable scoped OpenBao.
+"""Opt-in exact-bundle migration probe with disposable scoped OpenBao.
 
 This is migration evidence only, not a release gate or installed-stack claim.
 """
