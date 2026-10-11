@@ -15325,3 +15325,17 @@ Notification OpenBao tokens without printing them. The scoped and base probe
 tests pass 22 cases with one optional live-Docker case skipped; Ruff and diff
 checks pass. This merge and follow-up remain local until the active CI run
 concludes, to avoid overlapping full CI runs.
+
+On the published `900568fae` head, Release Contract Tests failed only the six
+newly merged scoped installed-migration probe tests: they assumed four image
+roles and five Compose services, while this branch's release validator also
+requires the Rust services image and native-schema service. The local
+`c98129b90` integration fixes that mismatch and passes its 22 focused tests.
+Rust Service Tests (contracts) found one additional stale Kubernetes model
+assertion: the legacy Issuance deployment already has the fixed-origin
+signing-grant mount, so adding two DIDComm mounts yields three, not two. The
+local assertion now retains the grant mount, removes only the two new mounts
+when comparing the complete legacy model, and checks the native two-mount
+suffix. Its focused test passed on Rust 1.95; 14 of 15 tests in that file
+passed locally, with the remaining CLI test requiring a Linux executable.
+The image, Canvas and OpenBao lanes were still active at this checkpoint.

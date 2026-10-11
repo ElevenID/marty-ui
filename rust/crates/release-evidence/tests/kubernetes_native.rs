@@ -148,24 +148,20 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         .unwrap()
                         .as_object_mut()
                         .unwrap();
-                    let volumes = pod.remove("volumes").unwrap();
-                    assert_eq!(volumes.as_array().unwrap().len(), 2);
-                    for volume in volumes.as_array().unwrap() {
+                    let volumes = pod["volumes"].as_array_mut().unwrap();
+                    assert_eq!(volumes.len(), 3);
+                    assert_eq!(volumes[0]["name"], "issuance-sign-grants");
+                    let added_volumes = volumes.split_off(1);
+                    for volume in &added_volumes {
                         assert_eq!(volume["secret"]["optional"], false);
                         assert_eq!(volume["secret"]["defaultMode"], 292);
                     }
                     let legacy_owner = owner_mut(value);
-                    let mounts = legacy_owner
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("volumeMounts")
-                        .unwrap();
-                    assert_eq!(mounts.as_array().unwrap().len(), 2);
-                    assert!(mounts
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .all(|v| v["readOnly"] == true));
+                    let mounts = legacy_owner["volumeMounts"].as_array_mut().unwrap();
+                    assert_eq!(mounts.len(), 3);
+                    assert_eq!(mounts[0]["name"], "issuance-sign-grants");
+                    let added_mounts = mounts.split_off(1);
+                    assert!(added_mounts.iter().all(|v| v["readOnly"] == true));
                     let entries = legacy_owner["env"].as_array_mut().unwrap();
                     assert_eq!(entries.pop().unwrap()["name"], "DIDCOMM_TLS_CA_FILE");
                     assert_eq!(
@@ -174,14 +170,14 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     );
                     let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
                     assert_eq!(native_mounts.len(), 4);
-                    assert_eq!(native_mounts[2..], mounts.as_array().unwrap()[..]);
+                    assert_eq!(native_mounts[2..], added_mounts);
                     let native_volumes = native_owner
                         .pointer("/spec/template/spec/volumes")
                         .unwrap()
                         .as_array()
                         .unwrap();
                     assert_eq!(native_volumes.len(), 4);
-                    assert_eq!(native_volumes[2..], volumes.as_array().unwrap()[..]);
+                    assert_eq!(native_volumes[2..], added_volumes);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
