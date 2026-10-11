@@ -15753,6 +15753,7 @@ new DIDComm-only release selector, forbids the DIDComm-only path from selecting
 OpenBao, and updates the DIDComm consumer test count from 31 to the branch's
 actual 38 (63 across its three exact sources). The first merged full workflow
 file run passed 146 tests and identified only that count mismatch; after the
-correction, all six affected DIDComm/CI-gate cases passed. Ruff, YAML parsing
+correction, all six affected DIDComm/CI-gate cases passed and the complete
+merged CI-workflow test file passed 147 tests. Ruff, YAML parsing
 and diff checks passed. Main remains merged locally pending the previous
 head's Canvas result and one grouped push.
