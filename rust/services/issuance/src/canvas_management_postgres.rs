@@ -904,6 +904,7 @@ impl PostgresCanvasManagementRepository {
         expected_config_version: i64,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        reject_private_binding(binding)?;
         if binding.config_version != expected_config_version
             || binding.updated_at != expected_updated_at
             || binding.validated_config_version != Some(expected_config_version)
@@ -1389,6 +1390,7 @@ fn bind_binding_insert<'query>(
     sqlx::query::Query<'query, sqlx::Postgres, sqlx::postgres::PgArguments>,
     CanvasManagementRepositoryError,
 > {
+    reject_private_binding(binding)?;
     let scope = serde_json::to_value(&binding.canvas_scope)
         .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
     let feature_flags = serde_json::to_value(&binding.feature_flags)
@@ -1436,6 +1438,7 @@ fn bind_binding_update<'query>(
     sqlx::query::Query<'query, sqlx::Postgres, sqlx::postgres::PgArguments>,
     CanvasManagementRepositoryError,
 > {
+    reject_private_binding(binding)?;
     let scope = serde_json::to_value(&binding.canvas_scope)
         .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
     let feature_flags = serde_json::to_value(&binding.feature_flags)
@@ -1667,6 +1670,17 @@ fn json_object(value: Value) -> Result<Map<String, Value>, CanvasManagementRepos
         .ok_or(CanvasManagementRepositoryError::Unavailable)
 }
 
+fn reject_private_binding(
+    binding: &CanvasProgramBindingRecord,
+) -> Result<(), CanvasManagementRepositoryError> {
+    let value =
+        serde_json::to_value(binding).map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(CanvasManagementRepositoryError::Unavailable);
+    }
+    Ok(())
+}
+
 fn version_i32(value: i64) -> Result<i32, CanvasManagementRepositoryError> {
     if value < 1 {
         return Err(CanvasManagementRepositoryError::Unavailable);
@@ -1693,6 +1707,56 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn binding_writes_reject_private_material_before_database_access() {
+        let now = Utc::now();
+        let mut binding = CanvasProgramBindingRecord {
+            id: "binding-1".into(),
+            organization_id: "org-a".into(),
+            platform_id: "platform-1".into(),
+            application_template_id: "template-1".into(),
+            credential_template_id: "credential-1".into(),
+            display_name: None,
+            flow_mode: "elevenid_orchestrated_canvas_evidence".into(),
+            direct_issue_enabled: false,
+            auto_approve_on_evidence: false,
+            evidence_requirements: vec![],
+            canvas_scope: BTreeMap::new(),
+            delivery_mode: "wallet_only".into(),
+            issuer_mode: "org_managed".into(),
+            approval_policy_set_id: None,
+            deployment_profile_id: None,
+            feature_flags: BTreeMap::new(),
+            canvas_credentials: Map::new(),
+            config_version: 1,
+            validated_config_version: None,
+            readiness_checks: vec![],
+            readiness_validated_at: None,
+            activated_at: None,
+            archived_at: None,
+            credential_template_snapshot: Map::new(),
+            enabled: false,
+            created_at: now,
+            updated_at: now,
+        };
+        binding.credential_template_snapshot.insert(
+            "issuer".into(),
+            json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+        );
+        assert!(bind_binding_insert(sqlx::query(INSERT_BINDING), &binding).is_err());
+        assert!(
+            bind_binding_update(sqlx::query(UPDATE_BINDING_CONFIGURATION), &binding, 1).is_err()
+        );
+        binding.credential_template_snapshot.insert(
+            "issuer".into(),
+            json!({"key_reference": "transit/keys/issuer-v4"}),
+        );
+        assert!(bind_binding_insert(sqlx::query(INSERT_BINDING), &binding).is_ok());
+        assert!(
+            bind_binding_update(sqlx::query(UPDATE_BINDING_CONFIGURATION), &binding, 1).is_ok()
+        );
+    }
 
     #[test]
     fn management_queries_are_tenant_and_archive_scoped() {

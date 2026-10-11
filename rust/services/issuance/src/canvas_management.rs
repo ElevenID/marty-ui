@@ -21,6 +21,8 @@ const REVIEW_NOTES_MAX: usize = 4_000;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CanvasRequestValidationError {
+    #[error("Canvas request contains private key material")]
+    PrivateMaterial,
     #[error("{field} must not be empty")]
     Empty { field: &'static str },
     #[error("{field} must contain at most {max} characters")]
@@ -255,7 +257,7 @@ pub enum CanvasDeliveryMode {
     WalletPlusCanvasMirror,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasProgramBindingRequest {
     pub application_template_id: String,
@@ -293,6 +295,11 @@ impl CanvasProgramBindingRequest {
 
 impl ValidateCanvasRequest for CanvasProgramBindingRequest {
     fn validate(&self) -> Result<(), CanvasRequestValidationError> {
+        let value = serde_json::to_value(self)
+            .map_err(|_| CanvasRequestValidationError::PrivateMaterial)?;
+        if marty_key_material_policy::contains_private_key(&value) {
+            return Err(CanvasRequestValidationError::PrivateMaterial);
+        }
         validate_required(
             "application_template_id",
             &self.application_template_id,
@@ -591,6 +598,26 @@ mod tests {
                 fields: "private_service_url".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn binding_rejects_private_material_and_accepts_remote_secret_reference() {
+        let mut value = json!({
+            "application_template_id": "application-template",
+            "evidence_requirements": [evidence_requirement()],
+            "canvas_scope": {"course_id": "-----BEGIN PRIVATE KEY-----synthetic-----END PRIVATE KEY-----"}
+        });
+        let request: CanvasProgramBindingRequest = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            request.validate(),
+            Err(CanvasRequestValidationError::PrivateMaterial)
+        );
+        value["canvas_scope"]["course_id"] = json!("course-1");
+        value["canvas_credentials"] = json!({
+            "api_token_secret_id": "transit/keys/canvas-token-v4"
+        });
+        let request: CanvasProgramBindingRequest = serde_json::from_value(value).unwrap();
+        assert!(request.validate().is_ok());
     }
 
     #[test]

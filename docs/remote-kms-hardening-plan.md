@@ -15888,3 +15888,18 @@ batch PostgreSQL step that failed on the prior head. Release Contract Tests
 also passed. Canvas, the plugin image, service images and the aggregate CI Gate
 still need their terminal exact-head results; the local Application Template
 guard above is not part of this pushed head.
+
+K10 Canvas binding write-path self-review found caller-influenced scope,
+credential metadata and readiness snapshots persisted as neutral JSON. The
+local correction uses the same shared Rust private-material policy in binding
+request validation and before binding insert, configuration replacement and
+readiness update. Synthetic private PEM/JWK values fail before database access;
+remote references remain supported. All 38 focused Canvas management library
+tests passed; the complete Issuance library suite passed 576 tests with 8
+ignored, and direct rustfmt and diff checks passed. This correction is held
+with the Application Template guard for
+the next grouped push after current exact-head CI completes.
+
+The OpenBao DIDComm plugin image job on pushed head `828bc6ecd` also passed
+in exact-head run `38164123792`. Canvas is the sole remaining live job at this
+checkpoint; the aggregate CI Gate has not yet completed.
