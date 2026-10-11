@@ -36,6 +36,7 @@ class BundlePreparationTest(unittest.TestCase):
                             for name, data in self.contents.items()},
                   "directories": [""]}
         with zipfile.ZipFile(self.archive, "w") as bundle:
+            bundle.writestr("bundle/", b"")
             for name, data in self.contents.items():
                 bundle.writestr("bundle/" + name, data)
             bundle.writestr("bundle/.marty-selfhost-bundle.json", json.dumps(marker))
@@ -72,6 +73,12 @@ class BundlePreparationTest(unittest.TestCase):
         with zipfile.ZipFile(self.archive, "a") as bundle:
             bundle.writestr("bundle/extra.txt", b"unexpected")
         with self.assertRaisesRegex(ValueError, "inventory differs"):
+            self.check()
+
+    def test_rejects_uninventoried_empty_directory(self):
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr("bundle/extra/", b"")
+        with self.assertRaisesRegex(ValueError, "directories differ"):
             self.check()
 
     def test_rejects_path_traversal(self):

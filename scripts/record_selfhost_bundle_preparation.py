@@ -28,6 +28,7 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
     transaction_bytes = transaction.read_bytes()
     with zipfile.ZipFile(archive) as bundle, tempfile.TemporaryDirectory(prefix="selfhost-fresh-") as scratch:
         files = {}
+        directories = set()
         roots = set()
         extracted = Path(scratch)
         for member in bundle.infolist():
@@ -40,6 +41,9 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
                 raise ValueError("symlink ZIP member")
             target = extracted.joinpath(*path.parts)
             if member.is_dir():
+                if member.filename in directories:
+                    raise ValueError("duplicate ZIP directory")
+                directories.add(member.filename)
                 target.mkdir(parents=True, exist_ok=True)
                 continue
             if member.filename in files:
@@ -56,6 +60,10 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         marker = json.loads((extracted / root / ".marty-selfhost-bundle.json").read_bytes())
         if marker.get("schema") != "marty.selfhost-bundle-files/v1":
             raise ValueError("unsupported bundle inventory")
+        expected_directories = {f"{root}/{name}/" if name else f"{root}/"
+                                for name in marker["directories"]}
+        if directories != expected_directories:
+            raise ValueError("ZIP directories differ from owned bundle")
         expected = {f"{root}/{name}": value for name, value in marker["files"].items()}
         actual = {name: digest(data) for name, data in files.items()
                   if name != f"{root}/.marty-selfhost-bundle.json"}
