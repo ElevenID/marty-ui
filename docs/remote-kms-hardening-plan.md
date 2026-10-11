@@ -13994,3 +13994,18 @@ is transport authentication, not tenant authority. Preserve the authorized
 Gateway path and the existing purpose/algorithm/reference checks while
 closing this sibling route; do not infer its safety from removal of the old
 internal service-sign alias.
+
+K6 Azure signature-format qualification finding: the Signing Keys adapter
+currently labels every ECDSA provider response as DER, and its Azure ES256
+golden vector supplies a synthetic DER response. Microsoft's [Key Vault
+algorithm reference](https://learn.microsoft.com/en-us/azure/key-vault/keys/about-keys-details)
+and [Sign REST contract](https://learn.microsoft.com/en-us/rest/api/keyvault/keys/sign/sign?view=rest-keyvault-keys-2025-07-01)
+describe ES256/384/512 by RFC 7518; [RFC 7518 section
+3.4](https://www.rfc-editor.org/rfc/rfc7518.html#section-3.4) defines a
+fixed-width R||S signature. This is evidence that the adapter's DER assumption
+may be wrong, but those documents do not explicitly demonstrate the actual
+Azure response bytes. Before claiming Azure support, capture a real Key Vault
+ES256 response with a non-exportable test key, verify it against the returned
+public key, and correct provider-specific encoding and golden vectors as
+needed. Also exercise ES384/ES512 if advertised. Do not treat the current
+mock DER vector as cloud interoperability evidence.
