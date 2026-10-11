@@ -849,6 +849,25 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(
                     f"Rust Gateway managed-key route check failed:\n{detail[-2000:]}"
                 )
+            for test_name in (
+                "authenticated_gateway_reaches_remaining_rust_signing_handlers",
+                "authenticated_gateway_rotates_only_a_dedicated_signing_service",
+            ):
+                result = subprocess.run(
+                    [
+                        "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
+                        "--test", "gateway_signing_acceptance", "--locked", "--offline",
+                        "-j2", test_name, "--", "--ignored", "--exact", "--nocapture",
+                    ],
+                    cwd=ROOT / "rust", env=environment,
+                    capture_output=True, text=True, timeout=600, check=False,
+                )
+                if result.returncode:
+                    detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                    detail = detail.replace(managed, "[scoped]")
+                    raise RuntimeError(
+                        f"Rust Gateway scoped envelope case {test_name} failed:\n{detail[-2000:]}"
+                    )
             result = subprocess.run(
                 [
                     "cargo", "+1.95", "test", "-p", "marty-service-acceptance",

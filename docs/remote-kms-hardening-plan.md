@@ -15609,3 +15609,20 @@ the complete disposable-stack probe passed again with that denial.
 The rotated bearer additionally signs through the public presentation route;
 the test verifies its DER P-256 signature with the original public key. The
 full live probe passed again, so rotation preserves both holder key purposes.
+
+In exact-head run `38155603867`, Rust service contracts reached the guarded
+Gateway signing tests and failed because two older cases did not set the root
+sentinel token after the helper began requiring separate guard and service
+tokens. The hosted workflow now mints a non-root `credential-service` token
+for their envelope operations and reserves root for the disposable marker.
+Both cases were added to the local disposable-stack probe. The first local
+attempt exposed stale missing-service CSR and sign expectations: malformed
+requests were rejected before service lookup. Their bodies now contain valid
+managed key references, purposes and algorithms, and expect 503 when the
+mock Gateway has no grant minter. Positive CSR and signing remain covered by
+the separate real OpenBao grant cases. The full local OpenBao/Redis/PostgreSQL
+probe passed with both previously omitted Gateway cases, both holder signing
+purposes after rotation, and the managed DSC ceremony. Warnings-denied Clippy,
+Ruff, YAML parsing and diff checks passed. At this checkpoint the hosted
+Canvas lane is still running; hold the local corrections for one grouped push
+after its terminal result.

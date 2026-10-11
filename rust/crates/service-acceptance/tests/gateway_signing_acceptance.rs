@@ -2050,16 +2050,20 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         (
             "POST",
             "/v1/signing-keys/services/missing-service/certificate-csr",
-            Some(json!({"country":"US","organization":"Test","common_name":"test"})),
-            StatusCode::NOT_FOUND,
-            "service",
+            Some(
+                json!({"country":"US","organization":"Test","common_name":"test","key_reference":"cred-issuer-missing-service","algorithm":"ES256"}),
+            ),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant minter",
         ),
         (
             "POST",
             "/v1/signing-keys/services/missing-service/sign",
-            Some(json!({"payload_b64":"cGF5bG9hZA"})),
-            StatusCode::NOT_FOUND,
-            "service",
+            Some(
+                json!({"payload_b64":"cGF5bG9hZA","key_reference":"cred-issuer-missing-service","key_purpose":"vc_jwt_issuer","algorithm":"ES256"}),
+            ),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant minter",
         ),
         (
             "GET",

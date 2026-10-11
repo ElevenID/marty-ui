@@ -1847,10 +1847,17 @@ jobs:
             | tee "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
           grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
             "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
-          cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-            authenticated_gateway_reaches_remaining_rust_signing_handlers -- --ignored --exact
-          cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-            authenticated_gateway_rotates_only_a_dedicated_signing_service -- --ignored --exact
+          envelope_token="$(curl --silent --show-error --fail \
+            --header 'X-Vault-Token: test-only' --header 'Content-Type: application/json' \
+            --request POST --data '{"policies":["credential-service"],"no_default_policy":true}' \
+            "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
+          [[ -n "$envelope_token" && "$envelope_token" != test-only ]]
+          for test_name in authenticated_gateway_reaches_remaining_rust_signing_handlers \
+            authenticated_gateway_rotates_only_a_dedicated_signing_service; do
+            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$envelope_token" BAO_TOKEN="$envelope_token" \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                "$test_name" -- --ignored --exact
+          done
           cargo test --locked -p marty-signing-keys --test public_config_resolve_live_contract \
             -- --ignored --test-threads=1 \
             | tee "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
