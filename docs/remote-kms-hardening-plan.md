@@ -16226,3 +16226,32 @@ durability, Redis pairing, tenant and managed-profile routes. The disposable
 containers were removed. Incremental Rust compilation was disabled after the
 scoped cache cleanup. This remains local source-built evidence, not an exact
 release-image qualification, while hosted Canvas is still running.
+
+Hosted Canvas on pushed head `44e94b746` finished with one failed
+published-schema contract (`status_runtime_matches_json_depth_full_credential_routes`);
+the other four substantive CI lanes passed. The failing frozen case expected
+HTTP 200 for a valid 126-level JSON array but received 500. The shared
+private-material scanner treated ordinary JSON nesting beyond 16 levels as
+private material. A second boundary parsed lossless Canvas delivery metadata
+through `serde_json`, whose recursion limit rejected the same valid input.
+The Rust correction walks parsed JSON iteratively, scans raw metadata through
+the existing depth-safe JSON tree, and keeps the 16-level bound solely for
+repeated JSON-encoded string decoding. Shared-policy unit tests, including
+1,600-level public and private JSON, and warnings-denied Clippy pass. The
+local published-schema Canvas route now passes all 64 depth cases against a
+disposable PostgreSQL container, including the hosted failure and 1,600-level
+array/object cases. The local diagnostic was removed; this correction stays
+in the grouped batch before push.
+
+Final pre-push qualification for this batch: the clean-source published-schema
+Canvas depth route passed again after temporary diagnostics were removed; all
+64 frozen depth cases passed against a disposable PostgreSQL instance.
+`marty-key-material-policy` unit tests and all-targets warnings-denied Clippy
+for both that crate and `marty-issuance-service` passed. The full local
+`probe_signing_keys_openbao_policy.py --rust-adapter` then passed with six
+managed signing prefixes, seven scoped grant keys, provider HMAC isolation,
+Rust managed key, ES256/384/512 CSR custody, holder service/DB/OpenBao
+lifecycle, credential durability, Redis pairing, tenant and managed-profile
+routes. All three disposable probe containers were removed. This is a local
+source-built instance; exact pushed-head CI and release-artifact qualification
+remain to be established.

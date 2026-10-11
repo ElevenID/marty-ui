@@ -345,9 +345,10 @@ impl CanvasLifecycleDeliverySynchronizer {
                     .ok_or(CanvasLifecycleSyncError::TextEncoding)
             })
             .transpose()?;
-        let metadata_value: Value = serde_json::from_str(metadata.get())
-            .map_err(|_| CanvasLifecycleSyncError::TextEncoding)?;
-        if marty_key_material_policy::contains_private_key(&metadata_value)
+        let metadata_contains_private =
+            marty_key_material_policy::contains_private_key_json(metadata.get())
+                .ok_or(CanvasLifecycleSyncError::TextEncoding)?;
+        if metadata_contains_private
             || last_error.is_some_and(|value| {
                 marty_key_material_policy::contains_private_key(&Value::String(value.to_owned()))
             })

@@ -4284,6 +4284,7 @@ dependencies = [
 name = "marty-key-material-policy"
 version = "0.1.0"
 dependencies = [
+ "marty-response-compat",
  "serde_json",
 ]
 

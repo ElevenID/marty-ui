@@ -10,3 +10,4 @@ publish = false
 
 [dependencies]
 serde_json.workspace = true
+marty-response-compat = { path = "../response-compat" }
