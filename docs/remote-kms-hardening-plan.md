@@ -15492,3 +15492,9 @@ routes, and managed-profile routes. The test sources compile offline and the
 diff has no whitespace errors. Hosted run `38149505674` still has Canvas in
 progress at this checkpoint; group these local corrections with the golden
 vector fix once its final result is known, then rerun exact-head CI.
+
+Run `38149505674` is terminal: 20 jobs passed, including the 40-minute
+Canvas lane, and only Rust service contracts plus their dependent CI Gate
+failed on the previously identified missing-grant expectation. The grouped
+local head `d23bb7de1` includes that correction and the fully passing
+disposable-stack probe. Push this batch once and review its exact-head gate.
