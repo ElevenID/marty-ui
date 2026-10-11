@@ -16092,3 +16092,13 @@ and PEM rejection with no idempotency record, plus normal concurrent
 reservation and management behavior. Issuance all-targets warnings-denied
 Clippy passed; the disposable database was removed. This stays in the same
 grouped local batch.
+
+K10 OID4VCI authorization follow-up: the PostgreSQL adapter stored caller-
+influenced PAR parameters, session configuration IDs and wallet notification
+metadata as JSON without the shared private-material policy. It now checks
+each exact serialized payload before insertion and rejects private JWK/PEM
+content. The fresh PostgreSQL 16 transaction contract passed three negative
+cases with no PAR, session or notification row, plus the normal authorization,
+notification and transaction paths. Issuance all-targets warnings-denied
+Clippy passed; the disposable database was removed. This remains in the
+grouped local batch while the prior hosted Canvas run continues.
