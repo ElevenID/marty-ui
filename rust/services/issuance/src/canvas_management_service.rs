@@ -824,6 +824,9 @@ impl CanvasPlatformManagementService {
         api_key: Option<&str>,
         trusted_organization_id: Option<&str>,
     ) -> Result<ManagedIntegrationSecret, CanvasPlatformManagementError> {
+        request
+            .validate()
+            .map_err(CanvasManagementDomainError::InvalidRequest)?;
         let organization_id = self.authorize(api_key, trusted_organization_id)?;
         let repository = self.integration_secret_repository()?;
         let mut secret = repository

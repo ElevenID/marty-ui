@@ -67,6 +67,12 @@ impl NewIntegrationSecret {
     }
 }
 
+/// Reject key-shaped content passed through an opaque integration-secret value.
+#[must_use]
+pub fn contains_private_key_value(value: &str) -> bool {
+    marty_key_material_policy::contains_private_key(&Value::String(value.to_owned()))
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum IntegrationSecretError {
     #[error("integration secret persistence is unavailable")]

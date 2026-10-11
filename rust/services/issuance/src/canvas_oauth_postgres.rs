@@ -14,8 +14,8 @@ use crate::{
         CanvasOAuthPlatformPatch, CanvasOAuthRepository, CanvasOAuthSecretVault,
     },
     integration_secret::{
-        integration_secret_hint, IntegrationSecretMetadata, ManagedIntegrationSecret,
-        NewIntegrationSecret,
+        contains_private_key_value, integration_secret_hint, IntegrationSecretMetadata,
+        ManagedIntegrationSecret, NewIntegrationSecret,
     },
     integration_secret_kms::KmsIntegrationSecretCipher,
 };
@@ -773,6 +773,11 @@ impl CanvasOAuthSecretVault for PostgresIntegrationSecretVault {
     }
 
     async fn save(&self, secret: NewIntegrationSecret) -> Result<(), CanvasOAuthError> {
+        if marty_key_material_policy::contains_private_key(&secret.metadata)
+            || contains_private_key_value(&secret.value)
+        {
+            return Err(CanvasOAuthError::SecretUnavailable);
+        }
         let encrypted = self
             .storage
             .encrypt(
@@ -828,6 +833,11 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
         secret: &ManagedIntegrationSecret,
         plaintext: &str,
     ) -> Result<ManagedIntegrationSecret, CanvasManagementRepositoryError> {
+        if marty_key_material_policy::contains_private_key_map(&secret.metadata)
+            || contains_private_key_value(plaintext)
+        {
+            return Err(CanvasManagementRepositoryError::Unavailable);
+        }
         let encrypted = self
             .storage
             .encrypt(
@@ -913,6 +923,11 @@ impl CanvasIntegrationSecretRepository for PostgresIntegrationSecretVault {
         plaintext: Option<&str>,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<ManagedIntegrationSecret>, CanvasManagementRepositoryError> {
+        if marty_key_material_policy::contains_private_key_map(&secret.metadata)
+            || plaintext.is_some_and(contains_private_key_value)
+        {
+            return Err(CanvasManagementRepositoryError::Unavailable);
+        }
         let encrypted = match plaintext {
             Some(value) => Some(
                 self.storage

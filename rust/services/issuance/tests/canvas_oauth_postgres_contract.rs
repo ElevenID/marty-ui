@@ -141,6 +141,29 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
         remote_integration_secret::cipher(),
     );
 
+    assert!(vault
+        .save(NewIntegrationSecret {
+            id: "rejected-private-client-secret".to_owned(),
+            organization_id: "org-1".to_owned(),
+            name: "Rejected private key".to_owned(),
+            provider: "canvas".to_owned(),
+            purpose: "oauth_client_secret".to_owned(),
+            value: "-----BEGIN PRIVATE KEY-----".to_owned(),
+            metadata: json!({}),
+        })
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.organization_integration_secrets
+             WHERE id = 'rejected-private-client-secret'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
+
     vault
         .save(NewIntegrationSecret {
             id: "client-secret-1".to_owned(),
@@ -229,6 +252,26 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
         updated_at: managed_now,
         last_used_at: None,
     };
+    let mut private_metadata = managed_secret.clone();
+    private_metadata.id = "rejected-private-managed-secret".to_owned();
+    private_metadata.metadata = json!({"private_jwk": {"kty": "EC", "d": "synthetic"}})
+        .as_object()
+        .unwrap()
+        .clone();
+    assert!(CanvasIntegrationSecretRepository::create_secret(
+        &vault,
+        &private_metadata,
+        "ordinary-api-token",
+    )
+    .await
+    .is_err());
+    assert!(CanvasIntegrationSecretRepository::create_secret(
+        &vault,
+        &managed_secret,
+        "-----BEGIN PRIVATE KEY-----",
+    )
+    .await
+    .is_err());
     let created = CanvasIntegrationSecretRepository::create_secret(
         &vault,
         &managed_secret,
@@ -237,6 +280,24 @@ async fn oauth_state_secrets_publication_and_revocation_are_atomic_and_tenant_bo
     .await
     .expect("create managed secret");
     assert_eq!(created, managed_secret);
+    let mut rejected_update = created.clone();
+    rejected_update.metadata = private_metadata.metadata.clone();
+    assert!(CanvasIntegrationSecretRepository::update_secret(
+        &vault,
+        &rejected_update,
+        None,
+        created.updated_at,
+    )
+    .await
+    .is_err());
+    assert!(CanvasIntegrationSecretRepository::update_secret(
+        &vault,
+        &created,
+        Some("-----BEGIN PRIVATE KEY-----"),
+        created.updated_at,
+    )
+    .await
+    .is_err());
     let managed_ciphertext: String = sqlx::query_scalar(
         "SELECT encrypted_secret_value
          FROM issuance_service.organization_integration_secrets

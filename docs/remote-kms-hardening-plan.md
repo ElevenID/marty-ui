@@ -15985,3 +15985,26 @@ local with the Internal Application guard for the next grouped push. The
 current `ec63b4de4` hosted head has no failed jobs at this checkpoint;
 OpenBao plugin image, service images and browser lifecycle lanes are still
 running.
+
+K10 Canvas integration-secret follow-up: remote envelope encryption correctly
+keeps ordinary Canvas API tokens opaque, but create/update inputs and the
+OAuth secret-vault repository still accepted private JWK/PEM-shaped values or
+metadata. The local correction applies the shared private-material policy at
+request validation and all three repository save/create/update paths, before
+encryption or database access. Ordinary API tokens and remote key references
+remain accepted. Secret request Debug output now redacts metadata as well as
+the secret value. A fresh PostgreSQL 16 contract with the synthetic remote
+cipher passed rejected private saves and rotations alongside normal remote
+envelope, tenant-bound read, concurrency, rotation and deletion behavior;
+the disposable container was removed. The full Issuance library suite passed
+582 tests with 8 ignored, and Issuance all-targets Clippy passed.
+
+The pushed `ec63b4de4` CI run `38167183578` exposed one shared packaging
+fixture issue in both Rust Lint and Packaging and Rust Feature Regression
+Probe: their standalone `.github/feature-regression/rust-probe/Cargo.lock`
+omitted the newly introduced `marty-key-material-policy` dependency. The
+immutable hosted logs both fail at `cargo fetch --locked`. The local lockfile
+now includes the crate and its Issuance edge; locked offline metadata and
+fetch pass, and the standalone probe's exact locked offline Clippy command
+passes with warnings denied. Other hosted jobs are still running, so this
+correction stays batched with the local custody changes until they finish.
