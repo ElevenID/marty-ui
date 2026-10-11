@@ -59,8 +59,21 @@ mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PAS
 echo "Configuring external Vault/OpenBao at ${BAO_ADDR}..."
 # Pass the token through Docker's inherited environment, not the process argv.
 export BAO_TOKEN
+if [ -n "${SELFHOST_BOOTSTRAP_CONTAINER_NAME:-}" ]; then
+    case "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" in
+        marty-selfhost-bootstrap-*-helper) ;;
+        *) echo "Invalid disposable bootstrap container name." >&2; exit 1 ;;
+    esac
+    case "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" in
+        *[!a-z0-9-]*) echo "Invalid disposable bootstrap container name." >&2; exit 1 ;;
+    esac
+    set -- --name "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" \
+        --label "marty.selfhost.bootstrap-handoff=${SELFHOST_BOOTSTRAP_CONTAINER_NAME}"
+else
+    set --
+fi
 
-docker run --rm \
+docker run --rm "$@" \
     -e BAO_ADDR="${BAO_ADDR}" \
     -e BAO_TOKEN \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \

@@ -60,7 +60,12 @@ def named_container(name: str, env: dict[str, str]) -> str:
 
 
 def inspect_owned(
-    container_id: str, env: dict[str, str], name: str, *, require_address: bool = True
+    container_id: str,
+    env: dict[str, str],
+    name: str,
+    *,
+    require_address: bool = True,
+    expected_mounts: dict[str, tuple[str, bool]] | None = None,
 ) -> str:
     raw = checked(
         ["docker", "inspect", "--format", "{{json .}}", container_id],
@@ -77,13 +82,27 @@ def inspect_owned(
         ports = item["HostConfig"]["PortBindings"]
         assert item["Id"] == container_id
         assert item["Name"] == "/" + name
-        assert network == "bridge" and labels.get(OWNED) == name
+        assert isinstance(labels, dict)
+        assert (
+            network
+            in ({"bridge"} if expected_mounts is None else {"bridge", "default"})
+            and labels.get(OWNED) == name
+        )
         assert image == HELPER_IMAGE
         assert not ports
+        mounts = item["Mounts"]
+        assert isinstance(mounts, list)
+        actual_mounts = {
+            mount["Destination"]: (mount["Source"], mount["RW"])
+            for mount in mounts
+            if mount["Type"] == "bind"
+        }
+        assert len(actual_mounts) == len(mounts)
+        assert actual_mounts == (expected_mounts or {})
         if require_address:
             assert ipaddress.ip_address(address).is_private
             assert ipaddress.ip_address(address).version == 4
-    except (AssertionError, KeyError, TypeError, ValueError) as exc:
+    except (AssertionError, AttributeError, KeyError, TypeError, ValueError) as exc:
         raise migrations.QualificationError(
             "Disposable OpenBao identity, network, or no-host-port boundary changed"
         ) from exc
@@ -139,12 +158,17 @@ def probe(install_root: Path, receipt: dict) -> dict:
         "Extracted bootstrap helper is missing",
     )
     name = "marty-selfhost-bootstrap-" + secrets.token_hex(8)
+    helper_name = name + "-helper"
     root_token = secrets.token_hex(32)
     env = os.environ.copy()
     env["BAO_DEV_ROOT_TOKEN_ID"] = root_token
     verify_helper_image(env, helper)
     require(
         not named_container(name, env), "Disposable OpenBao name was already occupied"
+    )
+    require(
+        not named_container(helper_name, env),
+        "Disposable bootstrap helper name was already occupied",
     )
     with tempfile.TemporaryDirectory(prefix="marty-selfhost-bootstrap-") as temporary:
         secret_dir = Path(temporary)
@@ -220,6 +244,7 @@ def probe(install_root: Path, receipt: dict) -> dict:
                 "BAO_ADDR": f"http://{address}:8200",
                 "BAO_TOKEN_FILE": str(token_file),
                 "SELFHOST_SECRET_DIR": str(secret_dir),
+                "SELFHOST_BOOTSTRAP_CONTAINER_NAME": helper_name,
             }
             result = migrations.command(["/bin/sh", str(helper)], helper_env, 180)
             require(result.returncode == 0, "Extracted OpenBao bootstrap helper failed")
@@ -259,23 +284,50 @@ def probe(install_root: Path, receipt: dict) -> dict:
                 "scoped_tokens": list(TOKEN_NAMES),
             }
         finally:
-            owned_id = named_container(name, env)
-            if owned_id:
-                require(
-                    CONTAINER_ID.fullmatch(container_id) is None
-                    or container_id == owned_id,
-                    "Disposable OpenBao identity changed before cleanup",
-                )
-                inspect_owned(owned_id, env, name, require_address=False)
-                checked(
-                    ["docker", "rm", "--force", "--volumes", owned_id],
-                    env,
-                    "Disposable OpenBao cleanup failed",
-                )
-                require(
-                    not named_container(name, env),
-                    "Disposable OpenBao remains after cleanup",
-                )
+            try:
+                helper_id = named_container(helper_name, env)
+                if helper_id:
+                    source = str((install_root / "docker/openbao-init.sh").resolve())
+                    directory = str(secret_dir.resolve())
+                    inspect_owned(
+                        helper_id,
+                        env,
+                        helper_name,
+                        require_address=False,
+                        expected_mounts={
+                            "/scripts/openbao-init.sh": (source, False),
+                            "/work-service": (directory, True),
+                            "/work-notification": (directory, True),
+                            "/work-callback": (directory, True),
+                        },
+                    )
+                    checked(
+                        ["docker", "rm", "--force", "--volumes", helper_id],
+                        env,
+                        "Disposable bootstrap helper cleanup failed",
+                    )
+                    require(
+                        not named_container(helper_name, env),
+                        "Disposable bootstrap helper remains after cleanup",
+                    )
+            finally:
+                owned_id = named_container(name, env)
+                if owned_id:
+                    require(
+                        CONTAINER_ID.fullmatch(container_id) is None
+                        or container_id == owned_id,
+                        "Disposable OpenBao identity changed before cleanup",
+                    )
+                    inspect_owned(owned_id, env, name, require_address=False)
+                    checked(
+                        ["docker", "rm", "--force", "--volumes", owned_id],
+                        env,
+                        "Disposable OpenBao cleanup failed",
+                    )
+                    require(
+                        not named_container(name, env),
+                        "Disposable OpenBao remains after cleanup",
+                    )
 
 
 def main() -> None:
