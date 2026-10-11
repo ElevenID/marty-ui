@@ -15050,13 +15050,42 @@ credential grants; the signer still needs the operation ID, exact payload
 and fixed-origin OpenBao minter wired before the route can work under the
 downstream grant gate.
 
-Passport producer test review: the main managed-SOD mock resolver in
-`passport_signer.rs` currently returns profile ID, certificate chain,
-algorithm and verification method but omits `signing_key_reference` in both
-its flattened response and nested profile. The real Signing Keys resolver
-publishes the profile-selected reference in the flattened response. When
-wiring the passport grant, update this mock to model the selected remote key,
-exercise an inconsistent top-level versus nested reference as a denial, and
-bind the persisted passport job ID and exact CMS signing input before the
-Gateway call. Do not treat the current managed-SOD test as proof of grant
-authorization merely because its returned signature verifies.
+Passport producer test review found that the managed-SOD mock omitted the
+selected remote key reference. It now models that reference in both the
+flattened response and nested profile, with a denial case for conflicting
+values. The managed passport context carries the validated reference to the
+shared `SignRequest`. Binding the persisted passport job ID and exact CMS
+signing input in a scoped grant remains open; a valid SOD signature alone
+does not prove grant authorization.
+
+Local Issuance key-reference propagation is now shared across credential,
+Canvas LTI, Canvas readiness and managed passport signing. A single Rust
+accessor rejects conflicting flattened and nested resolver references. The
+credential builder, Canvas signature provider, readiness challenge port and
+passport managed context carry the selected reference to `SignRequest`;
+`HttpDidSigner` refuses an empty reference before sending HTTP and its debug
+output reports only whether one was present. The request body still omits the
+internal reference, leaving Signing Keys to select it independently and the
+pending grant to bind the two views. Focused results: Canvas LTI behavior
+7 pass, managed passport 3 pass, readiness library 4 pass/3 live-only ignored,
+credential builder 5 pass/4 live-only ignored, credential HTTP diagnostic
+1 pass, and warnings-denied all-target Issuance Clippy passes. The new
+missing-reference and Canvas forwarding assertions pass. No grant header or
+operation ID is wired yet; do not claim these calls are usable under the
+downstream consumed-grant gate.
+
+Hosted UI run 38129327296 is terminal failure on published head
+`5e9a41116`. Rust Service Images, Release Contract, Rust Lint and Packaging,
+Flow rendered acceptance, Canvas worker acceptance, and the OpenBao DIDComm
+plugin plus coordinated PostgreSQL/Raft recovery lane passed. The Contracts
+lane failed the extracted self-host bundle at the stale Gateway secret roster
+assertion (`resolved_selfhost_runtime.rs:511`), corrected locally in
+`d4a893114` and checked against actual Compose 5.4.0 output. Canvas's sole
+failed isolated target was `selfhost_public_image_loader_isolated`; its
+parent reported an incomplete packager operation and withheld recovery. The
+child preflight calls the same `selfhost_prepared::qualify` fixture under the
+packager operation, so the roster mismatch is a likely shared cause, but the
+child diagnostic is intentionally sealed and does not prove that inference.
+The Flow and Canvas worker targets returned exit 0; the timeout replay
+panics visible in the worker log are caught comparison probes, not target
+failures. Verify both self-host targets on the next grouped hosted head.

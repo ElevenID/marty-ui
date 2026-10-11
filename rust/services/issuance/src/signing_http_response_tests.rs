@@ -367,6 +367,7 @@ fn sign_request() -> SignRequest {
         payload: b"controlled-public-payload".to_vec(),
         algorithm: "EdDSA".into(),
         verification_method_id: "did:web:issuer.example#key-1".into(),
+        signing_key_reference: "transit/keys/issuer-1".into(),
     }
 }
 fn proof_request(did: bool) -> ProofPolicyRequest {

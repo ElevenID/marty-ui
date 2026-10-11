@@ -308,21 +308,23 @@ impl IssuerContext {
     /// Return the remote key selected by the resolved issuer profile only
     /// when the response's flattened and nested views agree.
     pub fn signing_key_reference(&self) -> Option<&str> {
-        let flattened = self
-            .raw_context
-            .get("signing_key_reference")
-            .and_then(Value::as_str)
-            .filter(|reference| !reference.trim().is_empty());
-        let profile = self
-            .raw_context
-            .pointer("/issuer_profile/signing_key_reference")
-            .and_then(Value::as_str)
-            .filter(|reference| !reference.trim().is_empty());
-        match (flattened, profile) {
-            (Some(left), Some(right)) if left != right => None,
-            (Some(reference), _) | (_, Some(reference)) => Some(reference),
-            (None, None) => None,
-        }
+        resolved_signing_key_reference(&self.raw_context)
+    }
+}
+
+pub(crate) fn resolved_signing_key_reference(context: &Value) -> Option<&str> {
+    let flattened = context
+        .get("signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty());
+    let profile = context
+        .pointer("/issuer_profile/signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty());
+    match (flattened, profile) {
+        (Some(left), Some(right)) if left != right => None,
+        (Some(reference), _) | (_, Some(reference)) => Some(reference),
+        (None, None) => None,
     }
 }
 

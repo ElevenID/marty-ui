@@ -354,7 +354,7 @@ impl IssuerContextResolver for SigningHarness {
             verification_method_id: Some("did:web:issuer.example#contract-key".to_owned()),
             public_jwk: Some(public_jwk),
             certificate_chain: vec![],
-            raw_context: json!({}),
+            raw_context: json!({"signing_key_reference": "transit/keys/contract-issuer"}),
         })
     }
 }

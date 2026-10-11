@@ -36,7 +36,7 @@ impl CanvasLtiToolIdentityResolver for Resolver {
     }
 }
 
-type SignatureRequest = (String, String, String, Vec<u8>);
+type SignatureRequest = (String, String, String, String, Vec<u8>);
 
 #[derive(Default)]
 struct Signatures {
@@ -51,12 +51,14 @@ impl CanvasLtiToolSignatureProvider for Signatures {
         organization_id: &str,
         issuer_did: &str,
         verification_method_id: &str,
+        signing_key_reference: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError> {
         self.requests.lock().unwrap().push((
             organization_id.to_owned(),
             issuer_did.to_owned(),
             verification_method_id.to_owned(),
+            signing_key_reference.to_owned(),
             payload.to_vec(),
         ));
         Ok(self
@@ -72,6 +74,7 @@ fn identity(issuer_did: &str, kid: &str) -> Value {
     json!({
         "ok": true,
         "issuer_did": issuer_did,
+        "signing_key_reference": "transit/keys/canvas-tool-1",
         "verification_method_id": kid,
         "public_jwk": {
             "kid": kid,
@@ -150,8 +153,9 @@ async fn signer_uses_only_the_organization_did_and_exact_rs256_method() {
     assert_eq!(&requests[0].0, "system-tools");
     assert_eq!(&requests[0].1, issuer_did);
     assert_eq!(&requests[0].2, &kid);
+    assert_eq!(&requests[0].3, "transit/keys/canvas-tool-1");
     assert_eq!(
-        requests[0].3,
+        requests[0].4,
         format!("{}.{}", parts[0], parts[1]).as_bytes()
     );
 }

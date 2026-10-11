@@ -102,6 +102,7 @@ pub(crate) trait CanvasReadinessDidSigner: Send + Sync {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
+        signing_key_reference: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError>;
 }
@@ -134,6 +135,7 @@ impl CanvasReadinessDidSigner for HttpDidSigner {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
+        signing_key_reference: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError> {
         self.sign_did(SignRequest {
@@ -144,6 +146,7 @@ impl CanvasReadinessDidSigner for HttpDidSigner {
             payload: challenge.to_vec(),
             algorithm: configuration.algorithm.clone(),
             verification_method_id: verification_method_id.to_owned(),
+            signing_key_reference: signing_key_reference.to_owned(),
         })
         .await
         .map(|response| response.signature_b64)
@@ -263,6 +266,7 @@ impl LiveCanvasReadinessChallengeProvider {
             .await
             .ok()?;
         let verification_method_id = validate_issuer_resolution(&resolution, &configuration)?;
+        let signing_key_reference = crate::credential::resolved_signing_key_reference(&resolution)?;
         let public_jwk = resolution.get("public_jwk")?.as_object()?;
         let mut nonce = [0_u8; 32];
         rand::rng().fill_bytes(&mut nonce);
@@ -276,6 +280,7 @@ impl LiveCanvasReadinessChallengeProvider {
                 organization_id,
                 &configuration,
                 verification_method_id,
+                signing_key_reference,
                 &challenge,
             )
             .await
@@ -1021,6 +1026,7 @@ mod tests {
             _organization_id: &str,
             _configuration: &CanvasReadinessIssuerConfiguration,
             _verification_method_id: &str,
+            _signing_key_reference: &str,
             challenge: &[u8],
         ) -> Result<String, CanvasReadinessDependencyError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -1037,6 +1043,7 @@ mod tests {
             "issuer_did": issuer_did,
             "algorithm": "RS256",
             "verification_method_id": rsa.key_id,
+            "signing_key_reference": "transit/keys/canvas-readiness-1",
             "public_jwk": rsa.public_jwk,
             "issuer_profile": {
                 "status": "active",

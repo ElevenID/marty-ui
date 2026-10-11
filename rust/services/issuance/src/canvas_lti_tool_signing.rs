@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::{
     canvas_award_candidate::python_canonical_json,
+    credential::resolved_signing_key_reference,
     credential_builder::{HttpDidSigner, SignRequest},
     credential_issuer::HttpIssuerContextResolver,
 };
@@ -62,6 +63,7 @@ pub trait CanvasLtiToolSignatureProvider: Send + Sync {
         organization_id: &str,
         issuer_did: &str,
         verification_method_id: &str,
+        signing_key_reference: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError>;
 }
@@ -157,7 +159,9 @@ impl IssuerDidCanvasLtiToolJwtSigner {
 impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
     async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
         let (organization_id, issuer_did) = self.configuration()?;
-        let (verification_method_id, _, _) = self.resolved_identity().await?;
+        let (verification_method_id, _, resolution) = self.resolved_identity().await?;
+        let signing_key_reference = resolved_signing_key_reference(&resolution)
+            .ok_or(CanvasLtiToolSigningError::InvalidVerificationMethod)?;
         let header = json!({
             "alg": ALGORITHM,
             "typ": "JWT",
@@ -174,6 +178,7 @@ impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
                 organization_id,
                 issuer_did,
                 &verification_method_id,
+                signing_key_reference,
                 signing_input.as_bytes(),
             )
             .await?;
@@ -392,6 +397,7 @@ impl CanvasLtiToolSignatureProvider for HttpCanvasLtiToolSignatureProvider {
         organization_id: &str,
         issuer_did: &str,
         verification_method_id: &str,
+        signing_key_reference: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError> {
         self.signer
@@ -403,6 +409,7 @@ impl CanvasLtiToolSignatureProvider for HttpCanvasLtiToolSignatureProvider {
                 payload: payload.to_vec(),
                 algorithm: ALGORITHM.to_owned(),
                 verification_method_id: verification_method_id.to_owned(),
+                signing_key_reference: signing_key_reference.to_owned(),
             })
             .await
             .map(|response| response.signature_b64)

@@ -89,6 +89,11 @@ impl HttpCredentialBuilder {
                 payload: payload.to_vec(),
                 algorithm: algorithm.to_owned(),
                 verification_method_id: verification_method(request)?.to_owned(),
+                signing_key_reference: request
+                    .issuer
+                    .signing_key_reference()
+                    .ok_or_else(|| signing_error("Resolved issuer has no remote signing key"))?
+                    .to_owned(),
             })
             .await?;
         URL_SAFE_NO_PAD
@@ -351,6 +356,7 @@ pub(crate) struct SignRequest {
     pub(crate) payload: Vec<u8>,
     pub(crate) algorithm: String,
     pub(crate) verification_method_id: String,
+    pub(crate) signing_key_reference: String,
 }
 
 impl fmt::Debug for SignRequest {
@@ -364,6 +370,10 @@ impl fmt::Debug for SignRequest {
             .field("payload", &REDACTED_SIGNING_VALUE)
             .field("algorithm", &self.algorithm)
             .field("verification_method_id", &self.verification_method_id)
+            .field(
+                "signing_key_reference_configured",
+                &!self.signing_key_reference.is_empty(),
+            )
             .finish()
     }
 }
@@ -457,6 +467,9 @@ struct SignResponseBody {
 #[async_trait]
 impl DidSigner for HttpDidSigner {
     async fn sign(&self, request: SignRequest) -> Result<SignResponse, CredentialIssuanceError> {
+        if request.signing_key_reference.trim().is_empty() {
+            return Err(signing_error("DID signer requires a resolved remote key"));
+        }
         let mut http_request = self
             .client
             .post(self.endpoint())
@@ -1114,6 +1127,7 @@ mod tests {
             payload: payload_secret.as_bytes().to_vec(),
             algorithm: "RS256".to_owned(),
             verification_method_id: "did:web:issuer.example#safe-key".to_owned(),
+            signing_key_reference: "transit/keys/safe-key".to_owned(),
         };
         let response = SignResponse {
             signature_b64: signature_secret.to_owned(),
@@ -1170,7 +1184,7 @@ mod tests {
                 verification_method_id: Some("did:web:issuer.example#key-1".to_owned()),
                 public_jwk: None,
                 certificate_chain: Vec::new(),
-                raw_context: json!({}),
+                raw_context: json!({"signing_key_reference": "transit/keys/issuer-1"}),
             },
             status_list_entries: vec![json!({
                 "index": 7,
@@ -1408,6 +1422,7 @@ mod tests {
                 payload: b"exact-signing-input".to_vec(),
                 algorithm: "ES256".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                signing_key_reference: "transit/keys/issuer-1".to_owned(),
             })
             .await
             .expect("sign response");
@@ -1430,6 +1445,21 @@ mod tests {
         );
         assert!(body.get("issuer_profile_id").is_none());
         assert!(body.get("service_id").is_none());
+        let missing_key = signer
+            .sign(SignRequest {
+                organization_id: "org-a".to_owned(),
+                issuer_did: "did:web:issuer.example".to_owned(),
+                credential_format: "dc+sd-jwt".to_owned(),
+                key_purpose: "vc_jwt_issuer".to_owned(),
+                payload: b"exact-signing-input".to_vec(),
+                algorithm: "ES256".to_owned(),
+                verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                signing_key_reference: String::new(),
+            })
+            .await
+            .expect_err("missing remote key must be denied before HTTP");
+        assert!(missing_key.to_string().contains("resolved remote key"));
+        assert!(capture.0.lock().expect("capture lock").is_none());
         server.abort();
     }
 
@@ -1457,6 +1487,7 @@ mod tests {
                 payload: b"exact-signing-input".to_vec(),
                 algorithm: "ES256".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                signing_key_reference: "transit/keys/issuer-1".to_owned(),
             })
             .await
             .expect_err("private routing must be rejected");

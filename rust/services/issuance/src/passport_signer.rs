@@ -160,6 +160,7 @@ pub struct ManagedProfileSigner {
 
 struct ManagedSigningContext {
     issuer_profile_id: String,
+    signing_key_reference: String,
     algorithm: SodSignatureAlgorithm,
     method_id: String,
     leaf: String,
@@ -276,6 +277,7 @@ impl ManagedProfileSigner {
                 payload: prepared.signing_input().to_vec(),
                 algorithm: context.algorithm.as_str().into(),
                 verification_method_id: context.method_id,
+                signing_key_reference: context.signing_key_reference,
             })
             .await
             .map_err(|_| SignerError::ManagedUnavailable)?;
@@ -380,6 +382,9 @@ impl ManagedProfileSigner {
             .or(nested_profile_id)
             .ok_or(SignerError::InvalidManagedMaterial)?
             .to_owned();
+        let signing_key_reference = crate::credential::resolved_signing_key_reference(&identity)
+            .ok_or(SignerError::InvalidManagedMaterial)?
+            .to_owned();
         let algorithm = identity
             .get("algorithm")
             .and_then(Value::as_str)
@@ -411,6 +416,7 @@ impl ManagedProfileSigner {
         )?;
         Ok(ManagedSigningContext {
             issuer_profile_id,
+            signing_key_reference,
             algorithm,
             method_id,
             leaf,
@@ -697,7 +703,8 @@ mod tests {
                 "key_purpose": "x509_doc_signer",
                 "algorithm": "ES256",
                 "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
-                "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD"},
+                "signing_key_reference": "transit/keys/passport-dsc-1",
+                "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD", "signing_key_reference": "transit/keys/passport-dsc-1"},
                 "issuer_x5c": [dsc, csca]
             }))
         }
@@ -961,7 +968,8 @@ mod tests {
             "key_purpose": "x509_doc_signer",
             "algorithm": "ES256",
             "verification_method_id": "did:web:issuer.example:orgs:org-1#dsc",
-            "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD"},
+            "signing_key_reference": "transit/keys/passport-dsc-1",
+            "issuer_profile": {"id": "passport-profile-1", "credential_format": "ICAO_EMRTD", "signing_key_reference": "transit/keys/passport-dsc-1"},
             "issuer_x5c": ["not-reached"]
         });
         for (pointer, replacement) in [
@@ -969,6 +977,10 @@ mod tests {
             ("/issuer_did", json!("did:web:issuer.example:orgs:org-2")),
             ("/key_purpose", json!("vc_jwt_issuer")),
             ("/issuer_profile/credential_format", json!("JWT_VC")),
+            (
+                "/issuer_profile/signing_key_reference",
+                json!("transit/keys/other-tenant"),
+            ),
             (
                 "/verification_method_id",
                 json!("did:web:other.example#dsc"),
