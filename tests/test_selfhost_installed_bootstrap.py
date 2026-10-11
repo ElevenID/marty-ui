@@ -33,7 +33,13 @@ def owned_model(
             "Config": {
                 "Labels": {bootstrap.OWNED: name},
                 "Image": bootstrap.HELPER_IMAGE,
-                "User": "1000:1000" if mounts else "openbao",
+                "User": (
+                    f"{os.getuid()}:{os.getgid()}"
+                    if os.name == "posix"
+                    else "1000:1000"
+                )
+                if mounts
+                else "openbao",
             },
             "HostConfig": {
                 "NetworkMode": "default" if mounts else "bridge",
@@ -94,6 +100,40 @@ def test_helper_cleanup_rejects_foreign_mount_before_forced_remove(monkeypatch) 
             name,
             require_address=False,
             expected_mounts={"/work-service": ("/owned", True)},
+        )
+
+
+def test_helper_cleanup_rejects_wrong_runtime_user(monkeypatch) -> None:
+    container_id = "e" * 64
+    name = "marty-selfhost-bootstrap-1234567890abcdef-helper"
+    model = json.loads(
+        owned_model(
+            container_id,
+            name,
+            mounts=[
+                {
+                    "Type": "bind",
+                    "Source": "/owned",
+                    "Destination": "/work-service",
+                    "RW": True,
+                }
+            ],
+        )
+    )
+    model["Config"]["User"] = "foreign:foreign"
+    monkeypatch.setattr(
+        bootstrap, "checked", lambda *_args, **_kwargs: json.dumps(model)
+    )
+    with pytest.raises(bootstrap.migrations.QualificationError):
+        bootstrap.inspect_owned(
+            container_id,
+            {},
+            name,
+            require_address=False,
+            expected_mounts={"/work-service": ("/owned", True)},
+            expected_user=(
+                f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "1000:1000"
+            ),
         )
 
 
