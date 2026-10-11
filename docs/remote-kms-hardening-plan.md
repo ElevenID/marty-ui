@@ -14151,6 +14151,12 @@ alias/wrong-region/response-ID tests, all five provider vectors, validation
 golden vectors, the Signing Keys library suite (183 passed, nine ignored),
 Clippy with warnings denied, changed-file Rustfmt and diff hygiene pass.
 Real AWS key/certificate acceptance remains outstanding.
+The DescribeKey connectivity probe now checks its returned metadata ARN
+against the pinned request ARN instead of treating any HTTP success as the
+requested key. The provider golden fixture covers both matching and
+mismatching metadata; its five-test suite, Signing Keys Clippy with warnings
+denied and changed-file Rustfmt pass. This is synthetic response evidence,
+not a real AWS provider proof.
 
 UI #1192 head `ba2724cba2e37320fafc62e1333647baf667b15d` [CI
 38113449573](https://github.com/ElevenID/marty-ui/actions/runs/38113449573)

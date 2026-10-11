@@ -2150,10 +2150,17 @@ async fn verify_aws(config: &Value) -> CapabilityResult {
         Err(error) => return CapabilityResult::fail("Authentication", error.to_string()),
     };
     match client.describe_key().key_id(key_id).send().await {
+        Ok(output) if output.key_metadata().and_then(|metadata| metadata.arn()) == Some(key_id) => {
+            result.add_check(
+                "Key exists",
+                "pass",
+                format!("AWS KMS key '{key_id}' is reachable."),
+            )
+        }
         Ok(_) => result.add_check(
             "Key exists",
-            "pass",
-            format!("AWS KMS key '{key_id}' is reachable."),
+            "fail",
+            "AWS KMS returned metadata for a different key.",
         ),
         Err(_) => result.add_check("Connectivity", "fail", "AWS KMS verification failed."),
     }

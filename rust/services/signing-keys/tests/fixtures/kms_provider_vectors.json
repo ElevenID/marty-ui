@@ -243,6 +243,22 @@
   ],
   "verify_cases": [
     {
+      "name": "aws_key_reachable",
+      "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "auth_mode": "access_key", "auth_reference": "{\"access_key_id\":\"test-access-key\",\"secret_access_key\":\"test-secret-key\"}" },
+      "expected_request": { "method": "POST", "path_query": "/", "headers": { "x-amz-target": "TrentService.DescribeKey" }, "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test" } },
+      "provider_status": 200,
+      "provider_response": { "KeyMetadata": { "Arn": "arn:aws:kms:us-east-1:111122223333:key/test" } },
+      "expected_response": { "ok": true, "checks": [{ "name": "Key exists", "status": "pass", "detail": "AWS KMS key 'arn:aws:kms:us-east-1:111122223333:key/test' is reachable.", "source": "adapter" }] }
+    },
+    {
+      "name": "aws_key_mismatch",
+      "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "auth_mode": "access_key", "auth_reference": "{\"access_key_id\":\"test-access-key\",\"secret_access_key\":\"test-secret-key\"}" },
+      "expected_request": { "method": "POST", "path_query": "/", "headers": { "x-amz-target": "TrentService.DescribeKey" }, "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test" } },
+      "provider_status": 200,
+      "provider_response": { "KeyMetadata": { "Arn": "arn:aws:kms:us-east-1:111122223333:key/other" } },
+      "expected_response": { "ok": false, "checks": [{ "name": "Key exists", "status": "fail", "detail": "AWS KMS returned metadata for a different key.", "source": "adapter" }] }
+    },
+    {
       "name": "openbao_signing_key_reachable",
       "service_config": { "service_type": "openbao-transit", "endpoint": "$STUB", "mount": "transit", "key_reference": "issuer-key", "auth_mode": "token", "auth_reference": "root" },
       "expected_request": { "method": "GET", "path_query": "/v1/transit/keys/issuer-key", "headers": { "x-vault-token": "root" } },
