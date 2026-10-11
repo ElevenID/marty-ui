@@ -307,8 +307,20 @@ def protected_source(
     branch = json.loads(runner(["gh", "api", "repos/ElevenID/marty-ui/branches/main"]))
     require(branch.get("protected") is True
             and isinstance(branch.get("commit"), dict)
-            and branch["commit"].get("sha") == head,
-            "Local source differs from protected remote main")
+            and SHA.fullmatch(str(branch["commit"].get("sha"))) is not None,
+            "Remote main is not protected")
+    remote_head = branch["commit"]["sha"]
+    # The release source stays immutable while unrelated commits may land on
+    # protected main. Callers additionally bind this source to the signed
+    # manifest, published annotated tag, and their stage receipts.
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/ElevenID/marty-ui/compare/{head}...{remote_head}",
+    ]))
+    require(comparison.get("status") in ("ahead", "identical")
+            and comparison.get("behind_by") == 0
+            and isinstance(comparison.get("merge_base_commit"), dict)
+            and comparison["merge_base_commit"].get("sha") == head,
+            "Local release source is not an ancestor of protected main")
     return head
 
 

@@ -140,7 +140,7 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
-          test "$(git rev-parse 'refs/remotes/origin/main^{commit}')" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
           python scripts/release_transaction.py validate \
             --input "$RUNNER_TEMP/release-transaction-input/release-transaction.json" \
             --repository "$GITHUB_REPOSITORY" \
@@ -231,7 +231,7 @@ jobs:
             +refs/heads/main:refs/remotes/origin/main
           main_commit="$(git rev-parse refs/remotes/origin/main)"
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
-          test "$main_commit" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" "$main_commit"
       - id: components
         env:
           EXPECTED_VERSION: ${{ needs.resolve-transaction.outputs.version }}
@@ -976,7 +976,7 @@ jobs:
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          test "$(git rev-parse refs/remotes/origin/main)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
       - name: Reject incomplete independent image inputs before building
         env:
           EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
@@ -1112,7 +1112,7 @@ jobs:
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          test "$(git rev-parse refs/remotes/origin/main)" = "$SOURCE_SHA"
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
           python scripts/release_transaction.py validate \
             --input transaction/release-transaction.json \
             --repository "$GITHUB_REPOSITORY" --source-sha "$SOURCE_SHA" \
