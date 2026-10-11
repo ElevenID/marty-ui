@@ -15171,3 +15171,12 @@ and warnings-denied all-target Clippy and Rust formatting passed. The
 disposable PostgreSQL container was removed. This local fixture still cannot
 prove live OpenBao grant policy, KMS key non-exportability, hosted packaging,
 or release cutover.
+
+The disposable pinned OpenBao ACL probe now checks all seven signing origins
+against the actual `docker/openbao-init.sh` policies. Each HMAC key is
+non-exportable with plaintext backup disabled; its dedicated token mints only
+that origin, cannot verify or export, and is denied every other origin's mint
+path. The verify-only token cannot mint. Every grant verifies under its own
+key and fails under all six other keys. The probe passed and removed its
+disposable container. This proves live OpenBao key and policy isolation, but
+not Signing Keys replay consumption or the exact production service route.

@@ -307,6 +307,76 @@ def qualify(*, rust_adapter: bool = False) -> None:
             == 403,
             "beta callback token cannot verify provider HMAC",
         )
+        grant_origins = (
+            "gateway-service", "gateway-issuer-did", "flow-wallet",
+            "issuance-credential", "issuance-canvas",
+            "issuance-readiness", "issuance-passport",
+        )
+        grant_mint_tokens = {
+            origin: issue([f"sign-grant-mint-{origin}"])
+            for origin in grant_origins
+        }
+        grant_verify_token = issue(["sign-grant-verify"])
+        grant_input = base64.b64encode(b"exact scoped signing operation").decode()
+        for origin in grant_origins:
+            key = f"marty-sign-grant-{origin}-v1"
+            status, metadata = call("GET", f"transit/keys/{key}", root_token)
+            ensure(status == 200, f"read {origin} grant key")
+            ensure(
+                metadata["data"]["type"] == "hmac"
+                and metadata["data"]["exportable"] is False
+                and metadata["data"]["allow_plaintext_backup"] is False,
+                f"{origin} grant key custody",
+            )
+            status, minted = call(
+                "POST", f"transit/hmac/{key}/sha2-256",
+                grant_mint_tokens[origin], {"input": grant_input},
+            )
+            ensure(status == 200, f"mint {origin} grant")
+            hmac = minted["data"]["hmac"]
+            status, verified = call(
+                "POST", f"transit/verify/{key}/sha2-256",
+                grant_verify_token, {"input": grant_input, "hmac": hmac},
+            )
+            ensure(
+                status == 200 and verified.get("data", {}).get("valid") is True,
+                f"verify {origin} grant",
+            )
+            ensure(
+                call("POST", f"transit/verify/{key}/sha2-256",
+                     grant_mint_tokens[origin],
+                     {"input": grant_input, "hmac": hmac})[0] == 403,
+                f"{origin} mint token cannot verify",
+            )
+            ensure(
+                call("POST", f"transit/hmac/{key}/sha2-256",
+                     grant_verify_token, {"input": grant_input})[0] == 403,
+                f"verify token cannot mint {origin}",
+            )
+            ensure(
+                call("GET", f"transit/export/hmac-key/{key}",
+                     grant_mint_tokens[origin])[0] == 403,
+                f"{origin} mint token cannot export",
+            )
+            for other in grant_origins:
+                if other == origin:
+                    continue
+                other_key = f"marty-sign-grant-{other}-v1"
+                ensure(
+                    call("POST", f"transit/hmac/{other_key}/sha2-256",
+                         grant_mint_tokens[origin], {"input": grant_input})[0]
+                    == 403,
+                    f"{origin} mint token cannot mint {other}",
+                )
+                status, wrong_origin = call(
+                    "POST", f"transit/verify/{other_key}/sha2-256",
+                    grant_verify_token, {"input": grant_input, "hmac": hmac},
+                )
+                ensure(
+                    status == 200
+                    and wrong_origin.get("data", {}).get("valid") is False,
+                    f"{origin} grant cannot verify as {other}",
+                )
         if rust_adapter:
             require_docker(
                 "run",
@@ -655,7 +725,7 @@ def qualify(*, rust_adapter: bool = False) -> None:
                     f"Rust managed-profile route check failed:\n{detail[-2000:]}"
                 )
         print(
-            "Scoped signing-keys policy passed against disposable OpenBao for six managed prefixes and isolated provider HMAC verification"
+            "Scoped signing-keys policy passed against disposable OpenBao for six managed prefixes, isolated provider HMAC verification, and seven origin-bound signing-grant keys"
         )
         if rust_adapter:
             print(
