@@ -3,13 +3,14 @@
 
 use axum::{
     body::{to_bytes, Body},
-    extract::Path,
     http::{Request, StatusCode},
-    response::IntoResponse,
-    routing::{get, post},
-    Json, Router,
+    Router,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use marty_signing_grant::{
+    mint_bound, replay::RedisGrantReplayStore, transit::TransitGrantClient,
+    verifier::GrantVerifier, GrantBinding, SigningOrigin, HEADER_NAME,
+};
 use marty_signing_keys::{
     documents::DocumentStore,
     kms::{create_managed_openbao, ProviderRequest, SignRequest},
@@ -18,16 +19,9 @@ use marty_signing_keys::{
 };
 use redis::AsyncCommands;
 use serde_json::{json, Value};
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
-};
+use std::io::Write;
 use tower::ServiceExt;
 use uuid::Uuid;
-
-#[path = "support/mock_bao_addr.rs"]
-mod mock_bao_addr_support;
-use mock_bao_addr_support::mock_bao_addr;
 
 #[tokio::test]
 #[ignore = "requires marked disposable OpenBao and managed signing token"]
@@ -202,17 +196,53 @@ async fn sign_service(
     service_id: &str,
     payload: Value,
 ) -> (StatusCode, Value) {
+    let route = format!("/v1/signing-keys/services/{service_id}/sign");
+    let grant = if let (Some(encoded), Some(reference), Some(purpose), Some(algorithm)) = (
+        payload.get("payload_b64").and_then(Value::as_str),
+        payload.get("key_reference").and_then(Value::as_str),
+        payload.get("key_purpose").and_then(Value::as_str),
+        payload.get("algorithm").and_then(Value::as_str),
+    ) {
+        let bytes = URL_SAFE_NO_PAD
+            .decode(encoded)
+            .expect("test signing payload");
+        let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let token =
+            std::env::var("MARTY_TEST_GRANT_MINT_TOKEN").expect("scoped Gateway grant mint token");
+        let client = TransitGrantClient::for_origin(&endpoint, SigningOrigin::GatewayService)
+            .expect("Gateway grant key");
+        let operation_id = Uuid::new_v4().to_string();
+        let binding = GrantBinding {
+            origin: SigningOrigin::GatewayService,
+            operation_id: &operation_id,
+            organization_id,
+            route: &route,
+            service_id: Some(service_id),
+            issuer_did: None,
+            key_reference: Some(reference),
+            key_purpose: purpose,
+            algorithm,
+            payload: &bytes,
+        };
+        Some(
+            mint_bound(&client, &token, &binding)
+                .await
+                .expect("scoped signing grant")
+                .to_header_value()
+                .expect("signing grant header"),
+        )
+    } else {
+        None
+    };
+    let mut request = Request::post(format!("{route}?organization_id={organization_id}"))
+        .header("content-type", "application/json")
+        .header("x-api-key", "test-service-sign-gateway-key-000000");
+    if let Some(grant) = grant.as_deref() {
+        request = request.header(HEADER_NAME, grant);
+    }
     let response = app
         .clone()
-        .oneshot(
-            Request::post(format!(
-                "/v1/signing-keys/services/{service_id}/sign?organization_id={organization_id}"
-            ))
-            .header("content-type", "application/json")
-            .header("x-api-key", "test-service-sign-gateway-key-000000")
-            .body(Body::from(payload.to_string()))
-            .unwrap(),
-        )
+        .oneshot(request.body(Body::from(payload.to_string())).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -222,27 +252,53 @@ async fn sign_service(
     (status, body)
 }
 
+async fn scoped_grant_verifier(
+    endpoint: &str,
+    connection: redis::aio::ConnectionManager,
+) -> (GrantVerifier, tempfile::NamedTempFile) {
+    let token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN").expect("scoped grant verify token");
+    let mut file = tempfile::NamedTempFile::new().expect("grant token file");
+    file.write_all(token.as_bytes()).expect("write grant token");
+    let verifier = GrantVerifier::for_managed_openbao(
+        endpoint,
+        file.path().to_path_buf(),
+        RedisGrantReplayStore::new(connection),
+    )
+    .expect("scoped signing verifier");
+    (verifier, file)
+}
+
+async fn signing_router(
+    registry: RegistryStore,
+    documents: DocumentStore,
+    profiles: ProfileStore,
+    grant_endpoint: &str,
+) -> (Router, tempfile::NamedTempFile) {
+    let (verifier, file) = scoped_grant_verifier(grant_endpoint, registry.connection()).await;
+    let router = marty_signing_keys::http::router_with_all_keys_and_grants(
+        "test-internal-key".into(),
+        Some("test-service-sign-gateway-key-000000".into()),
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some(registry),
+        Some(documents),
+        None,
+        Some(profiles),
+        None,
+        None,
+        Some(verifier),
+    );
+    (router, file)
+}
+
 #[tokio::test]
-#[ignore = "requires independently marked disposable loopback Redis"]
+#[ignore = "requires independently marked disposable loopback Redis and OpenBao grants"]
 async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
     let redis_url = disposable_redis_url().await;
-    let calls = Arc::new(AtomicUsize::new(0));
-    let kms = Router::new().route(
-        "/v1/transit/sign/{reference}",
-        post({
-            let calls = Arc::clone(&calls);
-            move || {
-                let calls = Arc::clone(&calls);
-                async move {
-                    calls.fetch_add(1, Ordering::SeqCst);
-                    StatusCode::INTERNAL_SERVER_ERROR
-                }
-            }
-        }),
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let (endpoint, _) = disposable_openbao().await;
     let organization_id = format!("test-managed-stale-{}", Uuid::new_v4().simple());
     let stale_reference = "cred-issuer-0123456789abcdefabcd-es256";
     let foreign_namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"other-tenant")
@@ -265,18 +321,17 @@ async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
         )
         .await
         .unwrap();
-    let managed = registry.clone().with_managed_openbao(Some(endpoint));
+    let managed = registry
+        .clone()
+        .with_managed_openbao(Some(endpoint.clone()));
     let profiles = ProfileStore::from_connection(registry.connection());
-    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
-        "test-internal-key".to_string(),
-        Some("test-service-sign-gateway-key-000000".into()),
-        Some(managed),
-        Some(DocumentStore::from_connection(registry.connection())),
-        None,
-        Some(profiles.clone()),
-        None,
-        None,
-    );
+    let (app, _grant_file) = signing_router(
+        managed,
+        DocumentStore::from_connection(registry.connection()),
+        profiles.clone(),
+        &endpoint,
+    )
+    .await;
     let (status, body) = sign_service(
         &app,
         &organization_id,
@@ -329,14 +384,12 @@ async fn stale_managed_profile_binding_cannot_select_a_kms_key() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{mismatched}");
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
     let mut connection = registry.connection();
     let _: () = connection.del(storage_key(&organization_id)).await.unwrap();
     let _: () = connection
         .del(profile_storage_key(&organization_id))
         .await
         .unwrap();
-    server.abort();
 }
 
 #[tokio::test]
@@ -425,80 +478,29 @@ async fn public_config_cannot_replace_managed_kms_purpose_bindings() {
 }
 
 #[tokio::test]
-#[ignore = "requires independently marked disposable loopback Redis and test-only BAO_TOKEN"]
+#[ignore = "requires independently marked disposable loopback Redis and scoped OpenBao grants"]
 async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sign() {
     let redis_url = disposable_redis_url().await;
-    std::env::var("BAO_TOKEN").expect("test-only managed OpenBao token");
+    let (endpoint, _) = disposable_openbao().await;
     let organization_id = format!("test-managed-alias-{}", Uuid::new_v4().simple());
     let other_organization_id = format!("test-managed-other-{}", Uuid::new_v4().simple());
     let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
         .simple()
         .to_string();
     let reference = format!("cred-issuer-{namespace}-issuer-es256");
-    let calls = Arc::new(AtomicUsize::new(0));
-    const PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n";
-    let kms = Router::new()
-        .route(
-            "/v1/transit/keys",
-            get({
-                let reference = reference.clone();
-                move || {
-                    let reference = reference.clone();
-                    async move { Json(json!({"data": {"keys": [reference]}})) }
-                }
-            }),
-        )
-        .route(
-            "/v1/transit/keys/{reference}",
-            get({
-                let expected = reference.clone();
-                move |Path(actual): Path<String>| {
-                    let expected = expected.clone();
-                    async move {
-                        if actual != expected {
-                            return StatusCode::NOT_FOUND.into_response();
-                        }
-                        Json(json!({"data": {
-                            "latest_version": 1,
-                            "type": "ecdsa-p256",
-                            "supports_signing": true,
-                            "soft_deleted": false,
-                            "exportable": false,
-                            "allow_plaintext_backup": false,
-                            "deletion_allowed": false,
-                            "imported_key": false,
-                            "keys": {"1": {"public_key": PUBLIC_KEY_PEM}}
-                        }}))
-                        .into_response()
-                    }
-                }
-            }),
-        )
-        .route(
-            "/v1/transit/sign/{reference}",
-            post({
-                let calls = Arc::clone(&calls);
-                let expected = reference.clone();
-                move |Path(actual): Path<String>| {
-                    let calls = Arc::clone(&calls);
-                    let expected = expected.clone();
-                    async move {
-                        if actual != expected {
-                            return StatusCode::NOT_FOUND.into_response();
-                        }
-                        calls.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({"data": {"signature": "vault:v1:MAYCAQECAQI="}}))
-                            .into_response()
-                    }
-                }
-            }),
-        );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
-    let _bao_addr = mock_bao_addr(&endpoint).await;
+    let metadata = create_managed_openbao(ProviderRequest {
+        service_config: json!({
+            "id": "managed-openbao-transit", "service_type": "openbao-transit",
+            "auth_mode": "service_token", "endpoint": endpoint,
+            "mount": "transit", "key_reference": reference, "algorithm": "ES256"
+        }),
+    })
+    .await
+    .expect("non-exportable tenant signing key");
+    assert_eq!(metadata["exportable"], false);
+    assert_eq!(metadata["allow_plaintext_backup"], false);
     let stored = RegistryStore::connect(&redis_url).await.unwrap();
-    let managed = stored.clone().with_managed_openbao(Some(endpoint));
+    let managed = stored.clone().with_managed_openbao(Some(endpoint.clone()));
     for tenant in [&organization_id, &other_organization_id] {
         managed
             .save(
@@ -528,16 +530,13 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
         .put(&other_organization_id, "foreign-profile", foreign_profile)
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
-        "test-internal-key".to_string(),
-        Some("test-service-sign-gateway-key-000000".into()),
-        Some(managed),
-        Some(DocumentStore::from_connection(stored.connection())),
-        None,
-        Some(profiles.clone()),
-        None,
-        None,
-    );
+    let (app, _grant_file) = signing_router(
+        managed,
+        DocumentStore::from_connection(stored.connection()),
+        profiles.clone(),
+        &endpoint,
+    )
+    .await;
     let request = json!({
         "payload_b64": "cGF5bG9hZA",
         "algorithm": "ES256",
@@ -552,7 +551,9 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{signed}");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(signed["signature_b64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
     for (tenant, purpose, algorithm) in [
         (&organization_id, "mdoc_dsc", "ES256"),
         (&organization_id, "vc_jwt_issuer", "RS256"),
@@ -563,7 +564,6 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
         denied["algorithm"] = json!(algorithm);
         let (status, body) = sign_service(&app, tenant, "managed-openbao-transit", denied).await;
         assert_eq!(status, StatusCode::CONFLICT, "{body}");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
     let mut implicit_reference = request.clone();
     implicit_reference
@@ -578,7 +578,6 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
     )
     .await;
     assert_ne!(status, StatusCode::OK, "{body}");
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
     let mut connection = stored.connection();
     for tenant in [&organization_id, &other_organization_id] {
         let _: () = connection.del(storage_key(tenant)).await.unwrap();
@@ -587,7 +586,6 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
         .del(profile_storage_key(&other_organization_id))
         .await
         .unwrap();
-    server.abort();
 }
 
 #[tokio::test]
@@ -640,7 +638,7 @@ async fn live_managed_provider_rejects_foreign_profile_for_explicit_and_default_
     .await
     .expect("scoped managed key creation");
     let stored = RegistryStore::connect(&redis_url).await.unwrap();
-    let managed = stored.clone().with_managed_openbao(Some(endpoint));
+    let managed = stored.clone().with_managed_openbao(Some(endpoint.clone()));
     for tenant in [&own_tenant, &foreign_tenant] {
         managed
             .save(
@@ -669,16 +667,13 @@ async fn live_managed_provider_rejects_foreign_profile_for_explicit_and_default_
         .put(&foreign_tenant, "foreign-profile", forged)
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
-        "test-internal-key".to_string(),
-        Some("test-service-sign-gateway-key-000000".into()),
-        Some(managed),
-        Some(DocumentStore::from_connection(stored.connection())),
-        None,
-        Some(profiles),
-        None,
-        None,
-    );
+    let (app, _grant_file) = signing_router(
+        managed,
+        DocumentStore::from_connection(stored.connection()),
+        profiles,
+        &endpoint,
+    )
+    .await;
     let request = json!({
         "payload_b64": "cGF5bG9hZA", "algorithm": "ES256",
         "key_purpose": "vc_jwt_issuer", "key_reference": reference
@@ -782,20 +777,13 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         .put(&organization_id, "ip-vector", profile)
         .await
         .unwrap();
-    let app = marty_signing_keys::http::router_with_dependencies_and_sign_key(
-        "test-internal-key".to_string(),
-        Some("test-service-sign-gateway-key-000000".into()),
-        Some(registry.clone()),
-        Some(documents),
-        None,
-        Some(profiles.clone()),
-        None,
-        None,
-    );
+    let (app, _grant_file) =
+        signing_router(registry.clone(), documents, profiles.clone(), &bao_url).await;
     let request = json!({
         "payload_b64": "cGF5bG9hZA",
         "algorithm": "ES256",
         "key_purpose": "vc_jwt_issuer",
+        "key_reference": key_name,
     });
     let (status, signed) = sign(&app, &organization_id, request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{signed}");

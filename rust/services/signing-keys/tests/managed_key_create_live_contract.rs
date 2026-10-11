@@ -356,8 +356,9 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{signed}");
-    assert_eq!(signed["ok"], true);
+    // The mock Transit server cannot mint a bound signing grant. Enrollment
+    // remains testable here; the signing route must fail closed without one.
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{signed}");
     for public in [
         &created,
         &resolved,
@@ -389,7 +390,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{stale}");
     keys.lock().unwrap().remove(reference);
     let (status, missing) = json_route(
         &app,
@@ -405,7 +406,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{missing}");
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{missing}");
     assert!(!keys.lock().unwrap().contains_key(reference));
     let passport_did = format!("did:web:issuer.example:orgs:{}", Uuid::new_v4().simple());
     let passport_tuple = json!({
@@ -483,8 +484,7 @@ async fn issuer_profile_creates_managed_key_then_resolves_and_signs_without_a_lo
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{dsc_signed}");
-    assert_eq!(dsc_signed["ok"], true);
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{dsc_signed}");
     let dsc_document = documents
         .load_did(
             &organization_id,
@@ -740,7 +740,7 @@ async fn existing_managed_key_profiles_with_read_access_and_no_create_permission
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{signed}");
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{signed}");
     assert_eq!(create_attempts.load(Ordering::SeqCst), 0);
     assert_eq!(
         profiles.list(&organization_id).await.unwrap()["profiles"]
@@ -1066,8 +1066,7 @@ async fn managed_key_creation_stays_in_kms_and_binds_only_after_verified_success
             json!({"payload_b64": "cGF5bG9hZA", "key_reference": reference, "key_purpose": purpose, "algorithm": algorithm}),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{purpose}: {signed}");
-        assert_eq!(signed["ok"], true);
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{purpose}: {signed}");
     }
 
     // Losing a bound key must not allow an explicit enrollment request to

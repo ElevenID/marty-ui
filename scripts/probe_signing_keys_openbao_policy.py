@@ -543,6 +543,8 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
                     "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
                     "BAO_TOKEN": managed,
+                    "MARTY_TEST_GRANT_MINT_TOKEN": grant_mint_tokens["gateway-service"],
+                    "MARTY_TEST_GRANT_VERIFY_TOKEN": grant_verify_token,
                     "MARTY_TEST_REDIS_URL": f"redis://127.0.0.1:{redis_port}/13",
                     "MARTY_TEST_REDIS_DISPOSABLE_NONCE": redis_nonce,
                     "DEVICE_REGISTRATION_POSTGRES_TEST_URL": (

@@ -15474,3 +15474,21 @@ credential alone never authorizes issuer signing. The focused test and all 16
 `marty-signing-keys --test http_golden_vectors` cases pass locally. This fix
 is held for a grouped push until the running image, OpenBao and Canvas jobs
 finish and their results are inspected.
+
+The next correction has now been exercised against a disposable local
+OpenBao/Redis/PostgreSQL stack before push. The managed-key route fixtures
+still attempted signing with an API key alone and, in two cases, changed
+`BAO_ADDR` to a mock KMS endpoint that cannot support real origin-bound grant
+minting. The positive public-service route tests now use the real disposable
+OpenBao provider and verifier with separately scoped Gateway mint and verify
+tokens. The mock-provider enrollment tests retain their creation, public-key,
+profile, tenant, and error-path checks while explicitly asserting that sign
+requests without a grant fail with 401. Positive service signing and tenant
+denial are covered by the real-provider tests. The full
+`py -3.12 scripts/probe_signing_keys_openbao_policy.py --rust-adapter` run
+passed: seven origin-bound grant keys and scoped ACLs, managed signing, all
+three CSR algorithms, holder and credential persistence, pairing, tenant
+routes, and managed-profile routes. The test sources compile offline and the
+diff has no whitespace errors. Hosted run `38149505674` still has Canvas in
+progress at this checkpoint; group these local corrections with the golden
+vector fix once its final result is known, then rerun exact-head CI.
