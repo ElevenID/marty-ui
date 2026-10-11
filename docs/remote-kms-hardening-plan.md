@@ -13817,3 +13817,18 @@ targeted Rust example `cargo check` and Clippy with warnings denied pass
 locally using toolchain 1.95.0; Rustfmt and diff hygiene pass. Other
 jobs and the exact-head CodeQL run are still active, and this local fix is
 not hosted qualification until a later grouped head passes.
+
+The same [CI run](https://github.com/ElevenID/marty-ui/actions/runs/38104474349)
+also failed Release Contract Tests in six assertions. Five were stale
+reviewed current-input pins after removal of the Python validation
+preparer and its Rust published-image wrapper: JSON-depth constructor and
+preparer hashes, the body-timeout preparer pin, and REST preparer/native
+HTTPS hashes (including the transitive consumer-range fixture hash). The
+sixth was the published Python matrix timing collector still admitting the
+20 removed validation-wrapper case IDs. The local grouped correction now
+pins the changed reviewed files, removes only those historical timing IDs,
+and updates the fixed wrapper count from 11 to 10; native validation still
+has its distinct HTTPS scenario/timing owner. All 73 tests across the four
+affected suites pass locally. This does not requalify the frozen historical
+reference or the published release image; the next exact-head hosted run
+must pass.
