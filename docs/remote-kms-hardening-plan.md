@@ -16144,3 +16144,18 @@ updated to this head and its remaining release gates. Exact-head
 [CI run 38171770054](https://github.com/ElevenID/marty-ui/actions/runs/38171770054)
 has started; preserve this checkpoint locally for the next grouped tracker
 push rather than launching a second hosted cycle for documentation alone.
+
+Post-push local source-head regression probe: on the accumulated custody
+batch, `py -3.12 scripts/probe_signing_keys_openbao_policy.py --rust-adapter`
+passed again against disposable OpenBao, Redis and PostgreSQL. It exercised
+six managed signing prefixes, seven origin-bound grant keys, isolated provider
+HMAC, the Rust managed-key adapter, ES256/384/512 CSR custody, holder
+service/database/OpenBao lifecycle, credential durability, Redis pairing,
+tenant routes and managed-profile routes. Probe containers were removed. This
+is local source-built evidence while exact-head CI on `44e94b746` runs, not
+qualification of a locked release image. Hold the tracker-only checkpoint for
+the next grouped push.
+The complete Issuance library selection on this accumulated source head also
+passed: 583 tests, zero failures, eight opt-in tests ignored. This confirms
+the new final-write guards did not regress the default library suite; opt-in
+live provider acceptance and exact release-image checks remain separate.
