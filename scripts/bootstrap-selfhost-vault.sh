@@ -57,10 +57,12 @@ PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME=$(basename "${PASSPORT_CALLBACK_TOKEN_OU
 mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
 
 echo "Configuring external Vault/OpenBao at ${BAO_ADDR}..."
+# Pass the token through Docker's inherited environment, not the process argv.
+export BAO_TOKEN
 
 docker run --rm \
     -e BAO_ADDR="${BAO_ADDR}" \
-    -e BAO_TOKEN="${BAO_TOKEN}" \
+    -e BAO_TOKEN \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
     -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
