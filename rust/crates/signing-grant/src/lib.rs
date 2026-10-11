@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub mod ceremony;
 pub mod minter;
 pub mod replay;
 mod token_file;
@@ -49,12 +50,21 @@ impl SigningOrigin {
             Self::GatewayService => claims
                 .route
                 .strip_prefix("/v1/signing-keys/services/")
-                .and_then(|tail| tail.strip_suffix("/sign"))
-                .is_some_and(|service_id| {
+                .and_then(|tail| {
+                    tail.strip_suffix("/sign")
+                        .map(|service_id| (service_id, false))
+                        .or_else(|| {
+                            tail.strip_suffix("/certificate-csr")
+                                .map(|service_id| (service_id, true))
+                        })
+                })
+                .is_some_and(|(service_id, csr)| {
                     !service_id.is_empty()
                         && !service_id.contains('/')
                         && claims.service_id.as_deref() == Some(service_id)
                         && claims.issuer_did.is_none()
+                        && (!csr
+                            || (claims.key_purpose == "x509_csr" && claims.key_reference.is_some()))
                 }),
             Self::FlowWalletRequest => {
                 issuer_did_route_shape(claims)
@@ -402,6 +412,30 @@ mod tests {
             bound_input(&claims, &binding(b"changed.payload"), 1_700_000_001),
             Err(GrantError::BindingMismatch)
         ));
+    }
+
+    #[test]
+    fn gateway_service_csr_grant_requires_the_csr_purpose_and_explicit_key() {
+        let mut claims = sample_claims();
+        claims.route = "/v1/signing-keys/services/service-1/certificate-csr".into();
+        claims.key_purpose = "x509_csr".into();
+        let binding = GrantBinding {
+            route: &claims.route,
+            key_purpose: "x509_csr",
+            ..binding(b"exact.payload")
+        };
+        assert!(bound_input(&claims, &binding, 1_700_000_001).is_ok());
+        claims.key_purpose = "vc_jwt_issuer".into();
+        assert_eq!(
+            bound_input(&claims, &binding, 1_700_000_001),
+            Err(GrantError::Malformed)
+        );
+        claims.key_purpose = "x509_csr".into();
+        claims.key_reference = None;
+        assert_eq!(
+            bound_input(&claims, &binding, 1_700_000_001),
+            Err(GrantError::Malformed)
+        );
     }
 
     #[test]

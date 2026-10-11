@@ -14748,6 +14748,17 @@ with 422, while the test expected 400. The assertion now matches that exact
 contract. Keep the correction local with the broader authorization batch until
 the remaining hosted lanes finish.
 
+The service-CSR producer/consumer batch has begun locally in the shared Rust
+grant crate. `ServiceCsrIntent` now has one canonical subject/key/algorithm
+encoding for Gateway and Signing Keys; its untrusted body tenant is excluded
+because the authenticated tenant is bound separately in the grant. The fixed
+Gateway service origin can authorize the `/certificate-csr` route only for an
+explicit key reference and `x509_csr` purpose. Shared grant tests pass (12
+active, three opt-in live tests ignored) and warnings-denied Clippy passes.
+Gateway minting, Signing Keys verification, the transition from verified
+intent to an exact generated-CSR signing proof, and live KMS acceptance remain
+open. Do not publish this partial feature independently.
+
 The current `5db9a4b7f` hosted release-contract lane has now completed
 successfully. Contracts failed at the Gateway executable fixture described
 above; the OpenBao image, Rust service image and Canvas lanes remain
