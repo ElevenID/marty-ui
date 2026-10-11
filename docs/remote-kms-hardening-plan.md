@@ -14940,3 +14940,16 @@ on Windows because the synthetic `docker compose config` call is rejected;
 the Linux hosted rerun must confirm the fixture correction. Do not count
 this local run as a pass. Remaining lanes on the published head are still
 running; retain the local fixes for one grouped push after terminal CI.
+
+Canvas operation-authority inventory for the pending producer wiring:
+deep-linking signs only after loading its session, pilot/staff check,
+platform/binding lookup and return-URL validation; its persisted launch
+session ID plus newly generated response nonce can identify that operation.
+The readiness signer creates a random 24-byte JWT `jti` for a configured
+issuer and fixed readiness audience. The Canvas sync OAuth assertion creates
+a UUID `jti` after checking platform client identity and trusted token
+endpoint. Thread an explicit caller-supplied operation ID and operation kind
+through `CanvasLtiToolJwtSigner` and the signature-provider boundary from
+these three sites, then bind the resolved profile key and exact canonical JWT
+signing input in the grant. Do not infer authority solely from a payload
+claim or use one default Canvas operation ID for all callers.
