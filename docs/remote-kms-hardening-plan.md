@@ -14265,3 +14265,14 @@ wrong-tenant/payload/purpose/key/operation, expiry, replay, concurrent-use,
 direct-backend and outage tests; prove live OpenBao policy denial and allowed
 wallet/credential paths. This is an implementation design, not completed K6
 authority evidence.
+
+K6 grant foundation, local UI batch: added a shared Rust `marty-signing-grant`
+crate for versioned, domain-separated canonical claim bytes and exact operation
+binding. Claims cover producer, operation ID, tenant, route, service/issuer,
+key reference/purpose, algorithm, SHA-256 of the payload, short expiry and a
+one-use nonce. The crate rejects malformed, expired, wrong-tenant, wrong-key,
+wrong-purpose and altered-payload claims before invoking a KMS verifier; it
+contains no secret key or local HMAC implementation. Its focused tests and
+warnings-denied Clippy pass. This is contract groundwork only: producers,
+OpenBao HMAC/verify, atomic replay, policies and live sign-route enforcement
+must be implemented before claiming tenant authorization.
