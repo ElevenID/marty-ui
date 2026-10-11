@@ -1,7 +1,11 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-10 00:26 UTC checkpoint). Gateway and
+Status: active implementation (2026-10-11 UTC checkpoint; UI main `49a0a2454`).
+Self-host preparation and opt-in consumer probes through #1264 are merged, but
+there is no qualified or released self-host bundle or standalone verifier.
+Required PR and protected merge-group gates remain in force. The following
+October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
 have merged. Recent UI #1129–#1131 brought Canvas configuration fail-fast,
 phase timing, and Bookworm-first reusable test compilation. The protected
@@ -3446,12 +3450,10 @@ merged as `bdef60bcf` after exact-head and full protected
 [merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38127368351)
 passed. It binds the extracted tree exactly to the prepared ZIP and requires
 governed Open Badges proof keys; neither change qualifies a self-host runtime
-or standalone verifier artifact. A separate local no-start secret-closure
-validator still detects `flow_webhook_secret` missing from the catalog and
-three required notification secrets missing from the stack list. It is not a
-gate until that declaration mismatch is resolved. The next
-opt-in consumer candidate checks each exact locked image's Linux/amd64 pull
-and inspected digest association, but does not run or qualify the stack.
+or standalone verifier artifact. The then-local no-start secret-closure
+validator found missing flow and notification declarations; [UI #1261](https://github.com/ElevenID/marty-ui/pull/1261)
+subsequently merged the names-only declaration closure. That check does not
+prove secret values or a running installation.
 
 [UI #1260](https://github.com/ElevenID/marty-ui/pull/1260) merged as
 `8447b39c3` after exact-head and protected
@@ -3460,11 +3462,43 @@ passed. The opt-in prepared-bundle consumer now anonymously pulls every unique
 locked image for Linux/amd64 and checks the selected platform and repository
 digest association. It remains a no-start preflight, not installed-runtime
 qualification. [UI #1261](https://github.com/ElevenID/marty-ui/pull/1261)
-is the independently reviewed follow-on for names-only self-host secret
-declaration closure; its protected checks were still running at this update.
-A separate local scoped-OpenBao migration probe draft has no current-main
-prepared ZIP/lock/receipt/descriptor for a full artifact-bound run. It must
-remain unqualified and outside release gates until that evidence exists.
+merged as `d91261c2d` after protected validation. [#1263](https://github.com/ElevenID/marty-ui/pull/1263)
+then merged the opt-in exact-bundle disposable migration probe, and
+[#1264](https://github.com/ElevenID/marty-ui/pull/1264) merged the successful
+opt-in Stack-release-triggered prepared consumer with exact current-main
+producer identity, archive/receipt verification, disposable migration and
+signing/JWKS checks. #1264 also adds the Credential Template-to-Issuance
+Canvas readiness HTTP edge to the shadow planner; it does not narrow Rust
+selection. The latest successful Stack release did not opt in to a prepared
+ZIP, so these probes have no current-main artifact-bound qualification run.
+The archive/bootstrap follow-on [#1266](https://github.com/ElevenID/marty-ui/pull/1266)
+is independently reviewed and in protected merge-group CI; its staged Linux
+bootstrap smoke is not proof of a fresh installed product. Keep all these
+probes outside official release gates and supported-product claims.
+
+October 11 A0-A7 reconciliation: [#1236](https://github.com/ElevenID/marty-ui/pull/1236)
+inventoried four residual service-owned test targets, and [#1238](https://github.com/ElevenID/marty-ui/pull/1238)
+added a fail-closed gRPC constructor inventory; neither completes all runtime
+input closure (A0/A1). [#1237](https://github.com/ElevenID/marty-ui/pull/1237)
+keeps cross-service acceptance sources out of production Docker contexts.
+Observed Applicant notification, issuer resolution, and Canvas readiness
+edges from [#1233](https://github.com/ElevenID/marty-ui/pull/1233),
+[#1247](https://github.com/ElevenID/marty-ui/pull/1247), and #1264 extend only
+the shadow planner (A3). [#1241](https://github.com/ElevenID/marty-ui/pull/1241)
+and [#1250](https://github.com/ElevenID/marty-ui/pull/1250) hardened published-image,
+mount, and child-process provenance without proving complete historical
+closure (A5). Exact-input PR selection in [#1227](https://github.com/ElevenID/marty-ui/pull/1227),
+[#1242](https://github.com/ElevenID/marty-ui/pull/1242), and
+[#1249](https://github.com/ElevenID/marty-ui/pull/1249) retains broad fallback
+for unknown or mixed inputs and full protected merge-group validation (A6).
+[#1248](https://github.com/ElevenID/marty-ui/pull/1248) moves unchanged webhook
+acceptance earlier; [#1253](https://github.com/ElevenID/marty-ui/pull/1253)
+serializes the Flow port handoff without dropping tests. The #1254 public
+builder linker and #1257 dev-debug changes have no attributable steady-state
+speedup yet. The manual-only migrated-base pilot is reviewed locally but
+unmerged: sequential eight-database local timings of 39.43s off versus 23.22s
+on do not establish hosted parallel Canvas improvement. Compare complete
+Linux CI case inventory and wall time before any routine or release promotion.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
