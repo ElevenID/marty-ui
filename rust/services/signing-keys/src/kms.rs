@@ -1329,9 +1329,12 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
         "azure-key-vault adapter requires 'endpoint' and 'key_reference' in service_config",
     )?;
     let key_path = azure_key_path(config)?;
-    let algorithm = string(config, "azure_signing_algorithm")
-        .or_else(|| string(config, "algorithm"))
-        .unwrap_or("ES256");
+    let algorithm = string(config, "algorithm").unwrap_or("ES256");
+    if string(config, "azure_signing_algorithm").is_some_and(|configured| configured != algorithm) {
+        return Err(KmsError::InvalidConfig(
+            "Azure signing algorithm must match the service algorithm.".into(),
+        ));
+    }
     let (_, digest) = signing_digest(algorithm, payload)?;
     let response = send_json(
         azure_bearer(
@@ -3451,6 +3454,23 @@ mod tests {
                 "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test",
                 "algorithm": "RS256",
                 "aws_signing_algorithm": "ECDSA_SHA_256"
+            }),
+            payload_b64: "cGF5bG9hZA".into(),
+        })
+        .await;
+        assert!(matches!(result, Err(KmsError::InvalidConfig(_))));
+    }
+
+    #[tokio::test]
+    async fn azure_signing_rejects_conflicting_provider_algorithm_before_network_io() {
+        let result = sign(SignRequest {
+            service_config: json!({
+                "service_type": "azure-key-vault",
+                "endpoint": "https://issuer.vault.azure.net",
+                "key_reference": "https://issuer.vault.azure.net/keys/issuer/version-1",
+                "auth_mode": "managed_identity",
+                "algorithm": "RS256",
+                "azure_signing_algorithm": "ES256"
             }),
             payload_b64: "cGF5bG9hZA".into(),
         })

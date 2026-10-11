@@ -14045,3 +14045,13 @@ gates. A further common-response check now rejects an empty remote signature
 for ECDSA, RSA and EdDSA before returning success. Its focused test,
 Signing Keys Clippy with warnings denied, file Rustfmt and diff hygiene pass
 locally; batch it with the malformed-ECDSA correction on the next UI head.
+
+K6 Azure algorithm-binding self-review, local follow-up: the Azure adapter
+previously allowed `azure_signing_algorithm` to override the service's
+declared `algorithm`, although both use the same JOSE identifier. That could
+ask Key Vault to sign a different digest/algorithm than the response contract
+and registered service expect. The adapter now rejects a mismatch before
+network I/O. A focused negative test and the Signing Keys library suite
+(177 passed, nine ignored) pass; Clippy with warnings denied, file Rustfmt
+and diff hygiene pass. This is held locally for the next grouped UI push;
+it does not replace real Azure signature-format/certificate qualification.
