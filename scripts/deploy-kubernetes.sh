@@ -389,27 +389,41 @@ cmd_setup_secrets() {
   require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"
   flow_sign_grant_mint_token="$(resolve_secret_input FLOW_SIGN_GRANT_MINT_TOKEN)"
   require_resolved_secret FLOW_SIGN_GRANT_MINT_TOKEN "$flow_sign_grant_mint_token"
+  issuance_credential_sign_grant_mint_token="$(resolve_secret_input ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN)"
+  require_resolved_secret ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN "$issuance_credential_sign_grant_mint_token"
+  issuance_canvas_sign_grant_mint_token="$(resolve_secret_input ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN)"
+  require_resolved_secret ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN "$issuance_canvas_sign_grant_mint_token"
+  issuance_readiness_sign_grant_mint_token="$(resolve_secret_input ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN)"
+  require_resolved_secret ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN "$issuance_readiness_sign_grant_mint_token"
+  issuance_passport_sign_grant_mint_token="$(resolve_secret_input ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN)"
+  require_resolved_secret ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN "$issuance_passport_sign_grant_mint_token"
   gateway_sign_grant_mint_token="$(resolve_secret_input GATEWAY_SIGN_GRANT_MINT_TOKEN)"
   require_resolved_secret GATEWAY_SIGN_GRANT_MINT_TOKEN "$gateway_sign_grant_mint_token"
   gateway_issuer_csr_grant_mint_token="$(resolve_secret_input GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN)"
   require_resolved_secret GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN "$gateway_issuer_csr_grant_mint_token"
   signing_keys_grant_verify_token="$(resolve_secret_input SIGNING_KEYS_GRANT_VERIFY_TOKEN)"
   require_resolved_secret SIGNING_KEYS_GRANT_VERIFY_TOKEN "$signing_keys_grant_verify_token"
-  if [[ "$flow_sign_grant_mint_token" == "$gateway_sign_grant_mint_token" ||
-        "$flow_sign_grant_mint_token" == "$gateway_issuer_csr_grant_mint_token" ||
-        "$flow_sign_grant_mint_token" == "$signing_keys_grant_verify_token" ||
-        "$gateway_sign_grant_mint_token" == "$gateway_issuer_csr_grant_mint_token" ||
-        "$gateway_issuer_csr_grant_mint_token" == "$signing_keys_grant_verify_token" ||
-        "$gateway_sign_grant_mint_token" == "$signing_keys_grant_verify_token" ]]; then
-    error "Signing grant mint and verify tokens must be distinct for each role."
-  fi
-  for broad_token in "$openbao_service_token" "$signing_keys_openbao_token" "$didcomm_issuance_openbao_token"; do
-    if [[ -n "$broad_token" && ( "$flow_sign_grant_mint_token" == "$broad_token" ||
-        "$gateway_sign_grant_mint_token" == "$broad_token" ||
-        "$gateway_issuer_csr_grant_mint_token" == "$broad_token" ||
-        "$signing_keys_grant_verify_token" == "$broad_token" ) ]]; then
-      error "Signing grant tokens must differ from general OpenBao credentials."
-    fi
+  grant_tokens=(
+    "$flow_sign_grant_mint_token"
+    "$issuance_credential_sign_grant_mint_token"
+    "$issuance_canvas_sign_grant_mint_token"
+    "$issuance_readiness_sign_grant_mint_token"
+    "$issuance_passport_sign_grant_mint_token"
+    "$gateway_sign_grant_mint_token"
+    "$gateway_issuer_csr_grant_mint_token"
+    "$signing_keys_grant_verify_token"
+  )
+  for ((i=0; i<${#grant_tokens[@]}; i++)); do
+    for ((j=i+1; j<${#grant_tokens[@]}; j++)); do
+      if [[ "${grant_tokens[i]}" == "${grant_tokens[j]}" ]]; then
+        error "Signing grant mint and verify tokens must be distinct for each role."
+      fi
+    done
+    for broad_token in "$openbao_service_token" "$signing_keys_openbao_token" "$didcomm_issuance_openbao_token"; do
+      if [[ -n "$broad_token" && "${grant_tokens[i]}" == "$broad_token" ]]; then
+        error "Signing grant tokens must differ from general OpenBao credentials."
+      fi
+    done
   done
   notification_openbao_token="$(resolve_secret_input NOTIFICATION_OPENBAO_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
@@ -459,6 +473,10 @@ cmd_setup_secrets() {
     --from-literal=SIGNING_KEYS_OPENBAO_TOKEN="$signing_keys_openbao_token" \
     --from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token" \
     --from-literal=FLOW_SIGN_GRANT_MINT_TOKEN="$flow_sign_grant_mint_token" \
+    --from-literal=ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN="$issuance_credential_sign_grant_mint_token" \
+    --from-literal=ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN="$issuance_canvas_sign_grant_mint_token" \
+    --from-literal=ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN="$issuance_readiness_sign_grant_mint_token" \
+    --from-literal=ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN="$issuance_passport_sign_grant_mint_token" \
     --from-literal=GATEWAY_SIGN_GRANT_MINT_TOKEN="$gateway_sign_grant_mint_token" \
     --from-literal=GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN="$gateway_issuer_csr_grant_mint_token" \
     --from-literal=SIGNING_KEYS_GRANT_VERIFY_TOKEN="$signing_keys_grant_verify_token" \

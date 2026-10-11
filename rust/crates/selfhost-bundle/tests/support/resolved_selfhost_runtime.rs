@@ -344,6 +344,10 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "signing_keys_issuer_sign_key",
             "signing_keys_integration_secret_key",
             "didcomm_issuance_openbao_token",
+            "sign_grant_mint_issuance_credential_token",
+            "sign_grant_mint_issuance_canvas_token",
+            "sign_grant_mint_issuance_readiness_token",
+            "sign_grant_mint_issuance_passport_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
             "grpc_service_token",
@@ -394,6 +398,16 @@ fn secret_field(key: &str) -> Result<&'static str> {
             Ok("sign_grant_mint_gateway_issuer_did_token")
         }
         "FLOW_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_flow_wallet_token"),
+        "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_credential_token")
+        }
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_issuance_canvas_token"),
+        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_readiness_token")
+        }
+        "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_passport_token")
+        }
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" => Ok("signing_keys_integration_secret_key"),
         "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
@@ -530,15 +544,14 @@ impl ClosedSelfhostModel {
         )?;
         require(native["environment"]["DIDCOMM_ALLOW_PRIVATE_IPS"] == "false")?;
         require(native["environment"]["DIDCOMM_KMS_ADDR"] == "http://openbao.invalid:8200")?;
+        require(native["environment"]["BAO_ADDR"] == "http://openbao.invalid:8200")?;
         require(
             native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
                 == "/run/secrets/didcomm_issuance_openbao_token",
         )?;
-        require(
-            !object(&native["environment"])?
-                .keys()
-                .any(|key| key.starts_with("BAO_") || key.starts_with("OPENBAO_")),
-        )?;
+        require(!object(&native["environment"])?.keys().any(|key| {
+            (key.starts_with("BAO_") && key != "BAO_ADDR") || key.starts_with("OPENBAO_")
+        }))?;
         require(services["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] == READY)?;
         require(services["gateway"]["environment"]["REDIS_DB_GATEWAY"] == "2")?;
         require(services["flow"]["environment"]["REDIS_DB_FLOW"] == "3")?;

@@ -25,7 +25,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "7ef1c84f841bcc0d6cbb85915c378fbf3facfcaf78ec8d941a3c65f599aa010a"
+        == "bd437bf7c184f9cc9e1754b18fc128246e52043b433cef6851a12e45a1d2ea76"
     )
     import json
 

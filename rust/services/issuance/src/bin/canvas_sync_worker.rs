@@ -1,3 +1,4 @@
+use marty_signing_grant::SigningOrigin;
 use std::{env, error::Error, fs, process::ExitCode, sync::Arc, time::Duration};
 
 use marty_issuance_service::{
@@ -19,6 +20,7 @@ use marty_issuance_service::{
     },
     canvas_sync_worker_postgres::PostgresCanvasSyncWorkerRepository,
     integration_secret_kms::KmsIntegrationSecretCipher,
+    signing_grant_config::managed_grant_minter,
 };
 use mmf_runtime::managed_task::{CleanupOutcome, TaskCompletion, TaskOutcome};
 use sqlx::PgPool;
@@ -183,10 +185,11 @@ async fn run_initialized_worker(
             Some(&signing_key),
             Duration::from_secs(10),
         )?),
-        Arc::new(HttpCanvasLtiToolSignatureProvider::new(
+        Arc::new(HttpCanvasLtiToolSignatureProvider::new_with_grant(
             signing_url,
             Some(&issuer_sign_key),
             Duration::from_secs(15),
+            managed_grant_minter(SigningOrigin::IssuanceCanvas)?,
         )?),
     ));
     let authoritative_provider = Arc::new(HttpCanvasAuthoritativeProvider::new(

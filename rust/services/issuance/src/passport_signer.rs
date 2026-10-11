@@ -6,6 +6,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_crypto::certificate::{load_certificate_der, load_certificate_pem};
 use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use marty_verification::{
     trust_anchor::CscaRegistry,
     verification::emrtd::{verify_dsc_chain, ChainStatus, DocumentSignerCertificate},
@@ -225,6 +226,30 @@ impl ManagedProfileSigner {
         api_key: Option<&str>,
         issuer_sign_key: Option<&str>,
     ) -> Result<Self, SignerError> {
+        Self::configure(base_url, api_key, issuer_sign_key, None)
+    }
+
+    pub fn new_with_grant(
+        base_url: Url,
+        api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        minter: GrantMinter,
+    ) -> Result<Self, SignerError> {
+        Self::configure(base_url, api_key, issuer_sign_key, Some(minter))
+    }
+
+    fn configure(
+        base_url: Url,
+        api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        minter: Option<GrantMinter>,
+    ) -> Result<Self, SignerError> {
+        let mut signer =
+            HttpDidSigner::new(base_url.clone(), issuer_sign_key, Duration::from_secs(30))
+                .map_err(|_| SignerError::ManagedUnavailable)?;
+        if let Some(minter) = minter {
+            signer = signer.with_grant_minter(SigningOrigin::IssuancePassport, minter);
+        }
         Ok(Self {
             resolver: HttpIssuerContextResolver::new(
                 base_url.clone(),
@@ -232,8 +257,7 @@ impl ManagedProfileSigner {
                 Duration::from_secs(15),
             )
             .map_err(|_| SignerError::ManagedUnavailable)?,
-            signer: HttpDidSigner::new(base_url.clone(), issuer_sign_key, Duration::from_secs(30))
-                .map_err(|_| SignerError::ManagedUnavailable)?,
+            signer,
             trust: CscaTrustAnchorClient::new(base_url, api_key)?,
         })
     }
@@ -728,10 +752,24 @@ mod tests {
             Json(request): Json<Value>,
         ) -> Json<Value> {
             assert_eq!(headers["x-api-key"], "synthetic-issuer-sign-key");
+            let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+                headers[marty_signing_grant::HEADER_NAME].to_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(grant.claims.origin, SigningOrigin::IssuancePassport);
+            assert_eq!(grant.claims.operation_id, "passport-job-1");
+            assert_eq!(
+                grant.claims.key_reference.as_deref(),
+                Some("transit/keys/passport-dsc-1")
+            );
             state.requests.lock().unwrap().push(request.clone());
             let input = URL_SAFE_NO_PAD
                 .decode(request["payload_b64"].as_str().unwrap())
                 .unwrap();
+            assert_eq!(
+                grant.claims.payload_sha256_b64,
+                marty_signing_grant::payload_digest(&input)
+            );
             assert_eq!(
                 hex::encode(sha2::Sha256::digest(&input)),
                 state.signing_input_sha256
@@ -774,14 +812,41 @@ mod tests {
             .route("/internal/signing-keys/resolve-issuer-did", get(resolve))
             .route("/internal/signing-keys/csca-trust-anchors", get(trust))
             .route("/internal/signing-keys/issuer-dids/sign", post(sign))
+            .route(
+                "/v1/transit/hmac/marty-sign-grant-issuance-passport-v1/sha2-256",
+                post(|headers: HeaderMap| async move {
+                    assert_eq!(headers["x-vault-token"], "passport-mint-token");
+                    Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+                }),
+            )
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let signer = ManagedProfileSigner::new(
+        let mut token_file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut token_file, b"passport-mint-token\n").unwrap();
+        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
+            .lock()
+            .unwrap();
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        let endpoint = format!("http://{address}");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let minter = GrantMinter::for_managed_openbao(
+            &endpoint,
+            SigningOrigin::IssuancePassport,
+            token_file.path().to_path_buf(),
+        )
+        .unwrap();
+        match previous_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        drop(_bao_config_guard);
+        let signer = ManagedProfileSigner::new_with_grant(
             Url::parse(&format!("http://{address}/internal/signing-keys/")).unwrap(),
             Some("existing-internal-auth"),
             Some("synthetic-issuer-sign-key"),
+            minter,
         )
         .unwrap();
         let groups = BTreeMap::from([

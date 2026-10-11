@@ -12,6 +12,7 @@ use marty_oid4vci::{
     },
     types::SignedCredential,
 };
+use marty_signing_grant::{minter::GrantMinter, GrantBinding, SigningOrigin, HEADER_NAME};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -65,6 +66,20 @@ impl HttpCredentialBuilder {
     ) -> Result<Self, CredentialIssuanceError> {
         Ok(Self {
             signer: Arc::new(HttpDidSigner::new(base_url, api_key, timeout)?),
+        })
+    }
+
+    pub fn new_with_grant(
+        base_url: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+        minter: GrantMinter,
+    ) -> Result<Self, CredentialIssuanceError> {
+        Ok(Self {
+            signer: Arc::new(
+                HttpDidSigner::new(base_url, api_key, timeout)?
+                    .with_grant_minter(SigningOrigin::IssuanceCredential, minter),
+            ),
         })
     }
 
@@ -407,6 +422,7 @@ pub(crate) struct HttpDidSigner {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
+    grant: Option<(SigningOrigin, GrantMinter)>,
 }
 
 impl HttpDidSigner {
@@ -424,7 +440,13 @@ impl HttpDidSigner {
             client,
             base_url,
             api_key: api_key.map(str::to_owned),
+            grant: None,
         })
+    }
+
+    pub(crate) fn with_grant_minter(mut self, origin: SigningOrigin, minter: GrantMinter) -> Self {
+        self.grant = Some((origin, minter));
+        self
     }
 
     fn endpoint(&self) -> Url {
@@ -476,10 +498,31 @@ impl DidSigner for HttpDidSigner {
         if request.signing_key_reference.trim().is_empty() {
             return Err(signing_error("DID signer requires a resolved remote key"));
         }
+        let (origin, minter) = self
+            .grant
+            .as_ref()
+            .ok_or_else(|| signing_error("DID signer requires a scoped KMS grant minter"))?;
+        let grant = minter
+            .mint(&GrantBinding {
+                origin: *origin,
+                operation_id: &request.operation_id,
+                organization_id: &request.organization_id,
+                route: "/internal/compat/issuer-dids/sign",
+                service_id: None,
+                issuer_did: Some(&request.issuer_did),
+                key_reference: Some(&request.signing_key_reference),
+                key_purpose: &request.key_purpose,
+                algorithm: &request.algorithm,
+                payload: &request.payload,
+            })
+            .await
+            .and_then(|grant| grant.to_header_value())
+            .map_err(|_| signing_error("DID signer KMS grant is unavailable"))?;
         let mut http_request = self
             .client
             .post(self.endpoint())
             .query(&[("organization_id", request.organization_id.as_str())])
+            .header(HEADER_NAME, grant)
             .json(&SignBody {
                 issuer_did: &request.issuer_did,
                 credential_format: &request.credential_format,
@@ -939,6 +982,7 @@ mod tests {
     use marty_crypto::jwk::public_key_pem_to_jwk;
     use serde_json::json;
     use sha2::{Digest, Sha256};
+    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::credential::IssuerContext;
@@ -1399,8 +1443,47 @@ mod tests {
         }))
     }
 
+    async fn credential_grant_minter() -> (GrantMinter, NamedTempFile, tokio::task::JoinHandle<()>)
+    {
+        let app = Router::new().route(
+            "/v1/transit/hmac/marty-sign-grant-issuance-credential-v1/sha2-256",
+            post(|headers: HeaderMap, Json(_body): Json<Value>| async move {
+                assert_eq!(
+                    headers.get("x-vault-token").unwrap(),
+                    "credential-mint-token"
+                );
+                Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("grant listener");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut token_file = NamedTempFile::new().expect("mint token file");
+        std::io::Write::write_all(&mut token_file, b"credential-mint-token\n")
+            .expect("write token");
+        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
+            .lock()
+            .expect("BAO config lock");
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let minter = GrantMinter::for_managed_openbao(
+            &endpoint,
+            SigningOrigin::IssuanceCredential,
+            token_file.path().to_path_buf(),
+        )
+        .expect("credential grant minter");
+        match previous_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        (minter, token_file, server)
+    }
+
     #[tokio::test]
     async fn http_signer_sends_the_language_neutral_contract() {
+        let (minter, _token_file, grant_server) = credential_grant_minter().await;
         let capture = HttpCapture::default();
         let app = Router::new()
             .route(
@@ -1420,20 +1503,26 @@ mod tests {
         )
         .expect("HTTP signer");
 
-        let response = signer
-            .sign(SignRequest {
-                organization_id: "org-a".to_owned(),
-                operation_id: "synthetic-operation".to_owned(),
-                issuer_did: "did:web:issuer.example".to_owned(),
-                credential_format: "dc+sd-jwt".to_owned(),
-                key_purpose: "vc_jwt_issuer".to_owned(),
-                payload: b"exact-signing-input".to_vec(),
-                algorithm: "ES256".to_owned(),
-                verification_method_id: "did:web:issuer.example#key-1".to_owned(),
-                signing_key_reference: "transit/keys/issuer-1".to_owned(),
-            })
+        let request = SignRequest {
+            organization_id: "org-a".to_owned(),
+            operation_id: "synthetic-operation".to_owned(),
+            issuer_did: "did:web:issuer.example".to_owned(),
+            credential_format: "dc+sd-jwt".to_owned(),
+            key_purpose: "vc_jwt_issuer".to_owned(),
+            payload: b"exact-signing-input".to_vec(),
+            algorithm: "ES256".to_owned(),
+            verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+            signing_key_reference: "transit/keys/issuer-1".to_owned(),
+        };
+        let error = signer
+            .sign(request.clone())
             .await
-            .expect("sign response");
+            .expect_err("unconfigured signer must deny before HTTP");
+        assert!(error.to_string().contains("scoped KMS grant minter"));
+        assert!(capture.0.lock().expect("capture lock").is_none());
+        let signer = signer.with_grant_minter(SigningOrigin::IssuanceCredential, minter);
+
+        let response = signer.sign(request).await.expect("sign response");
 
         assert!(!response.signature_b64.is_empty());
         let (query, headers, body) = capture
@@ -1447,6 +1536,20 @@ mod tests {
             Some("org-a")
         );
         assert_eq!(headers.get("X-API-Key").expect("API key"), "service-secret");
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+            headers.get(HEADER_NAME).expect("grant").to_str().unwrap(),
+        )
+        .expect("bound grant");
+        assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCredential);
+        assert_eq!(grant.claims.operation_id, "synthetic-operation");
+        assert_eq!(
+            grant.claims.key_reference.as_deref(),
+            Some("transit/keys/issuer-1")
+        );
+        assert_eq!(
+            grant.claims.payload_sha256_b64,
+            marty_signing_grant::payload_digest(b"exact-signing-input")
+        );
         assert_eq!(
             body["payload_b64"],
             URL_SAFE_NO_PAD.encode(b"exact-signing-input")
@@ -1470,10 +1573,12 @@ mod tests {
         assert!(missing_key.to_string().contains("resolved remote key"));
         assert!(capture.0.lock().expect("capture lock").is_none());
         server.abort();
+        grant_server.abort();
     }
 
     #[tokio::test]
     async fn http_signer_rejects_even_null_private_routing_fields() {
+        let (minter, _token_file, grant_server) = credential_grant_minter().await;
         let app = Router::new().route("/issuer-dids/sign", post(private_routing_handler));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1485,7 +1590,8 @@ mod tests {
             None,
             Duration::from_secs(2),
         )
-        .expect("HTTP signer");
+        .expect("HTTP signer")
+        .with_grant_minter(SigningOrigin::IssuanceCredential, minter);
 
         let error = signer
             .sign(SignRequest {
@@ -1504,5 +1610,6 @@ mod tests {
 
         assert!(error.to_string().contains("private signing routing"));
         server.abort();
+        grant_server.abort();
     }
 }

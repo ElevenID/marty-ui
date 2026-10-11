@@ -4227,6 +4227,7 @@ dependencies = [
  "marty-platform-clock",
  "marty-response-compat",
  "marty-schema-startup",
+ "marty-signing-grant",
  "marty-verification",
  "mmf-config",
  "mmf-core",

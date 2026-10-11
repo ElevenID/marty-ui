@@ -158,6 +158,7 @@ pub mod resource_owner_postgres;
 pub mod retention;
 pub mod retention_http;
 pub mod runtime;
+pub mod signing_grant_config;
 pub mod signing_policy;
 pub mod tenant_discovery;
 pub mod tenant_postgres;

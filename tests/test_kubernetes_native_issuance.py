@@ -49,6 +49,48 @@ def owner(value):
     return value["spec"]["template"]["spec"]["containers"][0]
 
 
+def test_issuance_grant_tokens_are_mounted_by_exact_producers_only():
+    values = resources("k8s/oracle/07-microservices.yaml")
+    issuer = deployment(values, "issuance")
+    worker = deployment(values, "canvas-sync-worker")
+    issuer_container = owner(issuer)
+    worker_container = owner(worker)
+    origins = ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT")
+    issuer_env = {entry["name"]: entry for entry in issuer_container["env"]}
+    worker_env = {entry["name"]: entry for entry in worker_container["env"]}
+    for origin in origins:
+        key = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
+        assert issuer_env[key]["value"] == (
+            f"/var/run/secrets/marty/issuance-sign-grants/{origin.lower()}"
+        )
+        assert (key in worker_env) == (origin == "CANVAS")
+    assert worker_env["ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE"]["value"] == (
+        "/var/run/secrets/marty/issuance-canvas-sign-grant/token"
+    )
+    issuer_volume = next(
+        item for item in issuer["spec"]["template"]["spec"]["volumes"]
+        if item["name"] == "issuance-sign-grants"
+    )
+    assert issuer_volume["secret"]["secretName"] == "marty-secrets"
+    assert issuer_volume["secret"]["items"] == [
+        {"key": f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN", "path": origin.lower()}
+        for origin in origins
+    ]
+    assert {item["name"] for item in issuer_container["volumeMounts"]} >= {
+        "issuance-sign-grants"
+    }
+    worker_volume = next(
+        item for item in worker["spec"]["template"]["spec"]["volumes"]
+        if item["name"] == "issuance-canvas-sign-grant"
+    )
+    assert worker_volume["secret"]["items"] == [
+        {"key": "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "path": "token"}
+    ]
+    assert {item["name"] for item in worker_container["volumeMounts"]} >= {
+        "issuance-canvas-sign-grant"
+    }
+
+
 def constants(name):
     source = NATIVE.read_text()
     matched = re.findall(rf"pub const {name}: &\[&str\] = &\[(.*?)\];", source, re.S)

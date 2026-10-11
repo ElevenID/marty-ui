@@ -15,7 +15,9 @@ use axum::{
     response::Response as ServerResponse,
     Router,
 };
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_oid4vci::discovery::ProofPolicyRequest;
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use serde_json::json;
 use std::{
     sync::{Arc, Mutex},
@@ -91,7 +93,15 @@ impl Peer {
             reply,
             requests: vec![],
         }));
-        let app = Router::new().fallback(handle).with_state(state.clone());
+        let app = Router::new()
+            .route(
+                "/v1/transit/hmac/marty-sign-grant-issuance-credential-v1/sha2-256",
+                axum::routing::post(|| async {
+                    axum::Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+                }),
+            )
+            .fallback(handle)
+            .with_state(state.clone());
         let (stop, stopped) = oneshot::channel();
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -113,6 +123,27 @@ impl Peer {
     }
     pub(crate) fn request_count(&self) -> usize {
         self.state.lock().unwrap().requests.len()
+    }
+    fn credential_grant_minter(&self) -> (GrantMinter, tempfile::NamedTempFile) {
+        let mut token_file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut token_file, b"diagnostic-mint-token\n").unwrap();
+        let endpoint = self.base.origin().ascii_serialization();
+        let _guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
+            .lock()
+            .unwrap();
+        let previous = std::env::var_os("BAO_ADDR");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let minter = GrantMinter::for_managed_openbao(
+            &endpoint,
+            SigningOrigin::IssuanceCredential,
+            token_file.path().to_path_buf(),
+        )
+        .unwrap();
+        match previous {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        (minter, token_file)
     }
     pub(crate) fn assert_last_resolution_request(&self) {
         let state = self.state.lock().unwrap();
@@ -393,6 +424,7 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
         br#"{"detail":"synthetic-private-diagnostic"}"#.as_slice(),
     ))
     .await;
+    let (minter, _token_file) = peer.credential_grant_minter();
     let resolver = HttpIssuerContextResolver::new(
         peer.base.clone(),
         Some("synthetic-service-key"),
@@ -404,7 +436,8 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
         Some("synthetic-service-key"),
         Duration::from_secs(2),
     )
-    .unwrap();
+    .unwrap()
+    .with_grant_minter(SigningOrigin::IssuanceCredential, minter);
     let policy = HttpProofPolicyResolver::new(
         peer.base.clone(),
         Some("synthetic-service-key"),
@@ -473,6 +506,7 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
 #[tokio::test]
 async fn redirects_continue_existing_success_validators_and_404_defaults() {
     let peer = Peer::new(Reply::json(302, b"{}".as_slice())).await;
+    let (minter, _token_file) = peer.credential_grant_minter();
     let resolver = HttpIssuerContextResolver::new(
         peer.base.clone(),
         Some("synthetic-service-key"),
@@ -484,7 +518,8 @@ async fn redirects_continue_existing_success_validators_and_404_defaults() {
         Some("synthetic-service-key"),
         Duration::from_secs(2),
     )
-    .unwrap();
+    .unwrap()
+    .with_grant_minter(SigningOrigin::IssuanceCredential, minter);
     let policy = HttpProofPolicyResolver::new(
         peer.base.clone(),
         Some("synthetic-service-key"),

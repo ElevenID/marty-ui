@@ -60,7 +60,7 @@ CANVAS_PUBLICATION_INPUTS = {
 # instance may run the Canvas mirror automation loop.
 LEGACY_ONLY = frozenset(
     """
-BAO_ADDR BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
+BAO_TOKEN CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS CANVAS_LTI_TOOL_ACTIVE_KID
 CANVAS_LTI_TOOL_PUBLIC_JWKS
 """.split()
 )
@@ -235,9 +235,27 @@ def assert_sources(base, profile, runtime):
         "command",
         "environment",
         "secrets",
+        "volumes",
         "networks",
     }
     assert native["secrets"] == ["dev_integration_secret_ca"]
+    grant_mounts = [
+        ("credential", "openbao_issuance_credential_grant"),
+        ("canvas", "openbao_issuance_canvas_grant"),
+        ("readiness", "openbao_issuance_readiness_grant"),
+        ("passport", "openbao_issuance_passport_grant"),
+    ]
+    assert native["volumes"] == [
+        f"{volume}:/bao/issuance-{origin}-grant:ro"
+        for origin, volume in grant_mounts
+    ]
+    assert base["services"]["issuance"]["volumes"] == native["volumes"]
+    for owner in (base["services"]["issuance"]["environment"], env):
+        for origin, _ in grant_mounts:
+            assert owner[f"ISSUANCE_{origin.upper()}_SIGN_GRANT_MINT_TOKEN_FILE"] == (
+                f"/bao/issuance-{origin}-grant/token"
+            )
+    assert worker["volumes"] == ["openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro"]
     EXTRACTION["complete_common"](source(EXTRACTION["COMMON"]), runtime)
     text = (
         (ROOT / "rust/services/issuance/src/config.rs")
@@ -340,6 +358,21 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
                 "source": "dev_integration_secret_ca",
                 "target": "/run/secrets/dev_integration_secret_ca",
             }
+        ],
+        "volumes": [
+            {
+                "type": "volume",
+                "source": volume,
+                "target": f"/bao/issuance-{origin}-grant",
+                "read_only": True,
+                "volume": {},
+            }
+            for origin, volume in (
+                ("credential", "openbao_issuance_credential_grant"),
+                ("canvas", "openbao_issuance_canvas_grant"),
+                ("readiness", "openbao_issuance_readiness_grant"),
+                ("passport", "openbao_issuance_passport_grant"),
+            )
         ],
         "networks": {"marty-network": None},
         "restart": "unless-stopped",

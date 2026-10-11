@@ -72,7 +72,10 @@ is absent; this profile explicitly sets production. The copied default revocatio
 profile ID has no native reader and the audited Python helper has no call site;
 its presence is not claimed as an implemented feature or a reason to delete it.
 
-The independent root-relative snapshot is `selfhost-kms-only-model.snapshot.yml`.
+The current independent root-relative snapshot is
+`selfhost-kms-only-model.issuance-grants.snapshot.yml`. The earlier
+`selfhost-kms-only-model.snapshot.yml` remains unchanged as historical
+evidence for the pre-Issuance-grant model.
 Its normalized SHA-256 is
 `5d72ff9654f8c07960449de43dd6818aa2bf8273ca6834ba75ec27ffe0e9d01e`.
 `scripts/test_selfhost_native_owner_compose.py` compares the entire rendered

@@ -15101,3 +15101,41 @@ managed passport (3) tests pass. This is grant preparation only: Issuance
 still needs fixed-origin OpenBao minters, scoped token mounts, exact payload
 binding and grant headers at its shared signing boundary. The hosted
 self-host failures above still need a grouped-head rerun.
+
+Issuance grant integration local batch: the common Rust DID signer now refuses
+an unconfigured grant minter and mints a short-lived OpenBao Transit HMAC
+grant over the exact outgoing payload, operation ID, organization, DID,
+purpose, algorithm and resolved remote key reference before HTTP. Credential,
+Canvas LTI, Canvas readiness and managed passport production constructors
+select four fixed origins with four separate mounted mint tokens; the Canvas
+sync worker receives only the Canvas origin. Self-host Compose, development
+Compose, the Oracle Kubernetes manifest/template and Kubernetes deployment
+secret creation now carry these mounts. The old approved self-host snapshot
+remains unchanged; a new Issuance-grant snapshot records the updated model.
+The credential diagnostic HTTP test, managed passport signer, Canvas HTTP
+grant test and Issuance library suite (574 passed, eight ignored) pass; base
+Compose (65) and self-host (72) rendered tests pass, as does the self-host
+whole-model script. These are local mock-Transit tests and rendered config,
+not yet proof of live OpenBao policy enforcement or a release artifact. A
+disposable OpenBao positive/cross-origin denial run, full affected acceptance
+targets, hosted grouped-head CI, and removal of the passport external-signer
+fallback remain before this feature can be considered landed.
+
+Additional local deployment evidence for that batch: the Kubernetes secret
+script's token-isolation tests pass (37) and the native manifest tests pass
+(32); the base Compose source/model suite passes (65) and its 12 rendered
+selected models pass; the self-host model suite passes (72) with all three
+interpolated whole-model cases. The self-host bundle and public-image Rust
+test targets compile on Windows, and the isolated packaged Issuance secret
+inventory test passes. These checks include newly mounted Issuance grants,
+but the extracted bundle and published image paths still require the grouped
+Linux hosted rerun. The old approved model snapshot is preserved as historical
+evidence; the new snapshot has its own digest and exact-token roster.
+Warnings-denied all-target Clippy passes for Issuance, self-host bundle and
+self-host acceptance. The local self-review verified that the HTTP body does
+not accept caller routing overrides, the grant is minted only after a resolved
+key and bounded operation ID exist, each origin uses its own policy key and
+mounted token, the worker lacks the credential/readiness/passport tokens,
+and missing mint authority blocks signing before HTTP. Further live proof
+must show Signing Keys consumes and rejects cross-origin or replayed grants
+with real OpenBao policies; fixture HMAC responses cannot establish that.

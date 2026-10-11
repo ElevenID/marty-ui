@@ -13,6 +13,7 @@ use marty_oid4vci::{
     jose::{verify_compact_jwt_with_public_jwk, verify_detached_signature_with_public_jwk},
     lti::canvas_lti_trust_profile,
 };
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use rand::RngCore;
 use reqwest::{Client, StatusCode, Url};
 use serde_json::{json, Map, Value};
@@ -180,14 +181,53 @@ impl LiveCanvasReadinessChallengeProvider {
         issuer_sign_key: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, String> {
+        Self::configure(
+            lti_signer,
+            signing_service_url,
+            signing_service_api_key,
+            issuer_sign_key,
+            timeout,
+            None,
+        )
+    }
+
+    pub fn new_with_grant(
+        lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+        signing_service_url: Url,
+        signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        timeout: Duration,
+        minter: GrantMinter,
+    ) -> Result<Self, String> {
+        Self::configure(
+            lti_signer,
+            signing_service_url,
+            signing_service_api_key,
+            issuer_sign_key,
+            timeout,
+            Some(minter),
+        )
+    }
+
+    fn configure(
+        lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+        signing_service_url: Url,
+        signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        timeout: Duration,
+        minter: Option<GrantMinter>,
+    ) -> Result<Self, String> {
         let issuer_resolver = HttpIssuerContextResolver::new(
             signing_service_url.clone(),
             signing_service_api_key,
             timeout,
         )
         .map_err(|_| "Canvas readiness issuer resolver could not be configured".to_owned())?;
-        let did_signer = HttpDidSigner::new(signing_service_url, issuer_sign_key, timeout)
+        let mut did_signer = HttpDidSigner::new(signing_service_url, issuer_sign_key, timeout)
             .map_err(|_| "Canvas readiness DID signer could not be configured".to_owned())?;
+        if let Some(minter) = minter {
+            did_signer = did_signer.with_grant_minter(SigningOrigin::IssuanceReadiness, minter);
+        }
         Ok(Self::with_ports(
             lti_signer,
             Arc::new(issuer_resolver),

@@ -580,6 +580,22 @@ fn write_synthetic_secrets(
             "didcomm_issuance_openbao_token",
             "synthetic-selfhost-didcomm-openbao-token",
         ),
+        (
+            "sign_grant_mint_issuance_credential_token",
+            "synthetic-credential-grant-token",
+        ),
+        (
+            "sign_grant_mint_issuance_canvas_token",
+            "synthetic-canvas-grant-token",
+        ),
+        (
+            "sign_grant_mint_issuance_readiness_token",
+            "synthetic-readiness-grant-token",
+        ),
+        (
+            "sign_grant_mint_issuance_passport_token",
+            "synthetic-passport-grant-token",
+        ),
         ("token_hmac_key", HMAC),
         (
             "canvas_credentials_shared_secret",

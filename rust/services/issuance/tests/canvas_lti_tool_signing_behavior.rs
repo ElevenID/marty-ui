@@ -5,14 +5,99 @@ use axum::{body::Body, http::Request};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_issuance_service::canvas_lti_tool_signing::{
     CanvasLtiSigningKind, CanvasLtiToolIdentityResolver, CanvasLtiToolJwtSigner,
-    CanvasLtiToolSignatureProvider, CanvasLtiToolSigningError, IssuerDidCanvasLtiToolJwtSigner,
+    CanvasLtiToolSignatureProvider, CanvasLtiToolSigningError, HttpCanvasLtiToolSignatureProvider,
+    IssuerDidCanvasLtiToolJwtSigner,
 };
 use marty_issuance_service::{
     http::router_with_canvas_lti_tool_signer, transport::TransportPolicy, IssuanceRuntime,
     IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin, HEADER_NAME};
 use serde_json::{json, Value};
+
+#[tokio::test]
+async fn http_canvas_signer_mints_only_its_bound_remote_grant() {
+    use axum::{http::HeaderMap, routing::post, Json, Router};
+    use base64::engine::general_purpose::STANDARD;
+
+    let app = Router::new()
+        .route(
+            "/v1/transit/hmac/marty-sign-grant-issuance-canvas-v1/sha2-256",
+            post(|headers: HeaderMap| async move {
+                assert_eq!(headers["x-vault-token"], "canvas-mint-token");
+                Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+            }),
+        )
+        .route(
+            "/internal/issuer-dids/sign",
+            post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+                    headers[HEADER_NAME].to_str().unwrap(),
+                )
+                .unwrap();
+                assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCanvas);
+                assert_eq!(grant.claims.operation_id, "deep-link:session-1:nonce-1");
+                assert_eq!(
+                    grant.claims.key_reference.as_deref(),
+                    Some("transit/keys/canvas-1")
+                );
+                assert_eq!(grant.claims.key_purpose, "lti_tool_signing");
+                assert_eq!(grant.claims.algorithm, "RS256");
+                assert_eq!(
+                    grant.claims.payload_sha256_b64,
+                    marty_signing_grant::payload_digest(b"exact-jwt-signing-input")
+                );
+                assert!(body.get("signing_key_reference").is_none());
+                Json(json!({
+                    "ok": true,
+                    "issuer_did": body["issuer_did"],
+                    "algorithm": body["algorithm"],
+                    "verification_method_id": "did:web:issuer.example:canvas#key-1",
+                    "signature_raw_b64": URL_SAFE_NO_PAD.encode([1_u8, 2, 3]),
+                }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut token_file = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut token_file, b"canvas-mint-token\n").unwrap();
+    let previous = std::env::var_os("BAO_ADDR");
+    std::env::set_var("BAO_ADDR", &endpoint);
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::IssuanceCanvas,
+        token_file.path().to_path_buf(),
+    )
+    .unwrap();
+    match previous {
+        Some(value) => std::env::set_var("BAO_ADDR", value),
+        None => std::env::remove_var("BAO_ADDR"),
+    }
+    let provider = HttpCanvasLtiToolSignatureProvider::new_with_grant(
+        format!("{endpoint}/internal").parse().unwrap(),
+        Some("issuer-sign-key"),
+        std::time::Duration::from_secs(2),
+        minter,
+    )
+    .unwrap();
+    assert_eq!(
+        provider
+            .sign(
+                "org-a",
+                "did:web:issuer.example:canvas",
+                "did:web:issuer.example:canvas#key-1",
+                "transit/keys/canvas-1",
+                "deep-link:session-1:nonce-1",
+                b"exact-jwt-signing-input",
+            )
+            .await
+            .unwrap(),
+        URL_SAFE_NO_PAD.encode([1_u8, 2, 3])
+    );
+    server.abort();
+}
 use tower::ServiceExt;
 
 #[derive(Default)]

@@ -14,7 +14,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
-APPROVED = "selfhost-kms-only-model.snapshot.yml"
+APPROVED = "selfhost-kms-only-model.issuance-grants.snapshot.yml"
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
     "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
@@ -245,24 +245,28 @@ def assert_models(approved, actual):
             assert envelope not in mounts
     grant_roles = [
         (
-            "gateway",
+            {"gateway"},
             "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE",
             "sign_grant_mint_gateway_service_token",
         ),
         (
-            "gateway",
+            {"gateway"},
             "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
             "sign_grant_mint_gateway_issuer_did_token",
         ),
-        ("flow", "FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_flow_wallet_token"),
-        ("signing-keys", "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "sign_grant_verify_token"),
+        ({"flow"}, "FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_flow_wallet_token"),
+        ({"signing-keys"}, "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "sign_grant_verify_token"),
+        ({"issuance", "issuance-native"}, "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_credential_token"),
+        ({"issuance", "issuance-native", "canvas-sync-worker"}, "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_canvas_token"),
+        ({"issuance", "issuance-native"}, "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_readiness_token"),
+        ({"issuance", "issuance-native"}, "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_passport_token"),
     ]
     for owner, setting, secret in grant_roles:
         assert actual["secrets"][secret]["file"].endswith(f"/{secret}")
         for name, service in actual["services"].items():
             environment = service.get("environment", {})
             mounts = [item["source"] for item in service.get("secrets", [])]
-            if name == owner:
+            if name in owner:
                 assert environment[setting] == f"/run/secrets/{secret}"
                 assert mounts.count(secret) == 1
             else:
@@ -374,7 +378,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "7ef1c84f841bcc0d6cbb85915c378fbf3facfcaf78ec8d941a3c65f599aa010a"
+        == "bd437bf7c184f9cc9e1754b18fc128246e52043b433cef6851a12e45a1d2ea76"
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])

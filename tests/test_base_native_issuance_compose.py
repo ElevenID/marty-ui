@@ -259,9 +259,15 @@ def test_model_guard_rejects_every_unowned_delta(modeled, fault):
     elif fault == "policy-unpaired":
         native["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = "/other.json"
     elif fault == "policy-writable":
-        native["volumes"][0]["read_only"] = False
+        policy_mount = next(
+            volume for volume in native["volumes"] if volume["type"] == "bind"
+        )
+        policy_mount["read_only"] = False
     elif fault == "policy-create":
-        native["volumes"][0]["bind"]["create_host_path"] = True
+        policy_mount = next(
+            volume for volume in native["volumes"] if volume["type"] == "bind"
+        )
+        policy_mount["bind"]["create_host_path"] = True
     elif fault == "policy-outside":
         flow["volumes"] = deepcopy(native["volumes"])
     elif fault == "readiness":

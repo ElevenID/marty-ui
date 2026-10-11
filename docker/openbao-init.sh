@@ -163,8 +163,8 @@ done
 for grant_origin in ${grant_origins}; do
     printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "${grant_origin}"
 done | bao policy write -address="${BAO_ADDR}" sign-grant-verify -
-if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ]; then
-    [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] || {
+if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE:-}" ]; then
+    [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE:-}" ] || {
         echo 'All scoped signing grant token paths are required.' >&2
         exit 1
     }
@@ -181,6 +181,19 @@ if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FIL
     [ -n "${gateway_issuer_grant_token}" ] || { echo 'Could not mint Gateway issuer CSR grant token.' >&2; exit 1; }
     printf '%s\n' "${gateway_issuer_grant_token}" > "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE}"
     chmod 0444 "${BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE}"
+    mint_issuance_grant_token() {
+        grant_origin="$1"
+        grant_file="$2"
+        grant_token="$(bao token create -address="${BAO_ADDR}" -policy="sign-grant-mint-issuance-${grant_origin}" -no-default-policy -orphan -field=token)"
+        [ -n "${grant_token}" ] || { echo "Could not mint Issuance ${grant_origin} signing grant token." >&2; exit 1; }
+        mkdir -p "$(dirname "${grant_file}")"
+        printf '%s\n' "${grant_token}" > "${grant_file}"
+        chmod 0444 "${grant_file}"
+    }
+    mint_issuance_grant_token credential "${BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE}"
+    mint_issuance_grant_token canvas "${BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE}"
+    mint_issuance_grant_token readiness "${BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE}"
+    mint_issuance_grant_token passport "${BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE}"
     grant_verify_token="$(bao token create -address="${BAO_ADDR}" -policy=sign-grant-verify -no-default-policy -orphan -field=token)"
     [ -n "${grant_verify_token}" ] || { echo 'Could not mint signing grant verifier token.' >&2; exit 1; }
     printf '%s\n' "${grant_verify_token}" > "${BAO_VERIFY_GRANT_TOKEN_FILE}"

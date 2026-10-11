@@ -227,6 +227,10 @@ services:
       BAO_VERIFY_GRANT_TOKEN_FILE: /bao/verify-grant/token
       BAO_GATEWAY_GRANT_TOKEN_FILE: /bao/gateway-grant/token
       BAO_GATEWAY_ISSUER_GRANT_TOKEN_FILE: /bao/gateway-grant/issuer-csr-token
+      BAO_ISSUANCE_CREDENTIAL_GRANT_TOKEN_FILE: /bao/issuance-credential-grant/token
+      BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE: /bao/issuance-canvas-grant/token
+      BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE: /bao/issuance-readiness-grant/token
+      BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE: /bao/issuance-passport-grant/token
     depends_on:
       openbao:
         condition: service_healthy
@@ -235,6 +239,10 @@ services:
       - openbao_flow_grant:/bao/flow-grant
       - openbao_verify_grant:/bao/verify-grant
       - openbao_gateway_grant:/bao/gateway-grant
+      - openbao_issuance_credential_grant:/bao/issuance-credential-grant
+      - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant
+      - openbao_issuance_readiness_grant:/bao/issuance-readiness-grant
+      - openbao_issuance_passport_grant:/bao/issuance-passport-grant
     restart: "no"
     networks:
       - marty-network
@@ -980,6 +988,10 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-credential-grant/token
+      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-canvas-grant/token
+      ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-readiness-grant/token
+      ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-passport-grant/token
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
       # Exact HTTPS resources that VCDM credentials may reference by digest.
       # Empty remains fail-closed; conformance and production operators must
@@ -1034,6 +1046,11 @@ services:
       # Managed path-scoped did:web issuer documents are resolved through the
       # stack-owned gateway, never by caller-selected or public-network URLs.
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
+    volumes:
+      - openbao_issuance_credential_grant:/bao/issuance-credential-grant:ro
+      - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro
+      - openbao_issuance_readiness_grant:/bao/issuance-readiness-grant:ro
+      - openbao_issuance_passport_grant:/bao/issuance-passport-grant:ro
     ports:
       - "127.0.0.1:8005:8005"
       - "127.0.0.1:9005:9005"
@@ -1087,6 +1104,8 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
+      BAO_ADDR: http://openbao:8200
+      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-canvas-grant/token
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
@@ -1110,6 +1129,8 @@ services:
       CANVAS_SYNC_WORKER_POLL_SECONDS: ${CANVAS_SYNC_WORKER_POLL_SECONDS:-5}
     secrets:
       - dev_integration_secret_ca
+    volumes:
+      - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1332,6 +1353,10 @@ volumes:
   openbao_flow_grant:
   openbao_verify_grant:
   openbao_gateway_grant:
+  openbao_issuance_credential_grant:
+  openbao_issuance_canvas_grant:
+  openbao_issuance_readiness_grant:
+  openbao_issuance_passport_grant:
 
 networks:
   marty-network:

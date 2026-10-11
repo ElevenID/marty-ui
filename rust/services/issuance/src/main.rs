@@ -1,3 +1,4 @@
+use marty_signing_grant::SigningOrigin;
 use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
@@ -140,6 +141,7 @@ use marty_issuance_service::{
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
     retention::{PostgresRetentionRepository, RetentionService},
+    signing_grant_config::managed_grant_minter,
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
@@ -504,10 +506,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.signing_keys_internal_api_key.as_deref(),
             config.dependency_timeout,
         )?),
-        Arc::new(HttpCanvasLtiToolSignatureProvider::new(
+        Arc::new(HttpCanvasLtiToolSignatureProvider::new_with_grant(
             config.signing_keys_internal_url.clone(),
             config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
+            managed_grant_minter(SigningOrigin::IssuanceCanvas)?,
         )?),
     ));
     let canvas_readiness = Arc::new(CanvasReadinessRuntime::new(
@@ -520,12 +523,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.revocation_profile_service_url.clone(),
             config.dependency_timeout,
         )?),
-        Arc::new(LiveCanvasReadinessChallengeProvider::new(
+        Arc::new(LiveCanvasReadinessChallengeProvider::new_with_grant(
             canvas_lti_tool_signer.clone(),
             config.signing_keys_internal_url.clone(),
             config.signing_keys_internal_api_key.as_deref(),
             config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
+            managed_grant_minter(SigningOrigin::IssuanceReadiness)?,
         )?),
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
@@ -572,10 +576,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pool.clone(),
         token_hmac_key,
     ));
-    let credential_builder = Arc::new(HttpCredentialBuilder::new(
+    let credential_builder = Arc::new(HttpCredentialBuilder::new_with_grant(
         config.signing_keys_internal_url.clone(),
         config.issuer_sign_key.as_deref(),
         config.dependency_timeout,
+        managed_grant_minter(SigningOrigin::IssuanceCredential)?,
     )?);
     let credential_lifecycle = Arc::new(PostgresCredentialLifecycle::new(
         pool.clone(),

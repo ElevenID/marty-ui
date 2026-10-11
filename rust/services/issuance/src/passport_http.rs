@@ -20,6 +20,7 @@ use marty_passport_auth::{
     PassportTenantAuthError, PassportTenantCredentialSource, PassportTenantKeyring,
     PassportTenantPrincipal,
 };
+use marty_signing_grant::SigningOrigin;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -52,6 +53,7 @@ use crate::{
     passport_signer::{
         ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
     },
+    signing_grant_config::{managed_grant_minter, IssuanceGrantConfigError},
 };
 
 #[derive(Clone)]
@@ -202,6 +204,8 @@ pub enum PassportStartupError {
     Bureau(#[from] BureauError),
     #[error(transparent)]
     Artifact(#[from] KmsArtifactError),
+    #[error(transparent)]
+    SigningGrant(#[from] IssuanceGrantConfigError),
 }
 
 impl PassportHttpService {
@@ -260,10 +264,11 @@ impl PassportHttpService {
         };
         let signer = if native.managed_issuer_signing_enabled {
             Some(PassportSigner::Managed(Box::new(
-                ManagedProfileSigner::new(
+                ManagedProfileSigner::new_with_grant(
                     config.signing_keys_internal_url.clone(),
                     config.signing_keys_internal_api_key.as_deref(),
                     config.issuer_sign_key.as_deref(),
+                    managed_grant_minter(SigningOrigin::IssuancePassport)?,
                 )?,
             )))
         } else if let Some(url) = native.signer_url.as_deref() {
@@ -3070,9 +3075,29 @@ mod tests {
             ),
         ])
         .unwrap();
+        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
+            .lock()
+            .unwrap();
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        let previous_token_file = std::env::var_os("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE");
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("BAO_ADDR", "http://127.0.0.1:8200");
+        std::env::set_var(
+            "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
+            token_file.path(),
+        );
         let managed = PassportHttpService::from_config(&managed, pool.clone())
             .unwrap()
             .unwrap();
+        match previous_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        match previous_token_file {
+            Some(value) => std::env::set_var("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", value),
+            None => std::env::remove_var("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE"),
+        }
+        drop(_bao_config_guard);
         assert_eq!(
             managed.signer.as_ref().unwrap().mode(),
             "MANAGED_ISSUER_PROFILE"
