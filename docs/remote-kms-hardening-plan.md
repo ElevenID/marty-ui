@@ -14726,3 +14726,24 @@ give both CSR routes an authenticated scoped producer and carry a typed,
 exact-request proof through all five issuer certificate/CSR signs and the
 direct service CSR call, alongside the grant proof for service and issuer-DID
 signing. Preserve their existing certificate and holder-proof behavior.
+
+The next local signing batch now passes the consumed OpenBao/Redis grant into
+the Signing Keys compatibility signer and rechecks its bound tenant, resolved
+key, purpose, algorithm and actual payload immediately before `kms::sign`.
+The public service and internal issuer-DID routes no longer discard the
+consumed proof at HTTP. The five issuer certificate/CSR calls use a separate
+move-only, exact-request in-process authority tied to their selected profile;
+those ceremonies still need authenticated scoped producer evidence, and public
+service CSR still calls `kms::sign` directly. This is progress toward, not
+completion of, final KMS authorization. A focused certificate mismatch test
+and the full Signing Keys library suite pass (185 active, 9 ignored).
+
+The `5db9a4b7f` hosted Contracts lane failed three Gateway executable smoke
+checks because its fixture omitted the newly required grant minter address and
+token file. The local fixture now keeps a disposable synthetic token file for
+the child process and supplies `BAO_ADDR`; all three executable checks pass.
+The Signing Keys full-library run also exposed one stale contract assertion:
+the actual KMS-only public sign contract and handler reject an empty payload
+with 422, while the test expected 400. The assertion now matches that exact
+contract. Keep the correction local with the broader authorization batch until
+the remaining hosted lanes finish.

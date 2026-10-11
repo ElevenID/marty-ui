@@ -31,6 +31,7 @@ pub struct ConsumedGrant {
 
 /// The operation actually submitted to a remote signing provider. The origin
 /// and operation ID come from the consumed grant, never from this input.
+#[derive(Clone, Copy)]
 pub struct FinalSignBinding<'a> {
     pub organization_id: &'a str,
     pub route: &'a str,

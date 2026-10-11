@@ -2,7 +2,8 @@ use crate::certificate_csr::{self, CsrSubject};
 use crate::certificate_issuance::{self, VerifiedDscSubject};
 use crate::compat::{
     CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
-    ProfileWriteRequest, ResolveIssuerDidRequest, ServiceSignRequest, SigningCompatibilityService,
+    ProfileWriteRequest, ResolveIssuerDidRequest, ServiceSignRequest, SignAuthorization,
+    SigningCompatibilityService,
 };
 use crate::csca_lifecycle::{
     self, CscaCertificateDataResponse, CscaCertificateView, CscaLifecycleDocument,
@@ -58,6 +59,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_signing_grant::{
+    replay::ConsumedGrant,
     verifier::{GrantAuthorizationError, GrantVerifier},
     GrantBinding, GrantEnvelope, SigningOrigin, HEADER_NAME,
 };
@@ -2490,17 +2492,22 @@ async fn generate_public_issuer_csr(
         Ok(csr) => csr,
         Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     };
+    let signing_request = IssuerDidSignRequest {
+        organization_id: scope.organization_id,
+        issuer_did: input.issuer_did.clone(),
+        credential_format: input.credential_format,
+        key_purpose: input.key_purpose,
+        algorithm,
+        key_reference: None,
+        payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
+        payload_hex: None,
+    };
+    let authorization = match SignAuthorization::certificate(&signing_request, &profile) {
+        Ok(authorization) => authorization,
+        Err(error) => return error.into_response(),
+    };
     let signed = match compatibility
-        .sign_with_issuer_did(&IssuerDidSignRequest {
-            organization_id: scope.organization_id,
-            issuer_did: input.issuer_did.clone(),
-            credential_format: input.credential_format,
-            key_purpose: input.key_purpose,
-            algorithm,
-            key_reference: None,
-            payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
-            payload_hex: None,
-        })
+        .sign_with_issuer_did(&signing_request, authorization)
         .await
     {
         Ok(value) => value,
@@ -2713,8 +2720,11 @@ async fn issue_managed_csca_self_signed(
         payload_b64: Some(URL_SAFE_NO_PAD.encode(payload)),
         payload_hex: None,
     };
+    let csr_request = sign(csr.signing_bytes());
+    let csr_authorization =
+        SignAuthorization::certificate(&csr_request, &profile).map_err(dsc_compat_failure)?;
     let csr_signed = compatibility
-        .sign_with_issuer_did(&sign(csr.signing_bytes()))
+        .sign_with_issuer_did(&csr_request, csr_authorization)
         .await
         .map_err(dsc_compat_failure)?;
     let csr_signature = managed_der_signature(&csr_signed)?;
@@ -2759,8 +2769,11 @@ async fn issue_managed_csca_self_signed(
             "CSCA certificate metadata is invalid.",
         )
     })?;
+    let certificate_request = sign(prepared.signing_bytes());
+    let certificate_authorization = SignAuthorization::certificate(&certificate_request, &profile)
+        .map_err(dsc_compat_failure)?;
     let certificate_signed = compatibility
-        .sign_with_issuer_did(&sign(prepared.signing_bytes()))
+        .sign_with_issuer_did(&certificate_request, certificate_authorization)
         .await
         .map_err(dsc_compat_failure)?;
     let certificate_signature = managed_der_signature(&certificate_signed)?;
@@ -3267,17 +3280,20 @@ async fn issue_claimed_dsc_certificate(
     };
     let csr = certificate_csr::prepare(&dsc_jwk, "ES256", &subject)
         .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?;
+    let csr_request = IssuerDidSignRequest {
+        organization_id: organization_id.into(),
+        issuer_did: input.dsc_issuer_did.clone(),
+        credential_format: input.credential_format.clone(),
+        key_purpose: "x509_doc_signer".into(),
+        algorithm: "ES256".into(),
+        key_reference: None,
+        payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
+        payload_hex: None,
+    };
+    let csr_authorization =
+        SignAuthorization::certificate(&csr_request, &dsc_profile).map_err(dsc_compat_failure)?;
     let csr_signature = compatibility
-        .sign_with_issuer_did(&IssuerDidSignRequest {
-            organization_id: organization_id.into(),
-            issuer_did: input.dsc_issuer_did.clone(),
-            credential_format: input.credential_format.clone(),
-            key_purpose: "x509_doc_signer".into(),
-            algorithm: "ES256".into(),
-            key_reference: None,
-            payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
-            payload_hex: None,
-        })
+        .sign_with_issuer_did(&csr_request, csr_authorization)
         .await
         .map_err(dsc_compat_failure)?;
     let csr_signature = managed_der_signature(&csr_signature)?;
@@ -3383,17 +3399,21 @@ async fn issue_signed_dsc_certificate(
     let metadata = prepared
         .metadata()
         .map_err(|error| public_failure(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()))?;
+    let certificate_request = IssuerDidSignRequest {
+        organization_id: organization_id.into(),
+        issuer_did: input.csca_issuer_did.clone(),
+        credential_format: input.credential_format.clone(),
+        key_purpose: "csca".into(),
+        algorithm: "ES256".into(),
+        key_reference: None,
+        payload_b64: Some(URL_SAFE_NO_PAD.encode(prepared.signing_bytes())),
+        payload_hex: None,
+    };
+    let certificate_authorization =
+        SignAuthorization::certificate(&certificate_request, csca_profile)
+            .map_err(dsc_compat_failure)?;
     let signed = compatibility
-        .sign_with_issuer_did(&IssuerDidSignRequest {
-            organization_id: organization_id.into(),
-            issuer_did: input.csca_issuer_did.clone(),
-            credential_format: input.credential_format.clone(),
-            key_purpose: "csca".into(),
-            algorithm: "ES256".into(),
-            key_reference: None,
-            payload_b64: Some(URL_SAFE_NO_PAD.encode(prepared.signing_bytes())),
-            payload_hex: None,
-        })
+        .sign_with_issuer_did(&certificate_request, certificate_authorization)
         .await
         .map_err(dsc_compat_failure)?;
     let signature = managed_der_signature(&signed)?;
@@ -3782,8 +3802,8 @@ async fn sign_public_service_payload(
         algorithm,
         payload: &payload,
     };
-    match consume_bound_signing_grant(&state, header, &binding).await {
-        Ok(()) => {}
+    let consumed = match consume_bound_signing_grant(&state, header, &binding).await {
+        Ok(consumed) => consumed,
         Err(GrantAuthorizationError::Denied) => {
             return public_error(StatusCode::UNAUTHORIZED, "Signing grant is denied.")
         }
@@ -3793,7 +3813,7 @@ async fn sign_public_service_payload(
                 "Signing grant verifier is unavailable.",
             )
         }
-    }
+    };
     let request = ServiceSignRequest {
         organization_id: scope.organization_id,
         payload_b64: input.payload_b64,
@@ -3802,7 +3822,11 @@ async fn sign_public_service_payload(
         key_reference: input.key_reference,
         key_purpose: input.key_purpose,
     };
-    match service.sign_with_service(&service_id, &request).await {
+    let authorization = SignAuthorization::grant(consumed, route, None);
+    match service
+        .sign_with_service(&service_id, &request, authorization)
+        .await
+    {
         Ok(signed) => Json(signed).into_response(),
         Err(error) => error.into_response(),
     }
@@ -6695,7 +6719,7 @@ async fn issuer_did_sign(
         algorithm: &request.algorithm,
         payload: &payload,
     };
-    consume_bound_signing_grant(&state, header, &binding)
+    let consumed = consume_bound_signing_grant(&state, header, &binding)
         .await
         .map_err(|error| match error {
             GrantAuthorizationError::Denied => CompatibilityError::Unauthorized,
@@ -6705,24 +6729,28 @@ async fn issuer_did_sign(
         .compatibility
         .as_ref()
         .ok_or(CompatibilityError::Unavailable)?;
-    service.sign_with_issuer_did(&request).await.map(Json)
+    let authorization = SignAuthorization::grant(
+        consumed,
+        "/internal/compat/issuer-dids/sign",
+        Some(request.issuer_did.clone()),
+    );
+    service
+        .sign_with_issuer_did(&request, authorization)
+        .await
+        .map(Json)
 }
 
 async fn consume_bound_signing_grant(
     state: &AppState,
     header: &str,
     binding: &GrantBinding<'_>,
-) -> Result<(), GrantAuthorizationError> {
+) -> Result<ConsumedGrant, GrantAuthorizationError> {
     let verifier = state
         .grant_verifier
         .as_ref()
         .ok_or(GrantAuthorizationError::Unavailable)?;
     let consumed = verifier.authorize(header, binding).await?;
-    if consumed.authorizes(binding) {
-        Ok(())
-    } else {
-        Err(GrantAuthorizationError::Denied)
-    }
+    Ok(consumed)
 }
 
 async fn create_compatibility_profile(
@@ -10037,7 +10065,7 @@ mod public_contract_tests {
         assert_eq!(contract["method"], "POST");
         assert_eq!(contract["signing_private_key_location"], "KMS only");
         assert_eq!(contract["public_request_private_key_fields_allowed"], false);
-        assert_eq!(contract["empty_or_missing_payload_status"], 400);
+        assert_eq!(contract["empty_or_missing_payload_status"], 422);
         assert_eq!(contract["missing_service_status"], 404);
         assert!(contract["managed_reference_rule"].is_string());
         let tenant = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, b"org-a")
