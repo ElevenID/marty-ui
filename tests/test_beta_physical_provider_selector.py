@@ -417,11 +417,11 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-beta-physical-envelope-key-0001",
     })
     digest_names = (
-        "MARTY_COMMON_DIGEST", "MARTY_RS_DIGEST", "MARTY_VERIFICATION_DIGEST",
+        "MARTY_RS_DIGEST", "MARTY_VERIFICATION_DIGEST",
         "MARTY_ISO18013_DIGEST",
     )
     uri_names = (
-        "MARTY_COMMON_URI", "MARTY_RS_URI", "MARTY_VERIFICATION_URI",
+        "MARTY_RS_URI", "MARTY_VERIFICATION_URI",
         "MARTY_ISO18013_URI",
     )
     required_names = (

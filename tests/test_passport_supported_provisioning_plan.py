@@ -41,7 +41,7 @@ def manifest() -> dict:
     )
     supporting = (
         "marty-api-core", "marty-blog", "marty-core-python",
-        "marty-verification-python", "marty-iso18013-python", "marty-common",
+        "marty-verification-python", "marty-iso18013-python",
         "marty-cli", "marty-integration-tests",
     )
     return {"schema": "marty.stack/v1", "release": "marty-ui@1.1.219",

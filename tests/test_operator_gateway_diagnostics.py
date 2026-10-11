@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import logging
 import sys
-import types
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,19 +49,7 @@ class TransportFailureClient(RecordingClient):
         )
 
 
-def import_canvas_seed(monkeypatch):
-    package = types.ModuleType("marty_common")
-    system_ids = types.ModuleType("marty_common.system_ids")
-    for name in [
-        "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID",
-        "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID",
-        "MARTY_DEFAULT_ORG_ID",
-        "MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID",
-        "MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID",
-    ]:
-        setattr(system_ids, name, f"synthetic-{name.lower()}")
-    monkeypatch.setitem(sys.modules, "marty_common", package)
-    monkeypatch.setitem(sys.modules, "marty_common.system_ids", system_ids)
+def import_canvas_seed():
     sys.modules.pop("scripts.seed_canvas_real", None)
     return importlib.import_module("scripts.seed_canvas_real")
 
@@ -131,7 +118,7 @@ def test_debug_and_canvas_seed_fail_fast_with_only_service_key(
     assert not debug_factory_called
     assert "private-service-key" not in caplog.text
 
-    seed_canvas_real = import_canvas_seed(monkeypatch)
+    seed_canvas_real = import_canvas_seed()
     monkeypatch.setattr(sys, "argv", ["seed_canvas_real.py", "--skip-canvas-lms-seed"])
     assert seed_canvas_real.main() == 2
     assert "private-service-key" not in capsys.readouterr().out
@@ -160,7 +147,7 @@ def test_debug_diagnostic_handles_transport_status_and_json_failures_without_lea
 def test_canvas_seed_keeps_internal_application_credentials_separate(
     monkeypatch,
 ) -> None:
-    seed_canvas_real = import_canvas_seed(monkeypatch)
+    seed_canvas_real = import_canvas_seed()
     monkeypatch.setenv("MARTY_API_BASE_URL", "https://gateway.example")
     monkeypatch.setenv("MARTY_API_KEY", "private-gateway-actor-key")
     monkeypatch.setenv("ISSUANCE_INTERNAL_API_BASE_URL", "http://issuance-native:8005")
@@ -179,7 +166,7 @@ def test_canvas_seed_keeps_internal_application_credentials_separate(
 def test_canvas_seed_rejects_missing_or_gateway_routed_internal_configuration(
     monkeypatch, capsys
 ) -> None:
-    seed_canvas_real = import_canvas_seed(monkeypatch)
+    seed_canvas_real = import_canvas_seed()
     monkeypatch.setattr(sys, "argv", ["seed_canvas_real.py", "--skip-canvas-lms-seed"])
     monkeypatch.setenv("MARTY_API_KEY", "private-gateway-actor-key")
     monkeypatch.setenv("ISSUANCE_API_KEY", "private-service-key")

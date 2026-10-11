@@ -5,8 +5,6 @@ env:
   MARTY_API_CORE_DIGEST: sha256:c4ee1a9d325ae54d44465862eaaaf8172de08338e59381220b901ec0e1ac6682
   MARTY_BLOG_URI: https://github.com/ElevenID/marty-blog/releases/download/v0.1.9/elevenid-marty-blog-0.1.9.tgz
   MARTY_BLOG_DIGEST: sha256:1dda635bd284d9cb254e3c2c51fc09890cfae21b48a4c2095985621ad86cb358
-  MARTY_COMMON_URI: https://github.com/ElevenID/Marty/releases/download/marty-common-v0.2.16/marty_common-0.2.16-py3-none-any.whl
-  MARTY_COMMON_DIGEST: sha256:e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4
   MARTY_PROTOCOL_REF: 76c37dc229b328afe002b911a26624543f814a64
   # Exact BuildKit index digest; the selected registry may be the public cache or Docker Hub.
   MARTY_CI_BUILDKIT_PIN: moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
@@ -738,7 +736,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
           marty_rs_uri="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           marty_rs_digest="$(jq -er '.components[] | select(.name == "marty-core-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           marty_rs_wheel="$RUNNER_TEMP/${marty_rs_uri##*/}"
@@ -748,17 +745,15 @@ jobs:
           iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
           curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
           curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
           curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
           uv pip install --system -r requirements-services.txt
           uv pip install --system psycopg2-binary==2.9.10
-          uv pip install --system "$marty_common_wheel" "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
+          uv pip install --system "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Verify released native trust-registry backend
         shell: bash
         run: |
@@ -2214,8 +2209,6 @@ jobs:
           MARTY_VERIFICATION_DIGEST: sha256:4444444444444444444444444444444444444444444444444444444444444444
           MARTY_ISO18013_URI: https://example.invalid/marty-iso18013.whl
           MARTY_ISO18013_DIGEST: sha256:5555555555555555555555555555555555555555555555555555555555555555
-          MARTY_COMMON_URI: https://example.invalid/marty-common.whl
-          MARTY_COMMON_DIGEST: sha256:1111111111111111111111111111111111111111111111111111111111111111
           MARTY_ISSUANCE_IMAGE: example.invalid/issuance@sha256:2222222222222222222222222222222222222222222222222222222222222222
           MARTY_DOCS_IMAGE: example.invalid/docs@sha256:3333333333333333333333333333333333333333333333333333333333333333
           MARTY_SERVICES_IMAGE: example.invalid/services@sha256:6666666666666666666666666666666666666666666666666666666666666666
@@ -2865,12 +2858,8 @@ jobs:
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
-          marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"
-          curl --fail --location --silent --show-error "$MARTY_COMMON_URI" --output "$marty_common_wheel"
-          echo "${MARTY_COMMON_DIGEST#sha256:}  $marty_common_wheel" | sha256sum --check --strict
-          # Fixture-integrity tests import the unchanged published SQL helpers;
-          # actual database execution remains in the isolated Rust/Docker gate.
-          uv pip install --system pytest pyyaml jsonschema cryptography playwright sqlalchemy "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel" "$marty_common_wheel"
+          # Actual database execution remains in the isolated Rust/Docker gate.
+          uv pip install --system pytest pyyaml jsonschema cryptography playwright sqlalchemy "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |

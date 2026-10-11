@@ -791,8 +791,8 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
 def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert "$env:MARTY_COMMON_URI = $martyCommon.Uri" in script
-    assert "$env:MARTY_COMMON_DIGEST = $martyCommon.Digest" in script
+    assert "MARTY_COMMON_URI" not in script
+    assert "MARTY_COMMON_DIGEST" not in script
     assert "$env:MARTY_RS_URI = $martyRs.Uri" in script
     assert "$env:MARTY_RS_DIGEST = $martyRs.Digest" in script
     assert "$env:MARTY_VERIFICATION_URI = $martyVerification.Uri" in script

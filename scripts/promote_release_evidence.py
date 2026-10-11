@@ -21,7 +21,6 @@ REQUIRED_STACK_COMPONENTS = {
     "marty-api-core",
     "marty-blog",
     "marty-cli",
-    "marty-common",
     "marty-core-python",
     "marty-verification-python",
     "marty-iso18013-python",

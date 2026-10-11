@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
-"""
-Migration Runner for All Marty-UI Services
-
-This script runs database migrations for all microservices in the correct order.
-It ensures that the database schema is up-to-date before services start.
+"""Prepare shared database schemas and managed KMS identity for native Rust services.
 
 Usage:
     python run_all_migrations.py [--verify-only]
 
 Options:
-    --verify-only    Check if migrations are up-to-date without applying them
+    --verify-only    Check the database connection without applying changes
 
 Environment Variables:
     DATABASE_URL     PostgreSQL connection string (required)
@@ -33,17 +29,9 @@ from sqlalchemy import create_engine, text
 services_root = Path(__file__).parent
 sys.path.insert(0, str(services_root))
 
-from marty_common.migration import (  # noqa: E402 - services path is bootstrapped above
-    AlembicMigrationAdapter,
-    MigrationError,
-)
-from marty_common.migration_profile import (  # noqa: E402 - services path is bootstrapped above
-    migration_profile,
-    migration_profile_settings,
-)
-from marty_common.system_ids import (  # noqa: E402 - services path is bootstrapped above
-    MARTY_DEFAULT_ORG_ID,
-    MARTY_DEFAULT_ORG_SLUG,
+from migration_profile import (  # noqa: E402 - services path is bootstrapped above
+    is_persistent_profile,
+    normalize_migration_profile,
 )
 from passport_disposable_identity import (  # noqa: E402 - services path is bootstrapped above
     ORGANIZATION_ID as DISPOSABLE_ORGANIZATION_ID,
@@ -52,9 +40,10 @@ from passport_disposable_identity import (  # noqa: E402 - services path is boot
 )
 
 
-# Issuance migrations are owned by the one-shot Rust issuance service. This
-# shared job prepares schemas and KMS bootstrap before that owner runs.
-SERVICES = []
+# Each service owns its Rust migrations. This shared job prepares schemas and
+# managed KMS bootstrap before those owners run.
+MARTY_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
+MARTY_DEFAULT_ORG_SLUG = "marty"
 
 MANAGED_OPENBAO_SERVICE_ID = "managed-openbao-transit"
 MARTY_NOTIFICATION_WEBHOOK_ENVELOPE_KEY_ID = (
@@ -1091,112 +1080,6 @@ def ensure_schemas(database_url: str) -> None:
         engine.dispose()
 
 
-def run_service_migration(
-    service_config: dict, database_url: str, verify_only: bool = False
-) -> bool:
-    """Run migrations for a single service.
-
-    Args:
-        service_config: Service configuration dict with name and module
-        database_url: Database connection URL
-        verify_only: If True, only verify schema without applying migrations
-
-    Returns:
-        True if migrations successful/verified, False otherwise
-    """
-    service_name = service_config["name"]
-    module_name = service_config["module"]
-
-    print(f"\n{'=' * 60}")
-    print(f"Service: {service_name}")
-    print(f"{'=' * 60}")
-
-    try:
-        # Import service models
-        module = __import__(module_name, fromlist=["mapper_registry"])
-        mapper_registry = module.mapper_registry
-
-        # Create migration adapter
-        adapter = AlembicMigrationAdapter(
-            database_url=database_url,
-            metadata=mapper_registry.metadata,
-        )
-
-        # Initialize migrations directory (creates alembic.ini, env.py, etc. if they don't exist)
-        migrations_dir = services_root / service_name / "infrastructure" / "migrations"
-
-        # Only initialize if migrations directory doesn't have required files
-        if (
-            not (migrations_dir / "alembic.ini").exists()
-            or not (migrations_dir / "env.py").exists()
-        ):
-            adapter.initialize(service_name=service_name, migrations_dir=migrations_dir)
-        else:
-            # Manually configure the adapter to use existing migration infrastructure
-            adapter._service_name = service_name
-            adapter._migrations_dir = migrations_dir
-            alembic_ini_path = migrations_dir / "alembic.ini"
-
-            from alembic.config import Config
-
-            adapter.alembic_cfg = Config(str(alembic_ini_path))
-            adapter.alembic_cfg.set_main_option("script_location", str(migrations_dir))
-            adapter.alembic_cfg.set_main_option("sqlalchemy.url", database_url)
-            adapter.alembic_cfg.attributes["target_metadata"] = mapper_registry.metadata
-
-        if verify_only:
-            # Verify schema is up-to-date
-            is_valid = adapter.verify_schema(raise_on_mismatch=False)
-            if is_valid:
-                print(f"✓ {service_name}: Schema is up-to-date")
-                return True
-            else:
-                print(f"✗ {service_name}: Schema is outdated")
-                return False
-        else:
-            # Apply migrations
-            current = adapter.current()
-            print(f"  Current revision: {current or 'None'}")
-
-            # Check if there are any migrations to apply
-            from alembic.script import ScriptDirectory
-
-            script_dir = ScriptDirectory.from_config(adapter.alembic_cfg)
-            head = script_dir.get_current_head()
-            print(f"  Head revision: {head or 'None'}")
-
-            if not head:
-                print(
-                    f"⚠ {service_name}: No migration files found in versions directory"
-                )
-                print(f"  Versions directory: {migrations_dir / 'versions'}")
-            elif current != head:
-                # Run migrations when current doesn't match head
-                # This includes the case when current is None (first run)
-                adapter.upgrade(revision="head")
-                new_current = adapter.current()
-                print(f"  New revision: {new_current or 'None'}")
-                print(f"✓ {service_name}: Migrations applied successfully")
-            else:
-                print("  Already up-to-date")
-                print(f"✓ {service_name}: No migrations needed")
-
-            return True
-
-    except ImportError as e:
-        print(f"⚠ {service_name}: No models module found ({e}), skipping...")
-        return True  # Not an error if service doesn't have migrations yet
-
-    except MigrationError as e:
-        print(f"✗ {service_name}: Migration error: {e}", file=sys.stderr)
-        return False
-
-    except Exception as e:
-        print(f"✗ {service_name}: Unexpected error: {e}", file=sys.stderr)
-        import traceback
-
-        traceback.print_exc()
-        return False
 
 
 def main():
@@ -1204,12 +1087,12 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Run migrations for all Marty-UI services"
+        description="Prepare shared Marty-UI schemas and managed KMS identity"
     )
     parser.add_argument(
         "--verify-only",
         action="store_true",
-        help="Only verify migrations are up-to-date without applying",
+        help="Only verify database connectivity without applying changes",
     )
 
     args = parser.parse_args()
@@ -1224,18 +1107,17 @@ def main():
         f"Database: {database_url.split('@')[1] if '@' in database_url else database_url}"
     )
     print(f"Mode: {'Verify Only' if args.verify_only else 'Apply Migrations'}")
-    profile = migration_profile()
-    settings = migration_profile_settings()
-    print(
-        "Profile: "
-        f"{profile} "
-        f"(demo={settings.include_demo_seed_data}, "
-        f"beta={settings.include_beta_seed_data}, "
-        f"experiments={settings.include_experimental_seed_data}, "
-        f"test={settings.include_test_seed_data}, "
-        f"experimental_fixes={settings.allow_experimental_data_fixes}, "
-        f"persistent={settings.persistent})"
-    )
+    profile = normalize_migration_profile(os.environ.get("MARTY_MIGRATION_PROFILE"))
+    persistent = is_persistent_profile(profile)
+    print(f"Profile: {profile} (persistent={persistent})")
+
+    if args.verify_only:
+        engine = create_engine(database_url)
+        try:
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1")).scalar_one()
+        finally:
+            engine.dispose()
 
     # Ensure schemas exist first
     if not args.verify_only:
@@ -1243,17 +1125,6 @@ def main():
         if not prepare_notification_webhook_envelope_key():
             print("\nNotification webhook KMS preparation failed", file=sys.stderr)
             sys.exit(1)
-
-    # Run migrations for each service
-    success_count = 0
-    failure_count = 0
-
-    for service_config in SERVICES:
-        success = run_service_migration(service_config, database_url, args.verify_only)
-        if success:
-            success_count += 1
-        else:
-            failure_count += 1
 
     kms_bootstrap_success = True
     if not args.verify_only:
@@ -1263,21 +1134,22 @@ def main():
     print(f"\n{'=' * 60}")
     print("MIGRATION SUMMARY")
     print(f"{'=' * 60}")
-    print(f"Total services: {len(SERVICES)}")
-    print(f"Marty KMS identity: {'ready' if kms_bootstrap_success else 'failed'}")
-    print(f"✓ Successful: {success_count}")
-    print(f"✗ Failed: {failure_count}")
+    kms_status = (
+        "not checked"
+        if args.verify_only
+        else "ready" if kms_bootstrap_success else "failed"
+    )
+    print(f"Marty KMS identity: {kms_status}")
 
-    if failure_count > 0 or not kms_bootstrap_success:
-        if not kms_bootstrap_success:
-            print("\nMarty KMS/DID bootstrap failed")
-            if failure_count == 0:
-                sys.exit(1)
-        print(f"\n✗ {failure_count} service(s) failed migration")
+    if not kms_bootstrap_success:
+        print("\nMarty KMS/DID bootstrap failed")
         sys.exit(1)
-    else:
-        print("\n✓ All migrations completed successfully")
-        sys.exit(0)
+    print(
+        "\nDatabase connectivity verified"
+        if args.verify_only
+        else "\n✓ All migrations completed successfully"
+    )
+    sys.exit(0)
 
 
 if __name__ == "__main__":

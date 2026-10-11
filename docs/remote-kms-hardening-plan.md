@@ -16324,3 +16324,49 @@ compilation, Ruff and diff hygiene passed. Both corrections were grouped in
 draft Credentials PR #313 head `f22414f`; new exact-head CI is pending. The
 prior head `46d5a63` had passed all required hosted checks. Keep artifact and
 native UI cutover qualification open.
+
+K10 release-dependency finding: the exact `marty-common` v0.2.16 wheel in
+`release/stack-lock.json` (SHA-256
+`e39d77ebcdd47e301fff6933d19929e19bb92f2ef6fb5f3e15d9e10e184f13b4`)
+still contains `marty_common/infrastructure/trust_models.py` with a
+`private_key_encrypted` ORM column and SQL table definition, plus
+`marty_common/infrastructure/key_vault.py` local private-key store/load APIs.
+The older v0.2.0 wheel pinned by the Credentials test harness has the same
+surfaces. Credentials has no remaining `marty_common` imports; its harness
+dependency was removed locally at `5078100` and is held for a grouped push
+after the current exact-head CI. In UI, the Python migration runner's
+`SERVICES` list was already empty, so its dead Alembic adapter path was
+removed locally along with its `marty-common` imports. The migration Dockerfile
+and two CI Python install steps no longer install the wheel. Focused
+migration/release-contract tests passed 59 cases, and self-host migration and
+operator tests passed 29 with one pre-existing skip. The local broad UI batch
+now also removes the wheel from both stack-lock files, Compose build
+arguments, CI/CD validation and installs, beta release/restore scripts,
+conformance inputs and promotion requirements. The affected release and
+packaging suites passed 361 cases after that correction. A wider stack
+manifest, release transaction, pre-promotion, self-host and migration contract
+run passed 158 more with one pre-existing skip. Bash, PowerShell, YAML and JSON
+syntax checks passed. Exact-image proof remains; do not close K10 or K9 until
+the released graph and signed image are qualified.
+The two developer seed CLIs also had direct `marty_common` imports. The
+Canvas seed now carries only its five stable public IDs; the demo-vendor seed
+uses the public fixture data copied from the reviewed v0.2.16 wheel and a
+local profile normalizer. The copied data was scanned for private-key fields;
+its full returned bundle, all supported profile aliases, and the five Canvas
+IDs were compared against the exact wheel and matched. Both CLI help paths
+loaded without `marty-common`, and the six operator diagnostic tests passed.
+No production `services` or `scripts` Python import of `marty_common` remains.
+The migration runner and demo seed now share a small local profile helper;
+normalization and persistent-profile decisions for every released alias
+matched the exact v0.2.16 wheel. The runner's read-only preflight no longer
+claims that migrations or KMS bootstrap ran. The source-built release batch
+is held locally while the prior exact-head UI Canvas job finishes; disk
+capacity and old Core wheel pins make a newly built migration image an
+inadequate KMS-only release proof at this checkpoint.
+The edited runner's read-only `--verify-only` path also connected to a fresh
+pinned PostgreSQL 16 container without installing `marty-common`; the
+disposable database had no `issuer_signing_keys` table. The first Windows
+attempt hit its existing console encoding on a checkmark after DB access; the
+UTF-8 rerun passed and both disposable containers were removed. The runner
+now reports connectivity rather than claiming migrations ran in verify-only
+mode. This local source-built check does not prove the final image contents.

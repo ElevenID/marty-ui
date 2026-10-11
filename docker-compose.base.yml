@@ -13,8 +13,6 @@ x-marty-migration-build-artifacts: &marty_migration_build_artifacts
   MARTY_VERIFICATION_DIGEST: ${MARTY_VERIFICATION_DIGEST:?set MARTY_VERIFICATION_DIGEST to that wheel's sha256 digest}
   MARTY_ISO18013_URI: ${MARTY_ISO18013_URI:?set MARTY_ISO18013_URI to the immutable marty-iso18013 wheel}
   MARTY_ISO18013_DIGEST: ${MARTY_ISO18013_DIGEST:?set MARTY_ISO18013_DIGEST to that wheel's sha256 digest}
-  MARTY_COMMON_URI: ${MARTY_COMMON_URI:?set MARTY_COMMON_URI to the immutable marty-common wheel}
-  MARTY_COMMON_DIGEST: ${MARTY_COMMON_DIGEST:?set MARTY_COMMON_DIGEST to that wheel's sha256 digest}
 
 # One development-only value shared by the native issuance owner and its direct
 # callers. Deployed overlays replace this with their existing secret source.

@@ -321,7 +321,6 @@ def test_registry_builder_separates_rust_services_from_python_migrations() -> No
         "MARTY_VERIFICATION_DIGEST",
         "MARTY_ISO18013_URI",
         "MARTY_ISO18013_DIGEST",
-        "MARTY_COMMON_URI",
-        "MARTY_COMMON_DIGEST",
     ):
         assert marker in migration_args
+    assert "MARTY_COMMON_URI" not in migration_args

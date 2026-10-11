@@ -205,9 +205,6 @@ jobs:
       marty_iso18013_version: ${{ steps.components.outputs.marty_iso18013 }}
       marty_iso18013_uri: ${{ steps.components.outputs.marty_iso18013_uri }}
       marty_iso18013_digest: ${{ steps.components.outputs.marty_iso18013_digest }}
-      marty_common_version: ${{ steps.components.outputs.marty_common }}
-      marty_common_uri: ${{ steps.components.outputs.marty_common_uri }}
-      marty_common_digest: ${{ steps.components.outputs.marty_common_digest }}
       cli_version: ${{ steps.components.outputs.cli }}
       cli_uri: ${{ steps.components.outputs.cli_uri }}
       cli_digest: ${{ steps.components.outputs.cli_digest }}
@@ -263,9 +260,6 @@ jobs:
             echo "marty_iso18013=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .version' "$LOCK_FILE")"
             echo "marty_iso18013_uri=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
             echo "marty_iso18013_digest=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
-            echo "marty_common=$(jq -er '.components[] | select(.name == "marty-common") | .version' "$LOCK_FILE")"
-            echo "marty_common_uri=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
-            echo "marty_common_digest=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
             echo "cli=$(jq -er '.components[] | select(.name == "marty-cli") | .version' "$LOCK_FILE")"
             echo "cli_uri=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
             echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
@@ -468,9 +462,6 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
-            MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
-            MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
-            MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
             MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
             MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
             MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}

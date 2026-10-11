@@ -31,15 +31,15 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "packages"))
-
-from marty_common.system_ids import (  # noqa: E402  # pylint: disable=import-error
-    MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID,
-    MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID,
-    MARTY_DEFAULT_ORG_ID,
-    MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID,
-    MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID,
+# Stable public fixture IDs from the former marty-common system catalog.
+MARTY_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
+MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID = "50000000-0000-0000-0000-000000000040"
+MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID = "50000000-0000-0000-0000-000000000041"
+MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID = (
+    "0ab66d45-0d84-5fbd-837f-25788d32279e"
+)
+MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID = (
+    "0ab66d45-0d84-5fbd-837f-25788d3227a1"
 )
 
 if __package__:

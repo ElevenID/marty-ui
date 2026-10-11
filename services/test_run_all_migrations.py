@@ -1,26 +1,6 @@
 import json
 import inspect
-import sys
-import types
 import pytest
-
-if "marty_common.migration" not in sys.modules:
-    migration_stub = types.ModuleType("marty_common.migration")
-    migration_stub.AlembicMigrationAdapter = object
-    migration_stub.MigrationError = RuntimeError
-    sys.modules["marty_common.migration"] = migration_stub
-
-if "marty_common.migration_profile" not in sys.modules:
-    profile_stub = types.ModuleType("marty_common.migration_profile")
-    profile_stub.migration_profile = lambda: None
-    profile_stub.migration_profile_settings = lambda: None
-    sys.modules["marty_common.migration_profile"] = profile_stub
-
-if "marty_common.system_ids" not in sys.modules:
-    ids_stub = types.ModuleType("marty_common.system_ids")
-    ids_stub.MARTY_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
-    ids_stub.MARTY_DEFAULT_ORG_SLUG = "marty"
-    sys.modules["marty_common.system_ids"] = ids_stub
 
 import run_all_migrations as migrations
 from services.passport_disposable_identity import managed_key_reference
@@ -89,19 +69,6 @@ def test_disposable_icao_registry_is_scoped_to_exact_project_and_issuer(monkeypa
         )
 
 
-def test_revocation_schema_is_removed_from_the_python_migration_graph() -> None:
-    order = [service["name"] for service in migrations.SERVICES]
-
-    assert "revocation_profile" not in order
-    assert "trust_profile" not in order
-
-
-def test_notification_schema_is_removed_from_the_python_migration_graph() -> None:
-    services = {service["name"]: service["module"] for service in migrations.SERVICES}
-
-    assert "notification" not in services
-
-
 def test_notification_webhook_envelope_key_is_prepared_before_migration(
     monkeypatch,
 ) -> None:
@@ -150,10 +117,7 @@ def test_notification_webhook_envelope_preparation_fails_without_kms(
     assert migrations.prepare_notification_webhook_envelope_key() is False
 
 
-def test_device_registration_schema_is_owned_by_its_native_runtime() -> None:
-    services = {service["name"]: service["module"] for service in migrations.SERVICES}
-
-    assert "device_registration" not in services
+def test_device_registration_schema_is_prepared_for_its_native_runtime() -> None:
     assert "device_registration_service" in inspect.getsource(migrations.ensure_schemas)
 
 

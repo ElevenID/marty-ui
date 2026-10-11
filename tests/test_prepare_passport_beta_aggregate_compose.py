@@ -321,7 +321,6 @@ def test_rendered_compose_rejects_wrong_ui_image():
 def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: Path,
                                                                       monkeypatch):
     handoff, _, beta, ui = candidate()
-    monkeypatch.setenv("MARTY_COMMON_DIGEST", "sha256:" + "f" * 64)
     monkeypatch.setenv("MARTY_DOCS_IMAGE", "sha256:" + "f" * 64)
     monkeypatch.setattr(compose, "ROOT", tmp_path)
     monkeypatch.setattr(compose, "COMPOSE_FILES", ("base.yml", "passport.yml"))
@@ -344,8 +343,6 @@ def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: P
     assert commands[0][1]["input"] == evidence["image_override"]
     assert commands[0][1]["env"]["MARTY_SERVICES_IMAGE"] == handoff["services_image"]
     assert commands[1][1]["env"]["MARTY_UI_RELEASE_IMAGE"] == handoff["ui_image"]
-    assert commands[0][1]["env"]["MARTY_COMMON_DIGEST"] == (
-        handoff["build_only_artifacts"]["MARTY_COMMON_DIGEST"])
     assert commands[0][1]["env"]["MARTY_DOCS_IMAGE"] == handoff["docs_image"]
     assert set(evidence["compose_files_sha256"]) == {"base.yml", "passport.yml"}
     assert evidence["service_config_hashes"]["flow"] == "0" * 64

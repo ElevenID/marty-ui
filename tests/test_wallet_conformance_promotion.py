@@ -148,7 +148,6 @@ def _stack_manifest() -> dict:
         _component("marty-api-core", "ElevenID/marty-cli", "1" * 40, "npm"),
         _component("marty-blog", "ElevenID/marty-blog", "2" * 40, "npm"),
         _component("marty-cli", "ElevenID/marty-cli", "1" * 40, "npm"),
-        _component("marty-common", "ElevenID/Marty", "5" * 40),
         _component("marty-core-python", "ElevenID/marty-core", MARTY_CORE_SHA),
         _component("marty-verification-python", "ElevenID/marty-core", MARTY_CORE_SHA),
         _component("marty-iso18013-python", "ElevenID/marty-core", MARTY_CORE_SHA),

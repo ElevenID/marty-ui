@@ -964,7 +964,6 @@ function Get-StackArtifact([string]$Name, [string]$Type, [string]$SourceReposito
         Digest = [string]$artifact[0].digest
     }
 }
-$martyCommon = Get-StackArtifact "marty-common" "python"
 $martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
 $martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
 $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
@@ -1089,8 +1088,6 @@ Write-Host "Runtime configuration: $script:RuntimeConfigRoot"
 
 Write-Step "Preflight running beta topology"
 Invoke-Checked -FilePath docker -Arguments @("info", "--format", "{{.ServerVersion}}")
-$env:MARTY_COMMON_URI = $martyCommon.Uri
-$env:MARTY_COMMON_DIGEST = $martyCommon.Digest
 $env:MARTY_RS_URI = $martyRs.Uri
 $env:MARTY_RS_DIGEST = $martyRs.Digest
 $env:MARTY_VERIFICATION_URI = $martyVerification.Uri
@@ -1229,8 +1226,6 @@ if (-not $OfficialStackRelease) {
     Invoke-Checked -FilePath docker -Arguments @(
         "build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"),
         "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
-        "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
-        "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)",
         "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)", "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)",
         "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
         "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",

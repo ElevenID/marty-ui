@@ -85,13 +85,12 @@ def test_shared_service_image_provisions_private_writable_runtime_state() -> Non
     assert dockerfile.index(provision) < dockerfile.index("USER 10001:10001")
 
 
-def test_migration_image_preserves_released_wheel_filename() -> None:
+def test_migration_image_excludes_retired_common_wheel() -> None:
     dockerfile = (ROOT / "services" / "Dockerfile.migrations").read_text(encoding="utf-8")
 
-    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfile
+    assert 'MARTY_COMMON_WHEEL' not in dockerfile
     assert "pip install --no-cache-dir" in dockerfile
-    assert '"$MARTY_COMMON_WHEEL"' in dockerfile
-    assert "/tmp/marty-common.whl" not in dockerfile
+    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in dockerfile
 
 
 def test_shared_service_image_does_not_rebuild_external_sources() -> None:

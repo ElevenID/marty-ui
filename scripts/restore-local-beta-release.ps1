@@ -105,12 +105,9 @@ function Get-StackArtifact([string]$Name, [string]$Type) {
     }
     return $artifact[0]
 }
-$martyCommon = Get-StackArtifact "marty-common" "python"
 $martyRs = Get-StackArtifact "marty-core-python" "python"
 $martyVerification = Get-StackArtifact "marty-verification-python" "python"
 $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python"
-$env:MARTY_COMMON_URI = $martyCommon.uri
-$env:MARTY_COMMON_DIGEST = $martyCommon.digest
 $env:MARTY_RS_URI = $martyRs.uri
 $env:MARTY_RS_DIGEST = $martyRs.digest
 $env:MARTY_VERIFICATION_URI = $martyVerification.uri

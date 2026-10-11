@@ -268,8 +268,8 @@ def test_stack_cd_uses_released_credentials_and_public_migration_contract() -> N
     assert "MARTY_RS_URI" in workflow
     assert "MARTY_RS_DIGEST" in workflow
     assert "file: services/Dockerfile.migrations" in workflow
-    assert "MARTY_COMMON_URI" in workflow
-    assert "MARTY_COMMON_DIGEST" in workflow
+    assert "MARTY_COMMON_URI" not in workflow
+    assert "MARTY_COMMON_DIGEST" not in workflow
     assert "repository: ElevenID/marty-integration-tests" not in workflow
     assert "stack-release-integration-source-${{ github.run_id }}" in workflow
     assert "gh attestation verify integration-source.tar.gz" in workflow

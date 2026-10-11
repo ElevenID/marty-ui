@@ -509,10 +509,6 @@ def test_local_build_requires_digest_pinned_bootstrap_artifacts(
         "MARTY_ISO18013_URI=value-for-MARTY_ISO18013_URI",
         "--build-arg",
         "MARTY_ISO18013_DIGEST=value-for-MARTY_ISO18013_DIGEST",
-        "--build-arg",
-        "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
-        "--build-arg",
-        "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
     ]
 
 

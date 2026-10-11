@@ -263,7 +263,6 @@ def manifest_source(
                 "Credentials issuance image attestation is invalid")
     build_only = {}
     for variable, component_name in (
-        ("MARTY_COMMON", "marty-common"),
         ("MARTY_RS", "marty-core-python"),
         ("MARTY_VERIFICATION", "marty-verification-python"),
         ("MARTY_ISO18013", "marty-iso18013-python"),

@@ -22,7 +22,6 @@ REQUIRED_COMPONENTS = {
     "marty-verification-python",
     "marty-iso18013-python",
     "marty-credentials-issuance",
-    "marty-common",
     "marty-cli",
     "marty-integration-tests",
     "marty-ui",

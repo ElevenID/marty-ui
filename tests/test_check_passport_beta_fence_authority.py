@@ -364,7 +364,6 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             component("marty-core-python", "ElevenID/marty-core"),
             component("marty-verification-python", "ElevenID/marty-core"),
             component("marty-iso18013-python", "ElevenID/marty-core"),
-            component("marty-common", "ElevenID/Marty"),
             component("marty-cli", "ElevenID/marty-cli"),
             component("marty-integration-tests", "ElevenID/marty-integration-tests"),
             {**component("marty-credentials-issuance", "ElevenID/marty-credentials"),
@@ -565,8 +564,7 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["deployed_beta_baseline"]["source_commit"] == "9" * 40
     assert plan["source"]["services_image"] != plan["deployed_beta_baseline"]["services_image"]
     assert plan["source"]["signed_manifest_verified"] is True
-    assert plan["source"]["build_only_artifacts"]["MARTY_COMMON_URI"] == (
-        "https://example.test/artifact.whl")
+    assert "MARTY_COMMON_URI" not in plan["source"]["build_only_artifacts"]
     assert plan["source"]["build_only_artifacts"]["MARTY_RS_DIGEST"] == DIGEST
     assert plan["credentials_deletion_head"] == DELETION_HEAD
     assert plan["target_observation_sha256"] == OBSERVATION

@@ -65,7 +65,6 @@ def _manifest() -> dict:
             _component("marty-core-python", "ElevenID/marty-core", [wheel]),
             _component("marty-verification-python", "ElevenID/marty-core", [wheel]),
             _component("marty-iso18013-python", "ElevenID/marty-core", [wheel]),
-            _component("marty-common", "ElevenID/Marty", [wheel]),
             _component(
                 "marty-credentials-issuance",
                 "ElevenID/marty-credentials",

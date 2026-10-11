@@ -50,7 +50,6 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         "marty-api-core",
         "marty-blog",
         "marty-cli",
-        "marty-common",
         "marty-core-python",
         "marty-verification-python",
         "marty-iso18013-python",
@@ -109,23 +108,14 @@ def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
     assert "result.not_revoked is None" in workflow
 
 
-def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
+def test_ci_and_stack_lock_exclude_retired_marty_common_wheel() -> None:
     workflow_text = _text(".github/workflows/ci.yml")
     workflow = yaml.safe_load(workflow_text)
     lock = json.loads(_text("release/stack-lock.json"))
-    common = next(
-        component
-        for component in lock["components"]
-        if component["name"] == "marty-common"
-    )
-    artifact = next(item for item in common["artifacts"] if item["type"] == "python")
-
-    assert common["version"] == "0.2.16"
-    assert common["commit"] == "36bb2aac65759edc2ccdce120e16a61391a7ce32"
-    assert workflow["env"]["MARTY_COMMON_URI"] == artifact["uri"]
-    assert workflow["env"]["MARTY_COMMON_DIGEST"] == artifact["digest"]
-    assert 'marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"' in workflow_text
-    assert "marty_common-0.2.4" not in workflow_text
+    assert all(item["name"] != "marty-common" for item in lock["components"])
+    assert "MARTY_COMMON_URI" not in workflow["env"]
+    assert "MARTY_COMMON_DIGEST" not in workflow["env"]
+    assert 'marty_common_wheel=' not in workflow_text
 
 
 def test_ci_and_stack_lock_pin_the_same_npm_releases() -> None:
@@ -806,14 +796,13 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
 
     assert "context: .." not in workflow
     assert "COPY ../" not in dockerfiles
-    assert "MARTY_COMMON_URI" in dockerfiles
-    assert "MARTY_COMMON_DIGEST" in dockerfiles
+    assert "MARTY_COMMON_URI" not in dockerfiles
+    assert "MARTY_COMMON_DIGEST" not in dockerfiles
     assert "MARTY_VERIFICATION_URI" in dockerfiles
     assert "MARTY_VERIFICATION_DIGEST" in dockerfiles
     assert "MARTY_ISO18013_URI" in dockerfiles
     assert "MARTY_ISO18013_DIGEST" in dockerfiles
-    assert 'MARTY_COMMON_WHEEL="/tmp/${MARTY_COMMON_URI##*/}"' in dockerfiles
-    assert "/tmp/marty-common.whl" not in dockerfiles
+    assert "marty_common" not in dockerfiles
     assert "sha256sum --check --strict" in dockerfiles
 
 
