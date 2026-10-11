@@ -1356,6 +1356,7 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
         })),
     )
     .await?;
+    require_azure_response_key(&response, endpoint, &key_path)?;
     let value = response
         .get("value")
         .and_then(Value::as_str)
@@ -1366,6 +1367,21 @@ async fn sign_azure(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError>
             )
         })?;
     decode_urlsafe(value, "Azure signature")
+}
+
+fn require_azure_response_key(
+    response: &Value,
+    endpoint: &str,
+    key_path: &str,
+) -> Result<(), KmsError> {
+    let expected_kid = format!("{}/keys/{key_path}", endpoint.trim_end_matches('/'));
+    if response.get("kid").and_then(Value::as_str) != Some(expected_kid.as_str()) {
+        return Err(KmsError::InvalidResponse(
+            "Azure Key Vault sign response key identifier did not match the pinned key."
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 async fn public_key_azure(config: &Value) -> Result<Value, KmsError> {
@@ -3544,6 +3560,28 @@ mod tests {
         })
         .await;
         assert!(matches!(result, Err(KmsError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn azure_signing_requires_the_requested_key_version_in_the_response() {
+        let endpoint = "https://issuer.vault.azure.net";
+        let requested = "issuer/version-1";
+        assert!(require_azure_response_key(
+            &json!({"kid": "https://issuer.vault.azure.net/keys/issuer/version-1"}),
+            endpoint,
+            requested,
+        )
+        .is_ok());
+        for response in [
+            json!({}),
+            json!({"kid": "https://issuer.vault.azure.net/keys/issuer/version-2"}),
+            json!({"kid": "https://other.vault.azure.net/keys/issuer/version-1"}),
+        ] {
+            assert!(matches!(
+                require_azure_response_key(&response, endpoint, requested),
+                Err(KmsError::InvalidResponse(_))
+            ));
+        }
     }
 
     #[test]

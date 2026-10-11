@@ -229,6 +229,9 @@ async fn spawn_stub(
         .expect("bind provider stub");
     let address = listener.local_addr().expect("stub address");
     let captured = Arc::new(Mutex::new(None));
+    let endpoint = format!("http://{address}");
+    let response = serde_json::from_str(&response.to_string().replace("$STUB", &endpoint))
+        .expect("substituted provider response");
     let state = StubState {
         status,
         response,
@@ -244,7 +247,7 @@ async fn spawn_stub(
             .await
             .expect("provider stub server");
     });
-    (format!("http://{address}"), captured, shutdown_tx)
+    (endpoint, captured, shutdown_tx)
 }
 
 async fn managed_transit_stub(

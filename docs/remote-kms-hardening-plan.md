@@ -14069,6 +14069,12 @@ registry/validation golden suites and Signing Keys library suite (177 passed,
 nine ignored) pass. Real Azure response `kid` and public-key/certificate
 binding still need provider acceptance; a pinned request path alone does not
 prove the response came from that version.
+Follow-up self-review added a response check: Azure's documented Sign result
+includes a versioned `kid` ([Microsoft Sign REST contract](https://learn.microsoft.com/en-us/rest/api/keyvault/keys/sign/sign?view=rest-keyvault-keys-2025-07-01)).
+The adapter now rejects a missing, different-version or different-vault `kid`
+before accepting the signature. A focused negative/positive unit test and all
+five provider golden tests pass locally. This still needs a real Azure key and
+signature-format/certificate qualification.
 
 K6 GCP reference qualification, local UI batch: service validation previously
 accepted an unversioned CryptoKey path, while `asymmetricSign` and public-key
