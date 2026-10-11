@@ -9,6 +9,16 @@ extracted root, source SHA, and run ID as the [scoped migration
 probe](selfhost-scoped-installed-migration-probe.md). It is not part of an
 ordinary CI or release gate and always reports `qualification: unqualified`.
 
+The same downstream workflow first runs
+`scripts/probe_selfhost_installed_bootstrap.py` against the verified extracted
+bundle. It starts one owned, digest-pinned disposable OpenBao with no host
+ports, invokes the shipped bootstrap helper, checks three distinct scoped
+tokens in an external private temporary directory, and verifies cleanup of
+both owned containers. Its separate sanitized report is also unqualified.
+The helper runs its Linux CLI container as the invoking user and replaces
+placeholder token files through private atomic writes. A successful handoff
+does not qualify the production Compose stack, login, or an issuer journey.
+
 The script first repeats that probe's exact-bundle and disposable migration
 checks. It takes `signing-keys` only from the verified image lock, pulls its
 exact `services` digest for Linux amd64, and checks the selected local image's
