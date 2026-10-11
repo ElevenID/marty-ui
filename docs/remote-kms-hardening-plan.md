@@ -16386,3 +16386,34 @@ URI, including underscore wheel names. The targeted and adjacent release
 suites passed 131 cases; Ruff and diff hygiene passed. This is source and
 local-runtime evidence; exact-head CI and release-artifact qualification are
 still open.
+
+Credentials release-graph follow-up: after the harness dependency removal at
+`5078100`, the separate `release/dependencies.json` still pinned a released
+`marty-common` wheel and Python Security CI still expected pip-audit to skip
+that package. Commit `fc6af8a` removes the dead release pin, requires zero
+unaudited Python dependencies in CI and adds a contract that the release
+manifest contains only the two canonical Core wheels for all shipped
+platforms. Its six installer/manifest tests, Ruff, JSON/YAML parsing and diff
+hygiene passed. A local `pip-audit .` resolved 25 dependencies with no skips
+or known vulnerabilities. Both Credentials commits were pushed together to
+draft PR #313 head `fc6af8a`; [exact-head CI 38182526702](https://github.com/ElevenID/marty-credentials/actions/runs/38182526702)
+is running. The prior pushed head passed its required checks.
+Credentials wheel-pin self-review found an independent release mismatch:
+the Rust binding graph and its KMS guard select Core `6acba9d9`, but the
+CI wheel builder and cache warmer still selected older Core revisions
+`7f276a4` and `7c50d31`. The local correction pins both workflows to the
+reviewed Core PR #355 head and adds a cross-workflow contract comparing their
+pin to the binding graph. Seven focused tests, Ruff, workflow YAML parse and
+diff hygiene pass. Hold this correction for a grouped follow-up push after
+the running prior-head CI provides its useful evidence. The separate released
+Core wheel pins remain old; exact release artifacts are not yet qualified.
+The pushed Credentials head's Python Tests job exposed a dependency hidden by
+the retired `marty-common` wheel: a source-retirement evidence test imports
+PyYAML, but the harness did not declare it. The local follow-up adds PyYAML to
+the dev test requirements. A separate local false positive came from 100
+ignored `.pyc` files left under the removed `services/issuance` directory in
+this Windows worktree; the source gate now rejects actual source files while
+ignoring stale bytecode. All 176 affected retirement, wheel-pin and installer
+tests pass locally with Ruff and diff hygiene. Neither issue justifies
+restoring the retired wheel. Preserve the failed CI job as evidence and batch
+these fixes with the Core wheel-pin correction before the next push.
