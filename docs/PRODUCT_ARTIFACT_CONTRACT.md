@@ -43,8 +43,9 @@ provenance, or license notice. The qualified **stack transaction** is not
 qualification of this self-host ZIP. The producer does not authenticate the
 GitHub Actions run, attest image architecture, verify every independent image's
 provenance, or exercise an extracted clean install; those remain release-gate
-responsibilities. Its output path must be new and is not automatically uploaded
-or promoted.
+responsibilities. The opt-in self-host preparation job uploads this unqualified
+descriptor beside the ZIP, lock, and receipt for later artifact-consumer checks;
+it does not publish or promote any of them as release assets.
 
 ## Initial sequence and evidence still needed
 
