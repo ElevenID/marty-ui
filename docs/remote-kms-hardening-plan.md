@@ -14408,3 +14408,12 @@ directly. Those paths must receive operation-specific authority and the
 lower-level sign methods must recheck it; guarding only the two HTTP sign
 handlers would leave bypasses. Holder/device proof signing is separately
 scoped and must retain its supported behavior.
+
+Fresh Issuance schema qualification, local UI evidence: applied all nine
+Rust-owned Issuance SQL files (`0000` through `0008`) in order to a new
+disposable PostgreSQL 15 container, then ran the canonical
+`verify_fresh_kms_issuance_schema.py` catalog check against its exact
+container ID. It found no historical Alembic ledger and no private-key
+table or column, including `issuer_signing_keys`. The container was stopped.
+This proves the Rust Issuance clean-install schema only; assembled supported
+stacks and populated-data content scans still need their own evidence.
