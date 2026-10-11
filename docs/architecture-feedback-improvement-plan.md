@@ -3459,6 +3459,14 @@ Rust lanes executed. Canvas also has SHA-sensitive self-host steps. Therefore
 do not skip protected merge-group Rust checks yet. Any later pilot needs
 authenticated exact-tree and job evidence, authoritative single-PR queue
 membership, and full-run fallback on unknown or mismatched inputs.
+The October 11 local provenance-only pilot passed 170 focused/workflow tests
+and independent review, but is deferred without a PR: GitHub's documented
+`merge_group` payload and queue APIs do not expose an immutable PR-membership
+list for the event head SHA, and Canvas retains SHA-sensitive image/revision
+proof. The record alone cannot justify skipping either protected Rust lane;
+shipping it now would add artifact/workflow maintenance without a demonstrated
+reuse path. Revisit only with authoritative group membership and a validated
+consumer, or a different measured reuse strategy. No gate was changed.
 
 ## Design references
 
