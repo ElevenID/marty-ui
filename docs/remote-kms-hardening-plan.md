@@ -15817,3 +15817,12 @@ local PostgreSQL instance. The complete Issuance library suite also passed
 (572 passed, 8 ignored), as did direct rustfmt and diff checks. The correction
 is held for a grouped push with the two upstream merges after Canvas finishes
 on the prior hosted head.
+
+K10 Credentials clean-install SQL audit: applied the Credentials hardening
+branch's `setup_tables.sql` and `create_application_tables.sql` to a separate
+disposable PostgreSQL 16 database after creating their four named schemas and
+the `marty` role. The resulting catalog has 11 tables and 157 columns, with
+zero table or column names matching private/secret key material. Source search
+found no Python ORM key-material model on that branch. This checks the two
+retained SQL entry points; JSON payload data flows and exact released runtime
+images still need separate qualification.
