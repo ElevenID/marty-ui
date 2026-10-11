@@ -14983,3 +14983,30 @@ both, rather than reporting Canvas acceptance as passed.
 The Flow published-schema acceptance test target compiles locally with the
 updated cleanup roster. Its exact-owned PostgreSQL/Compose behavior remains
 unverified locally on Windows and must pass in the Linux hosted lane.
+
+Grouped follow-up head `5e9a41116` was pushed to draft UI PR #1192 after
+run 38126745463 became terminal. The PR description now states the scoped
+origin limits, local validation, passed OpenBao/Raft recovery lane, exact
+packaging failures and unresolved self-host loader diagnostic. Main hosted
+CI run 38129327296 has been queued for this exact head. Keep subsequent
+corrections local until its terminal results to avoid overlapping full CI.
+
+Issuance producer follow-up audit: Canvas readiness has a second DID-signing
+path beyond its LTI tool JWT. `LiveCanvasReadinessChallengeProvider` resolves
+the active credential-template issuer profile, signs a fresh
+`marty-canvas-readiness-v1` challenge with that profile's configured purpose,
+and verifies the detached signature against its public JWK. The current
+`HttpDidSigner` call has no grant and the resolved key reference is not carried
+through `CanvasReadinessDidSigner`. Do not force this check into the
+`IssuanceCanvas` LTI-only origin or remove it: give the readiness challenge a
+separate, fixed-origin scoped grant capability, bind the selected profile key,
+tenant, template/readiness operation, fresh challenge and exact algorithm,
+and retain its positive and failure readiness coverage. The shared origin
+validator, OpenBao policy/token bootstrap, self-host and Kubernetes mounts,
+and closed packaging fixtures must all include that capability in the same
+broad producer PR. The existing `PassportSigner::Remote` branch also needs a
+feature-loss/security decision during this batch: it calls a configured
+external signer outside the managed issuer-profile grant route. With no
+public deployments or compatibility requirement, remove this selector if it
+cannot satisfy the KMS-only custody and authorization contract, while keeping
+supported managed SOD signing and verification intact.
