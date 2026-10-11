@@ -2398,6 +2398,19 @@ CI gate or skip, or establish a speedup.
 The witness and its source-scoped mutation regression landed in
 [#1195](https://github.com/ElevenID/marty-ui/pull/1195), not a separate PR.
 
+## A0/A3 Credential Template-to-Issuance Canvas readiness HTTP witness (2026-10-11 local candidate)
+
+The existing Credential Template-to-Issuance shadow edge covers initiation's
+`GetTemplate` gRPC call, but not the separate Canvas readiness HTTP input.
+Native Issuance constructs a document provider from the configured Credential
+Template URL; readiness evaluation requests the template's internal issuance
+context through that provider. The Credential Template service registers and
+serves the matching route. This candidate adds source-scoped, mutation-checked
+witnesses for that path and its base/native Compose bindings on the existing
+edge. It changes no runtime behavior, selector, skip, or required gate. Service
+changes remain full-workspace validation, and the observation alone proves
+neither complete non-Cargo closure nor a speedup.
+
 ## A5 REST fresh-run provenance boundary (2026-10-08 candidate)
 
 [UI #1186](https://github.com/ElevenID/marty-ui/pull/1186) merged the
