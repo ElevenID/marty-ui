@@ -315,13 +315,16 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         checked: &[String],
         policy_allowed: bool,
     ) -> Result<bool, CanvasSyncProcessingError> {
-        let mut transaction = self.begin_write(target).await?;
-        let application = resources.application.as_ref().ok_or_else(stale)?;
         let patch = json!({
             "last_evidence_sync_at": Utc::now(),
             "last_evidence_policy_allowed": policy_allowed,
             "last_evidence_requirements_checked": checked,
         });
+        if marty_key_material_policy::contains_private_key(&patch) {
+            return Err(unavailable());
+        }
+        let mut transaction = self.begin_write(target).await?;
+        let application = resources.application.as_ref().ok_or_else(stale)?;
         lock_current_scope(&mut transaction, target, resources).await?;
         lock_current_application(&mut transaction, application).await?;
         let result = sqlx::query(

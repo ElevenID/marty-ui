@@ -16073,3 +16073,12 @@ The fresh PostgreSQL 16 candidate contract passed a private JWK attempt with
 the candidate and application unchanged, then passed the normal link and
 revision flow. Issuance all-targets warnings-denied Clippy passed, and the
 disposable database was removed. This remains in the same grouped local batch.
+
+K10 Canvas sync application follow-up: the worker's checked-requirement list
+is written into application integration context. Its generated JSON patch now
+passes the shared private-material policy before the write lease or database
+transaction. A fresh PostgreSQL 16 Canvas management contract passed with an
+encoded private JWK requirement rejected and unchanged roster state; the
+normal management flow passed, as did Issuance all-targets warnings-denied
+Clippy. The disposable database was removed. This correction remains in the
+same grouped local batch pending the prior hosted Canvas job.

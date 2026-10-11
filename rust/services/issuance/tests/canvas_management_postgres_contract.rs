@@ -1115,6 +1115,14 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         verification_method: "synthetic",
         effective_at: None,
     };
+    let private_requirement =
+        ["{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"private-seed\"}".to_owned()];
+    let denied = unscoped
+        .patch_application_sync(&target, &resources, &private_requirement, true)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, "canvas_sync_repository_unavailable");
+    assert_eq!(roster_storage(pool).await, original);
     for effect in [
         "fact",
         "application",
