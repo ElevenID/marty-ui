@@ -838,6 +838,15 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
     assert_initiation_idempotency_race(&repository).await;
     assert_initiation_dependency_reads(&pool, key.as_bytes()).await;
     assert_didcomm_retry_and_lifecycle_contract(&pool, &repository, &lifecycle).await;
+    sqlx::query(
+        "UPDATE issuance_service.issuance_transactions
+         SET claims = '{\"private_jwk\":{\"kty\":\"OKP\",\"d\":\"private-seed\"}}'::jsonb
+         WHERE id = 'tx-contract'",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(repository.transaction_by_id("tx-contract").await.is_err());
     revocation_server.abort();
     drop_contract_schema(&pool).await;
 }
@@ -1007,6 +1016,28 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         .expect("the public pending-delivery compatibility method must remain available");
     assert_eq!(compatibility_pending.credential, issued);
     assert_eq!(compatibility_pending.delivery, staged);
+
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials
+         SET status_list_entries = '[{\"private_jwk\":{\"kty\":\"OKP\",\"d\":\"private-seed\"}}]'::jsonb
+         WHERE id = $1",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.issued_credentials SET status_list_entries = '[]'::jsonb
+         WHERE id = $1",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
 
     assert!(
         lifecycle

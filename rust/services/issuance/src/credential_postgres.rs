@@ -1281,7 +1281,7 @@ pub(crate) fn transaction_row(
     row: PgRow,
 ) -> Result<CredentialTransaction, CredentialIssuanceError> {
     let status = get::<String>(&row, "status")?;
-    Ok(CredentialTransaction {
+    let transaction = CredentialTransaction {
         id: get(&row, "id")?,
         organization_id: get(&row, "organization_id")?,
         credential_template_id: get(&row, "credential_template_id")?,
@@ -1314,7 +1314,11 @@ pub(crate) fn transaction_row(
         oid4vci_client_id: get(&row, "oid4vci_client_id")?,
         created_at: get(&row, "created_at")?,
         expires_at: get(&row, "expires_at")?,
-    })
+    };
+    if transaction_contains_private_material(&transaction) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(transaction)
 }
 
 #[async_trait]
@@ -1585,10 +1589,7 @@ fn validate_finalization_input(
     transaction: &CredentialTransaction,
     credential: &IssuedCredential,
 ) -> Result<(), CredentialIssuanceError> {
-    if marty_key_material_policy::contains_private_key(&json!(credential.status_list_entries))
-        || marty_key_material_policy::contains_private_key(&Value::String(
-            credential.credential.clone(),
-        ))
+    if issued_credential_contains_private_material(credential)
         || transaction.status != CredentialTransactionStatus::Signing
         || transaction.reserved_credential_id.as_deref() != Some(&credential.id)
         || credential.transaction_id != transaction.id
@@ -1598,6 +1599,13 @@ fn validate_finalization_input(
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
     Ok(())
+}
+
+fn issued_credential_contains_private_material(credential: &IssuedCredential) -> bool {
+    marty_key_material_policy::contains_private_key(&json!(credential.status_list_entries))
+        || marty_key_material_policy::contains_private_key(&Value::String(
+            credential.credential.clone(),
+        ))
 }
 
 async fn finalize_credential(
@@ -1891,7 +1899,7 @@ fn metadata_required_text(metadata: &Value, name: &str) -> Result<String, Creden
 }
 
 fn issued_credential_row(row: &PgRow) -> Result<IssuedCredential, CredentialIssuanceError> {
-    Ok(IssuedCredential {
+    let credential = IssuedCredential {
         id: get(row, "id")?,
         transaction_id: get(row, "transaction_id")?,
         organization_id: get(row, "organization_id")?,
@@ -1906,7 +1914,11 @@ fn issued_credential_row(row: &PgRow) -> Result<IssuedCredential, CredentialIssu
         credential_hash: get(row, "credential_hash")?,
         issued_at: get(row, "issued_at")?,
         expires_at: get(row, "expires_at")?,
-    })
+    };
+    if issued_credential_contains_private_material(&credential) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(credential)
 }
 
 async fn mark_locked_didcomm_outcome_unknown(

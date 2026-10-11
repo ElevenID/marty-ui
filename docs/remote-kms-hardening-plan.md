@@ -16170,3 +16170,16 @@ normal finalization, DIDComm staging and management contracts passed. Issuance
 all-targets warnings-denied Clippy passed, and the disposable database was
 removed. This correction stays local for the next grouped push while exact-
 head CI on `44e94b746` runs.
+
+K10 read-side custody follow-up: shared issuance-transaction decoding and
+DIDComm issued-credential decoding now reject private material in claims,
+wallet/disclosure/predicate JSON, status-list entries or raw credential text.
+This uses the same predicates as their write boundaries. A fresh PostgreSQL
+16 credential contract injected private JWK data directly into transaction
+and issued-credential rows; both repository reads failed closed, while normal
+DIDComm transport and credential management still passed. Issuance all-targets
+warnings-denied Clippy passed; the disposable database was removed. On pushed
+head `44e94b746`, hosted Rust Lint and Packaging and Rust Feature Regression
+Probe have both passed, confirming the standalone lockfile repair. Rust
+contracts and Canvas are still running; hold this local correction for their
+terminal result and the next grouped push.
