@@ -92,10 +92,9 @@ pub async fn verify_bound(
     verify_token: &str,
     claims: &GrantClaims,
     binding: &GrantBinding<'_>,
-    now_seconds: i64,
     hmac: &str,
 ) -> Result<VerifiedGrant, GrantError> {
-    let input = bound_input(claims, binding, now_seconds)?;
+    let input = bound_input(claims, binding, chrono::Utc::now().timestamp())?;
     let valid = client
         .verify(verify_token, &input, hmac)
         .await

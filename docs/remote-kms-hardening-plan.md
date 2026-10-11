@@ -14297,3 +14297,9 @@ disposable loopback Redis DB 13: exactly one caller consumed the grant, and
 replay/expiry were denied. The container was stopped. Gateway/Flow/Issuance
 routes are not yet wired to this verifier and replay store, so K6 tenant
 authority is still open.
+Grant API self-review removed caller-supplied clocks from the public
+verification and replay-consumption methods. Both now read the process clock
+internally, so a route cannot accidentally extend an expired grant by passing
+a stale timestamp. The internal fixed-time test path remains private. The
+grant suite, warnings-denied Clippy and disposable concurrent Redis test
+pass after this change.

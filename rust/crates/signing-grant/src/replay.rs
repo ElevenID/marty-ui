@@ -30,7 +30,12 @@ impl RedisGrantReplayStore {
 
     /// Atomically records the grant before KMS signing. A failed sign still
     /// consumes the grant; the authorized origin must start a new operation.
-    pub async fn consume(
+    pub async fn consume(&self, verified: &VerifiedGrant) -> Result<(), ReplayError> {
+        self.consume_at(verified, chrono::Utc::now().timestamp())
+            .await
+    }
+
+    async fn consume_at(
         &self,
         verified: &VerifiedGrant,
         now_seconds: i64,
@@ -94,18 +99,18 @@ mod tests {
             expires_at: 1_700_000_030,
         };
         let now = 1_700_000_000;
-        let (a, b) = tokio::join!(store.consume(&grant, now), store.consume(&grant, now));
+        let (a, b) = tokio::join!(store.consume_at(&grant, now), store.consume_at(&grant, now));
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
         assert!(
             matches!(a, Err(ReplayError::AlreadyUsed))
                 || matches!(b, Err(ReplayError::AlreadyUsed))
         );
         assert_eq!(
-            store.consume(&grant, now).await,
+            store.consume_at(&grant, now).await,
             Err(ReplayError::AlreadyUsed)
         );
         assert_eq!(
-            store.consume(&grant, 1_700_000_031).await,
+            store.consume_at(&grant, 1_700_000_031).await,
             Err(ReplayError::Expired)
         );
     }
