@@ -1,5 +1,16 @@
 # Whole-worker OAuth revocation qualification
 
+2026-10-10 KMS-only cleanup candidate: the ten historical Python
+regeneration tests, their preparer selector and the standalone Python OAuth
+oracle runner have been removed locally. The frozen corpora remain unchanged.
+Nine native HTTPS matrices execute all 39 process/cycle observations; a
+separate native PostgreSQL repository test owns the one capped-selection
+observation. The tier inventory pins all ten scenario/corpus pairs, while
+the compiled-test guard requires every native owner. Earlier references below
+describe historical captures, not a current executable Python oracle. This
+candidate still needs hosted Linux exact-head qualification before the
+retirement can be treated as released.
+
 Latest qualification: exact head `75d82c9fe5a41ed14a6939d77a95c26f5ffc2a87`
 passed CI34069978028 and all applicable checks, including Rust CodeQL34069978088.
 Runtime101585424129 passed all 81 configured tests in 1726.05 seconds and the

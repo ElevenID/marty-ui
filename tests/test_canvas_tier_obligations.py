@@ -58,7 +58,7 @@ def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
 
 def test_worker_package_migration_accounts_for_all_original_case_ids() -> None:
     names = set(MIGRATION["case_ids"])
-    assert len(names) == 144
+    assert len(names) == 134
     assert discovered() <= names
     validate_package_migration(MIGRATION, names)
 
@@ -67,7 +67,7 @@ def test_worker_package_migration_rejects_same_count_substitution() -> None:
     names = set(MIGRATION["case_ids"])
     names.remove("worker_repository_root_is_independent_of_cargo_package_depth")
     names.add("worker_same_count_substitute")
-    assert len(names) == 144
+    assert len(names) == 134
     with pytest.raises(ValueError, match="missing a compiled case"):
         validate_package_migration(MIGRATION, names)
 
@@ -79,20 +79,21 @@ def discovered() -> set[str]:
             INVENTORY["historical"]
             + INVENTORY["preflights"]
             + INVENTORY["native_replays"]
+            + INVENTORY["native_oauth_replays"]
         )
     }
 
 
 def test_exact_current_inventory_is_source_and_fixture_backed() -> None:
     validate(INVENTORY, discovered())
-    assert len(INVENTORY["historical"]) == 30
+    assert len(INVENTORY["historical"]) == 20
     assert len(INVENTORY["preflights"]) == 4
     assert (
-        "worker_oauth_revocation_counters_reference_matches_published_cycle"
+        "worker_oauth_revocation_counters_matches_frozen_published_cycle"
         in discovered()
     )
     assert (
-        "worker_oauth_revocation_selection_reference_matches_published_repository"
+        "worker_oauth_revocation_selection_repository_matches_published"
         in discovered()
     )
 
@@ -105,7 +106,7 @@ def test_compiled_list_rejects_duplicate_names() -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["missing-historical", "extra-historical", "missing-preflight", "missing-native"]
+    "change", ["missing-historical", "extra-historical", "missing-preflight", "missing-native", "missing-native-oauth"]
 )
 def test_compiled_list_drift_fails_closed(change: str) -> None:
     names = discovered()
@@ -115,6 +116,8 @@ def test_compiled_list_drift_fails_closed(change: str) -> None:
         names.add("worker_new_reference_matches_published_process")
     elif change == "missing-preflight":
         names.remove(INVENTORY["preflights"][0]["test"])
+    elif change == "missing-native-oauth":
+        names.remove(INVENTORY["native_oauth_replays"][0]["test"])
     else:
         names.remove(INVENTORY["native_replays"][0]["test"])
     with pytest.raises(ValueError, match="mismatch|missing|drift"):
@@ -122,7 +125,7 @@ def test_compiled_list_drift_fails_closed(change: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["duplicate", "assertion", "corpus", "mode", "routine", "input", "native-pin"]
+    "change", ["duplicate", "assertion", "corpus", "mode", "routine", "input", "native-pin", "oauth-pin", "oauth-count"]
 )
 def test_inventory_drift_fails_closed(change: str) -> None:
     inventory = deepcopy(INVENTORY)
@@ -142,6 +145,10 @@ def test_inventory_drift_fails_closed(change: str) -> None:
         )
     elif change == "input":
         inventory["preflights"][0]["inputs"][0] = "contracts/missing-native-input.json"
+    elif change == "oauth-pin":
+        inventory["native_oauth_replays"][0]["sha256"]["oracle"] = "0" * 64
+    elif change == "oauth-count":
+        inventory["native_oauth_replays"][0]["cases"] += 1
     else:
         inventory["native_replays"][1]["sha256"]["oracle"] = "0" * 64
     with pytest.raises(ValueError):
@@ -165,10 +172,7 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
     deadline = "worker_deadline_matches_frozen_published_process"
     original = discovered() | {serial, deadline, "unrelated_native_worker_test"}
     omitted = {serial, deadline}
-    historical_serial = {
-        "worker_mixed_roster_reference_matches_published_process",
-        "worker_oauth_revocation_lease_reference_matches_published_process",
-    }
+    historical_serial = {"worker_mixed_roster_reference_matches_published_process"}
     selected_serial = historical_serial if mode == "full" or qualification == "1" else set()
     omitted |= selected_serial
     if mode == "full-after-preflights":
@@ -186,9 +190,9 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
         *sorted(selected_serial),
     )
     if mode == "full-after-preflights" and qualification == "0":
-        assert len(omitted - {serial, deadline}) == 34
+        assert len(omitted - {serial, deadline}) == 24
     if mode == "full-after-preflights" and qualification == "1":
-        assert len(omitted - {serial, deadline}) == 6
+        assert len(omitted - {serial, deadline}) == 5
 
 
 def test_historical_serial_owner_must_be_registered_for_full_qualification() -> None:
@@ -225,7 +229,7 @@ def test_same_count_wrong_selected_case_fails_closed() -> None:
     omitted = {serial, extra}
     omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
     omitted |= {entry["test"] for entry in INVENTORY["historical"][1:]}
-    assert len(omitted - {serial}) == 34
+    assert len(omitted - {serial}) == 24
     with pytest.raises(ValueError, match="selection drift"):
         validate_selection(
             INVENTORY,

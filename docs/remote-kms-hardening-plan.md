@@ -13635,3 +13635,33 @@ retained cases. The CI artifact verifier now runs that compiled-list guard
 immediately after Rust compilation, before image builds and database suites,
 to catch this class of failure earlier. The focused compile-scope/tier suites
 pass 89/89 locally; exact-head hosted qualification is still required.
+
+The grouped Facts/Retry correction is published as UI #1192 head
+`4922fb42cac644633bc76ac5f3faeb851a848ea4`. Its
+[Rust CodeQL 38099692182](https://github.com/ElevenID/marty-ui/actions/runs/38099692182)
+and [PR CI 38099692192](https://github.com/ElevenID/marty-ui/actions/runs/38099692192)
+completed successfully. The latter includes the new early compiled-worker
+inventory guard, Rust Contracts, Canvas packaged image/database suites,
+OpenBao plugin/recovery, and the CI Gate. This published-head qualification
+does not include the following local OAuth work.
+
+2026-10-10 K8 OAuth revocation oracle retirement (local candidate, not yet
+published): the ten old Python live-regeneration tests, preparer selector,
+standalone raw-key Python OAuth runner and its helper-only tests are removed.
+The frozen corpora are unchanged. Nine native HTTPS Rust worker matrices retain
+all 39 process/cycle cases and durable effects, while the separate native
+PostgreSQL repository test retains the one 509-row selection/cap observation.
+The tier inventory now requires all ten compiled native owners and pins each
+scenario and oracle; the producer and script-closure inventories classify
+these ten corpora as frozen native inputs rather than runnable Python output.
+The special Python OAuth lease serial lane and associated skip/count guards
+are removed. Local compiled Rust test enumeration passes the 134-case package
+migration and 20-reference/10-native-OAuth tier guard. Python OAuth fixture,
+producer and script-closure checks pass 102/102; database-group checks pass
+52/52 and current-input checks pass 35/35. CI workflow checks pass 145/145;
+the affected published-preflight segments pass (102 before the corrected
+inventory count, then both count variants, and 122 passed/one skipped in the
+remaining segment). Rust compile, Clippy, the issuance capture example,
+rustfmt, Ruff, JSON parsing, Bash syntax, and diff hygiene also pass locally.
+The native Rust worker and real PostgreSQL/HTTPS cases still require hosted
+Linux execution on this new head.

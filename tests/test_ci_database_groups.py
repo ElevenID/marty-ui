@@ -461,8 +461,8 @@ def test_target_relay_tags_only_fixed_published_canvas_phase_owners() -> None:
 def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
     # Published matrix IDs are checked-in case identities, not probe output,
     # environment values, SQL, URLs, or arbitrary text from the child log.
-    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 95
-    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 21
+    assert len(GROUPS.PUBLISHED_MATRIX_PROBE_NAMES) == 55
+    assert len(GROUPS.PUBLISHED_MATRIX_SCENARIOS) == 11
     assert len(GROUPS.JSON_CONSUMER_CASE_NAMES) == 132
     for name in GROUPS.JSON_CONSUMER_CASE_NAMES:
         marker = json.dumps(
@@ -583,7 +583,7 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
         r'Self::start_with_worker_case\(\s*case,\s*include_str!\(\s*"\.\./\.\./\.\./\.\./\.\./contracts/canvas-worker-([a-z-]+)-scenarios\.json"\s*\)',
         support,
     )
-    assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 21
+    assert len(wrapper_families) == support.count("Self::start_with_worker_case(") == 11
     assert set(wrapper_families) == GROUPS.PUBLISHED_MATRIX_SCENARIOS
 
 

@@ -126,15 +126,13 @@ require_selfhost_tests() {
 }
 deadline_serial_test=worker_deadline_matches_frozen_published_process
 mixed_roster_serial_test=worker_mixed_roster_reference_matches_published_process
-oauth_lease_serial_test=worker_oauth_revocation_lease_reference_matches_published_process
-# Both published-process replays enforce a 10-second child SIGINT bound. Run
-# them without the other Canvas owners during full qualification; routine
-# after-preflight runs already omit all historical references.
+# The mixed-roster published-process replay enforces a 10-second child SIGINT
+# bound. Run it without the other Canvas owners during full qualification.
 historical_serial_tests=()
 historical_serial_skips=()
 if [[ "$mode" == full || "$mode" == worker-full ||
   "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 1 ]]; then
-  historical_serial_tests=("$mixed_roster_serial_test" "$oauth_lease_serial_test")
+  historical_serial_tests=("$mixed_roster_serial_test")
   for historical_serial_test in "${historical_serial_tests[@]}"; do
     historical_serial_skips+=(--skip "$historical_serial_test")
   done
@@ -142,7 +140,6 @@ fi
 run_historical_serial_tests() {
   if (( ${#historical_serial_tests[@]} == 0 )); then return; fi
   timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1
-  timed canvas_serial oauth_lease_reference "$worker_executable" "$oauth_lease_serial_test" --exact --nocapture --test-threads=1
 }
 # Opt-in diagnostic owner. No current CI selector invokes these modes; the
 # default and existing full/preflight paths below retain their original order.
@@ -205,7 +202,7 @@ if [[ "$mode" == worker-* ]]; then
     expected_worker_skips=4
     if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]]; then
       worker_preflight_skips+=(--skip reference_matches_published)
-      expected_worker_skips=34
+      expected_worker_skips=24
       worker_retry_tier=routine
       worker_validation_tier=routine
     fi
@@ -323,10 +320,10 @@ if [[ "$mode" == full-after-preflights ]]; then
       --skip worker_lease_expiry_matches_frozen_published_process
       --skip reference_matches_published
     )
-    # All 30 remaining historical process/repository/cycle replays are available in
+    # All 20 remaining historical process/repository/cycle replays are available in
     # manual qualification, not the PR and merge-queue critical path. A new
     # replay changes this count and must be deliberately classified.
-    expected_skipped_worker_tests=34
+    expected_skipped_worker_tests=24
   fi
 fi
 pull_images() {
@@ -383,23 +380,15 @@ printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_envoy_composition_child
 printf '%s\n' "$all_test_names" | grep -Fx 'envoy_actual_image_validates_candidate: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_retry_after_reference_matches_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_native_child: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_fence_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_fence_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_patch_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_patch_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_retry_after_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_retry_after_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_backoff_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_backoff_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_queue_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_queue_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_repository_selection_matches_published_order: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_lease_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_lease_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_selection_reference_matches_published_repository: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_selection_repository_matches_published: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_repository_matches_frozen_errors: test'
@@ -494,9 +483,7 @@ printf '%s\n' "$all_test_names" | grep -Fx 'utf7_consumer_diagnostic_matches_pub
 printf '%s\n' "$all_test_names" | grep -Fx 'json_consumer_diagnostic_matches_published_boundaries: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'json_depth_diagnostic_matches_published_boundaries: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_counters_reference_matches_published_cycle: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_counters_matches_frozen_published_cycle: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_secrets_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_secrets_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_secret_reference_constraints_match_published_schema: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_empty_token_is_not_dispatched: test'

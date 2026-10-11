@@ -1824,6 +1824,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "scripts/ci/check_canvas_tier_obligations.py",
             "scripts/test_canvas_worker_rest_https.py",
             "tests/test_canvas_tier_obligations.py",
+            "tests/test_canvas_worker_oracle_producer_inventory.py",
             "tests/test_canvas_worker_validation_tier.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -3388,25 +3389,16 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     ]:
         assert f"grep -Fx '{name}: test'" in published
     for name in [
-        "worker_oauth_revocation_reference_matches_published_process",
         "worker_oauth_revocation_matches_frozen_published_process",
         "worker_oauth_revocation_native_child",
-        "worker_oauth_revocation_fence_reference_matches_published_process",
         "worker_oauth_revocation_fence_matches_frozen_published_process",
-        "worker_oauth_revocation_patch_reference_matches_published_process",
         "worker_oauth_revocation_patch_matches_frozen_published_process",
-        "worker_oauth_revocation_retry_after_reference_matches_published_process",
         "worker_oauth_revocation_retry_after_matches_frozen_published_process",
-        "worker_oauth_revocation_backoff_reference_matches_published_process",
         "worker_oauth_revocation_backoff_matches_frozen_published_process",
-        "worker_oauth_revocation_queue_reference_matches_published_process",
         "worker_oauth_revocation_queue_matches_frozen_published_process",
         "worker_oauth_revocation_repository_selection_matches_published_order",
-        "worker_oauth_revocation_lease_reference_matches_published_process",
         "worker_oauth_revocation_lease_matches_frozen_published_process",
-        "worker_oauth_revocation_counters_reference_matches_published_cycle",
         "worker_oauth_revocation_counters_matches_frozen_published_cycle",
-        "worker_oauth_revocation_secrets_reference_matches_published_process",
         "worker_oauth_revocation_secrets_matches_frozen_published_process",
         "worker_oauth_revocation_secret_reference_constraints_match_published_schema",
         "worker_oauth_revocation_empty_token_is_not_dispatched",
@@ -3439,7 +3431,6 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_provider_recovery_first_native_child",
         "canvas_worker_provider_completion_replay::rejected_owner_check_rejects_unrelated_or_reference_drift",
         "canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation",
-        "worker_oauth_revocation_selection_reference_matches_published_repository",
         "worker_oauth_revocation_selection_repository_matches_published",
     ]:
         assert f"grep -Fx '{name}: test'" in published

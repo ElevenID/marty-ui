@@ -455,14 +455,16 @@ def test_historical_capture_input_graph_is_reviewed():
             for names in producers["shared_runner_corpora"].values()
             for name in names
         }
+        | {
+            name.replace("-oracle.json", "-scenarios.json")
+            for name in producers["frozen_native_corpora"]
+        }
         | set(producers["standalone_scenarios"])
     )
     assert {name for names in literal_inputs.values() for name in names} <= owned
-    assert template_inputs == {
-        "run_canvas_worker_oauth_revocation_oracle.py": [
-            "canvas-worker-{kind}-scenarios.json"
-        ]
-    }, "Review dynamic scenario dispatch before reusing historical qualification"
+    assert template_inputs == {}, (
+        "Review dynamic scenario dispatch before reusing historical qualification"
+    )
     assert inventory["harness_path_syntax"] == {
         "scope": (
             "Static path literals and root.join syntax inside start_probe_with_scope "

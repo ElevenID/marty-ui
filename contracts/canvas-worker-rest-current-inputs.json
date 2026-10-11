@@ -10,7 +10,7 @@
     "rust/services/issuance/tests/support/canvas_worker_rest_replay.rs": "c66bc8e4c9f68004c3387f6d16fd29a82a90f1c91b5e456f917db8aebf7977b4",
     "rust/services/issuance/tests/support/remote_integration_secret.rs": "4a8338ffddf9a0f0d76624ee23aa05f2a125115c2891e47dd11ff6a9c9c61fcd",
     "scripts/canvas_worker_https_fixture.py": "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992",
-    "scripts/prepare_canvas_published_schema.py": "8bc34d4cd5438dc97431af492ac64c02e8ba42d8dd1ef605dce92307283a800e",
+    "scripts/prepare_canvas_published_schema.py": "9c313cd0c81aa5f50fca650c25e113d582385dfab5bf5e126b8ea15914438fba",
     "scripts/test_canvas_lti_https.py": "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d",
     "scripts/test_canvas_worker_rest_https.py": "45c15214de2f52d1c3d9ef2ab0fd4e52b8a891b23e66b28b0b31d2b7c7aaa60d"
   }

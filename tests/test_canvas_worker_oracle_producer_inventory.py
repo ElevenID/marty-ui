@@ -1,4 +1,4 @@
-"""Keep the historical corpus-to-producer inventory exhaustive before reuse work."""
+"""Keep historical producers and frozen native corpus owners exhaustive."""
 
 import ast
 import json
@@ -90,11 +90,12 @@ def standalone_reference_inputs(source):
 
 def test_oracle_producer_inventory_covers_every_corpus_once():
     inventory = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert inventory["schema"] == "marty.canvas-worker-oracle-producers/v1"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-producers/v2"
     assert set(inventory) == {
         "schema",
         "purpose",
         "retired_from_preparer",
+        "frozen_native_corpora",
         "direct_runner_corpora",
         "shared_runner_corpora",
         "standalone_runner_entries",
@@ -112,17 +113,22 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
         "run_canvas_worker_startup_oracle.py",
     }
     shared = inventory["shared_runner_corpora"]
+    frozen = inventory["frozen_native_corpora"]
     metadata = inventory["external_fixture_corpora"]
     listed = (
-        direct + [name for names in shared.values() for name in names] + list(metadata)
+        direct
+        + [name for names in shared.values() for name in names]
+        + frozen
+        + list(metadata)
     )
     actual = {path.name for path in CONTRACTS.glob("canvas-worker-*-oracle.json")}
 
     assert len(listed) == len(set(listed)), (
-        "Each corpus needs exactly one producer class"
+        "Each corpus needs exactly one producer or frozen native owner class"
     )
     assert set(listed) == actual, "New or removed corpora require an inventory review"
     assert direct == sorted(direct)
+    assert frozen == sorted(frozen)
     assert list(metadata) == sorted(metadata)
     assert all(names == sorted(names) and names for names in shared.values())
     assert all(name.endswith(".json") for name in listed)
@@ -139,36 +145,15 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
             f"Missing external-source record: {source_doc}"
         )
 
-    # The OAuth runner emits ten kinds through one entry point. Keep the
-    # manifest's extra nine corpora aligned with its declared dispatch set.
-    oauth_runner = SCRIPTS / "run_canvas_worker_oauth_revocation_oracle.py"
-    tree = ast.parse(oauth_runner.read_text(encoding="utf-8"))
-    run = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run"
-    )
-    kind_guards = [
-        node.comparators[0]
-        for node in ast.walk(run)
-        if isinstance(node, ast.Compare)
-        and isinstance(node.left, ast.Name)
-        and node.left.id == "kind"
-        and len(node.ops) == 1
-        and isinstance(node.ops[0], ast.In)
-        and len(node.comparators) == 1
-        and isinstance(node.comparators[0], ast.Set)
-    ]
-    assert len(kind_guards) == 1, "Review OAuth kind dispatch when its shape changes"
-    kinds = {
-        value.value for value in kind_guards[0].elts if isinstance(value, ast.Constant)
-    }
-    assert len(kinds) == len(kind_guards[0].elts)
-    assert {f"canvas-worker-{kind}-oracle.json" for kind in kinds} == (
-        {"canvas-worker-oauth-revocation-oracle.json"} | set(shared[oauth_runner.name])
-    )
-    for kind in kinds:
-        assert (CONTRACTS / f"canvas-worker-{kind}-scenarios.json").is_file()
+    native = json.loads(
+        (CONTRACTS / "canvas-worker-tier-obligations.json").read_text(encoding="utf-8")
+    )["native_oauth_replays"]
+    assert len(frozen) == len(native) == 10
+    assert set(frozen) == {
+        f"canvas-worker-{entry['scenario']}-oracle.json" for entry in native
+    }, "Frozen OAuth corpora need native Rust owner and byte pins"
+    for name in frozen:
+        assert (CONTRACTS / name.replace("-oracle.json", "-scenarios.json")).is_file()
 
     mapped_runners = {
         "run_" + name.removesuffix(".json").replace("-", "_") + ".py" for name in direct
@@ -271,6 +256,10 @@ def test_canvas_scenario_references_are_complete_and_acyclic():
         name.replace("-oracle.json", "-scenarios.json")
         for names in inventory["shared_runner_corpora"].values()
         for name in names
+    )
+    corpus_scenarios.update(
+        name.replace("-oracle.json", "-scenarios.json")
+        for name in inventory["frozen_native_corpora"]
     )
     standalone = inventory["standalone_scenarios"]
     assert corpus_scenarios.isdisjoint(standalone)

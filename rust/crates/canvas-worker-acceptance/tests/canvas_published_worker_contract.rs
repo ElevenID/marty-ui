@@ -890,19 +890,9 @@ async fn worker_provider_generation_native_child() {
     worker_provider_child("generation").await;
 }
 
-#[tokio::test]
-async fn worker_oauth_revocation_secrets_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-secrets").await;
-}
-
 #[test]
 fn worker_oauth_revocation_secrets_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation-secrets");
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_counters_reference_matches_published_cycle() {
-    assert_worker_matrix_reference("oauth-revocation-counters").await;
 }
 
 #[test]
@@ -1512,46 +1502,6 @@ async fn worker_retry_after_reference_matches_published_process() {
 }
 
 #[tokio::test]
-async fn worker_oauth_revocation_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_fence_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-fence").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_patch_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-patch").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_retry_after_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-retry-after").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_backoff_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-backoff").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_queue_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-queue").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_lease_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-lease").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_selection_reference_matches_published_repository() {
-    assert_worker_matrix_reference("oauth-revocation-selection").await;
-}
-
-#[tokio::test]
 async fn worker_validation_repository_matches_frozen_errors() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -1747,74 +1697,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
-        "oauth-revocation-secrets" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-secrets-oracle.json"
-            ),
-        ),
-        "oauth-revocation-counters" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-counters-oracle.json"
-            ),
-        ),
-        "oauth-revocation-selection" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-selection-oracle.json"
-            ),
-        ),
-        "oauth-revocation-lease" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-lease-oracle.json"),
-        ),
-        "oauth-revocation-queue" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-queue-oracle.json"),
-        ),
-        "oauth-revocation-backoff" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-backoff-oracle.json"
-            ),
-        ),
-        "oauth-revocation-retry-after" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-retry-after-oracle.json"
-            ),
-        ),
-        "oauth-revocation-patch" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-patch-oracle.json"),
-        ),
-        "oauth-revocation-fence" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-fence-oracle.json"),
-        ),
-        "oauth-revocation" => (
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-oracle.json"),
-        ),
         "retry-after" => (
             include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-retry-after-oracle.json"),
@@ -1862,39 +1744,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
-            "oauth-revocation-secrets" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_secrets(name).await
-            }
-            "oauth-revocation-counters" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_counters(name).await
-            }
-            "oauth-revocation-selection" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_selection(name).await
-            }
-            "oauth-revocation-lease" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_lease(name).await
-            }
-            "oauth-revocation-queue" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_queue(name).await
-            }
-            "oauth-revocation-backoff" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_backoff(name).await
-            }
-            "oauth-revocation-retry-after" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_retry_after(name).await
-            }
-            "oauth-revocation-patch" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_patch(name).await
-            }
-            "oauth-revocation-fence" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_fence(name).await
-            }
-            "oauth-revocation" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation(
-                    name,
-                )
-                .await
-            }
             "retry-after" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
                     .await

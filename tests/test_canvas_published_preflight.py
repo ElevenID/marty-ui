@@ -31,8 +31,7 @@ BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
 LEASE_EXPIRY_TARGET = "worker_lease_expiry_matches_frozen_published_process"
 DEADLINE_TARGET = "worker_deadline_matches_frozen_published_process"
 MIXED_ROSTER_REFERENCE = "worker_mixed_roster_reference_matches_published_process"
-OAUTH_LEASE_REFERENCE = "worker_oauth_revocation_lease_reference_matches_published_process"
-HISTORICAL_SERIAL = (MIXED_ROSTER_REFERENCE, OAUTH_LEASE_REFERENCE)
+HISTORICAL_SERIAL = (MIXED_ROSTER_REFERENCE,)
 PREFLIGHTS = [
     ("mixed-roster-preflight", TARGET),
     ("timeout-preflight", TIMEOUT_TARGET),
@@ -88,43 +87,43 @@ PINS = [
     "postgres@sha256:" + "a" * 64,
     "registry.invalid/issuance@sha256:" + "b" * 64,
 ]
-MANDATORY_REGISTRATION_COUNT = 162
+MANDATORY_REGISTRATION_COUNT = 152
 MANDATORY_REGISTRATION_SHA256 = (
-    "ffeaab38005de01ab87693dbebf01dcd301adbf72256104767e711e5488b2c2a"
+    "627482362d5a1edbff1f340161947ff75a9c91e6ad212c356523b291788f4191"
 )
 RENDERED_CONFIG = (
     "rendered_base_process::"
     "rendered_base_renewal_config_crosses_encryption_and_private_address_policy"
 )
-CURRENT_REGISTRATION_COUNT = 163
+CURRENT_REGISTRATION_COUNT = 153
 CURRENT_REGISTRATION_SHA256 = (
-    "35ab29dad7b58b432744749a1f931da6363349a0522f6824105f2cd5fd35282b"
+    "56cf2b5ef659bf695e9613782d810ba50bbf15559375d63aea0cd7c1d6d22008"
 )
 PRIVATE_IP_PG = "didcomm_renewal_private_ip_refusal_preserves_published_rows"
-NEW_REGISTRATION_COUNT = 164
+NEW_REGISTRATION_COUNT = 154
 NEW_REGISTRATION_SHA256 = (
-    "6c29df53307f59b207becad62a5385eb446ffadda6b6e317a59178e8b5acdadb"
+    "f3a66ba775d3526ea14568e6bfcfb19d804ce01b05b7702d8cc236b9f12ed46e"
 )
 K8S_RENDERED_CONFIG = (
     "resolved_kubernetes_runtime::"
     "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
 )
-PRE_ROSTER_REGISTRATION_COUNT = 165
+PRE_ROSTER_REGISTRATION_COUNT = 155
 PRE_ROSTER_REGISTRATION_SHA256 = (
-    "c47e3220ab9fcd98429546561cb7f05562334e86574e139f5ecf881078d79a0b"
+    "8a2ba9067661a3fc2537b77815ec45c32a9e366e98a3f17215a03f7df0b04fb9"
 )
 ROSTER_EXPIRY_TESTS = (
     "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
     "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
 )
 RENDERER_BOUNDS = "rendered_base_process::renderer_bounds_proof_is_image_free"
-LATEST_REGISTRATION_COUNT = 168
+LATEST_REGISTRATION_COUNT = 158
 LATEST_REGISTRATION_SHA256 = (
-    "b606956206072c71b4eab8ae77295f74e3950355526570f1c0c4b3f59121c9e3"
+    "83b31cbb184650952cf603476d3aa59d68f09c7239cc59df77522fba886b3e4b"
 )
-PRE_RENDERER_REGISTRATION_COUNT = 167
+PRE_RENDERER_REGISTRATION_COUNT = 157
 PRE_RENDERER_REGISTRATION_SHA256 = (
-    "762119a7f517ec8adccac045066717e00620e6b5e433f20290983afca8edd314"
+    "409610214c070edd3c166cf34114e7d43afb38a01c09e32ba81b1f92f3880ee9"
 )
 
 
@@ -216,15 +215,11 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
     assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
     assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
-    assert 'historical_serial_tests=("$mixed_roster_serial_test" "$oauth_lease_serial_test")' in script
-    for case, phase in (
-        ("mixed_roster_serial_test", "mixed_roster_reference"),
-        ("oauth_lease_serial_test", "oauth_lease_reference"),
-    ):
-        assert (
-            f'timed canvas_serial {phase} "$worker_executable" "${case}" --exact --nocapture --test-threads=1'
-            in script
-        )
+    assert 'historical_serial_tests=("$mixed_roster_serial_test")' in script
+    assert (
+        'timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1'
+        in script
+    )
     assert (
         sum(
             line.strip() == "timed canvas_serial json_consumer env " + scoped_kms + json_serial
@@ -1269,7 +1264,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         "scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:13] == [
+    assert children[:12] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "selfhost-contract", "1", "--list"],
@@ -1319,7 +1314,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[13:]) == sorted(
+    assert sorted(children[12:]) == sorted(
         [
             [
                 "child",
@@ -1430,7 +1425,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert any(
         call[:2] == ["child", "worker-contract"]
         and "--test-threads=4" in call
-        and call.count("--skip") == 4
+        and call.count("--skip") == 3
         for call in calls
     )
 

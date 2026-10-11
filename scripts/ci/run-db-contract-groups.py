@@ -69,16 +69,6 @@ PUBLISHED_MATRIX_SCENARIOS = frozenset(
         "lease-expiry",
         "dispatch",
         "mixed-roster",
-        "oauth-revocation",
-        "oauth-revocation-fence",
-        "oauth-revocation-patch",
-        "oauth-revocation-retry-after",
-        "oauth-revocation-backoff",
-        "oauth-revocation-queue",
-        "oauth-revocation-lease",
-        "oauth-revocation-selection",
-        "oauth-revocation-counters",
-        "oauth-revocation-secrets",
     }
 )
 PUBLISHED_MATRIX_PROBE_NAMES = frozenset(

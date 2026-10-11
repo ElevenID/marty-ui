@@ -253,65 +253,6 @@ def prepare():
             ):
                 report["worker_validation"] = run(validation_case)
         retry_after_case = os.environ.get("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE")
-        revocation_case = os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE")
-        revocation_fence_case = os.environ.get(
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_FENCE_CASE"
-        )
-        revocation_patch_case = os.environ.get(
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_PATCH_CASE"
-        )
-        revocation_inputs = [
-            (name, kind)
-            for name, kind in [
-                (revocation_case, "oauth-revocation"),
-                (revocation_fence_case, "oauth-revocation-fence"),
-                (revocation_patch_case, "oauth-revocation-patch"),
-                (
-                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SECRETS_CASE"),
-                    "oauth-revocation-secrets",
-                ),
-                (
-                    os.environ.get(
-                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE"
-                    ),
-                    "oauth-revocation-counters",
-                ),
-                (
-                    os.environ.get(
-                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SELECTION_CASE"
-                    ),
-                    "oauth-revocation-selection",
-                ),
-                (
-                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_LEASE_CASE"),
-                    "oauth-revocation-lease",
-                ),
-                (
-                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_QUEUE_CASE"),
-                    "oauth-revocation-queue",
-                ),
-                (
-                    os.environ.get("MARTY_CANVAS_WORKER_OAUTH_REVOCATION_BACKOFF_CASE"),
-                    "oauth-revocation-backoff",
-                ),
-                (
-                    os.environ.get(
-                        "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_RETRY_AFTER_CASE"
-                    ),
-                    "oauth-revocation-retry-after",
-                ),
-            ]
-            if name is not None
-        ]
-        assert len(revocation_inputs) <= 1
-        if revocation_inputs:
-            from run_canvas_worker_oauth_revocation_oracle import run
-
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                report["worker_oauth_revocation"] = run(*revocation_inputs[0])
         if retry_after_case is not None:
             from run_canvas_worker_retry_after_oracle import run
 
