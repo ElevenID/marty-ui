@@ -1,7 +1,8 @@
 # Exact-bundle signing-key runtime continuation (unqualified)
 
-`scripts/probe_selfhost_installed_signing_keys.py` is opt-in. The manual,
-unqualified prepared-consumer workflow runs it against an exact same-SHA
+`scripts/probe_selfhost_installed_signing_keys.py` is opt-in. The downstream,
+unqualified prepared-consumer workflow runs it after a successful opt-in Stack
+release against an exact same-SHA
 bundle; it is also available locally. It
 accepts the same exact archive, lock, transaction, receipt, descriptor,
 extracted root, source SHA, and run ID as the [scoped migration

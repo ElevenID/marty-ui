@@ -1,4 +1,4 @@
-"""A manually supplied run ID cannot substitute another candidate's bundle."""
+"""A producer run ID cannot substitute another candidate's bundle."""
 
 from __future__ import annotations
 
@@ -83,19 +83,32 @@ def test_rejects_artifact_from_different_source_or_repository() -> None:
             verify(*data, RUN_ID, SOURCE_SHA)
 
 
-def test_manual_workflow_is_separate_unqualified_and_cannot_publish() -> None:
+def test_downstream_workflow_is_separate_unqualified_and_cannot_publish() -> None:
     document = yaml.safe_load(
         (ROOT / ".github/workflows/selfhost-prepared-consumer.yml").read_text(encoding="utf-8")
     )
     trigger = document.get("on", document.get(True))
-    assert set(trigger) == {"workflow_dispatch"}
-    assert trigger["workflow_dispatch"]["inputs"]["stack_run_id"]["required"] is True
+    assert set(trigger) == {"workflow_run"}
+    assert trigger["workflow_run"] == {
+        "workflows": ["Stack release"],
+        "types": ["completed"],
+    }
     assert document["permissions"] == {"contents": "read"}
-    assert document["cache-mode"] == "none"
+    assert "cache-mode" not in document  # workflow_run defaults to read-only cache access
     assert set(document["jobs"]) == {"installed-migrations"}
     job = document["jobs"]["installed-migrations"]
+    assert "workflow_run.conclusion == 'success'" in job["if"]
+    assert "workflow_run.event == 'workflow_dispatch'" in job["if"]
+    assert "workflow_run.head_branch == 'main'" in job["if"]
     assert job["runs-on"] == "ubuntu-24.04"
     assert job["permissions"] == {"actions": "read", "contents": "read"}
+    assert job["steps"][0]["id"] == "select"
+    assert "artifacts?name=$bundle_name" in job["steps"][0]["run"]
+    assert ".total_count == 0" in job["steps"][0]["run"]
+    assert all(
+        step.get("if") == "steps.select.outputs.present == 'true'"
+        for step in job["steps"][1:]
+    )
     source = "\n".join(step.get("run", "") for step in job["steps"])
     assert "check_selfhost_preparation_artifacts.py" in source
     assert "run_attempt" not in source  # enforced by the tested checker
