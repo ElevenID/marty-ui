@@ -82,14 +82,15 @@ def test_missing_example_file_fails(tmp_path):
         validate(*paths)
 
 
-def test_current_source_names_unresolved_ownership_gap():
-    with pytest.raises(ValueError) as error:
-        validate(ROOT / "docker-compose.selfhost.prod.yml",
-                 ROOT / "deploy-config/catalog/secrets.json",
-                 ROOT / "deploy-config/stacks/selfhost-production.json",
-                 ROOT / "docker/secrets/selfhost.example")
-    message = str(error.value)
-    assert "Compose secrets absent from catalog: ['flow_webhook_secret']" in message
-    assert "notification_webhook_secret" in message
-    assert "notification_applicant_event_token" in message
-    assert "notification_openbao_token" in message
+def test_current_source_names_have_closed_ownership():
+    result = validate(ROOT / "docker-compose.selfhost.prod.yml",
+                      ROOT / "deploy-config/catalog/secrets.json",
+                      ROOT / "deploy-config/stacks/selfhost-production.json",
+                      ROOT / "docker/secrets/selfhost.example")
+    assert result["qualification"] == "unqualified"
+    assert set(result["required_secret_names"]) >= {
+        "flow_webhook_secret",
+        "notification_webhook_secret",
+        "notification_applicant_event_token",
+        "notification_openbao_token",
+    }
