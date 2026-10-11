@@ -1877,7 +1877,7 @@ jobs:
             canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads \
             canvas_published_database::diagnostic_tests::immutable_published_base_keeps_revision_parity_and_case_isolation \
             canvas_published_database::diagnostic_tests::failed_published_base_restore_removes_only_its_owned_container; do
-            "${executables[0]}" "$test_name" --exact --ignored --nocapture --test-threads=1
+            python3 ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" "$test_name"
           done
       - name: Test packaged passport self-signed mode
         if: matrix.lane == 'contracts'

@@ -1,5 +1,7 @@
 """Keep the migrated-base pilot manual-only without changing Canvas gates."""
 
+import importlib.util
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -9,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 SWITCH = "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT"
 DIAGNOSTICS = ROOT / "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs"
+EXACT_RUNNER = ROOT / "scripts/ci/run-exact-ignored-canvas-test.py"
 
 
 def _workflow() -> dict:
@@ -89,4 +92,78 @@ def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -
     ):
         assert f"canvas_published_database::diagnostic_tests::{test_name}" in diagnostic["run"]
         assert f"async fn {test_name}()" in source
-    assert '"$test_name" --exact --ignored --nocapture --test-threads=1' in diagnostic["run"]
+    assert (
+        'python3 ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" "$test_name"'
+        in diagnostic["run"]
+    )
+
+
+def _exact_runner():
+    spec = importlib.util.spec_from_file_location("exact_canvas_runner", EXACT_RUNNER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_exact_ignored_runner_rejects_missing_test(monkeypatch) -> None:
+    runner = _exact_runner()
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "0 tests, 0 benchmarks\n"),
+    )
+
+    def no_execution(*_args, **_kwargs):
+        raise AssertionError("Missing test must not execute")
+
+    monkeypatch.setattr(runner.subprocess, "Popen", no_execution)
+    assert runner.run_exact_ignored("fixture", "missing") == 1
+
+
+def test_exact_ignored_runner_rejects_zero_execution(monkeypatch) -> None:
+    runner = _exact_runner()
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "named: test\n\n1 test, 0 benchmarks\n"),
+    )
+
+    class FakeProcess:
+        stdout = iter(
+            [
+                "running 0 tests\n",
+                "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; "
+                "12 filtered out; finished in 0.00s\n",
+            ]
+        )
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    assert runner.run_exact_ignored("fixture", "named") == 1
+
+
+def test_exact_ignored_runner_accepts_one_executed_test(monkeypatch) -> None:
+    runner = _exact_runner()
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "named: test\n\n1 test, 0 benchmarks\n"),
+    )
+
+    class FakeProcess:
+        stdout = iter(
+            [
+                "running 1 test\n",
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+                "11 filtered out; finished in 0.00s\n",
+            ]
+        )
+
+        def wait(self):
+            return 0
+
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    assert runner.run_exact_ignored("fixture", "named") == 0
