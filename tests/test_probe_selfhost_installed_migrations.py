@@ -221,6 +221,7 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
             (secret_dir / "sign_grant_verify_token").write_text(
                 "scoped-service" if failure == "reused_verifier" else "scoped-verifier"
             )
+            (secret_dir / "signing_keys_openbao_token").write_text("scoped-signing-keys")
         output = (success if args[-1] == "db-migrate" else
                   "table:issuer.signing_private_keys\n" if failure == "private_storage" and
                   probe.PRIVATE_KEY_SCHEMA_QUERY in args else
@@ -303,8 +304,10 @@ def test_actual_scoped_openbao_bootstrap():
                 encoding="ascii")
             verifier = (secret_dir / "sign_grant_verify_token").read_text(
                 encoding="ascii")
-            assert service and notification and verifier
-            assert len({root, service, notification, verifier}) == 4
+            signing_keys = (secret_dir / "signing_keys_openbao_token").read_text(
+                encoding="ascii")
+            assert service and notification and verifier and signing_keys
+            assert len({root, service, notification, verifier, signing_keys}) == 5
         finally:
             probe._checked(probe.command([*compose, "down", "--volumes"],
                                          environment, 120), "OpenBao cleanup failed")

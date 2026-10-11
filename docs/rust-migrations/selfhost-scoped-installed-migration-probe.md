@@ -47,7 +47,8 @@ the one-shot bootstrap container; the migration receives distinct scoped
 credential-service and Notification tokens. The bootstrap verifies allowed and
 denied capabilities before writing those tokens to disposable files. It also
 creates a distinct verify-only signing-grant token for the later opt-in
-Signing Keys consumer; the migration container never mounts that token. Migration
+Signing Keys consumer and a separate managed Signing Keys OpenBao token; the
+migration container never mounts either token. Migration
 and native Rust schema migrations then run twice. Each pass verifies the native
 schema owners, the notification ledger and signing registry, and scans the
 assembled database for private-key tables, columns, and content before project

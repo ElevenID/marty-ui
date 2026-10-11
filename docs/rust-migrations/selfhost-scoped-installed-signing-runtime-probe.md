@@ -16,7 +16,8 @@ platform and repository-digest association. A closed Compose overlay starts
 only the shared-services image as `signing_keys` on the existing private
 disposable network, without source builds, host ports, persistent volumes, or
 the OpenBao root token. It uses three distinct generated API credentials,
-the scoped OpenBao service token, and a separate verify-only signing-grant
+its own OpenBao token with the reviewed credential-service and
+signing-keys-managed policies, and a separate verify-only signing-grant
 token minted by the disposable bootstrap. The grant token cannot mint HMACs;
 the probe does not exercise a signing operation. After health, it reads the migration-seeded public JWKS for the
 fixture organization and confirms that another organization has no keys.

@@ -15,9 +15,9 @@ services:
       SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/secrets/sign_grant_verify_token
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       BAO_ADDR: http://openbao:8200
-      BAO_TOKEN_FILE: /run/secrets/bao_service_token
+      BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
       PUBLIC_DOMAIN: migration.invalid
-    secrets: [issuance_api_key, signing_service_key, signing_issuer_key, sign_grant_verify_token, bao_service_token]
+    secrets: [issuance_api_key, signing_service_key, signing_issuer_key, sign_grant_verify_token, signing_keys_openbao_token]
     depends_on:
       redis: {condition: service_healthy}
       openbao: {condition: service_healthy}
@@ -36,3 +36,5 @@ secrets:
     file: ${PROBE_SECRET_DIR:?disposable secret root required}/signing_issuer_key
   sign_grant_verify_token:
     file: ${PROBE_SECRET_DIR:?disposable secret root required}/sign_grant_verify_token
+  signing_keys_openbao_token:
+    file: ${PROBE_SECRET_DIR:?disposable secret root required}/signing_keys_openbao_token

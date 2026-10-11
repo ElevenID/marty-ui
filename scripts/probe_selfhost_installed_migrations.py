@@ -288,14 +288,15 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
             _checked(run([*compose, "run", "--no-deps", "--rm", "openbao-bootstrap"],
                          environment, 180), "Disposable scoped OpenBao bootstrap failed")
             for name in ("bao_service_token", "notification_openbao_token",
-                         "sign_grant_verify_token"):
+                         "sign_grant_verify_token", "signing_keys_openbao_token"):
                 path = secret_dir / name
                 require(path.is_file() and not path.is_symlink()
                         and path.stat().st_size > 0, "Disposable scoped token is missing")
             token_values = [(secret_dir / name).read_bytes().strip()
                             for name in ("bao_root_token", "bao_service_token",
                                          "notification_openbao_token",
-                                         "sign_grant_verify_token")]
+                                         "sign_grant_verify_token",
+                                         "signing_keys_openbao_token")]
             require(all(token_values) and len(set(token_values)) == len(token_values),
                     "Disposable OpenBao tokens must be distinct")
             ledger = None

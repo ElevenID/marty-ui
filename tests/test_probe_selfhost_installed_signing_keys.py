@@ -127,6 +127,7 @@ def test_runtime_uses_private_service_and_tears_down_after_business_read(tmp_pat
     (install / "docker/openbao-init.sh").write_text("fixture", encoding="utf-8")
     (tmp_path / "bao_service_token").write_text("scoped-openbao-token", encoding="ascii")
     (tmp_path / "sign_grant_verify_token").write_text("scoped-verify-token", encoding="ascii")
+    (tmp_path / "signing_keys_openbao_token").write_text("scoped-signing-token", encoding="ascii")
     monkeypatch.setattr(probe, "verify_local_image", lambda image: None)
     environment = {**os.environ,
         "PROBE_MIGRATIONS_IMAGE": IMAGES["migrations"],
@@ -174,6 +175,7 @@ def test_failed_runtime_read_still_tears_down(tmp_path, monkeypatch):
     (install / "docker/openbao-init.sh").write_text("fixture", encoding="utf-8")
     (tmp_path / "bao_service_token").write_text("scoped-openbao-token", encoding="ascii")
     (tmp_path / "sign_grant_verify_token").write_text("scoped-verify-token", encoding="ascii")
+    (tmp_path / "signing_keys_openbao_token").write_text("scoped-signing-token", encoding="ascii")
     monkeypatch.setattr(probe, "verify_local_image", lambda image: None)
     environment = {**os.environ,
         "PROBE_MIGRATIONS_IMAGE": IMAGES["migrations"],
@@ -221,6 +223,7 @@ def test_runtime_hook_runs_after_two_migrations_and_retains_unqualified(tmp_path
             (secret_dir / "bao_service_token").write_text("scoped-service")
             (secret_dir / "notification_openbao_token").write_text("scoped-notification")
             (secret_dir / "sign_grant_verify_token").write_text("scoped-verifier")
+            (secret_dir / "signing_keys_openbao_token").write_text("scoped-signing-keys")
         output = ("{}" if args[-3:] == ["config", "--format", "json"] else
                   completed if args[-1] == "db-migrate" else
                   "20260808_0002" if args[-1] == probe.migrations.HEAD else

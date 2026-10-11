@@ -15419,8 +15419,10 @@ the upstream runtime callback only after both migration passes. The KMS-only
 Signing Keys image requires distinct service and issuer signing API keys plus
 an absolute verify-only grant token file; the new overlay now mounts all three
 as disposable secrets. The root-only OpenBao bootstrap mints the verifier
-token under the existing seven-origin policy, checks verify authority and
-HMAC-mint denial, and keeps it out of the migration container. The focused
+token under the existing seven-origin policy and a separate Signing Keys
+OpenBao token under the reviewed managed-signing policy; it checks verify
+authority and HMAC-mint denial and keeps both tokens out of the migration
+container. The focused
 merge suite passes 97 tests and 421 subtests with two opt-in cases skipped;
 the disposable live OpenBao bootstrap case separately passed. The exact
 installed signing image has not yet been run by this local check, so the

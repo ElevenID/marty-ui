@@ -77,7 +77,7 @@ def validate_model(model: dict, images: dict[str, str], image: str,
     signing_secrets = {
         name: baseline["secrets"].pop(name, None)
         for name in ("issuance_api_key", "signing_service_key", "signing_issuer_key",
-                     "sign_grant_verify_token")
+                     "sign_grant_verify_token", "signing_keys_openbao_token")
     }
     require(isinstance(service, dict) and all(isinstance(item, dict) for item in signing_secrets.values()),
             "Signing runtime service or secret is missing")
@@ -105,7 +105,7 @@ def validate_model(model: dict, images: dict[str, str], image: str,
             "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "/run/secrets/sign_grant_verify_token",
             "SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2",
             "BAO_ADDR": "http://openbao:8200",
-            "BAO_TOKEN_FILE": "/run/secrets/bao_service_token",
+            "BAO_TOKEN_FILE": "/run/secrets/signing_keys_openbao_token",
             "PUBLIC_DOMAIN": "migration.invalid",
         },
         "secrets": [
@@ -113,7 +113,7 @@ def validate_model(model: dict, images: dict[str, str], image: str,
             {"source": "signing_service_key", "target": "/run/secrets/signing_service_key"},
             {"source": "signing_issuer_key", "target": "/run/secrets/signing_issuer_key"},
             {"source": "sign_grant_verify_token", "target": "/run/secrets/sign_grant_verify_token"},
-            {"source": "bao_service_token", "target": "/run/secrets/bao_service_token"},
+            {"source": "signing_keys_openbao_token", "target": "/run/secrets/signing_keys_openbao_token"},
         ],
         "depends_on": {
             "redis": {"condition": "service_healthy", "required": True},
@@ -155,8 +155,9 @@ def run_signing_runtime(
     run: Callable[..., subprocess.CompletedProcess[str]], *,
     images: dict[str, str], image: str, install_root: Path,
 ) -> dict:
-    values = [(secret_dir / "bao_service_token").read_text(encoding="ascii"),
-              (secret_dir / "sign_grant_verify_token").read_text(encoding="ascii")]
+    values = [(secret_dir / name).read_text(encoding="ascii")
+              for name in ("bao_service_token", "signing_keys_openbao_token",
+                           "sign_grant_verify_token")]
     for name in ("issuance_api_key", "signing_service_key", "signing_issuer_key"):
         path = secret_dir / name
         path.write_text(secrets.token_hex(32), encoding="ascii")
