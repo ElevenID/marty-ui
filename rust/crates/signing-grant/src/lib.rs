@@ -15,6 +15,8 @@ const DOMAIN: &[u8] = b"marty:issuer-signing-grant:v1\n";
 const MAX_LIFETIME_SECONDS: i64 = 60;
 const MAX_FUTURE_SKEW_SECONDS: i64 = 5;
 const ISSUED_LIFETIME_SECONDS: i64 = 30;
+const MAX_HEADER_BYTES: usize = 8192;
+pub const HEADER_NAME: &str = "x-marty-signing-grant";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -64,6 +66,32 @@ pub struct GrantClaims {
 pub struct GrantEnvelope {
     pub claims: GrantClaims,
     pub hmac: String,
+}
+
+impl GrantEnvelope {
+    pub fn to_header_value(&self) -> Result<String, GrantError> {
+        let bytes = serde_json::to_vec(self).map_err(|_| GrantError::Malformed)?;
+        let value = URL_SAFE_NO_PAD.encode(bytes);
+        if value.len() > MAX_HEADER_BYTES {
+            return Err(GrantError::Malformed);
+        }
+        Ok(value)
+    }
+
+    pub fn from_header_value(value: &str) -> Result<Self, GrantError> {
+        if value.is_empty()
+            || value.len() > MAX_HEADER_BYTES
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(GrantError::Malformed);
+        }
+        let bytes = URL_SAFE_NO_PAD
+            .decode(value)
+            .map_err(|_| GrantError::Malformed)?;
+        serde_json::from_slice(&bytes).map_err(|_| GrantError::Malformed)
+    }
 }
 
 /// Values derived from the authorized operation and exact request received by

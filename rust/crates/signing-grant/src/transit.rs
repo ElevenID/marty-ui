@@ -191,7 +191,7 @@ fn validate_hmac(hmac: &str) -> Result<(), TransitGrantError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{mint_bound, verify_envelope, GrantBinding, GrantError};
+    use crate::{mint_bound, verify_envelope, GrantBinding, GrantEnvelope, GrantError};
     use axum::{
         extract::Json,
         http::{HeaderMap, StatusCode},
@@ -304,6 +304,8 @@ mod tests {
         let envelope = mint_bound(&client, "test-mint-token", &binding)
             .await
             .unwrap();
+        let header = envelope.to_header_value().unwrap();
+        let envelope = GrantEnvelope::from_header_value(&header).unwrap();
         assert_eq!(envelope.claims.origin, SigningOrigin::GatewayService);
         assert_eq!(
             envelope.claims.payload_sha256_b64,
@@ -323,6 +325,7 @@ mod tests {
             verify_envelope(&client, "test-verify-token", &envelope, &altered).await,
             Err(GrantError::BindingMismatch)
         ));
+        assert!(GrantEnvelope::from_header_value(&format!("{header}\n")).is_err());
         server.abort();
         if let Some(previous) = previous {
             std::env::set_var("BAO_ADDR", previous);

@@ -14360,3 +14360,9 @@ verify and altered-payload rejection; the crate suite and warnings-denied
 Clippy pass. Production services still need authoritative operation binding,
 scoped token mounts and fail-closed route use before this grants any signing
 authority.
+
+The grant envelope also has one bounded URL-safe header encoding for all
+producer-to-Signing-Keys paths. It rejects malformed, oversized or multiline
+values before JSON parsing; its synthetic mint/header/verify test and
+warnings-denied Clippy pass. Gateway still must replace any caller-supplied
+grant header, and Signing Keys must bind and consume it before KMS signing.
