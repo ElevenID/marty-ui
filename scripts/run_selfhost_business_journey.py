@@ -29,6 +29,7 @@ from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
 TRUST_ROOTS_PATH = "deploy-config/selfhost-kms-custody-trust-roots.json"
+FIXTURE_PATH = "scripts/setup_selfhost_synthetic_fixture.py"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
 JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
                   "SELFHOST_PUBLIC_DOMAIN", "SELFHOST_TEST_USERNAME",
@@ -149,6 +150,19 @@ def fixture_setup(script: Path, digest: str, integration_checkout: Path) -> None
         raise ValueError("operator fixture setup script changed")
 
 
+def source_bound_fixture(script: Path, digest: str, source_checkout: Path,
+                         source_sha: str) -> None:
+    if script.resolve() != (source_checkout / FIXTURE_PATH).resolve():
+        raise ValueError("fixture setup is not the reviewed source hook")
+    if command(["git", "status", "--porcelain", "--", FIXTURE_PATH],
+               cwd=source_checkout).strip():
+        raise ValueError("source fixture hook has local changes")
+    reviewed = command(["git", "show", f"{source_sha}:{FIXTURE_PATH}"],
+                       cwd=source_checkout)
+    if hashlib.sha256(reviewed.encode("utf-8")).hexdigest() != digest:
+        raise ValueError("fixture hook differs from the prepared source commit")
+
+
 def trusted_custody_keys(source_checkout: Path, source_sha: str) -> frozenset[str]:
     raw = command(["git", "show", f"{source_sha}:{TRUST_ROOTS_PATH}"],
                   cwd=source_checkout)
@@ -189,8 +203,9 @@ def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
     }
     if not isinstance(document, dict) or any(document.get(k) != v for k, v in expected.items()):
         raise ValueError("signed KMS custody evidence does not bind installed fixture")
-    command(["cosign", "verify-blob", "--key", str(public_key),
-             "--signature", str(signature), str(evidence)], timeout=120)
+    command(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin",
+             "-inkey", str(public_key), "-sigfile", str(signature),
+             "-in", str(evidence)], timeout=120)
     return hashlib.sha256(evidence.read_bytes()).hexdigest()
 
 
@@ -202,6 +217,7 @@ def empty_project(compose: list[str], install_root: Path,
 
 
 def installed_journey(compose: list[str], install_root: Path, state_root: Path,
+                      compose_model_path: Path, secret_root: Path,
                       model: dict, integration_checkout: Path,
                       environment: dict[str, str], setup_script: Path,
                       setup_sha256: str,
@@ -236,7 +252,12 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                 time.sleep(5)
         journey_env = {**environment, "PYTHONDONTWRITEBYTECODE": "1",
                        "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH": str(evidence),
-                       "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature)}
+                       "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature),
+                       "SELFHOST_COMPOSE_MODEL_PATH": str(compose_model_path),
+                       "SELFHOST_SECRET_ROOT": str(secret_root),
+                       "SELFHOST_SOURCE_SHA": preflight["source_sha"],
+                       "SELFHOST_ARCHIVE_SHA256": preflight["archive_sha256"],
+                       "SELFHOST_IMAGE_LOCK_SHA256": preflight["image_lock_sha256"]}
         if evidence.exists() or signature.exists():
             raise ValueError("KMS custody output exists before fresh fixture setup")
         fixture_setup(setup_script, setup_sha256, integration_checkout)
@@ -278,6 +299,8 @@ def run(args: argparse.Namespace) -> dict:
         raise ValueError("operator env file is absent or inside source checkout")
     fixture_setup(args.fixture_setup, args.fixture_setup_sha256,
                   args.integration_checkout)
+    source_bound_fixture(args.fixture_setup, args.fixture_setup_sha256,
+                         args.source_checkout, args.source_sha)
     for name in ("kms_custody_evidence", "kms_custody_signature",
                  "kms_custody_public_key"):
         path = getattr(args, name)
@@ -315,7 +338,8 @@ def run(args: argparse.Namespace) -> dict:
     with tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config:
         environment["DOCKER_CONFIG"] = config
         states, custody_sha256 = installed_journey(
-            compose, args.install_root, args.state_root, model,
+            compose, args.install_root, args.state_root, args.compose_model,
+            args.secret_root, model,
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,

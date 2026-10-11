@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +19,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     live_services,
     parse_status,
     required_secrets,
+    source_bound_fixture,
     trusted_custody_keys,
     verify_kms_custody,
 )
@@ -95,10 +98,13 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
     monkeypatch.setattr(runner, "command", fake_command)
     with pytest.raises(ValueError, match="signed custody evidence is absent"):
         installed_journey(["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"],
-                          tmp_path, state, model, integration, {}, setup_script,
+                          tmp_path, state, tmp_path / "compose.json", tmp_path / "secrets",
+                          model, integration, {}, setup_script,
                           hashlib.sha256(setup_script.read_bytes()).hexdigest(),
                           tmp_path / "custody.json", tmp_path / "custody.sig",
-                          tmp_path / "custody.pub", {}, frozenset())
+                          tmp_path / "custody.pub",
+                          {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                           "image_lock_sha256": "c" * 64}, frozenset())
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
@@ -110,7 +116,9 @@ def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "old-state").write_text("keep", encoding="utf-8")
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("Docker was touched"))
     with pytest.raises(ValueError, match="fresh empty directory"):
-        installed_journey(["docker", "compose"], tmp_path, tmp_path, {}, tmp_path, {},
+        installed_journey(["docker", "compose"], tmp_path, tmp_path,
+                          tmp_path / "compose.json", tmp_path / "secrets",
+                          {}, tmp_path, {},
                           tmp_path / "setup.py", "0" * 64, tmp_path / "custody.json",
                           tmp_path / "custody.sig", tmp_path / "custody.pub", {},
                           frozenset())
@@ -173,3 +181,54 @@ def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path) -> No
     (tmp_path / "issuer_token").write_text("change-me-later", encoding="utf-8")
     with pytest.raises(ValueError, match="placeholder: issuer_token"):
         required_secrets(tmp_path)
+
+
+def test_fixture_hook_must_match_prepared_source_commit(monkeypatch,
+                                                        tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    path = tmp_path / "scripts" / "setup_selfhost_synthetic_fixture.py"
+    path.parent.mkdir()
+    path.write_bytes(b"print('reviewed')\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def git_result(argv, **_kwargs):
+        return "" if "status" in argv else "print('reviewed')\n"
+
+    monkeypatch.setattr(runner, "command", git_result)
+    source_bound_fixture(path, digest, tmp_path, "a" * 40)
+    with pytest.raises(ValueError, match="prepared source commit"):
+        source_bound_fixture(path, "b" * 64, tmp_path, "a" * 40)
+    with pytest.raises(ValueError, match="reviewed source hook"):
+        source_bound_fixture(tmp_path / "other.py", digest, tmp_path, "a" * 40)
+
+
+def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -> None:
+    if shutil.which("openssl") is None:
+        pytest.skip("OpenSSL is unavailable")
+    private = tmp_path / "short-lived.key"
+    public = tmp_path / "short-lived.pub"
+    evidence = tmp_path / "evidence.json"
+    signature = tmp_path / "evidence.sig"
+    subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)],
+                   check=True, capture_output=True)
+    subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-out", str(public)],
+                   check=True, capture_output=True)
+    preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                 "image_lock_sha256": "c" * 64}
+    environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "organization_id": "org", "issuer_did": "did:example:issuer",
+                "verifier_did": "did:example:verifier",
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True}
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(private),
+                    "-in", str(evidence), "-out", str(signature)],
+                   check=True, capture_output=True)
+    approved = frozenset({hashlib.sha256(public.read_bytes()).hexdigest()})
+    assert verify_kms_custody(evidence, signature, public, preflight,
+                              environment, approved) == hashlib.sha256(evidence.read_bytes()).hexdigest()
+    evidence.write_text(json.dumps({**document, "profile_proofs": ["tampered"]}), encoding="utf-8")
+    with pytest.raises(ValueError, match="installed journey command returned failure"):
+        verify_kms_custody(evidence, signature, public, preflight, environment, approved)

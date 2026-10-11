@@ -74,8 +74,10 @@ absolute Compose env file outside source control; it must resolve
 all other variables in the prepared ZIP. Populate every required secret file,
 including scoped OpenBao tokens and workload TLS identity material, in the
 secret root before running. The state root must exist and be empty. Provide
-`--fixture-setup` as an absolute Python script path outside the pinned
-integration checkout and `--fixture-setup-sha256` as its exact SHA-256. The
+`--fixture-setup` as the absolute path to
+`scripts/setup_selfhost_synthetic_fixture.py` in the exact prepared source
+checkout, and `--fixture-setup-sha256` as its exact SHA-256. The runner rejects
+a changed or substituted hook. The
 runner invokes that script after health checks and migrations, before the
 public test. Its contract is to create the disposable Keycloak user and active
 KMS-backed issuer/verifier profiles through supported provisioning, and fail
@@ -89,16 +91,19 @@ document with schema `marty.selfhost-kms-custody/v1`, the exact `source_sha`,
 `archive_sha256`, `image_lock_sha256`, `organization_id`, `issuer_did`, and
 `verifier_did`, plus `issuer_key_non_exportable: true` and
 `verifier_key_non_exportable: true`. The runner verifies its signature using
-the supplied public key before issuing, and requires that key's SHA-256 digest
+the supplied OpenSSL Ed25519 public key before issuing, and requires that key's SHA-256 digest
 in the prepared release source commit's reviewed
 `deploy-config/selfhost-kms-custody-trust-roots.json`. The list is currently
 empty, so no operator-supplied self-signed claim can pass. Adding a trusted
 signer requires a reviewed source change and a new prepared release. The
 integration checkout is pinned to protected-main commit
 `71a34c96f4bff2911919ebd3a41644ec2631ee07`; a PR head cannot qualify.
-There is currently no reviewed automated fixture provisioner for
-those resources. This is the remaining fixture implementation slice, so no
-installed journey has yet qualified a release.
+The synthetic fixture hook is an opt-in follow-on candidate and has not yet
+passed an installed run, so no installed journey has qualified a release.
+
+The follow-on synthetic fixture setup and trust bootstrap contract are in
+`docs/selfhost-synthetic-fixture.md`. They are not part of any currently
+published bundle.
 
 Before adding these assets to the release publisher, run the full installation
 from a fresh extracted ZIP and disposable external OpenBao and state. Bind the
