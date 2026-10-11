@@ -65,32 +65,9 @@ def preparer_worker_runners(source):
     }
 
 
-def standalone_reference_inputs(source):
-    """Inventory literal corpus inputs used by the standalone launcher."""
-    inputs = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "contract":
-            continue
-        assert len(node.args) == 1 and not node.keywords, (
-            "Review standalone historical contract lookup"
-        )
-        argument = node.args[0]
-        assert isinstance(argument, ast.Constant) and isinstance(argument.value, str), (
-            "Review dynamic standalone historical contract input"
-        )
-        name = argument.value
-        assert Path(name).name == name and name.endswith("-oracle.json"), (
-            f"Review standalone historical contract path: {name}"
-        )
-        inputs.append(f"contracts/{name}")
-    return sorted(inputs)
-
-
 def test_oracle_producer_inventory_covers_every_corpus_once():
     inventory = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert inventory["schema"] == "marty.canvas-worker-oracle-producers/v2"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-producers/v3"
     assert set(inventory) == {
         "schema",
         "purpose",
@@ -98,8 +75,6 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
         "frozen_native_corpora",
         "direct_runner_corpora",
         "shared_runner_corpora",
-        "standalone_runner_entries",
-        "standalone_runner_reference_inputs",
         "external_fixture_corpora",
         "standalone_scenarios",
     }
@@ -107,9 +82,7 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     direct = inventory["direct_runner_corpora"]
     retired = set(inventory["retired_from_preparer"])
     assert retired == {
-        "run_canvas_worker_facts_oracle.py",
         "run_canvas_worker_rest_oracle.py",
-        "run_canvas_worker_retry_oracle.py",
         "run_canvas_worker_startup_oracle.py",
     }
     shared = inventory["shared_runner_corpora"]
@@ -145,13 +118,22 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
             f"Missing external-source record: {source_doc}"
         )
 
-    native = json.loads(
+    tiers = json.loads(
         (CONTRACTS / "canvas-worker-tier-obligations.json").read_text(encoding="utf-8")
-    )["native_oauth_replays"]
-    assert len(frozen) == len(native) == 10
+    )
+    oauth = tiers["native_oauth_replays"]
+    assert len(oauth) == 10
+    assert {entry["scenario"] for entry in tiers["native_replays"]} == {
+        "rest", "facts", "retry"
+    }
+    assert len(frozen) == 13
     assert set(frozen) == {
-        f"canvas-worker-{entry['scenario']}-oracle.json" for entry in native
-    }, "Frozen OAuth corpora need native Rust owner and byte pins"
+        f"canvas-worker-{entry['scenario']}-oracle.json"
+        for entry in tiers["native_replays"]
+        if entry["scenario"] != "rest"
+    } | {
+        f"canvas-worker-{entry['scenario']}-oracle.json" for entry in oauth
+    } | {"canvas-worker-logging-oracle.json"}, "Frozen corpora need native Rust owners"
     for name in frozen:
         assert (CONTRACTS / name.replace("-oracle.json", "-scenarios.json")).is_file()
 
@@ -164,42 +146,9 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     assert mapped_runners == actual_runners, (
         "New producers need corpus ownership review"
     )
-    standalone = inventory["standalone_runner_entries"]
-    reference_inputs = inventory["standalone_runner_reference_inputs"]
-    assert set(standalone) == {"run_canvas_worker_logging_oracle.py"}
-    assert set(reference_inputs) == set(standalone)
-    for runner, launcher in standalone.items():
-        source = (ROOT / launcher).read_text(encoding="utf-8")
-        assert source.count(f"/verification/scripts/{runner}") == 2, (
-            "Review standalone historical launcher mounting and invocation"
-        )
-        assert reference_inputs[runner] == standalone_reference_inputs(source), (
-            "Review standalone historical cross-corpus input"
-        )
-        assert reference_inputs[runner], "Standalone reference inputs must be explicit"
-        for path in reference_inputs[runner]:
-            assert (ROOT / path).is_file(), (
-                f"Missing standalone reference input: {path}"
-            )
-        assert launcher in (ROOT / ".github/workflows/ci.yml").read_text(
-            encoding="utf-8"
-        ), "Standalone historical runner must remain in CI"
     assert preparer_worker_runners(PREPARER.read_text(encoding="utf-8")) == (
-        mapped_runners - set(standalone) - retired
+        mapped_runners - retired
     ), "Published preparer worker dispatch needs producer-ownership review"
-
-
-def test_standalone_reference_input_guard_rejects_changed_corpus():
-    launcher = ROOT / "scripts/test_canvas_worker_logging_reference.py"
-    source = launcher.read_text(encoding="utf-8")
-    expected = ["contracts/canvas-worker-consumer-range-oracle.json"]
-    assert standalone_reference_inputs(source) == expected
-    changed = source.replace(
-        "canvas-worker-consumer-range-oracle.json",
-        "canvas-worker-startup-oracle.json",
-    )
-    assert changed != source
-    assert standalone_reference_inputs(changed) != expected
 
 
 def test_preparer_worker_dispatch_guard_rejects_unmapped_runner():

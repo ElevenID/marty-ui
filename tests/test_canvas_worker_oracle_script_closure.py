@@ -394,11 +394,7 @@ def test_historical_capture_input_graph_is_reviewed():
     assert {f"scripts/{name}" for name in mounted_roots} <= set(
         harness["literal_paths"]
     ), "Review mounted capture entrypoint roots"
-    launchers = set(producers["standalone_runner_entries"].values())
-    assert all(
-        launcher == f"scripts/{Path(launcher).name}" for launcher in launchers
-    ), "Review standalone launcher paths"
-    entrypoint_roots = mounted_roots | {Path(launcher).name for launcher in launchers}
+    entrypoint_roots = mounted_roots
     # The preparer also has a literal process edge to the operations oracle.
     # This is a bounded static graph, not dynamic or host/image input closure.
     runners |= entrypoint_roots
@@ -510,7 +506,6 @@ def test_historical_capture_input_graph_is_reviewed():
 @pytest.mark.parametrize(
     "entrypoint",
     [
-        "test_canvas_worker_logging_reference.py",
         "prepare_canvas_published_schema.py",
         "canvas_worker_dispatch_hooks.py",
     ],

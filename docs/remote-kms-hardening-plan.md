@@ -13684,3 +13684,61 @@ path for this broad feature PR. The focused compile-scope, exact test-source
 ownership and CI performance suite passed 210/210 after resolution; YAML
 parsing and staged diff hygiene passed. This merge still requires exact-head
 hosted qualification.
+
+The main-merge correction was published as UI #1192 head
+`e43c6b8960d1da5c88d66086f332cba85c3ac657`. GitHub now reports the
+PR as merge-blocked by its ordinary checks/review rather than conflicted;
+[CI 38102036415](https://github.com/ElevenID/marty-ui/actions/runs/38102036415)
+and [Rust CodeQL 38102036405](https://github.com/ElevenID/marty-ui/actions/runs/38102036405)
+were created for this exact head. They are not yet qualification evidence.
+
+K6 authorization implementation inventory: Flow's verification-start HTTP
+handler authorizes the principal for `verification:execute` on the requested
+organization and persists the resulting instance before its public request
+object route calls the signer. That stored instance and the exact signing
+input are suitable authority facts for a purpose-scoped signing grant; the
+current `SigningRequest` carries neither its instance ID nor a proof. Native
+Issuance reuses `HttpDidSigner` from credential building, Canvas LTI tool
+signing, and Canvas readiness. A replacement signer boundary must carry
+separately authorized operation context for all three owners, not just Flow
+or the credential builder. The direct Gateway compatibility route currently
+accepts only the shared issuer credential and a query tenant and should be
+removed or gated by the same verified proof. Signing Keys must reject a
+valid service credential paired with another tenant or altered payload
+before remote KMS invocation.
+
+K8 logging oracle retirement (local batch held behind UI head
+`e43c6b896`): removed the standalone Python logging-reference runner, its
+immutable-image launcher and container-only unit cases, and the CI step that
+executed the old Python worker source. The 16-case frozen logging corpus is
+unchanged. The deployed Rust Canvas worker already executes every threshold
+case against its `LOG_LEVEL` filter, and its executable smoke test checks
+invalid values fail before database/secret setup without echoing the value.
+The producer and script-closure inventories now classify logging as frozen
+native input with explicit Rust owners; the obsolete standalone-runner schema
+fields and helper were removed. The producer inventory advances to v3, and
+the tier guard verifies those owners.
+The four focused Python inventory/fixture suites pass 72/72, the compiled
+Canvas tier guard passes its 134-case inventory, and both targeted native
+Rust logging tests pass locally. This is a local candidate until grouped
+publication and exact-head hosted qualification. The 145 CI workflow checks
+and Ruff on the changed Python files also pass.
+
+The same held K8 cleanup now deletes the two dead Python Facts and Retry
+oracle wrappers, which had already been removed from preparer dispatch and
+had no remaining caller. Their frozen corpora and four/five-stage native Rust
+replays remain unchanged and pinned in the tier inventory. Producer and
+script-closure manifests classify these alongside the frozen OAuth and
+logging corpora. The focused 72-test inventory/fixture suite, Ruff, and
+compiled 134-case tier guard still pass after this removal. No claim of
+hosted qualification is made for this held batch.
+
+Next K8 candidate: validation still executes an old Python published-worker
+reference even though the native HTTPS worker has its own validation matrix,
+repository database cases and policy fast owners. This is not a wrapper-only
+deletion: `native_validation.historical_test`, the preparer selector, package
+migration list, CI compiled-test guard, and tier tests still require the old
+test. Retire that group together only after checking every frozen case and
+the full-only/routine split against the native owners; then requalify on
+hosted Linux. The Facts/Retry and logging deletion above does not claim
+validation retirement.

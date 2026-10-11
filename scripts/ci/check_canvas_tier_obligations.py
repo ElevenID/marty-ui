@@ -267,7 +267,7 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         )
     )
     require(
-        producers.get("schema") == "marty.canvas-worker-oracle-producers/v2",
+        producers.get("schema") == "marty.canvas-worker-oracle-producers/v3",
         "Wrong Canvas corpus ownership inventory schema",
     )
     direct = set(producers["direct_runner_corpora"])
@@ -275,15 +275,34 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         name for cases in producers["shared_runner_corpora"].values() for name in cases
     }
     frozen = producers.get("frozen_native_corpora", [])
+    expected_frozen = {
+        f"canvas-worker-{entry['scenario']}-oracle.json"
+        for entry in native_oauth
+    } | {
+        "canvas-worker-logging-oracle.json",
+        "canvas-worker-facts-oracle.json",
+        "canvas-worker-retry-oracle.json",
+    }
     require(
         isinstance(frozen, list)
-        and len(frozen) == len(set(frozen)) == len(native_oauth)
-        and set(frozen)
-        == {
-            f"canvas-worker-{entry['scenario']}-oracle.json"
-            for entry in native_oauth
-        },
-        "Frozen native OAuth corpus ownership drift",
+        and len(frozen) == len(set(frozen)) == len(expected_frozen)
+        and set(frozen) == expected_frozen,
+        "Frozen native corpus ownership drift",
+    )
+    logging_owner = (
+        root / "rust/services/issuance/src/bin/canvas_sync_worker.rs"
+    ).read_text(encoding="utf-8")
+    logging_process = (
+        root / "rust/services/issuance/tests/support/canvas_worker_logging_contract.rs"
+    ).read_text(encoding="utf-8")
+    require(
+        "fn deployed_log_level_matches_frozen_published_thresholds()"
+        in logging_owner
+        and 'include_str!(\n            "../../../../../contracts/canvas-worker-logging-oracle.json"'
+        in logging_owner
+        and "fn invalid_log_level_process_failure_does_not_echo_operator_value()"
+        in logging_process,
+        "Frozen logging corpus native owner drift",
     )
     for entry in historical:
         name = entry["test"]
