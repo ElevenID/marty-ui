@@ -1108,6 +1108,11 @@ async fn proxy_handler(
     let mut gateway_request = GatewayRequest::new(method, &upstream_path, now_ms());
     gateway_request.query = query_pairs(parts.uri.query());
     gateway_request.headers = request_headers(&parts.headers);
+    // Only the authorized Gateway producer may attach this proof. A public
+    // caller's header must never be forwarded to Signing Keys.
+    gateway_request
+        .headers
+        .remove(marty_signing_grant::HEADER_NAME);
     if native_passport_public {
         gateway_request.headers.remove("x-api-key");
         gateway_request.headers.remove("x-organization-id");
@@ -7657,7 +7662,8 @@ mod tests {
                 let mut builder = Request::builder()
                     .method("POST")
                     .uri(path)
-                    .header("content-type", "application/json");
+                    .header("content-type", "application/json")
+                    .header(marty_signing_grant::HEADER_NAME, "forged-grant");
                 if authenticated {
                     builder = builder.header("cookie", "sessionId=valid");
                 }
@@ -7677,6 +7683,9 @@ mod tests {
             assert_eq!(forwarded.method, HttpMethod::Post);
             assert_eq!(forwarded.path, path);
             assert_eq!(forwarded.query["organization_id"], vec!["org-1"]);
+            assert!(!forwarded
+                .headers
+                .contains_key(marty_signing_grant::HEADER_NAME));
             if is_public_service_sign_path(path) {
                 assert_eq!(
                     forwarded.headers.get("x-api-key").map(String::as_str),

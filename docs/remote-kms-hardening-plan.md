@@ -14417,3 +14417,12 @@ container ID. It found no historical Alembic ledger and no private-key
 table or column, including `issuer_signing_keys`. The container was stopped.
 This proves the Rust Issuance clean-install schema only; assembled supported
 stacks and populated-data content scans still need their own evidence.
+
+Gateway grant-header boundary, local UI follow-up: the public proxy now
+removes the shared Rust grant header from every caller request before
+applying trusted upstream overrides. The signing-mutation regression sends
+a forged header and confirms it does not reach Signing Keys while the
+authenticated organization and dedicated service-sign credential still do.
+That exact Gateway test and warnings-denied library Clippy pass. A trusted
+Gateway producer still must mint and insert the header after its authorization
+decision; this change alone does not enforce signing grants.
