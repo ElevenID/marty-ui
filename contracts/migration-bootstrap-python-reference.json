@@ -48,6 +48,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "clean_apply",
@@ -661,6 +667,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         },
         "runs": 2
       },
@@ -1282,6 +1294,12 @@
               }
             ]
           }
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "preserve_customer_profile",
@@ -1910,6 +1928,12 @@
               }
             ]
           }
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "backfill_mixed_did",
@@ -2519,6 +2543,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "disposable_bad_tuple",
@@ -2598,7 +2628,13 @@
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
         },
-        "precreated_disposable": true
+        "precreated_disposable": true,
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
+        }
       },
       "name": "disposable_precreated_keys",
       "state": {
@@ -3294,6 +3330,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "token_precedence",
@@ -3875,6 +3917,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "bootstrap_disabled",
@@ -3934,6 +3982,12 @@
           "OPENBAO_SERVICE_TOKEN": "fixture-token",
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "redis_absent",
@@ -4016,6 +4070,12 @@
               }
             }
           }
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "conflicting_managed_purpose",
@@ -4120,6 +4180,12 @@
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
         },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
+        },
         "unsafe_notification": true
       },
       "name": "unsafe_notification_kek",
@@ -4183,6 +4249,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "missing_notification_kek_create_denied",
@@ -4250,7 +4322,13 @@
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
         },
-        "ping_failures": 5
+        "ping_failures": 5,
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
+        }
       },
       "name": "redis_ping_final_failure",
       "state": {
@@ -4345,6 +4423,12 @@
           "REDIS_URL": "redis://redis.test:6379"
         },
         "fail_set": "org:00000000-0000-0000-0000-000000000001:signing-key-jwks",
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
+        },
         "runs": 2
       },
       "name": "partial_redis_write_then_retry",
@@ -4915,6 +4999,12 @@
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
         },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
+        },
         "verify_only": true
       },
       "name": "verify_only",
@@ -4949,6 +5039,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "missing_database_url",
@@ -4993,6 +5089,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         }
       },
       "name": "missing_bao_token",
@@ -5043,6 +5145,12 @@
           "PUBLIC_DOMAIN": "issuer.example",
           "REDIS_DB_GATEWAY": "2",
           "REDIS_URL": "redis://redis.test:6379"
+        },
+        "public_pem_by_type": {
+          "ecdsa-p256": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
+          "ecdsa-p384": "-----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEqofKIr6LBTeOscce8yCtdG4dO2KLp5uY\nWfdB4IJUKjhVAvJdv1UpbDpUXjhydgq3NhfeSpYmLG9dnpi/kpLcKfj0Hb0omhR8\n6doxE7XwuMAKYLHOHX6BnXpDHXyQ6g5f\n-----END PUBLIC KEY-----\n",
+          "ed25519": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n-----END PUBLIC KEY-----\n",
+          "rsa-2048": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\n////////////////////////////////////////////////////////////////\nYQIDAQAB\n-----END PUBLIC KEY-----\n"
         },
         "schema_failure": true
       },

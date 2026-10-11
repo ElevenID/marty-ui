@@ -23,6 +23,11 @@ name = "marty-passport-callback-signer-supported"
 path = "src/bin/passport_callback_signer_supported.rs"
 test = false
 
+[[bin]]
+name = "marty-migration-bootstrap"
+path = "src/bin/marty_migration_bootstrap.rs"
+test = false
+
 [dependencies]
 axum.workspace = true
 aws-config.workspace = true
@@ -37,6 +42,7 @@ percent-encoding.workspace = true
 regex.workspace = true
 reqwest = { workspace = true, features = ["query"] }
 redis.workspace = true
+sqlx.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 spki.workspace = true

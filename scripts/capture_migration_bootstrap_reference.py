@@ -322,6 +322,9 @@ def _run_case(owner, case: dict) -> dict:
         "name": case["name"],
         "input": {
             "environment": env,
+            "public_pem_by_type": {key_type: FakeBao.public_pem(key_type)
+                                   for key_type in ("ecdsa-p256", "ecdsa-p384",
+                                                    "rsa-2048", "ed25519")},
             **{key: value for key, value in case.items()
                if key not in {"name", "env", "unset"}},
         },
