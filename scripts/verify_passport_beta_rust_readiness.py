@@ -14,9 +14,11 @@ from typing import Any, Callable
 
 try:
     from .collect_passport_beta_rust_readiness import WORKFLOW, collect, utc
+    from .check_passport_beta_fence_authority import published_release_ref
     from .probe_passport_beta_host import HostProbeError
 except ImportError:
     from collect_passport_beta_rust_readiness import WORKFLOW, collect, utc
+    from check_passport_beta_fence_authority import published_release_ref
     from probe_passport_beta_host import HostProbeError
 
 
@@ -38,7 +40,7 @@ def command(args: list[str]) -> str:
 
 
 def checked_run(run_id: int, source_commit: str,
-                execute: Callable[[list[str]], str]) -> tuple[datetime, datetime]:
+                execute: Callable[[list[str]], str]) -> tuple[datetime, datetime, str]:
     require(type(run_id) is int and run_id > 0,
             "Protected beta readiness run ID is invalid")
     try:
@@ -52,17 +54,22 @@ def checked_run(run_id: int, source_commit: str,
             and run.get("conclusion") == "success"
             and run.get("event") == "workflow_dispatch"
             and run.get("path") == WORKFLOW
-            and run.get("head_branch") == "main"
+            and isinstance(run.get("head_branch"), str)
+            and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+",
+                             run["head_branch"]) is not None
             and run.get("head_sha") == source_commit
+            and run.get("run_attempt") == 1
             and isinstance(run.get("repository"), dict)
             and run["repository"].get("full_name") == REPOSITORY
             and isinstance(run.get("head_repository"), dict)
             and run["head_repository"].get("full_name") == REPOSITORY,
-            "Beta readiness is not from successful protected main")
+            "Beta readiness is not from the successful release tag")
+    release_ref = f"refs/tags/{run['head_branch']}"
+    published_release_ref(release_ref, source_commit, execute)
     started, completed = utc(run.get("created_at")), utc(run.get("updated_at"))
     require(started < completed,
             "Protected beta readiness workflow timing is invalid")
-    return started, completed
+    return started, completed, release_ref
 
 
 def verify(
@@ -88,7 +95,7 @@ def verify(
             and json.loads(snapshot_bytes) == snapshot
             and json.loads(receipt_bytes) == receipt,
             "Protected beta readiness file binding is invalid")
-    started, completed = checked_run(run_id, source_commit, execute)
+    started, completed, release_ref = checked_run(run_id, source_commit, execute)
     checked_at = utc(report.get("checked_at_utc"))
     require(started <= checked_at <= completed,
             "Protected beta readiness timestamp differs from its run")
@@ -133,7 +140,7 @@ def verify(
                 "--repo", REPOSITORY,
                 "--signer-workflow", f"{REPOSITORY}/{WORKFLOW}",
                 "--source-digest", source_commit,
-                "--source-ref", "refs/heads/main",
+                "--source-ref", release_ref,
             ])
             require(downloaded.read_bytes() == original,
                     "Protected beta readiness artifact changed during verification")

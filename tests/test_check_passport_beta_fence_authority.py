@@ -23,6 +23,34 @@ LEGACY_IMAGE = ("ghcr.io/elevenid/marty-credentials-issuance@sha256:"
                 "9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176")
 
 
+def release_proof(command: list[str], ref: str, source: str,
+                  tag_object: str) -> str | None:
+    if command[-2:] == ["show", f"{source}:release/stack-lock.json"]:
+        return json.dumps({"schema": "marty.stack-lock/v1",
+                           "release": f"marty-ui@{ref.removeprefix('refs/tags/v')}",
+                           "release_state": "eligible"})
+    if command[-1] == f"repos/ElevenID/marty-ui/git/tags/{tag_object}":
+        return json.dumps({
+            "tag": ref.removeprefix("refs/tags/"),
+            "object": {"type": "commit", "sha": source},
+            "message": (f"Release-Transaction: {'e' * 64}\n"
+                        f"Claim-Run: 123\nSource-SHA: {source}\n"),
+        })
+    if command[-1] == "repos/ElevenID/marty-ui/actions/runs/123":
+        return json.dumps({
+            "id": 123, "path": ".github/workflows/prepare-stack-tag.yml",
+            "event": "workflow_dispatch", "head_branch": "main",
+            "head_sha": source, "status": "completed",
+            "conclusion": "success",
+        })
+    if command[-1] == ("repos/ElevenID/marty-ui/releases/tags/"
+                       + ref.removeprefix("refs/tags/")):
+        return json.dumps({"tag_name": ref.removeprefix("refs/tags/"),
+                           "draft": False, "prerelease": False,
+                           "published_at": "2026-10-11T16:00:00Z"})
+    return None
+
+
 @pytest.mark.parametrize("status,behind,merge_base,accepted", [
     ("identical", 0, HEAD, True),
     ("ahead", 0, HEAD, True),
@@ -52,6 +80,98 @@ def test_release_source_must_remain_on_protected_main_history(
     else:
         with pytest.raises(HostProbeError, match="not an ancestor"):
             authority.protected_source(runner)
+
+
+@pytest.mark.parametrize("remote_object,peeled,valid", [
+    (TAG_OBJECT, HEAD, True),
+    (HEAD, HEAD, False),
+    (TAG_OBJECT, "d" * 40, False),
+])
+def test_published_release_ref_requires_annotated_exact_source(
+    remote_object: str, peeled: str, valid: bool,
+) -> None:
+    ref = "refs/tags/v1.1.244"
+
+    def runner(command: list[str]) -> str:
+        proof = release_proof(command, ref, HEAD, TAG_OBJECT)
+        if proof is not None:
+            return proof
+        assert command == ["git", "ls-remote",
+                           "https://github.com/ElevenID/marty-ui.git",
+                           ref, f"{ref}^{{}}"]
+        return f"{remote_object}\t{ref}\n{peeled}\t{ref}^{{}}\n"
+
+    if valid:
+        assert authority.published_release_ref(ref, HEAD, runner) == TAG_OBJECT
+    else:
+        with pytest.raises(HostProbeError, match="tag differs"):
+            authority.published_release_ref(ref, HEAD, runner)
+
+
+def test_detached_release_checkout_accepts_protected_main_ancestor(monkeypatch):
+    ref = "refs/tags/v1.1.244"
+    monkeypatch.setenv("GITHUB_REF", ref)
+
+    def runner(command: list[str]) -> str:
+        proof = release_proof(command, ref, HEAD, TAG_OBJECT)
+        if proof is not None:
+            return proof
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return HEAD
+        if command[-2:] == ["branch", "--show-current"]:
+            return ""
+        if command[-2:] == ["rev-parse", ref]:
+            return TAG_OBJECT
+        if command[-2:] == ["cat-file", "-t"]:
+            raise AssertionError("Unexpected tag type command")
+        if command[-3:] == ["cat-file", "-t", ref]:
+            return "tag"
+        if command[-2:] == ["rev-parse", f"{ref}^{{commit}}"]:
+            return HEAD
+        if command[:2] == ["git", "ls-remote"]:
+            return f"{TAG_OBJECT}\t{ref}\n{HEAD}\t{ref}^{{}}\n"
+        if "status" in command:
+            return ""
+        if command[-1] == "repos/ElevenID/marty-ui/branches/main":
+            return json.dumps({"protected": True,
+                               "commit": {"sha": "d" * 40}})
+        assert command[-1] == ("repos/ElevenID/marty-ui/compare/"
+                               f"{HEAD}...{'d' * 40}")
+        return json.dumps({"status": "ahead", "behind_by": 0,
+                           "merge_base_commit": {"sha": HEAD}})
+
+    assert authority.protected_source(runner) == HEAD
+
+
+@pytest.mark.parametrize("broken,expected", [
+    ("lock", "stack lock"),
+    ("claim", "claim did not succeed"),
+])
+def test_release_ref_rejects_wrong_version_or_failed_claim(
+    broken: str, expected: str,
+) -> None:
+    ref = "refs/tags/v1.1.244"
+
+    def runner(command: list[str]) -> str:
+        if command[:2] == ["git", "ls-remote"]:
+            return f"{TAG_OBJECT}\t{ref}\n{HEAD}\t{ref}^{{}}\n"
+        if broken == "lock" and command[-2:] == [
+            "show", f"{HEAD}:release/stack-lock.json",
+        ]:
+            return json.dumps({"schema": "marty.stack-lock/v1",
+                               "release": "marty-ui@1.1.245",
+                               "release_state": "eligible"})
+        if broken == "claim" and command[-1] == (
+            "repos/ElevenID/marty-ui/actions/runs/123"
+        ):
+            return json.dumps({"id": 123, "status": "completed",
+                               "conclusion": "failure"})
+        proof = release_proof(command, ref, HEAD, TAG_OBJECT)
+        assert proof is not None
+        return proof
+
+    with pytest.raises(HostProbeError, match=expected):
+        authority.published_release_ref(ref, HEAD, runner)
 
 
 def test_deletion_lineage_requires_approved_commit_in_pr_history():
