@@ -1413,6 +1413,7 @@ async fn public_key_azure(config: &Value) -> Result<Value, KmsError> {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    require_azure_response_key(&Value::Object(jwk.clone()), endpoint, &key_path)?;
     let public_jwk = canonical_provider_jwk(jwk, key_reference)?;
     let mut output = public_jwk.as_object().cloned().unwrap_or_default();
     output.insert("provider".to_string(), Value::String("azure".to_string()));
@@ -1420,6 +1421,7 @@ async fn public_key_azure(config: &Value) -> Result<Value, KmsError> {
         "key_reference".to_string(),
         Value::String(key_reference.to_string()),
     );
+    output.insert("kid".to_string(), Value::String(key_reference.to_string()));
     Ok(Value::Object(output))
 }
 

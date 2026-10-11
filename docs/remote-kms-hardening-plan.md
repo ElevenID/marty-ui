@@ -14075,6 +14075,12 @@ The adapter now rejects a missing, different-version or different-vault `kid`
 before accepting the signature. A focused negative/positive unit test and all
 five provider golden tests pass locally. This still needs a real Azure key and
 signature-format/certificate qualification.
+Azure Get Key's [documented public-key result](https://learn.microsoft.com/en-us/rest/api/keyvault/keys/get-key/get-key?view=rest-keyvault-keys-2025-07-01)
+also includes the versioned key `kid`. Public-key discovery now checks that
+provider identifier before projecting the stable configured `kid` used by the
+existing service contract. The first golden run caught the provider URI
+leaking into that response; the projection was restored, and all five
+provider golden cases pass. A real Azure key remains necessary.
 
 K6 GCP reference qualification, local UI batch: service validation previously
 accepted an unversioned CryptoKey path, while `asymmetricSign` and public-key
