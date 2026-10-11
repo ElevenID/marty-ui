@@ -28,6 +28,8 @@ from check_selfhost_installed_runtime_plan import (
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
+PINNED_INTEGRATION_SHA = "71a34c96f4bff2911919ebd3a41644ec2631ee07"
+TRUST_ROOTS_PATH = "deploy-config/selfhost-kms-custody-trust-roots.json"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
 JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
                   "SELFHOST_PUBLIC_DOMAIN", "SELFHOST_TEST_USERNAME",
@@ -53,7 +55,8 @@ def command(args: list[str], *, cwd: Path | None = None,
 
 
 def pinned_integration_checkout(root: Path, revision: str) -> None:
-    if SHA.fullmatch(revision) is None or root.is_symlink() or not root.is_dir():
+    if (revision != PINNED_INTEGRATION_SHA or root.is_symlink()
+            or not root.is_dir()):
         raise ValueError("integration checkout or exact revision is invalid")
     if command(["git", "rev-parse", "HEAD^{commit}"], cwd=root).strip() != revision:
         raise ValueError("integration checkout differs from pinned revision")
@@ -147,12 +150,32 @@ def fixture_setup(script: Path, digest: str, integration_checkout: Path) -> None
         raise ValueError("operator fixture setup script changed")
 
 
+def trusted_custody_keys(source_checkout: Path, source_sha: str) -> frozenset[str]:
+    raw = command(["git", "show", f"{source_sha}:{TRUST_ROOTS_PATH}"],
+                  cwd=source_checkout)
+    policy = json.loads(raw)
+    if (not isinstance(policy, dict)
+            or set(policy) != {"schema", "approved_public_key_sha256"}
+            or policy["schema"] != "marty.selfhost-kms-custody-trust-roots/v1"
+            or not isinstance(policy["approved_public_key_sha256"], list)
+            or any(SHA256.fullmatch(str(value)) is None
+                   for value in policy["approved_public_key_sha256"])):
+        raise ValueError("source-bound KMS custody trust roots are invalid")
+    keys = frozenset(policy["approved_public_key_sha256"])
+    if not keys or len(keys) != len(policy["approved_public_key_sha256"]):
+        raise ValueError("source-bound KMS custody signer is not approved")
+    return keys
+
+
 def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
-                       preflight: dict, environment: dict[str, str]) -> str:
+                       preflight: dict, environment: dict[str, str],
+                       trusted_keys: frozenset[str]) -> str:
     for label, path in (("custody evidence", evidence), ("custody signature", signature),
                         ("custody public key", public_key)):
         if not path.is_absolute() or path.is_symlink() or not path.is_file():
             raise ValueError(f"signed {label} is absent")
+    if hashlib.sha256(public_key.read_bytes()).hexdigest() not in trusted_keys:
+        raise ValueError("KMS custody signer is not approved by release source")
     document = json.loads(evidence.read_text(encoding="utf-8"))
     expected = {
         "schema": "marty.selfhost-kms-custody/v1",
@@ -184,7 +207,8 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       environment: dict[str, str], setup_script: Path,
                       setup_sha256: str,
                       evidence: Path, signature: Path, public_key: Path,
-                      preflight: dict) -> tuple[dict[str, str], str]:
+                      preflight: dict, trusted_keys: frozenset[str]
+                      ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
     fresh_project(state_root, compose, install_root, environment)
     selected = sorted(EXPECTED_SERVICES - NOT_LOCAL)
@@ -220,7 +244,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         command([sys.executable, str(setup_script)], cwd=integration_checkout,
                 env=journey_env, timeout=600)
         custody_sha256 = verify_kms_custody(evidence, signature, public_key,
-                                            preflight, journey_env)
+                                            preflight, journey_env, trusted_keys)
         command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                  JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
     except Exception as error:
@@ -269,6 +293,7 @@ def run(args: argparse.Namespace) -> dict:
     pinned_integration_checkout(args.integration_checkout, args.integration_sha)
     if command(["git", "rev-parse", "HEAD^{commit}"], cwd=args.source_checkout).strip() != args.source_sha:
         raise ValueError("source checkout differs from prepared ZIP source")
+    trusted_keys = trusted_custody_keys(args.source_checkout, args.source_sha)
     verify_descriptor(args.archive, args.image_lock, args.transaction,
                       args.receipt, args.descriptor)
     environment = os.environ.copy()
@@ -295,7 +320,7 @@ def run(args: argparse.Namespace) -> dict:
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
-            args.kms_custody_public_key, preflight)
+            args.kms_custody_public_key, preflight, trusted_keys)
     return {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],

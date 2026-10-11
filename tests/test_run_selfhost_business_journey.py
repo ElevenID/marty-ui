@@ -17,6 +17,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     live_services,
     parse_status,
     required_secrets,
+    trusted_custody_keys,
     verify_kms_custody,
 )
 
@@ -97,7 +98,7 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
                           tmp_path, state, model, integration, {}, setup_script,
                           hashlib.sha256(setup_script.read_bytes()).hexdigest(),
                           tmp_path / "custody.json", tmp_path / "custody.sig",
-                          tmp_path / "custody.pub", {})
+                          tmp_path / "custody.pub", {}, frozenset())
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
@@ -111,7 +112,8 @@ def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="fresh empty directory"):
         installed_journey(["docker", "compose"], tmp_path, tmp_path, {}, tmp_path, {},
                           tmp_path / "setup.py", "0" * 64, tmp_path / "custody.json",
-                          tmp_path / "custody.sig", tmp_path / "custody.pub", {})
+                          tmp_path / "custody.sig", tmp_path / "custody.pub", {},
+                          frozenset())
 
 
 def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) -> None:
@@ -122,6 +124,7 @@ def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) ->
     public_key = tmp_path / "custody.pub"
     signature.write_text("signature", encoding="utf-8")
     public_key.write_text("public key", encoding="utf-8")
+    trusted_keys = frozenset({hashlib.sha256(public_key.read_bytes()).hexdigest()})
     preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
                  "image_lock_sha256": "c" * 64}
     environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
@@ -133,7 +136,34 @@ def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) ->
     evidence.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("cosign was called"))
     with pytest.raises(ValueError, match="does not bind installed fixture"):
-        verify_kms_custody(evidence, signature, public_key, preflight, environment)
+        verify_kms_custody(evidence, signature, public_key, preflight, environment,
+                           trusted_keys)
+
+
+def test_unapproved_custody_signer_fails_before_signature_check(monkeypatch,
+                                                                tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    evidence = tmp_path / "evidence.json"
+    signature = tmp_path / "evidence.sig"
+    public_key = tmp_path / "attacker.pub"
+    for path in (evidence, signature, public_key):
+        path.write_text("attacker", encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("cosign was called"))
+    with pytest.raises(ValueError, match="signer is not approved"):
+        verify_kms_custody(evidence, signature, public_key, {}, {},
+                           frozenset({"a" * 64}))
+
+
+def test_source_policy_with_no_approved_keys_fails_closed(monkeypatch,
+                                                         tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    policy = {"schema": "marty.selfhost-kms-custody-trust-roots/v1",
+              "approved_public_key_sha256": []}
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: json.dumps(policy))
+    with pytest.raises(ValueError, match="signer is not approved"):
+        trusted_custody_keys(tmp_path, "a" * 40)
 
 
 def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path) -> None:

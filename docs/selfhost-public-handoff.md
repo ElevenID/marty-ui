@@ -89,8 +89,13 @@ document with schema `marty.selfhost-kms-custody/v1`, the exact `source_sha`,
 `archive_sha256`, `image_lock_sha256`, `organization_id`, `issuer_did`, and
 `verifier_did`, plus `issuer_key_non_exportable: true` and
 `verifier_key_non_exportable: true`. The runner verifies its signature using
-the supplied trusted public key before issuing. The integration checkout must
-be a clean commit reachable from `origin/main`, so a PR head cannot qualify.
+the supplied public key before issuing, and requires that key's SHA-256 digest
+in the prepared release source commit's reviewed
+`deploy-config/selfhost-kms-custody-trust-roots.json`. The list is currently
+empty, so no operator-supplied self-signed claim can pass. Adding a trusted
+signer requires a reviewed source change and a new prepared release. The
+integration checkout is pinned to protected-main commit
+`71a34c96f4bff2911919ebd3a41644ec2631ee07`; a PR head cannot qualify.
 There is currently no reviewed automated fixture provisioner for
 those resources. This is the remaining fixture implementation slice, so no
 installed journey has yet qualified a release.

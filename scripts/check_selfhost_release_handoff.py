@@ -98,11 +98,27 @@ def audit(directory: Path, tag: str) -> dict:
             or descriptor["source"]["commit"] != source_sha
             or descriptor["artifact"]["digest"] != "sha256:" + receipt["archive_sha256"]):
         raise ValueError("qualified descriptor differs from the prepared release")
+    expected_preparation = {
+        "run_id": run_id,
+        "receipt_sha256": "sha256:" + file_digest(receipt_path),
+        "image_lock_sha256": "sha256:" + receipt["image_lock_sha256"],
+        "transaction_sha256": "sha256:" + receipt["transaction_sha256"],
+    }
+    if descriptor.get("preparation") != expected_preparation:
+        raise ValueError("qualified descriptor omits the exact preparation lineage")
+    expected_evidence_url = (
+        f"https://github.com/ElevenID/marty-ui/releases/download/{tag}/selfhost-qualification.json"
+    )
+    if expected_evidence_url not in descriptor["qualification"]["evidence"]:
+        raise ValueError("qualified descriptor omits public journey evidence")
     evidence = json.loads((directory / "selfhost-qualification.json").read_text(encoding="utf-8"))
     if (not isinstance(evidence, dict)
             or evidence.get("source_sha") != source_sha
             or evidence.get("archive_sha256") != receipt["archive_sha256"]
             or evidence.get("image_lock_sha256") != receipt["image_lock_sha256"]
+            or evidence.get("transaction_sha256") != receipt["transaction_sha256"]
+            or evidence.get("run_id") != run_id
+            or re.fullmatch(r"[0-9a-f]{40}", str(evidence.get("integration_revision", ""))) is None
             or evidence.get("qualification") != "qualified"):
         raise ValueError("installed qualification evidence does not bind the exact release")
     steps = evidence.get("steps")

@@ -38,23 +38,32 @@ def test_exact_asset_handoff_binds_both_transaction_stages(tmp_path: Path, monke
     source = "b" * 40
     archive_digest = "a" * 64
     receipt = {"run_id": "123", "archive_sha256": archive_digest,
-               "image_lock_sha256": "c" * 64}
+               "image_lock_sha256": "c" * 64, "transaction_sha256": "e" * 64}
+    receipt_bytes = json.dumps(receipt).encode()
     transaction = {"repository": "ElevenID/marty-ui", "version": "1.2.3",
                    "source_sha": source, "transaction_id": "same", "state": "promoted"}
     preparation = {**transaction, "state": "qualified"}
     values = {
         "selfhost-bundle.zip": b"ZIP fixture",
         "selfhost-images.json": b"{}",
-        "selfhost-bundle-preparation.json": json.dumps(receipt).encode(),
+        "selfhost-bundle-preparation.json": receipt_bytes,
         "selfhost-preparation-transaction.json": json.dumps(preparation).encode(),
         "prepared-selfhost-product-descriptor.json": b"{}",
         "selfhost-product-descriptor.json": json.dumps({
             "product": "organizational-platform", "source": {"commit": source},
             "artifact": {"digest": "sha256:" + archive_digest},
-            "qualification": {"state": "qualified"}}).encode(),
+            "preparation": {
+                "run_id": "123",
+                "receipt_sha256": "sha256:" + hashlib.sha256(receipt_bytes).hexdigest(),
+                "image_lock_sha256": "sha256:" + "c" * 64,
+                "transaction_sha256": "sha256:" + "e" * 64},
+            "qualification": {"state": "qualified", "evidence": [
+                "https://github.com/ElevenID/marty-ui/releases/download/v1.2.3/selfhost-qualification.json"]}}).encode(),
         "selfhost-qualification.json": json.dumps({
             "source_sha": source, "archive_sha256": archive_digest,
-            "image_lock_sha256": "c" * 64, "qualification": "qualified",
+            "image_lock_sha256": "c" * 64, "transaction_sha256": "e" * 64,
+            "run_id": "123", "integration_revision": "f" * 40,
+            "qualification": "qualified",
             "steps": {step: {"status": "passed", "evidence_sha256": "d" * 64}
                       for step in handoff.JOURNEY_STEPS}}).encode(),
         "release-transaction.json": json.dumps(transaction).encode(),
