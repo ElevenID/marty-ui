@@ -15446,3 +15446,13 @@ local correction declares the dev dependency and updates `Cargo.lock`;
 `cargo +1.95.0 check --locked --offline -p marty-flow-acceptance --tests`
 passes. Other jobs were still running when this finding was recorded. Batch
 this fix with the separate-token correction, then rerun exact-head CI.
+
+Run `38147716458` is terminal. Its Release Contract Tests, Rust Service Images,
+OpenBao DIDComm plugin/Raft integration-secret recovery, feature regression,
+UI/browser and remaining security lanes passed. The Rust lint, service
+contracts and Canvas jobs each failed while compiling the same flow acceptance
+test fixture with that undeclared dependency; the aggregate CI Gate therefore
+failed. The corrected local head `b19e00274` passes
+`cargo +1.95.0 clippy --locked --offline --workspace --all-targets -- -D warnings`
+as well as the focused flow acceptance compile check. The next exact-head
+hosted run must re-prove the full failed jobs and all other gates.
