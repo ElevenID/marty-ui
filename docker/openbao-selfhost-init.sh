@@ -23,8 +23,9 @@ BAO_DIDCOMM_ISSUANCE_TOKEN_FILE="${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE:-/bao/runtime
 BAO_NOTIFICATION_TOKEN_FILE="${BAO_NOTIFICATION_TOKEN_FILE:-/bao/runtime/notification-webhook-service.token}"
 BAO_HAIP_TOKEN_FILE="${BAO_HAIP_TOKEN_FILE:-/bao/runtime/haip-kms.token}"
 BAO_HAIP_POLICY_FILE="${BAO_HAIP_POLICY_FILE:-/scripts/openbao-haip-workload-policy.hcl}"
+BAO_GRANT_TOKEN_DIR="${BAO_GRANT_TOKEN_DIR:-/bao/runtime}"
 
-mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")"
+mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
 
 status_json() {
     bao status -address="${BAO_ADDR}" -format=json 2>/dev/null || true
@@ -126,6 +127,37 @@ if [ "${raft_ready}" != "1" ]; then
 fi
 
 /bin/sh /scripts/openbao-init.sh
+
+ensure_grant_token() {
+    grant_policy="$1"
+    grant_token_file="$2"
+    if [ -s "${grant_token_file}" ] && ! is_placeholder_secret_value "$(tr -d '\r' < "${grant_token_file}")"; then
+        grant_token="$(tr -d '\r' < "${grant_token_file}")"
+        grant_lookup="$(bao token lookup -address="${BAO_ADDR}" -format=json "${grant_token}" 2>/dev/null)" || {
+            echo "Existing ${grant_policy} token is not accepted; rotate it explicitly." >&2
+            exit 1
+        }
+        if [ "$(json_array_field "${grant_lookup}" policies)" != "[\"${grant_policy}\"]" ] || \
+           [ -n "$(json_field "${grant_lookup}" entity_id)" ]; then
+            echo "Existing ${grant_policy} token has unexpected authority; rotate it explicitly." >&2
+            exit 1
+        fi
+        return 0
+    fi
+    grant_token_json="$(bao token create -address="${BAO_ADDR}" -policy="${grant_policy}" -no-default-policy -orphan -format=json)"
+    grant_token="$(json_field "${grant_token_json}" client_token)"
+    if [ -z "${grant_token}" ]; then
+        echo "Could not mint ${grant_policy} token." >&2
+        exit 1
+    fi
+    write_secret_file "${grant_token_file}" "${grant_token}" 0444
+}
+
+for grant_origin in gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-passport; do
+    grant_file_origin="$(printf '%s' "${grant_origin}" | tr '-' '_')"
+    ensure_grant_token "sign-grant-mint-${grant_origin}" "${BAO_GRANT_TOKEN_DIR}/sign_grant_mint_${grant_file_origin}_token"
+done
+ensure_grant_token sign-grant-verify "${BAO_GRANT_TOKEN_DIR}/sign_grant_verify_token"
 
 service_token_missing=0
 if [ ! -s "${BAO_SERVICE_TOKEN_FILE}" ]; then

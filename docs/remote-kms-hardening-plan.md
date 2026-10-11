@@ -14334,3 +14334,13 @@ not mint Gateway grants, the verifier could not mint, the minter could not
 verify, and the minter could not read the key. The instance was stopped.
 This does not yet provision or mount those tokens in supported deployments,
 or enforce grants on production signing routes.
+
+K6 self-host grant-token provisioning, local UI follow-up: the Raft bootstrap
+now creates six mint-only no-default-policy orphan tokens and one verify-only
+token in distinct runtime files, rejecting reused files with unexpected
+policies or identity. The full bootstrap and an idempotent rerun passed on a
+fresh disposable OpenBao 2.7.1 Raft instance. All seven files were present;
+Gateway mint and Signing Keys verify succeeded, while Flow-to-Gateway mint,
+verify-token mint, mint-token verify and mint-token key-read attempts failed.
+The disposable container and volumes were removed. Runtime mounts/config,
+producer authorization and sign-route enforcement remain open.
