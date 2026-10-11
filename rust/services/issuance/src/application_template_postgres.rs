@@ -141,6 +141,7 @@ impl ApplicationTemplateRepository for PostgresApplicationTemplateRepository {
         template: &ApplicationTemplateRecord,
         binding: &ApplicationTemplateIdempotencyBinding,
     ) -> Result<ApplicationTemplateReservation, ApplicationTemplateRepositoryError> {
+        reject_private_record(template)?;
         let validity_days = database_validity_days(template.application_validity_days)?;
         let inserted = sqlx::query(INSERT_IDEMPOTENT)
             .bind(&template.id)
@@ -225,6 +226,7 @@ impl ApplicationTemplateRepository for PostgresApplicationTemplateRepository {
         template: &ApplicationTemplateRecord,
         expected_version: i64,
     ) -> Result<(), ApplicationTemplateRepositoryError> {
+        reject_private_record(template)?;
         let validity_days = database_validity_days(template.application_validity_days)?;
         let version = sqlx::query_scalar::<_, i64>(REPLACE_IF_VERSION)
             .bind(&template.name)
@@ -341,6 +343,17 @@ fn database_validity_days(value: i64) -> Result<i32, ApplicationTemplateReposito
     })
 }
 
+fn reject_private_record(
+    template: &ApplicationTemplateRecord,
+) -> Result<(), ApplicationTemplateRepositoryError> {
+    let value = serde_json::to_value(template)
+        .map_err(|_| ApplicationTemplateRepositoryError::Unavailable)?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(ApplicationTemplateRepositoryError::Unavailable);
+    }
+    Ok(())
+}
+
 fn json_array(row: &PgRow, name: &str) -> Result<Vec<Value>, ApplicationTemplateRepositoryError> {
     let value = get::<Value>(row, name)?;
     value.as_array().cloned().ok_or_else(|| {
@@ -381,4 +394,35 @@ fn repository_error(cause: sqlx::Error) -> ApplicationTemplateRepositoryError {
 fn row_error(cause: sqlx::Error) -> ApplicationTemplateRepositoryError {
     error!(%cause, "application template repository row is invalid");
     ApplicationTemplateRepositoryError::Unavailable
+}
+
+#[cfg(test)]
+mod private_material_tests {
+    use super::*;
+    use crate::application_template_domain::ApplicationTemplateCreate;
+    use serde_json::json;
+
+    #[test]
+    fn direct_repository_write_rejects_private_material() {
+        let request: ApplicationTemplateCreate = serde_json::from_value(json!({
+            "organization_id": "org-a",
+            "name": "Synthetic template"
+        }))
+        .unwrap();
+        let mut record = request
+            .into_record("template-1".into(), Utc::now())
+            .unwrap();
+        record
+            .ui_config
+            .insert("issuer".into(), json!({"private_key": "synthetic"}));
+        assert_eq!(
+            reject_private_record(&record),
+            Err(ApplicationTemplateRepositoryError::Unavailable)
+        );
+        record.ui_config.insert(
+            "issuer".into(),
+            json!({"key_reference": "transit/keys/issuer-v4"}),
+        );
+        assert!(reject_private_record(&record).is_ok());
+    }
 }

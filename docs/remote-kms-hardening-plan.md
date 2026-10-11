@@ -15867,3 +15867,16 @@ or private-key storage; the resulting `issuance_service` schema had 31 tables
 and 463 columns and seeded one application template. This exercises the
 native migration and seed path rather than only reading SQL source. Exact
 image/install qualification and runtime writes remain separate gates.
+
+K10 Issuance write-path self-review found that Application Template management
+accepted arbitrary nested `ui_config` and `notification_config` JSON without
+the shared private-material policy used by other native repositories. The
+local correction adds the canonical Rust policy dependency, rejects private
+JWK/PEM material at create and patch transport boundaries, and rechecks the
+full record before insert or versioned replacement. Remote key references
+remain allowed; rejected patches leave the record unchanged. All 23 focused
+Application Template library tests passed, including direct repository-guard
+and public-input cases; locked offline Cargo metadata, direct rustfmt and diff
+checks passed. The full Issuance library suite then passed 574 tests with 8
+ignored. This correction is local until the current hosted head finishes,
+and other neutral JSON fields still need the K10 data-flow review.

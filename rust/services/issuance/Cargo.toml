@@ -64,6 +64,7 @@ marty-crypto.workspace = true
 marty-verification = { workspace = true, features = ["csca"] }
 marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "6acba9d" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
 marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
