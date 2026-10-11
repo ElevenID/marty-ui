@@ -1,4 +1,4 @@
-# Local draft: scoped installed-bundle migration probe
+# Scoped installed-bundle migration probe (unqualified)
 
 `scripts/probe_selfhost_installed_migrations.py` is an opt-in experiment. The
 manual `selfhost-prepared-consumer.yml` workflow runs the signing-runtime

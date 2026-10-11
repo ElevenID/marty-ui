@@ -1,4 +1,4 @@
-# Local draft: exact-bundle signing-key runtime continuation
+# Exact-bundle signing-key runtime continuation (unqualified)
 
 `scripts/probe_selfhost_installed_signing_keys.py` is opt-in. The manual,
 unqualified prepared-consumer workflow runs it against an exact same-SHA
