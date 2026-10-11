@@ -15768,3 +15768,11 @@ the local raw-CI OpenBao/Redis reproduction, complete merged CI-workflow test
 pass (147 tests), profile runtime database receipts and main #1269 merge.
 This is the grouped UI #1192 push candidate; it still requires a new
 exact-head hosted gate and release-artifact qualification.
+
+The grouped candidate was pushed as UI #1192 head `5d25ac629`, with main
+`44bb0b25f` merged. GitHub reports the draft PR mergeable. Exact-head CI run
+`38161151027` is underway; at the first poll, three jobs passed, six were in
+progress and twelve were queued, with no failures. The PR description now
+reflects the grouped fix and remaining release gates. Hold this tracker-only
+update locally until the run produces terminal evidence or a code correction,
+so recording status does not start another full CI run.
