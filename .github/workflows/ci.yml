@@ -74,7 +74,7 @@ jobs:
           rust_matrix='["canvas","contracts"]'
           planner_only=false
           rollback_test_only=false
-          didcomm_ownership_test_only=false
+          didcomm_release_test_only=false
           k8s_policy_test_only=false
           release=false
           verification=false
@@ -159,15 +159,19 @@ jobs:
                   ! -L tests/test_beta_worker_launch_rollback.py ]]; then
               rollback_test_only=true
             fi
-            # This exact ownership test is collected by root release pytest,
-            # not by a service or image. Moves, deletion, mixed changes and
-            # untrusted checkout entries retain the complete PR plan.
+            # These exact DIDComm policy tests are collected by root release
+            # pytest, not by a service or image. Only one regular test source
+            # may narrow a PR; moves, deletion, mixed changes and untrusted
+            # checkout entries retain the complete plan.
             if [[ "${{ github.event_name }}" == pull_request &&
-                  ${#changed_files[@]} -eq 1 &&
-                  "${changed_files[0]}" == tests/test_didcomm_native_consumer_ownership.py &&
-                  -f tests/test_didcomm_native_consumer_ownership.py &&
-                  ! -L tests/test_didcomm_native_consumer_ownership.py ]]; then
-              didcomm_ownership_test_only=true
+                  ${#changed_files[@]} -eq 1 ]]; then
+              case "${changed_files[0]}" in
+                tests/test_didcomm_native_consumer_ownership.py|tests/test_didcomm_native_credentials_release.py|tests/test_issuance_retention_credentials_release.py)
+                  if [[ -f "${changed_files[0]}" && ! -L "${changed_files[0]}" ]]; then
+                    didcomm_release_test_only=true
+                  fi
+                  ;;
+              esac
             fi
             # These six exact policy-test leaves have one root-pytest owner.
             # Only a nonempty PR of regular, unique files may use its bounded
@@ -372,8 +376,8 @@ jobs:
                     all=true
                   fi
                   ;;
-                tests/test_didcomm_native_consumer_ownership.py)
-                  if [[ "$didcomm_ownership_test_only" == true ]]; then
+                tests/test_didcomm_native_consumer_ownership.py|tests/test_didcomm_native_credentials_release.py|tests/test_issuance_retention_credentials_release.py)
+                  if [[ "$didcomm_release_test_only" == true ]]; then
                     release=true
                   else
                     all=true

@@ -2632,22 +2632,21 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
     )
 
 
-def test_didcomm_ownership_test_source_has_exact_release_owner(
+def test_didcomm_policy_test_sources_have_exact_release_owner(
     tmp_path: Path,
 ) -> None:
-    source = "tests/test_didcomm_native_consumer_ownership.py"
+    cases = {
+        "tests/test_didcomm_native_consumer_ownership.py": 31,
+        "tests/test_didcomm_native_credentials_release.py": 21,
+        "tests/test_issuance_retention_credentials_release.py": 4,
+    }
     _, workflow = _workflow(CI_PATH)
     ci_source = CI_PATH.read_text(encoding="utf-8")
-    assert ci_source.count(source) == 4  # Exact-file proof and classifier arm.
-    assert (ROOT / source).is_file() and not (ROOT / source).is_symlink()
-    for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
-        if other_workflow != CI_PATH:
-            assert source not in other_workflow.read_text(encoding="utf-8")
 
     def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
         return _classify_changed_paths(paths, tmp_path, combined=True, **kwargs)[0]
 
-    assert classify([source]) == {
+    selected = {
         "all": "false",
         "ui": "false",
         "python": "false",
@@ -2657,30 +2656,47 @@ def test_didcomm_ownership_test_source_has_exact_release_owner(
         "security": "false",
     }
     assert classify([])["release"] == "false"
-    for paths in (
-        [source, source],
-        [source, "docs/architecture-feedback-improvement-plan.md"],
-        [source, "contracts/didcomm-native-consumer-ownership.json"],
-        [source, "docker-compose.base.yml"],
-        [source, "tests/test_didcomm_native_consumer_ownership_helper.py"],
-        ["tests/renamed_didcomm_owner.py", source],
-    ):
-        assert classify(paths)["all"] == "true", paths
-    assert classify([source], event="merge_group")["all"] == "true"
-    assert classify([source], event="push")["all"] == "true"
-    assert classify([source], missing_base=True)["all"] == "true"
+    for source, count in cases.items():
+        assert ci_source.count(source) == 2  # Exact-file proof and classifier arm.
+        assert (ROOT / source).is_file() and not (ROOT / source).is_symlink()
+        for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert source not in other_workflow.read_text(encoding="utf-8")
+        assert classify([source]) == selected
+        for paths in (
+            [source, source],
+            [source, "docs/architecture-feedback-improvement-plan.md"],
+            [source, "contracts/didcomm-native-consumer-ownership.json"],
+            [source, "docker-compose.base.yml"],
+            [source, "tests/test_didcomm_native_consumer_ownership_helper.py"],
+            ["tests/renamed_didcomm_owner.py", source],
+            *([source, other] for other in cases if other != source),
+        ):
+            assert classify(paths)["all"] == "true", paths
+        assert classify([source], event="merge_group")["all"] == "true"
+        assert classify([source], event="push")["all"] == "true"
+        assert classify([source], missing_base=True)["all"] == "true"
 
-    absent = tmp_path / "absent-didcomm-owner"
-    absent.mkdir()
-    assert classify([source], working_directory=absent)["all"] == "true"
-    linked = tmp_path / "linked-didcomm-owner"
-    (linked / "tests").mkdir(parents=True)
-    try:
-        (linked / source).symlink_to(ROOT / source)
-    except (OSError, NotImplementedError):
-        pass  # Windows without symlink privilege; protected Linux checks it.
-    else:
-        assert classify([source], working_directory=linked)["all"] == "true"
+        absent = tmp_path / f"absent-{Path(source).stem}"
+        absent.mkdir()
+        assert classify([source], working_directory=absent)["all"] == "true"
+        linked = tmp_path / f"linked-{Path(source).stem}"
+        (linked / "tests").mkdir(parents=True)
+        try:
+            (linked / source).symlink_to(ROOT / source)
+        except (OSError, NotImplementedError):
+            pass  # Windows without symlink privilege; protected Linux checks it.
+        else:
+            assert classify([source], working_directory=linked)["all"] == "true"
+
+        collected = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", source],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert f"{count} tests collected" in collected.stdout
 
     release = workflow["jobs"]["test-release-contracts"]
     assert "needs.changes.outputs.release == 'true'" in release["if"]
@@ -2688,14 +2704,7 @@ def test_didcomm_ownership_test_source_has_exact_release_owner(
         step.get("run") == RELEASE_TEST_COMMAND for step in release["steps"]
     )
     assert "tests" in RELEASE_TEST_COMMAND.split()
-    collected = subprocess.run(
-        [sys.executable, "-m", "pytest", "--collect-only", "-q", source],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    assert "31 tests collected" in collected.stdout
+    assert sum(cases.values()) == 56
 
 
 def test_planner_only_pr_feedback_retains_full_protected_release_checks(
