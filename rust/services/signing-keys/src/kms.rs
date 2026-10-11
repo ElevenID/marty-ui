@@ -2147,10 +2147,10 @@ pub(crate) fn azure_key_path(config: &Value) -> Result<String, KmsError> {
             "Azure key version is invalid.".into(),
         ));
     }
-    Ok(match embedded_version.or(version) {
-        Some(version) => format!("{name}/{version}"),
-        None => name.to_string(),
-    })
+    let version = embedded_version.or(version).ok_or_else(|| {
+        KmsError::InvalidConfig("Azure signing key reference must pin a key version.".into())
+    })?;
+    Ok(format!("{name}/{version}"))
 }
 
 fn valid_azure_key_segment(value: &str) -> bool {
@@ -2721,6 +2721,8 @@ mod tests {
         bare["key_reference"] = json!("signing-key");
         bare["key_version"] = json!("version-1");
         assert_eq!(azure_key_path(&bare).unwrap(), "signing-key/version-1");
+        bare.as_object_mut().unwrap().remove("key_version");
+        assert!(azure_key_path(&bare).is_err());
     }
 
     #[tokio::test]

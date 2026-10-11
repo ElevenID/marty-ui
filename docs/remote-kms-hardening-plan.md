@@ -14055,3 +14055,17 @@ network I/O. A focused negative test and the Signing Keys library suite
 (177 passed, nine ignored) pass; Clippy with warnings denied, file Rustfmt
 and diff hygiene pass. This is held locally for the next grouped UI push;
 it does not replace real Azure signature-format/certificate qualification.
+
+K6 Azure version binding, local UI batch: a versionless Key Vault name was
+accepted by service registration and the common adapter, allowing a later
+sign or public-key read to follow the provider's current version instead of
+the key version bound at enrollment. `azure_key_path` now requires either a
+version in the same-vault key URI/reference or an explicit matching
+`key_version`. The shared registration, validation, public-key and signing
+paths all use this parser. Golden provider vectors now use a pinned Azure
+version; the first local run exposed one versionless connectivity fixture,
+which was corrected, and the complete five-case provider vector suite,
+registry/validation golden suites and Signing Keys library suite (177 passed,
+nine ignored) pass. Real Azure response `kid` and public-key/certificate
+binding still need provider acceptance; a pinned request path alone does not
+prove the response came from that version.
