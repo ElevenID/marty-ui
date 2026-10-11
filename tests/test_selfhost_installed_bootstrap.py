@@ -145,6 +145,77 @@ def test_shipped_helper_does_not_put_bootstrap_token_in_docker_argv() -> None:
     assert "-e BAO_TOKEN \\" in source
     assert "-e BAO_TOKEN=" not in source
     assert "BAO_TOKEN_FILE" in source
+    assert source.startswith("#!/bin/sh\nset -e\numask 077\n")
+    assert "/bin/sh -ec '\numask 077\n" in source
+    assert 'private_tmp="$(mktemp "$output_dir/.openbao-token.XXXXXX")"' in source
+    assert 'mv -f "$private_tmp" "$output_file"' in source
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX atomic file replacement")
+def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
+    tmp_path: Path,
+) -> None:
+    source = (
+        Path(__file__).resolve().parents[1] / "scripts/bootstrap-selfhost-vault.sh"
+    ).read_text(encoding="utf-8")
+    inner = source.split("/bin/sh -ec '\n", 1)[1].rsplit("\n'\n", 1)[0]
+    # Only stub the external OpenBao init and token minting. The shipped
+    # private-file writer and rename are executed unchanged.
+    inner = inner.replace("/bin/sh /scripts/openbao-init.sh", ":", 1)
+    fake_bao = (
+        'bao() { case "$*" in\n'
+        '  *credential-service*) command printf \'{"auth":{"client_token":"service-new"}}\\n\' ;;\n'
+        '  *notification-webhook-service*) command printf \'{"auth":{"client_token":"notification-new"}}\\n\' ;;\n'
+        '  *passport-callback-hmac-service*) command printf \'{"auth":{"client_token":"callback-new"}}\\n\' ;;\n'
+        "esac; }\n"
+        'mv() { [ "$1" = -f ] && shift; '
+        '[ "$(stat -c %a "$1")" = 600 ] || exit 98; '
+        'command mv -f "$@"; }\n'
+    )
+    paths = [tmp_path / name for name in bootstrap.TOKEN_NAMES]
+    for path in paths:
+        path.write_text("shipped-public-placeholder", encoding="ascii")
+        path.chmod(0o644)
+    environment = {
+        **os.environ,
+        "BAO_ADDR": "http://127.0.0.1:8200",
+        "BAO_TOKEN": "synthetic-bootstrap-token",
+        "SERVICE_TOKEN_OUTPUT_FILE": str(paths[0]),
+        "NOTIFICATION_TOKEN_OUTPUT_FILE": str(paths[1]),
+        "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE": str(paths[2]),
+    }
+    with paths[0].open("rb") as old_handle:
+        completed = subprocess.run(
+            ["/bin/sh", "-ec", fake_bao + inner],
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert old_handle.read() == b"shipped-public-placeholder"
+    assert [path.read_text(encoding="ascii") for path in paths] == [
+        "service-new",
+        "notification-new",
+        "callback-new",
+    ]
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
+    assert not list(tmp_path.glob(".openbao-token.*"))
+
+    paths[0].unlink()
+    paths[0].symlink_to(paths[1])
+    rejected = subprocess.run(
+        ["/bin/sh", "-ec", fake_bao + inner],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert rejected.returncode != 0
+    assert "Scoped token output path is unsafe." in rejected.stderr
+    assert paths[1].read_text(encoding="ascii") == "notification-new"
 
 
 def test_source_checkout_cannot_be_used_as_install_root() -> None:
@@ -170,7 +241,6 @@ def test_shipped_helper_inherits_token_without_argv_value(
         'printf "%s" "$BAO_TOKEN" > "$FAKE_DOCKER_ENV"\n'
         "for name in openbao_service_token notification_openbao_token passport_callback_signer_bao_token; do\n"
         '  printf "%s" synthetic-scoped-token > "$SELFHOST_SECRET_DIR/$name"\n'
-        '  chmod 600 "$SELFHOST_SECRET_DIR/$name"\n'
         "done\n",
         encoding="ascii",
     )
