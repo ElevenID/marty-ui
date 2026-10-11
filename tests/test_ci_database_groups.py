@@ -451,9 +451,7 @@ def test_target_relay_tags_only_fixed_published_canvas_phase_owners() -> None:
     ):
         assert GROUPS._safe_phase(bad, "published-canvas") is None
     assert (
-        GROUPS._safe_phase(
-            GROUPS.TARGET_TIMING_PREFIX + "worker " + marker, "rust-db"
-        )
+        GROUPS._safe_phase(GROUPS.TARGET_TIMING_PREFIX + "worker " + marker, "rust-db")
         is None
     )
 
@@ -542,6 +540,48 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         )
         assert (
             GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
+            is None
+        )
+
+
+def test_json_depth_route_timing_ids_match_frozen_cases_and_reject_unknowns() -> None:
+    spec = json.loads(
+        (ROOT / "contracts/canvas-json-depth-scenarios.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert spec["schema"] == "marty.canvas-json-depth-scenarios/v1"
+    assert spec["depths"] == list(GROUPS.JSON_DEPTH_ROUTE_DEPTHS)
+    assert spec["shapes"] == ["array", "object"]
+    assert spec["statuses"] == [200, 403]
+    assert len(GROUPS.JSON_DEPTH_ROUTE_CASE_NAMES) == 64
+    source = (
+        ROOT / "rust/services/issuance/tests/support/canvas_status_runtime_contract.rs"
+    ).read_text(encoding="utf-8")
+    assert 'format!("json_depth_route.{}"' in source
+    for name in GROUPS.JSON_DEPTH_ROUTE_CASE_NAMES:
+        marker = json.dumps(
+            {"phase": "scenario", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        parsed = GROUPS._safe_phase(
+            GROUPS.TARGET_TIMING_PREFIX + "composition " + marker,
+            "published-canvas",
+        )
+        assert parsed is not None
+        assert parsed["target"] == "composition"
+    for name in (
+        "json_depth_route.json_depth_array_2_200",
+        "json_depth_route.json_depth_array_1_201",
+        "json_depth_route.json_depth_private_payload_1_200",
+    ):
+        marker = json.dumps(
+            {"phase": "scenario", "name": name, "duration_ms": 1, "status": "ok"}
+        )
+        assert (
+            GROUPS._safe_phase(
+                GROUPS.TARGET_TIMING_PREFIX + "composition " + marker,
+                "published-canvas",
+            )
             is None
         )
 

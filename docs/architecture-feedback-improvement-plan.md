@@ -3537,6 +3537,10 @@ their obligations before trialing a fail-closed, stratified routine DB subset.
 Retain all 64 route cases for manual/official qualification until exact-case
 parity and protected CI evidence justify any routine reduction. This is a
 candidate, not a measured speedup or a coverage change.
+The follow-up candidate emits sanitized elapsed time for each of those 64
+real-route cases into the existing allowlisted DB timing artifact, without
+changing the case matrix or any gate. Hosted timings and a safe routine
+subset remain unproven.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
