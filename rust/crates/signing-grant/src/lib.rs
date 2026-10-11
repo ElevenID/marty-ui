@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+pub mod replay;
 pub mod transit;
 
 const DOMAIN: &[u8] = b"marty:issuer-signing-grant:v1\n";
@@ -67,6 +68,45 @@ pub enum GrantError {
     Expired,
     #[error("signing grant does not bind this signing operation")]
     BindingMismatch,
+    #[error("signing grant authentication failed")]
+    InvalidHmac,
+    #[error("signing grant verifier is unavailable")]
+    VerifierUnavailable,
+}
+
+/// A bound grant authenticated by OpenBao. Only this crate can construct it;
+/// callers must atomically consume it before any issuer KMS signing call.
+pub struct VerifiedGrant {
+    nonce: String,
+    expires_at: i64,
+}
+
+impl VerifiedGrant {
+    pub fn expires_at(&self) -> i64 {
+        self.expires_at
+    }
+}
+
+pub async fn verify_bound(
+    client: &transit::TransitGrantClient,
+    verify_token: &str,
+    claims: &GrantClaims,
+    binding: &GrantBinding<'_>,
+    now_seconds: i64,
+    hmac: &str,
+) -> Result<VerifiedGrant, GrantError> {
+    let input = bound_input(claims, binding, now_seconds)?;
+    let valid = client
+        .verify(verify_token, &input, hmac)
+        .await
+        .map_err(|_| GrantError::VerifierUnavailable)?;
+    if !valid {
+        return Err(GrantError::InvalidHmac);
+    }
+    Ok(VerifiedGrant {
+        nonce: claims.nonce.clone(),
+        expires_at: claims.expires_at,
+    })
 }
 
 /// Return the exact bytes to authenticate or verify through Transit HMAC.

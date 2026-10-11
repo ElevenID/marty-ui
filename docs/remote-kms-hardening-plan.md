@@ -14287,3 +14287,13 @@ non-exportable Transit key, and distinct 10-minute mint-only and verify-only
 tokens. It proved mint/verify, altered-input denial, and cross-policy denial;
 the instance was stopped. This proves the proposed KMS primitive and policy
 split, not yet the Gateway/Flow/Issuance authorization or one-use sign path.
+
+K6 replay foundation, local UI batch: an OpenBao-verified grant has a private
+Rust type that only a successful bound `verify` call can construct. A shared
+Redis store consumes that type with one `SET ... NX EX` before issuer KMS
+signing, using a short bounded TTL and failing closed on expiry or datastore
+failure. The focused concurrent-consumer test passed against fresh marked
+disposable loopback Redis DB 13: exactly one caller consumed the grant, and
+replay/expiry were denied. The container was stopped. Gateway/Flow/Issuance
+routes are not yet wired to this verifier and replay store, so K6 tenant
+authority is still open.
