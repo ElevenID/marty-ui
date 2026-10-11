@@ -11,9 +11,17 @@ import json
 import stat
 import zipfile
 from pathlib import Path
+from typing import BinaryIO
 
 from produce_selfhost_product_descriptor import produce
 from record_selfhost_bundle_preparation import record
+
+
+def stream_digest(source: BinaryIO) -> str:
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+        digest.update(chunk)
+    return digest.hexdigest()
 
 
 def verify_extracted_bundle(archive: Path, install_root: Path) -> None:
@@ -25,24 +33,37 @@ def verify_extracted_bundle(archive: Path, install_root: Path) -> None:
         bundle_root = members[0].filename.split("/", 1)[0]
         if install_root.name != bundle_root:
             raise ValueError("installed ZIP root name differs from archive")
-        expected = {
-            member.filename[len(bundle_root) + 1:].rstrip("/"): (
-                "directory" if member.is_dir() else hashlib.sha256(bundle.read(member)).hexdigest()
-            )
-            for member in members
-            if member.filename.rstrip("/") != bundle_root
-        }
-    actual = {}
+        expected = {}
+        for member in members:
+            if member.filename.rstrip("/") == bundle_root:
+                continue
+            relative = member.filename[len(bundle_root) + 1:].rstrip("/")
+            if member.is_dir():
+                expected[relative] = ("directory", 0, "")
+            else:
+                with bundle.open(member) as source:
+                    expected[relative] = ("file", member.file_size, stream_digest(source))
+    seen = set()
     for path in install_root.rglob("*"):
-        mode = path.lstat().st_mode
+        metadata = path.lstat()
+        mode = metadata.st_mode
         relative = path.relative_to(install_root).as_posix()
-        if stat.S_ISDIR(mode):
-            actual[relative] = "directory"
-        elif stat.S_ISREG(mode):
-            actual[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-        else:
+        if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)):
             raise ValueError("installed ZIP contains a symlink or special file")
-    if actual != expected:
+        if relative not in expected:
+            raise ValueError("installed ZIP tree differs from archive")
+        kind, size, digest = expected[relative]
+        if stat.S_ISDIR(mode):
+            if kind != "directory":
+                raise ValueError("installed ZIP tree differs from archive")
+        elif kind != "file" or metadata.st_size != size:
+            raise ValueError("installed ZIP tree differs from archive")
+        else:
+            with path.open("rb") as source:
+                if stream_digest(source) != digest:
+                    raise ValueError("installed ZIP tree differs from archive")
+        seen.add(relative)
+    if seen != expected.keys():
         raise ValueError("installed ZIP tree differs from archive")
 
 
