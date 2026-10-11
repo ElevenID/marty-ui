@@ -14711,3 +14711,18 @@ all-target Clippy. This is not yet wired into Signing Keys' final KMS call;
 the certificate/CSR ceremony authority and direct CSR path remain open. Keep
 the work local for the next cohesive authorization batch rather than triggering
 another hosted run for a preparatory API alone.
+
+Authorization review before wiring the proof found that issuer certificate CSR
+and service CSR are separate public Signing Keys routes. The issuer CSR handler
+reaches `sign_with_issuer_did` after profile and tenant checks but has no
+Signing Keys-side action credential or grant check; the service CSR handler
+calls `kms::sign` directly. Gateway supplies trusted tenant scope and checks
+its public-route permission, but that context is not a move-only authority at
+the provider boundary. The CSCA/DSC issuance routes do check their distinct
+Gateway operator credentials and actor identity before their certificate
+signs. Do not construct a generic certificate exception from an arbitrary
+tenant JSON field or shared service key. The cohesive authorization batch must
+give both CSR routes an authenticated scoped producer and carry a typed,
+exact-request proof through all five issuer certificate/CSR signs and the
+direct service CSR call, alongside the grant proof for service and issuer-DID
+signing. Preserve their existing certificate and holder-proof behavior.
