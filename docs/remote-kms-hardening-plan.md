@@ -14862,3 +14862,26 @@ investigate if it recurs on the grouped head. The next push can now proceed
 without overlapping that run. The wider goal remains open for issuer
 certificate ceremonies, issuance signing producers, kernel-wide enforcement,
 artifact qualification and protected PR landing.
+
+Grouped head `f111111e9` was pushed to draft UI PR #1192 after the earlier
+run terminated, and its PR description now reflects service and issuer CSR
+grant coverage and local disposable KMS evidence. Hosted CI run 38126745463
+started. Rust Service Images failed immediately in its self-host model check:
+the approved snapshot changed with the new issuer token mount, but its two
+immutable checksum assertions still held the prior digest. Both assertions
+now pin the new exact snapshot; the standalone self-host model script passes
+all default, empty and custom render comparisons plus required-input checks,
+and its 72 pytest tests pass. Keep this local correction in the next grouped
+push after current CI yields the remaining lane evidence.
+
+The next producer audit found that Issuance's shared `HttpDidSigner` still
+sends its DID signing request without a grant. Its credential, Canvas and
+passport callers have different legitimate origins, while the resolved
+`IssuerContext.raw_context` already contains the profile-selected remote key
+reference. Carry that resolved reference and an explicit origin through the
+shared Rust `SignRequest`, give each producer its own scoped OpenBao mint
+token, and bind tenant, DID, key, purpose, algorithm, route and exact payload
+before the Gateway forwards to Signing Keys. Do not infer an origin from
+credential format or mint a broad Gateway grant for arbitrary body fields.
+The current hosted head remains active; keep this producer work local until
+its CI evidence is collected.
