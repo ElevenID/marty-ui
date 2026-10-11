@@ -8,7 +8,7 @@
     "contracts/canvas-review-recovery-migration.json": "6b616575cf990ce82c4ac2591361343d296624b3ccf05787acd32f7be2b5a087",
     "contracts/canvas-worker-consumer-range-oracle.json": "0459d9b3ae5409df9e5cb149e13167a13625518bb97dcbf8654631898cc63e0c",
     "contracts/fixtures/canvas_review_recovery_claim.py": "b2bde4ce51071bcd8c33f044c66c9bf963243c13a5dec6bfcea951086aee5361",
-    "rust/services/issuance/tests/support/canvas_published_database.rs": "0fe72c49211a58268b3fdab9839102051189c219d801ae3f3c44db4faf520847",
+    "rust/services/issuance/tests/support/canvas_published_database.rs": "a8ac5199170c95fae687e8679127fa0d8c665b2ad809e0367b8fac93d9a17029",
     "scripts/canvas_json_tree_observation.py": "bd80063c57350d3535e5655db8bfca6b04dfbed92909bdea888e6ebfbbe76ae8",
     "scripts/canvas_observation_values.py": "91a6193ee484e128a8f992ec9072b26cb488caaf5a7adb7991edd29162afa609",
     "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",

@@ -15634,3 +15634,13 @@ The two envelope-oriented Gateway cases were rerun with the exact
 matching the hosted fixture rather than the broader managed-signing token;
 the full probe passed again. All six Gateway acceptance cases are now selected
 by the disposable local probe.
+
+Main advanced through #1268 while this batch was held. Its manual-only
+Canvas migrated-base pilot conflicted with the KMS branch's Canvas OpenBao
+image in the database-contract job and with the current-inputs digest for the
+auto-merged Canvas published-database source. The local reconciliation keeps
+both job environment settings, retains the upstream opt-in isolation check,
+refreshes the normalized source digest, and does not restore the retired
+passport self-signed contract step. The combined Canvas pilot/current-inputs
+suite passes 28 tests; Ruff, YAML/JSON parsing and diff checks pass. The
+merge remains local until the previous exact-head Canvas job completes.
