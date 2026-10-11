@@ -63,7 +63,7 @@ def validate_package_migration(migration: dict, listed: set[str], root: Path = R
     case_ids = migration.get("case_ids")
     require(
         isinstance(case_ids, list)
-        and len(case_ids) == 132
+        and len(case_ids) == 131
         and all(isinstance(name, str) and name for name in case_ids)
         and case_ids == sorted(set(case_ids)),
         "Canvas package migration identity list drift",
@@ -116,8 +116,9 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
     ]
     names.append(inventory["native_validation"]["test"])
     names.append(inventory["native_roster_failure"]["test"])
+    names.append(inventory["native_resources_unavailable"]["test"])
     require(
-        len(historical) == 18
+        len(historical) == 17
         and len(preflights) == 4
         and len(native_replays) == 3
         and len(native_oauth) == 10,
@@ -129,43 +130,45 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         and 'assert_worker_https("validation")' in text,
         "Native validation process owner missing",
     )
-    roster = inventory["native_roster_failure"]
-    require(
-        roster.get("scenario") == "roster-failure"
-        and roster.get("test") == "worker_roster_failure_matches_frozen_published_process"
-        and roster.get("cases") == 5
-        and roster["test"] in listed
-        and 'assert_worker_https("roster-failure")' in text,
-        "Native roster-failure process owner missing",
-    )
-    roster_inputs = {
-        kind: root / f"contracts/canvas-worker-roster-failure-{kind}.json"
-        for kind in ("oracle", "scenarios")
-    }
-    require(
-        set(roster.get("sha256", {})) == set(roster_inputs)
-        and all(
-            roster["sha256"][kind]
-            == hashlib.sha256(
-                path.read_text(encoding="utf-8")
-                .replace("\r\n", "\n")
-                .replace("\r", "\n")
-                .encode()
-            ).hexdigest()
-            for kind, path in roster_inputs.items()
-        ),
-        "Native roster-failure frozen input drift",
-    )
-    roster_cases = json.loads(roster_inputs["scenarios"].read_text(encoding="utf-8"))[
-        "cases"
-    ]
-    roster_expected = json.loads(roster_inputs["oracle"].read_text(encoding="utf-8"))
-    require(
-        len(roster_cases) == roster["cases"]
-        and len({case["name"] for case in roster_cases}) == roster["cases"]
-        and {case["name"] for case in roster_cases} == set(roster_expected),
-        "Native roster-failure case inventory drift",
-    )
+    for key, scenario, test, count in (
+        ("native_roster_failure", "roster-failure", "worker_roster_failure_matches_frozen_published_process", 5),
+        ("native_resources_unavailable", "resources-unavailable", "worker_resources_unavailable_matches_frozen_published_process", 1),
+    ):
+        entry = inventory[key]
+        require(
+            entry.get("scenario") == scenario
+            and entry.get("test") == test
+            and entry.get("cases") == count
+            and test in listed
+            and f'assert_worker_https("{scenario}")' in text,
+            f"Native {scenario} process owner missing",
+        )
+        inputs = {
+            kind: root / f"contracts/canvas-worker-{scenario}-{kind}.json"
+            for kind in ("oracle", "scenarios")
+        }
+        require(
+            set(entry.get("sha256", {})) == set(inputs)
+            and all(
+                entry["sha256"][kind]
+                == hashlib.sha256(
+                    path.read_text(encoding="utf-8")
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+                    .encode()
+                ).hexdigest()
+                for kind, path in inputs.items()
+            ),
+            f"Native {scenario} frozen input drift",
+        )
+        cases = json.loads(inputs["scenarios"].read_text(encoding="utf-8"))["cases"]
+        expected = json.loads(inputs["oracle"].read_text(encoding="utf-8"))
+        require(
+            len(cases) == count
+            and len({case["name"] for case in cases}) == count
+            and {case["name"] for case in cases} == set(expected),
+            f"Native {scenario} case inventory drift",
+        )
     actual_historical = {
         name for name in listed if "reference_matches_published" in name
     }
@@ -327,6 +330,7 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         "canvas-worker-facts-oracle.json",
         "canvas-worker-retry-oracle.json",
         "canvas-worker-roster-failure-oracle.json",
+        "canvas-worker-resources-unavailable-oracle.json",
         "canvas-worker-validation-oracle.json",
     }
     require(
@@ -526,8 +530,8 @@ def main() -> int:
         validate(inventory, listed)
         validate_package_migration(migration, listed)
         print(
-            "Canvas tier inventory: 18 historical references, 3 native REST-family replays, 10 native OAuth corpus owners, one native roster-failure owner, one native validation owner, and 4 native preflights discovered; "
-            "132 package-migrated cases retained"
+            "Canvas tier inventory: 17 historical references, 3 native REST-family replays, 10 native OAuth corpus owners, two native failure-matrix owners, one native validation owner, and 4 native preflights discovered; "
+            "131 package-migrated cases retained"
         )
     else:
         require(

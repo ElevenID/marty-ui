@@ -129,7 +129,6 @@
     "worker_resource_race_reference_matches_published_process",
     "worker_resource_race_repository_preserves_stale_write_fences",
     "worker_resources_unavailable_matches_frozen_published_process",
-    "worker_resources_unavailable_reference_matches_published_process",
     "worker_rest_matches_frozen_published_process",
     "worker_rest_native_child",
     "worker_retry_after_matches_frozen_published_process",

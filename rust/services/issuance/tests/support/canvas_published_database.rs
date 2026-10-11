@@ -1000,19 +1000,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_resources_unavailable(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-resources-unavailable-scenarios.json"
-            ),
-            "worker_resources_unavailable",
-            "worker-resources-unavailable",
-            "MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE",
-        )
-        .await
-    }
-
     pub async fn start_with_worker_resource_race(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -1391,7 +1378,6 @@ impl PublishedDatabase {
             script,
             "worker_retry_after"
                 | "worker_resource_race"
-                | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
                 | "worker_deadline"
@@ -1482,7 +1468,6 @@ impl PublishedDatabase {
             script,
             "worker_retry_after"
                 | "worker_resource_race"
-                | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
                 | "worker_deadline"
@@ -1599,11 +1584,6 @@ impl PublishedDatabase {
                 "scripts/canvas_worker_mixed_roster_https_fixture.py",
                 "contracts/canvas-mixed-roster-scenarios.json",
                 "contracts/canvas-mixed-roster-oracle.json",
-                "scripts/run_canvas_worker_provider_signals_oracle.py",
-                "scripts/run_canvas_worker_provider_recovery_oracle.py",
-            ],
-            "worker_resources_unavailable" => &[
-                "contracts/canvas-worker-validation-scenarios.json",
                 "scripts/run_canvas_worker_provider_signals_oracle.py",
                 "scripts/run_canvas_worker_provider_recovery_oracle.py",
             ],

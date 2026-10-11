@@ -59,7 +59,6 @@ MATRIX_SCENARIOS = frozenset(
 PUBLISHED_MATRIX_SCENARIOS = frozenset(
     {
         "retry-after",
-        "resources-unavailable",
         "resource-race",
         "deadline",
         "timeout",

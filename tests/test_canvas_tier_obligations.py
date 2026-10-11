@@ -58,7 +58,7 @@ def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
 
 def test_worker_package_migration_accounts_for_all_original_case_ids() -> None:
     names = set(MIGRATION["case_ids"])
-    assert len(names) == 132
+    assert len(names) == 131
     assert discovered() <= names
     validate_package_migration(MIGRATION, names)
 
@@ -67,7 +67,7 @@ def test_worker_package_migration_rejects_same_count_substitution() -> None:
     names = set(MIGRATION["case_ids"])
     names.remove("worker_repository_root_is_independent_of_cargo_package_depth")
     names.add("worker_same_count_substitute")
-    assert len(names) == 132
+    assert len(names) == 131
     with pytest.raises(ValueError, match="missing a compiled case"):
         validate_package_migration(MIGRATION, names)
 
@@ -84,12 +84,13 @@ def discovered() -> set[str]:
     } | {
         INVENTORY["native_validation"]["test"],
         INVENTORY["native_roster_failure"]["test"],
+        INVENTORY["native_resources_unavailable"]["test"],
     }
 
 
 def test_exact_current_inventory_is_source_and_fixture_backed() -> None:
     validate(INVENTORY, discovered())
-    assert len(INVENTORY["historical"]) == 18
+    assert len(INVENTORY["historical"]) == 17
     assert len(INVENTORY["preflights"]) == 4
     assert (
         "worker_oauth_revocation_counters_matches_frozen_published_cycle"
@@ -109,7 +110,7 @@ def test_compiled_list_rejects_duplicate_names() -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["missing-historical", "extra-historical", "missing-preflight", "missing-native", "missing-native-oauth", "missing-roster"]
+    "change", ["missing-historical", "extra-historical", "missing-preflight", "missing-native", "missing-native-oauth", "missing-roster", "missing-resources"]
 )
 def test_compiled_list_drift_fails_closed(change: str) -> None:
     names = discovered()
@@ -123,6 +124,8 @@ def test_compiled_list_drift_fails_closed(change: str) -> None:
         names.remove(INVENTORY["native_oauth_replays"][0]["test"])
     elif change == "missing-roster":
         names.remove(INVENTORY["native_roster_failure"]["test"])
+    elif change == "missing-resources":
+        names.remove(INVENTORY["native_resources_unavailable"]["test"])
     else:
         names.remove(INVENTORY["native_replays"][0]["test"])
     with pytest.raises(ValueError, match="mismatch|missing|drift"):
@@ -130,7 +133,7 @@ def test_compiled_list_drift_fails_closed(change: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "change", ["duplicate", "assertion", "corpus", "mode", "routine", "input", "native-pin", "oauth-pin", "oauth-count", "roster-pin", "roster-count"]
+    "change", ["duplicate", "assertion", "corpus", "mode", "routine", "input", "native-pin", "oauth-pin", "oauth-count", "roster-pin", "roster-count", "resources-pin", "resources-count"]
 )
 def test_inventory_drift_fails_closed(change: str) -> None:
     inventory = deepcopy(INVENTORY)
@@ -158,6 +161,10 @@ def test_inventory_drift_fails_closed(change: str) -> None:
         inventory["native_roster_failure"]["sha256"]["oracle"] = "0" * 64
     elif change == "roster-count":
         inventory["native_roster_failure"]["cases"] += 1
+    elif change == "resources-pin":
+        inventory["native_resources_unavailable"]["sha256"]["oracle"] = "0" * 64
+    elif change == "resources-count":
+        inventory["native_resources_unavailable"]["cases"] += 1
     else:
         inventory["native_replays"][1]["sha256"]["oracle"] = "0" * 64
     with pytest.raises(ValueError):
@@ -199,7 +206,7 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
         *sorted(selected_serial),
     )
     if mode == "full-after-preflights" and qualification == "0":
-        assert len(omitted - {serial, deadline}) == 22
+        assert len(omitted - {serial, deadline}) == 21
     if mode == "full-after-preflights" and qualification == "1":
         assert len(omitted - {serial, deadline}) == 5
 
@@ -238,7 +245,7 @@ def test_same_count_wrong_selected_case_fails_closed() -> None:
     omitted = {serial, extra}
     omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
     omitted |= {entry["test"] for entry in INVENTORY["historical"][1:]}
-    assert len(omitted - {serial}) == 22
+    assert len(omitted - {serial}) == 21
     with pytest.raises(ValueError, match="selection drift"):
         validate_selection(
             INVENTORY,

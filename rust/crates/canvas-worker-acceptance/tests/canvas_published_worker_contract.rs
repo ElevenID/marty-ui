@@ -1677,11 +1677,6 @@ async fn worker_resource_race_reference_matches_published_process() {
     assert_worker_matrix_reference("resource-race").await;
 }
 
-#[tokio::test]
-async fn worker_resources_unavailable_reference_matches_published_process() {
-    assert_worker_matrix_reference("resources-unavailable").await;
-}
-
 async fn assert_worker_matrix_reference(kind: &str) {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
@@ -1690,12 +1685,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
         "retry-after" => (
             include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-retry-after-oracle.json"),
-        ),
-        "resources-unavailable" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-resources-unavailable-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-resources-unavailable-oracle.json"),
         ),
         "resource-race" => (
             include_str!("../../../../contracts/canvas-worker-resource-race-scenarios.json"),
@@ -1729,9 +1718,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
             "retry-after" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
                     .await
-            }
-            "resources-unavailable" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_resources_unavailable(name).await
             }
             "resource-race" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_resource_race(name)

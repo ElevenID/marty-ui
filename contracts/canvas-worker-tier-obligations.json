@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-worker-tier-obligations/v1",
-  "scope": "The 18 remaining historical-reference cases, three native REST-family replays, ten native OAuth-revocation corpus owners, one native roster-failure matrix, four preflight-capable native cases, and 20 native-validation cases; this is not an inventory of either complete Canvas target.",
+  "scope": "The 17 remaining historical-reference cases, three native REST-family replays, ten native OAuth-revocation corpus owners, one native roster-failure matrix, one native unavailable-resource matrix, four preflight-capable native cases, and 20 native-validation cases; this is not an inventory of either complete Canvas target.",
   "package": "marty-canvas-worker-acceptance",
   "target": "canvas_published_worker_contract",
   "test_source": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
@@ -28,8 +28,7 @@
     {"test": "worker_provider_recovery_reference_matches_published_process", "assertion": "Published provider-renewal and recovery reports equal their frozen corpus."},
     {"test": "worker_provider_signals_reference_matches_published_process", "assertion": "Published SIGINT, SIGTERM and SIGKILL reports equal their frozen corpus."},
     {"test": "worker_retry_after_reference_matches_published_process", "assertion": "Published Retry-After matrix equals its frozen corpus."},
-    {"test": "worker_resource_race_reference_matches_published_process", "assertion": "Published resource-race report equals its frozen corpus."},
-    {"test": "worker_resources_unavailable_reference_matches_published_process", "assertion": "Published unavailable-resource report equals its frozen corpus."}
+    {"test": "worker_resource_race_reference_matches_published_process", "assertion": "Published resource-race report equals its frozen corpus."}
   ],
   "native_replays": [
     {"scenario": "rest", "test": "worker_rest_matches_frozen_published_process", "assertion": "Native REST worker process and database effects equal four frozen observations.", "stages": 4, "inputs": ["contracts/canvas-worker-rest-oracle.json", "contracts/canvas-worker-rest-scenarios.json", "contracts/canvas-worker-rest-current-inputs.json"], "sha256": {"oracle": "64b3e5a748fab30dcdb27a4ce4d4f9415e54cc73beaa6bbe4f56680a9ee07afc", "scenarios": "ab9e1f28a23a4db50982a8e64b01a6fb14d67d47f8c1ead9f255247e8ecb7e52"}},
@@ -37,6 +36,7 @@
     {"scenario": "retry", "test": "worker_retry_matches_frozen_published_process", "assertion": "Native worker retry and recovery effects equal five frozen observations.", "stages": 5, "inputs": ["contracts/canvas-worker-retry-oracle.json", "contracts/canvas-worker-retry-scenarios.json"], "sha256": {"oracle": "f541ac620569dfa184166c62b85bd877276aa74dbd2a0730ca8d51aacdc916db", "scenarios": "77d186577a5ec9972f8b61747d9fed807280dd1e2825df5e8c6b222f01ac09c9"}}
   ],
   "native_roster_failure": {"scenario": "roster-failure", "test": "worker_roster_failure_matches_frozen_published_process", "cases": 5, "sha256": {"oracle": "e6f4532675052a20381e68cdc2cf1f1bf3f2ab5c859a0bc07a1c1e1d12903eb7", "scenarios": "6087c9ba852d868b0923735a56ac2e2e1f0f12153a017e02f397b8bc3c19c4a7"}},
+  "native_resources_unavailable": {"scenario": "resources-unavailable", "test": "worker_resources_unavailable_matches_frozen_published_process", "cases": 1, "sha256": {"oracle": "0f388788c5d78e2d2cc140b29f48a67f5afc3c9d754ac4f2479e43afed38319d", "scenarios": "55cfb83df94cd116670353f275739ff237ff917027e6183195f5ae861f9b1231"}},
   "native_oauth_replays": [
     {"scenario": "oauth-revocation", "test": "worker_oauth_revocation_matches_frozen_published_process", "cases": 7, "sha256": {"scenarios": "46cd64b69af1a51509525bad53b6d75e5e79cece5ec819a10e011c79734af019", "oracle": "43679e0883a269993c879958815992885dc9b4e9fac55d4223f1af35bcd21b39"}},
     {"scenario": "oauth-revocation-fence", "test": "worker_oauth_revocation_fence_matches_frozen_published_process", "cases": 2, "sha256": {"scenarios": "da169c66a7122871d9270b54e7de13a74bef2509525f8ba19c8cf5d821198c52", "oracle": "025a31983550db5a734c8aed38e0b0d8dbafe7309db5b4b64863a6beefc905e9"}},

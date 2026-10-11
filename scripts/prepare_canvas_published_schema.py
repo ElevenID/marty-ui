@@ -214,17 +214,6 @@ def prepare():
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 report["worker_mixed_roster"] = run(mixed_roster_case)
-        resources_unavailable_case = os.environ.get(
-            "MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE"
-        )
-        if resources_unavailable_case is not None:
-            from run_canvas_worker_resources_unavailable_oracle import run
-
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                report["worker_resources_unavailable"] = run(resources_unavailable_case)
         resource_race_case = os.environ.get("MARTY_CANVAS_WORKER_RESOURCE_RACE_CASE")
         if resource_race_case is not None:
             from run_canvas_worker_resource_race_oracle import run

@@ -15,6 +15,7 @@
     "canvas-worker-oauth-revocation-retry-after-oracle.json",
     "canvas-worker-oauth-revocation-secrets-oracle.json",
     "canvas-worker-oauth-revocation-selection-oracle.json",
+    "canvas-worker-resources-unavailable-oracle.json",
     "canvas-worker-retry-oracle.json",
     "canvas-worker-roster-failure-oracle.json",
     "canvas-worker-validation-oracle.json"
@@ -35,7 +36,6 @@
     "canvas-worker-reclaimers-oracle.json",
     "canvas-worker-reclaimers-retry-oracle.json",
     "canvas-worker-resource-race-oracle.json",
-    "canvas-worker-resources-unavailable-oracle.json",
     "canvas-worker-rest-oracle.json",
     "canvas-worker-retry-after-oracle.json",
     "canvas-worker-startup-oracle.json",

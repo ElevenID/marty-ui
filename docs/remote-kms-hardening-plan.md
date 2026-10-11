@@ -13911,3 +13911,45 @@ alter the frozen Canvas corpora or the native roster process owner.
 The published head `f2f69f25b` is merge-conflicting with current main and
 has no exact-head checks; merge current main, complete local qualification,
 then push one conflict-resolution head for hosted CI.
+
+The conflict resolution was published as UI #1192 head
+`f08b5d8a37a9a9b946c0f5f0d238c9b3e8ce9490`, whose second parent is
+current main `319a518eb59f0e12d871b671d8cf7d2fa4ce25bd`. GitHub now
+reports it mergeable. Its exact-head [CI
+38106225586](https://github.com/ElevenID/marty-ui/actions/runs/38106225586)
+and [Rust CodeQL
+38106225589](https://github.com/ElevenID/marty-ui/actions/runs/38106225589)
+started; neither is qualification evidence yet. UI #1192's description was
+updated for the grouped roster retirement, the failed prior head, this
+merge and the open gates. Keep this note in the next grouped source batch
+instead of pushing documentation alone and wasting a hosted run.
+
+2026-10-10 K8 local Python resource-oracle retirement, held for the next
+grouped UI push: removed the historical
+`run_canvas_worker_resources_unavailable_oracle.py` path from the published
+schema preparer, its Rust reference wrapper and constructor, and the
+historical producer/closure/tier/CI inventories. The frozen one-case corpus
+and native HTTPS/Rust `worker_resources_unavailable_matches_frozen_published_process`
+owner remain. The fixture-integrity check now verifies that the native replay
+commits its exact queued seed before starting the worker. The compiled
+acceptance target builds and its `--list` passes the updated tier guard:
+17 historical references, 131 package case IDs, and distinct native
+roster-failure and unavailable-resource owners. The focused source,
+fixture, producer, and CI group suite passed 115 tests; JSON, Ruff,
+Rustfmt, Clippy with warnings denied and diff hygiene passed. The broader
+local Python suite passed 486 tests with one skip in 12m35s, including the
+published preflight, reviewed pins and CI workflow performance contracts.
+Hosted Linux process qualification remains pending. Do not push until the current
+`f08b5d8a3` hosted run is terminal, to avoid cancelling and repeating it.
+
+The `f08b5d8a37a9a9b946c0f5f0d238c9b3e8ce9490` exact-head UI [CI
+38106225586](https://github.com/ElevenID/marty-ui/actions/runs/38106225586)
+completed **success** with all 22 jobs green, including Rust contracts,
+Canvas, Service Images, Release Contract Tests, and the OpenBao DIDComm plugin
+image with coordinated PostgreSQL/Raft recovery. [Rust CodeQL
+38106225589](https://github.com/ElevenID/marty-ui/actions/runs/38106225589)
+also completed **success**. This qualifies that published head and the main
+merge on it; it does not qualify the held local resource-oracle retirement.
+Main still resolves to `319a518eb59f0e12d871b671d8cf7d2fa4ce25bd`, so
+the next source push can be a single fast-forward UI PR update without a
+second main merge.
