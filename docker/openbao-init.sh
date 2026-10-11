@@ -163,16 +163,20 @@ done
 for grant_origin in ${grant_origins}; do
     printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "${grant_origin}"
 done | bao policy write -address="${BAO_ADDR}" sign-grant-verify -
-if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ]; then
-    [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] || {
-        echo 'Both scoped signing grant token paths are required.' >&2
+if [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] || [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ]; then
+    [ -n "${BAO_FLOW_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_VERIFY_GRANT_TOKEN_FILE:-}" ] && [ -n "${BAO_GATEWAY_GRANT_TOKEN_FILE:-}" ] || {
+        echo 'All scoped signing grant token paths are required.' >&2
         exit 1
     }
-    mkdir -p "$(dirname "${BAO_FLOW_GRANT_TOKEN_FILE}")" "$(dirname "${BAO_VERIFY_GRANT_TOKEN_FILE}")"
+    mkdir -p "$(dirname "${BAO_FLOW_GRANT_TOKEN_FILE}")" "$(dirname "${BAO_VERIFY_GRANT_TOKEN_FILE}")" "$(dirname "${BAO_GATEWAY_GRANT_TOKEN_FILE}")"
     grant_token="$(bao token create -address="${BAO_ADDR}" -policy=sign-grant-mint-flow-wallet -no-default-policy -orphan -field=token)"
     [ -n "${grant_token}" ] || { echo 'Could not mint Flow signing grant token.' >&2; exit 1; }
     printf '%s\n' "${grant_token}" > "${BAO_FLOW_GRANT_TOKEN_FILE}"
     chmod 0444 "${BAO_FLOW_GRANT_TOKEN_FILE}"
+    gateway_grant_token="$(bao token create -address="${BAO_ADDR}" -policy=sign-grant-mint-gateway-service -no-default-policy -orphan -field=token)"
+    [ -n "${gateway_grant_token}" ] || { echo 'Could not mint Gateway signing grant token.' >&2; exit 1; }
+    printf '%s\n' "${gateway_grant_token}" > "${BAO_GATEWAY_GRANT_TOKEN_FILE}"
+    chmod 0444 "${BAO_GATEWAY_GRANT_TOKEN_FILE}"
     grant_verify_token="$(bao token create -address="${BAO_ADDR}" -policy=sign-grant-verify -no-default-policy -orphan -field=token)"
     [ -n "${grant_verify_token}" ] || { echo 'Could not mint signing grant verifier token.' >&2; exit 1; }
     printf '%s\n' "${grant_verify_token}" > "${BAO_VERIFY_GRANT_TOKEN_FILE}"

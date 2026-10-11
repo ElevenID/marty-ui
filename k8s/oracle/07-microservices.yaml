@@ -55,6 +55,8 @@ spec:
                   key: DEVICE_REGISTRATION_GATEWAY_KEY
             - name: GATEWAY_PORT
               value: "8000"
+            - name: GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/gateway-sign-grant/token
             - name: AUTH_GRPC_TARGET
               value: "auth:9001"
             - name: ISSUANCE_API_KEY
@@ -165,6 +167,17 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 10
+          volumeMounts:
+            - name: gateway-sign-grant
+              mountPath: /var/run/secrets/marty/gateway-sign-grant
+              readOnly: true
+      volumes:
+        - name: gateway-sign-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: GATEWAY_SIGN_GRANT_MINT_TOKEN
+                path: token
 ---
 apiVersion: v1
 kind: Service

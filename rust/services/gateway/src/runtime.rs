@@ -24,11 +24,16 @@ use axum::{
     routing::any,
     Json, Router,
 };
+use base64::{
+    engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+    Engine,
+};
 use chrono::Utc;
 use futures_core::Stream;
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
+use marty_signing_grant::{minter::GrantMinter, GrantBinding, GrantError, SigningOrigin};
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
     GatewayResponse, HttpMethod, IdempotencyBegin, IdempotencyRequest, IdempotencyResponse,
@@ -96,6 +101,7 @@ pub struct GatewayRuntimeState {
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
     pub service_sign_gateway_key: Option<String>,
+    pub service_sign_grant_minter: Option<GrantMinter>,
     pub issuer_sign_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
@@ -210,6 +216,7 @@ impl GatewayRuntimeState {
                 .filter(|value| !value.is_empty()),
             signing_service_api_key,
             service_sign_gateway_key: None,
+            service_sign_grant_minter: None,
             issuer_sign_key: None,
             dsc_issue_gateway_key: None,
             csca_issue_gateway_key: None,
@@ -285,6 +292,11 @@ impl GatewayRuntimeState {
         }
         self.service_sign_gateway_key = Some(key);
         Ok(self)
+    }
+
+    pub fn with_service_sign_grant_minter(mut self, minter: GrantMinter) -> Self {
+        self.service_sign_grant_minter = Some(minter);
+        self
     }
 
     pub fn with_issuer_sign_key(
@@ -1259,6 +1271,28 @@ async fn proxy_handler(
         );
     }
     overrides.body = canonical_body;
+    if is_public_service_sign_path(&public_path) {
+        let body = overrides
+            .body
+            .as_deref()
+            .or(gateway_request.body.as_deref());
+        let grant = match mint_public_service_sign_grant(
+            &state,
+            &identity,
+            &public_path,
+            &request_id,
+            body,
+            &overrides,
+        )
+        .await
+        {
+            Ok(grant) => grant,
+            Err(response) => return response,
+        };
+        overrides
+            .headers
+            .insert(marty_signing_grant::HEADER_NAME.into(), grant);
+    }
     match state
         .proxy
         .execute(gateway_request, &identity, &overrides)
@@ -3187,6 +3221,113 @@ fn is_public_service_sign_path(path: &str) -> bool {
     path.strip_prefix("/v1/signing-keys/services/")
         .and_then(|tail| tail.strip_suffix("/sign"))
         .is_some_and(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+}
+
+async fn mint_public_service_sign_grant(
+    state: &GatewayRuntimeState,
+    identity: &TrustedIdentityContext,
+    path: &str,
+    operation_id: &str,
+    body: Option<&[u8]>,
+    overrides: &ProxyOverrides,
+) -> Result<String, Response> {
+    let organization_id = identity
+        .organization_id
+        .as_deref()
+        .filter(|tenant| !tenant.trim().is_empty())
+        .ok_or_else(|| detail_response(403, "Trusted signing tenant is required."))?;
+    if identity.required_permission.as_deref() != Some("signing-key:create")
+        || overrides.headers.get("x-api-key") != state.service_sign_gateway_key.as_ref()
+    {
+        return Err(detail_response(403, "Signing operation is not authorized."));
+    }
+    let service_id = path
+        .strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/sign"))
+        .filter(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+        .ok_or_else(|| detail_response(404, "Signing service route not found."))?;
+    let request: Value = body
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .ok_or_else(|| detail_response(422, "Signing request must be a JSON object."))?;
+    let payload = gateway_signing_payload(&request)
+        .ok_or_else(|| detail_response(422, "Signing payload is invalid."))?;
+    let request = request
+        .as_object()
+        .ok_or_else(|| detail_response(422, "Signing request must be a JSON object."))?;
+    if request
+        .get("organization_id")
+        .is_some_and(|value| value.as_str() != Some(organization_id))
+    {
+        return Err(detail_response(
+            403,
+            "Signing tenant does not match authorization.",
+        ));
+    }
+    let required = |name: &str| {
+        request
+            .get(name)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && *value == value.trim())
+    };
+    let (Some(key_reference), Some(key_purpose), Some(algorithm)) = (
+        required("key_reference"),
+        required("key_purpose"),
+        required("algorithm"),
+    ) else {
+        return Err(detail_response(
+            422,
+            "Signing key, purpose and algorithm are required.",
+        ));
+    };
+    let minter = state
+        .service_sign_grant_minter
+        .as_ref()
+        .ok_or_else(|| detail_response(503, "Signing grant minter is unavailable."))?;
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id,
+        organization_id,
+        route: path,
+        service_id: Some(service_id),
+        issuer_did: None,
+        key_reference: Some(key_reference),
+        key_purpose,
+        algorithm,
+        payload: &payload,
+    };
+    minter
+        .mint(&binding)
+        .await
+        .map_err(|error| match error {
+            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
+                detail_response(422, "Signing grant binding is invalid.")
+            }
+            _ => detail_response(503, "Signing grant minter is unavailable."),
+        })?
+        .to_header_value()
+        .map_err(|_| detail_response(503, "Signing grant minter is unavailable."))
+}
+
+fn gateway_signing_payload(request: &Value) -> Option<Vec<u8>> {
+    let field = |name: &str| {
+        request
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    let payload = if let Some(encoded) = field("payload_b64") {
+        let unpadded = encoded.trim_end_matches('=');
+        URL_SAFE_NO_PAD
+            .decode(unpadded)
+            .or_else(|_| STANDARD_NO_PAD.decode(unpadded))
+            .or_else(|_| URL_SAFE.decode(encoded))
+            .or_else(|_| STANDARD.decode(encoded))
+            .ok()?
+    } else {
+        hex::decode(field("payload_hex")?).ok()?
+    };
+    (!payload.is_empty()).then_some(payload)
 }
 
 fn compatibility_upstream_path(
@@ -7674,10 +7815,6 @@ mod tests {
         ));
         for (path, body) in [
             (
-                "/v1/signing-keys/services/service-1/sign",
-                json!({"payload_b64": "cGF5bG9hZA", "key_purpose": "vc_jwt_issuer"}),
-            ),
-            (
                 "/v1/signing-keys/config/resolve",
                 json!({"key_purpose": "mdoc_dsc", "algorithm": "EdDSA"}),
             ),
@@ -7722,17 +7859,121 @@ mod tests {
             assert!(!forwarded
                 .headers
                 .contains_key(marty_signing_grant::HEADER_NAME));
-            if is_public_service_sign_path(path) {
-                assert_eq!(
-                    forwarded.headers.get("x-api-key").map(String::as_str),
-                    Some("dedicated-service-sign-gateway-key-000001")
-                );
-            }
             assert_eq!(
                 serde_json::from_slice::<Value>(forwarded.body.as_deref().unwrap()).unwrap(),
                 body
             );
         }
+    }
+
+    #[tokio::test]
+    async fn authorized_public_signing_cannot_forward_without_a_scoped_minter() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-1/sign")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(
+                json!({
+                    "payload_b64": "cGF5bG9hZA",
+                    "key_reference": "issuer-key-1",
+                    "key_purpose": "vc_jwt_issuer",
+                    "algorithm": "ES256"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(recorder.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn public_service_signing_mints_exact_scoped_grant_and_discards_caller_grant() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("disposable OpenBao listener");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let bao = Router::new().route(
+            "/v1/transit/hmac/marty-sign-grant-gateway-service-v1/sha2-256",
+            axum::routing::post(|| async {
+                Json(json!({"data": {"hmac": format!(
+                    "vault:v1:{}", STANDARD.encode([7_u8; 32])
+                )}}))
+            }),
+        );
+        let bao_task = tokio::spawn(async move { axum::serve(listener, bao).await.unwrap() });
+        let token_file = std::env::temp_dir().join(format!(
+            "marty-gateway-grant-{}.token",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&token_file, "scoped-gateway-token\n").unwrap();
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let minter = GrantMinter::for_managed_openbao(
+            &endpoint,
+            SigningOrigin::GatewayService,
+            token_file.clone(),
+        )
+        .unwrap();
+        if let Some(previous) = previous_bao_addr {
+            std::env::set_var("BAO_ADDR", previous);
+        } else {
+            std::env::remove_var("BAO_ADDR");
+        }
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+        Arc::get_mut(&mut state).unwrap().service_sign_grant_minter = Some(minter);
+        let router = gateway_router(state);
+        let body = json!({
+            "payload_hex": "7061796c6f6164",
+            "key_reference": "issuer-key-1",
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256"
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-1/sign")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let forwarded = &calls[0].1;
+        let header = forwarded
+            .headers
+            .get(marty_signing_grant::HEADER_NAME)
+            .expect("trusted Gateway grant");
+        assert_ne!(header, "forged-grant");
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(header).unwrap();
+        assert_eq!(grant.claims.origin, SigningOrigin::GatewayService);
+        assert_eq!(grant.claims.organization_id, "org-1");
+        assert_eq!(grant.claims.route, forwarded.path);
+        assert_eq!(grant.claims.service_id.as_deref(), Some("service-1"));
+        assert_eq!(grant.claims.key_reference.as_deref(), Some("issuer-key-1"));
+        assert_eq!(grant.claims.key_purpose, "vc_jwt_issuer");
+        assert_eq!(grant.claims.algorithm, "ES256");
+        assert_eq!(
+            grant.claims.payload_sha256_b64,
+            URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(b"payload"))
+        );
+        assert_eq!(
+            forwarded.headers.get("x-api-key").map(String::as_str),
+            Some("dedicated-service-sign-gateway-key-000001")
+        );
+        drop(calls);
+        std::fs::remove_file(token_file).unwrap();
+        bao_task.abort();
     }
 
     #[tokio::test]

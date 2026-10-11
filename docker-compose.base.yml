@@ -225,6 +225,7 @@ services:
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       BAO_FLOW_GRANT_TOKEN_FILE: /bao/flow-grant/token
       BAO_VERIFY_GRANT_TOKEN_FILE: /bao/verify-grant/token
+      BAO_GATEWAY_GRANT_TOKEN_FILE: /bao/gateway-grant/token
     depends_on:
       openbao:
         condition: service_healthy
@@ -232,6 +233,7 @@ services:
       - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
       - openbao_flow_grant:/bao/flow-grant
       - openbao_verify_grant:/bao/verify-grant
+      - openbao_gateway_grant:/bao/gateway-grant
     restart: "no"
     networks:
       - marty-network
@@ -413,6 +415,9 @@ services:
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
       HSM_PROVIDER: openbao
       SIGNING_KEY_SOURCE: openbao-transit
+      GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE: /bao/gateway-grant/token
+    volumes:
+      - openbao_gateway_grant:/bao/gateway-grant:ro
     ports:
       - "127.0.0.1:${GATEWAY_HOST_PORT:-8000}:8000"
     depends_on:
@@ -1325,6 +1330,7 @@ volumes:
   openbao_data:
   openbao_flow_grant:
   openbao_verify_grant:
+  openbao_gateway_grant:
 
 networks:
   marty-network:

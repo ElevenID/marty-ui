@@ -16,6 +16,7 @@ use marty_gateway::{
     },
     transport::ReqwestUpstream,
 };
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use mmf_platform::{GatewayProxy, ProxyConfig};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::info;
@@ -29,6 +30,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let config = GatewayConfig::from_env()?;
+    let service_sign_grant_minter = GrantMinter::for_managed_openbao(
+        config
+            .sign_grant_bao_addr
+            .as_deref()
+            .ok_or("BAO_ADDR is required for Gateway signing grants")?,
+        SigningOrigin::GatewayService,
+        config
+            .sign_grant_mint_token_file
+            .clone()
+            .ok_or("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE is required")?,
+    )?;
     let contract = GatewayContract::load()?;
     let routes = contract.runtime_route_table_with_passport_selectors(
         config.passport_native_gateway_enabled,
@@ -103,6 +115,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_service_token(config.grpc_service_token.clone())?
         .with_device_registration_gateway_key(config.device_registration_gateway_key.clone())?
         .with_service_sign_gateway_key(config.service_sign_gateway_key.clone())?
+        .with_service_sign_grant_minter(service_sign_grant_minter)
         .with_issuer_sign_key(config.issuer_sign_key.clone())?
         .with_dsc_issue_gateway_key(config.dsc_issue_gateway_key.clone())?
         .with_csca_issue_gateway_key(config.csca_issue_gateway_key.clone())?

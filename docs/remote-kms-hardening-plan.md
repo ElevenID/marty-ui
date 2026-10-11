@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-10 (America/Denver).
+Status: active. Updated: 2026-10-11 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -14605,6 +14605,27 @@ called from other in-process paths, and direct KMS signing calls serve CSR
 and holder-proof work. Do not describe this as a kernel-wide gate. Next
 thread a move-only consumed proof, or a separately verified ceremony
 authority, through each issuer signing call to its exact KMS invocation;
-wire Gateway and Issuance grant producers and add live HMAC/replay/KMS-denial
-acceptance. The current UI PR does not contain this local batch; its Canvas
-CI job remains in progress.
+wire the remaining Gateway and Issuance grant producers and add live
+HMAC/replay/KMS-denial acceptance. The published UI PR passed all 28 checks;
+the current local batch has not yet been pushed.
+
+Gateway public service-sign producer, local grouped follow-up: the Rust
+Gateway now discards caller-supplied signing grants and mints a fixed
+`GatewayService` OpenBao Transit HMAC grant after authenticated tenant and
+`signing-key:create` authorization. Its binding uses the Gateway-issued
+operation ID, exact service route and ID, tenant, explicit key reference,
+purpose, algorithm, and decoded payload (base64 or hex). Gateway startup
+requires an absolute, Gateway-specific mint token file. The development
+OpenBao bootstrap creates a separate mint-only Gateway token and volume;
+self-hosted Compose and Kubernetes mount only that token into Gateway. The
+Signing Keys verifier retains its separate verify-only token. Explicit key
+reference, purpose and algorithm are now required on this public sign route
+so the caller cannot change an implicit key choice after the grant is minted;
+this is an intentional contract tightening in a predeployment product. This
+work still does not put a consumed proof at the final signing kernel call.
+The remaining issuer-DID producers, in-process signing paths, live
+OpenBao/Redis denial evidence, and deployment token qualification remain
+open before the KMS-only goal can be declared complete.
+The Gateway library suite passed 163 tests with one pre-existing live test
+ignored; its all-target warnings-denied Clippy, focused grant-path tests,
+deployment YAML and shell parsing, and scoped token-mount checks passed.

@@ -389,6 +389,8 @@ cmd_setup_secrets() {
   require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"
   flow_sign_grant_mint_token="$(resolve_secret_input FLOW_SIGN_GRANT_MINT_TOKEN)"
   require_resolved_secret FLOW_SIGN_GRANT_MINT_TOKEN "$flow_sign_grant_mint_token"
+  gateway_sign_grant_mint_token="$(resolve_secret_input GATEWAY_SIGN_GRANT_MINT_TOKEN)"
+  require_resolved_secret GATEWAY_SIGN_GRANT_MINT_TOKEN "$gateway_sign_grant_mint_token"
   signing_keys_grant_verify_token="$(resolve_secret_input SIGNING_KEYS_GRANT_VERIFY_TOKEN)"
   require_resolved_secret SIGNING_KEYS_GRANT_VERIFY_TOKEN "$signing_keys_grant_verify_token"
   notification_openbao_token="$(resolve_secret_input NOTIFICATION_OPENBAO_TOKEN)"
@@ -439,6 +441,7 @@ cmd_setup_secrets() {
     --from-literal=SIGNING_KEYS_OPENBAO_TOKEN="$signing_keys_openbao_token" \
     --from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token" \
     --from-literal=FLOW_SIGN_GRANT_MINT_TOKEN="$flow_sign_grant_mint_token" \
+    --from-literal=GATEWAY_SIGN_GRANT_MINT_TOKEN="$gateway_sign_grant_mint_token" \
     --from-literal=SIGNING_KEYS_GRANT_VERIFY_TOKEN="$signing_keys_grant_verify_token" \
     --from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token" \
     --dry-run=client -o yaml | kubectl apply -f -
