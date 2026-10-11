@@ -15880,3 +15880,11 @@ and public-input cases; locked offline Cargo metadata, direct rustfmt and diff
 checks passed. The full Issuance library suite then passed 574 tests with 8
 ignored. This correction is local until the current hosted head finishes,
 and other neutral JSON fields still need the K10 data-flow review.
+
+On pushed UI head `828bc6ecd`, the Rust Service Tests (contracts) job in
+[run 38164123792](https://github.com/ElevenID/marty-ui/actions/runs/38164123792)
+completed successfully, including the beta passport reconciliation and native
+batch PostgreSQL step that failed on the prior head. Release Contract Tests
+also passed. Canvas, the plugin image, service images and the aggregate CI Gate
+still need their terminal exact-head results; the local Application Template
+guard above is not part of this pushed head.
