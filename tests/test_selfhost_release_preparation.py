@@ -80,6 +80,26 @@ def test_lock_staging_checks_exact_source_provenance_and_full_profile_closure() 
     assert "selfhost-lock-preparation-unqualified-" not in str(jobs["publish-manifest"])
 
 
+def test_prepared_consumer_is_separate_and_cannot_qualify_or_publish() -> None:
+    jobs = workflow()["jobs"]
+    consumer = jobs["preflight-selfhost-prepared-consumer"]
+    assert consumer["if"] == "inputs.prepare_selfhost_lock == true"
+    assert consumer["needs"] == ["prepare-selfhost-image-lock"]
+    assert "preflight-selfhost-prepared-consumer" not in jobs["publish-manifest"]["needs"]
+    source = "\n".join(step.get("run", "") for step in consumer["steps"])
+    assert "scripts/check_prepared_selfhost_consumer.py" in source
+    assert "prepared/prepared-selfhost-bundle.zip" in source
+    assert "--source-checkout \"$GITHUB_WORKSPACE\"" in source
+    assert 'DOCKER_CONFIG="$RUNNER_TEMP/selfhost-anonymous-docker-config"' in source
+    assert 'docker pull "$image"' in source
+    assert "docker compose --profile '*'" in source
+    assert "scripts/release_transaction.py validate" in source
+    assert '--stack-lock release/stack-lock.json' in source
+    assert '--source-sha "$GITHUB_SHA"' in source
+    assert '.gates | length == 2' in source
+    assert "docker compose up" not in source
+
+
 def test_rust_only_release_rejects_retired_issuance_image_inputs() -> None:
     value = workflow()
     assert "infrastructure images" in value.get("on", value.get(True))[

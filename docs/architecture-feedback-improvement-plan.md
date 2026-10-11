@@ -121,7 +121,7 @@ Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, 
 | A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Pure Python-value extraction [UI #1060](https://github.com/ElevenID/marty-ui/pull/1060), mixed-roster/body-reader unit coverage [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) merged. [#1112](https://github.com/ElevenID/marty-ui/pull/1112) moved pure self-host fixture controls and an Envoy scalar-value matrix to fast owners; [#1124](https://github.com/ElevenID/marty-ui/pull/1124), [#1126](https://github.com/ElevenID/marty-ui/pull/1126), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added layered worker/configuration and typed-transport owners. Real CLI, ZIP, Compose, Envoy-image/process, database, and published-process guarantees retain their acceptance owners. |
 | A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Provenance, producer, scenario, and input safeguards [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050), [#1055](https://github.com/ElevenID/marty-ui/pull/1055), [#1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1076](https://github.com/ElevenID/marty-ui/pull/1076)–[#1079](https://github.com/ElevenID/marty-ui/pull/1079), and [#1082](https://github.com/ElevenID/marty-ui/pull/1082) merged. [#1102](https://github.com/ElevenID/marty-ui/pull/1102) moved 33 pinned historical replays to weekly/manual full qualification while retaining native regression; [#1106](https://github.com/ElevenID/marty-ui/pull/1106) requires exact-main full qualification before stable tagging. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) guards preparer dispatch; [#1112](https://github.com/ElevenID/marty-ui/pull/1112) guards Canvas helper mount inputs. Neither establishes complete historical reference closure or authorizes additional qualification skips. |
 | A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | [UI #1064](https://github.com/ElevenID/marty-ui/pull/1064) retained fail-closed planned-skip and all-success merge-group gates; [#1080](https://github.com/ElevenID/marty-ui/pull/1080), [#1082](https://github.com/ElevenID/marty-ui/pull/1082), and [#1107](https://github.com/ElevenID/marty-ui/pull/1107) proved initial exact-input selection. [#1110](https://github.com/ElevenID/marty-ui/pull/1110), [#1112](https://github.com/ElevenID/marty-ui/pull/1112), [#1119](https://github.com/ElevenID/marty-ui/pull/1119), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added bounded test-only paths; [#1114](https://github.com/ElevenID/marty-ui/pull/1114) preserves failed timing-artifact upload as a failing job after one same-job retry. [#1129](https://github.com/ElevenID/marty-ui/pull/1129) moved two required Canvas configuration proofs earlier while retaining late checks. [#1131](https://github.com/ElevenID/marty-ui/pull/1131) measured a 12m20s compile-stage saving by removing duplicate compatible compilation. [#1134](https://github.com/ElevenID/marty-ui/pull/1134) routed exact shadow-planner-only PR inputs to their release owner, and [#1135](https://github.com/ElevenID/marty-ui/pull/1135) measured a 10m56s scoped PR run versus 39m50s for #1134's full-matrix PR; protected #1135 still ran all 23 jobs. This is observed scoped feedback, not a whole-repository average or faster Canvas execution. Unknown/mixed implementation inputs remain broad. |
-| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | deferred | Independent Core dependency PRs now show mixed critical paths: preflight was last for UUID but affected tests were last for cc. The expensive KMS/EUDI steps share Cargo inputs on one runner; splitting without reuse would duplicate setup/compilation and has no demonstrated gate saving. Keep the feature/security matrix and re-evaluate only with a proven artifact-reuse or fail-fast design. Exact runs and step timings appear in the A7 refresh below. [Core #350](https://github.com/ElevenID/marty-core/pull/350) removed a duplicate EUDI invocation without a claimed whole-pipeline saving. |
+| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | CI | Seven of eight recent successful Core PR runs put preflight after affected tests, justifying a bounded fail-fast pilot. [Core #359](https://github.com/ElevenID/marty-core/pull/359) separates cheap policy/format checks, unchanged KMS graphs, and unchanged lint/compatibility checks; the aggregate gate requires all three. Exact-head PR CI passed: cheap preflight 34s, KMS 6m50s, lint/compatibility 8m25s, affected tests 11m40s, Rust CodeQL 12m28s. Independent review found no P1-P3 issue. This proves earlier cheap-check feedback, not a general end-to-end saving. GitHub approval and protected merge-group qualification remain pending; the full feature/security matrix stays required. |
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Separate immutable nightly prerelease tag selected by the user. [#1106](https://github.com/ElevenID/marty-ui/pull/1106) merged the release-owner inventory, fail-closed tag grammar, and exact-main stable qualification gate. [#1113](https://github.com/ElevenID/marty-ui/pull/1113) merged a read-only nightly-claim preparation step; [#1127](https://github.com/ElevenID/marty-ui/pull/1127) merged typed OID4VP/verification transport, not signed-presentation trust or nightly E2E qualification. Neither creates qualified nightly deployment nor relaxes official E2E/YouTube gates. |
 
 2026-10-10 A3 source-inventory candidate: a tracked-source test compares the
@@ -1840,6 +1840,30 @@ Next: finish the release artifact/installer closure and clean-install proof
 (PKG02/PKG08), then select a single independent verification boundary
 (PKG03/PKG06) with its test ledger.
 
+October 11 split-pipeline checkpoint: routine worker, Flow, and self-host
+acceptance have separate owners and fail-closed PR selectors, while protected
+merge/release checks remain complete. The manually dispatched verification
+candidate build and consumer workflows passed on September 1, but explicitly
+produce short-lived nonpublishing evidence, not a supported independent
+verification distribution. The latest successful Stack release
+([run 38108653408](https://github.com/ElevenID/marty-ui/actions/runs/38108653408))
+still used the three-role UI/services/migrations transaction; its optional
+`build-selfhost-lock-roles` and `prepare-selfhost-image-lock` jobs were skipped.
+The nightly claim/intake workflows have no hosted runs yet, so no qualified
+nightly artifact or happy-path release gate is established. CICD02-04 and the
+PKG01 product boundary decision remain open; these are not CI feedback savings.
+
+October 11 product sequencing direction: the user selected Linux amd64
+self-host and offline verification library/headless verifier as the first
+independent product qualifications. Kiosk and separate issuance remain preview
+candidates until their dependency and hardware contracts are proven. This
+chooses work order, not a supported-product designation; PKG01's exact
+capability/dependency matrix and CICD02-04 artifact gates remain open. Local
+baseline checks passed: 67 no-Canvas bundle policy tests, the actual rendered
+Compose bundle check for all 20 converted Rust services, and 137 verification
+candidate build policy tests (one existing skip). None is a fresh installed
+product journey.
+
 PKG02 source check and the
 [v1.1.231 release transaction](https://github.com/ElevenID/marty-ui/releases/download/v1.1.231/release-transaction.json)
 confirm a concrete mismatch: `.github/workflows/cd.yml` declares release images under
@@ -3346,18 +3370,47 @@ queue attempt passed the same database-contract step and all required checks;
 the precise first-attempt failure mechanism remains unproven without retained
 Flow stderr.
 
-A6 Canvas port-handoff reliability follow-up (2026-10-11, local candidate):
+A6 Canvas port-handoff reliability follow-up (2026-10-11):
 the published-contract runner starts the Flow target only after the Canvas
 composition target finishes, while worker and self-host targets still overlap
-composition. This avoids racing Flow's reserved-then-released loopback ports
+composition. This removes overlap that could race Flow's reserved-then-released loopback ports
 against composition peers; it preserves all four target executions, failure
 status, timing/log replay, and cancellation cleanup. Local focused sequencing,
 failure and signal tests pass, including TERM before and after Flow starts;
 shell syntax, Ruff, and diff checks pass. A worktree-derived local
 PostgreSQL/Redis stack is healthy on separate loopback ports. Independent
-review found no P1-P3 issue. Hosted exact-head and protected queue checks
-remain pending, so neither the proposed cause nor a runtime speedup is claimed
-as proven.
+review found no P1-P3 issue. Exact-head PR CI and protected merge-group
+[run 38109538306](https://github.com/ElevenID/marty-ui/actions/runs/38109538306)
+passed with every required lane, including Canvas. [#1253](https://github.com/ElevenID/marty-ui/pull/1253)
+merged as `55dfb953f` at 2026-10-11 04:10:58 UTC. The sequencing and retained
+coverage are proven; the original intermittent failure mechanism and a runtime
+speedup are not claimed as proven.
+
+A6 public-builder linker pilot [UI #1254](https://github.com/ElevenID/marty-ui/pull/1254)
+(2026-10-11): the exact-head PR's public self-host image step passed in
+16m03s (04:07:13–04:23:16 UTC), compared with 6m56s on #1253's different
+head/runner. The new linker flag changes Cargo cache keys, so this first run
+cannot measure steady-state speed. Its unchanged host-side packager-loader
+compile remained in progress for more than 30 minutes, versus 12 seconds on
+#1253; the changed Dockerfile does not directly set that host compilation's
+flags. GitHub accepted normal and force cancellation; the runner later became
+terminal as cancelled, and GitHub returned 404 for that job's partial log.
+Auto-merge was paused pending evidence. Only the cancelled Canvas job was
+rerun on the same exact head (attempt 2); required coverage remained unchanged.
+On attempt 2 the reusable-test compile completed in 10m04s, the public image
+build in 15m08s, the unchanged host-side image-loader preparation in 10s,
+and the database suites in 10m23s. All required exact-head PR checks passed.
+The first attempt's loader stall did not reproduce on this same-head rerun;
+its cause remains unknown. Sanitized public-builder counters showed 123
+dependency-cook and 15 release-binary cache misses, compared with zero
+release-binary misses on #1253's warm protected build. Different cache states
+do not establish a linker speedup. Protected combined-head
+[run 38115564108](https://github.com/ElevenID/marty-ui/actions/runs/38115564108)
+passed all required checks and #1254 merged as `917ecca57` at 06:11 UTC.
+Its reusable-test compile, public image, image-loader preparation, and
+database suite steps took 7m03s, 10m45s, 7s, and 7m10s respectively. The
+[main cache warm-up](https://github.com/ElevenID/marty-ui/actions/runs/38117238266)
+was queued immediately after merge; steady-state timings remain unproven.
 
 ## Design references
 
