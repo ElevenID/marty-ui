@@ -1,15 +1,14 @@
 """No-start ownership checks for a downloaded self-host installation."""
 
 import json
-import sys
+import runpy
 from pathlib import Path
 
 import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-from check_selfhost_install_secret_closure import validate
+validate = runpy.run_path(str(ROOT / "scripts/check_selfhost_install_secret_closure.py"))["validate"]
 
 
 def fixture(tmp_path, *, secrets=("required", "optional")):
