@@ -493,7 +493,7 @@ async fn public_service_signing_requires_gateway_service_credential() {
             Some("dev-signing-keys-internal-api-key"),
             StatusCode::UNAUTHORIZED,
         ),
-        (Some(dedicated_key), StatusCode::SERVICE_UNAVAILABLE),
+        (Some(dedicated_key), StatusCode::UNAUTHORIZED),
     ] {
         let mut request =
             Request::post("/v1/signing-keys/services/service-a/sign?organization_id=org-a")

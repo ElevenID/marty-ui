@@ -15463,3 +15463,14 @@ prior-run result, token-custody separation, local full-workspace Clippy pass,
 and the installed consumer's remaining qualification limit. Core #355 is
 still green and mergeable with protected review required; Credentials #313 is
 green, mergeable, and draft. Neither status qualifies a release artifact.
+
+Run `38149505674` passed Rust lint, Release contracts, feature regression,
+browser/UI and security checks, but its Rust service contracts job exposed one
+stale HTTP golden-vector expectation. A request with the dedicated Gateway
+service credential but no signing grant is correctly denied with HTTP 401;
+the test still expected HTTP 503 from the older unavailable-service path.
+The local correction requires 401, preserving the intended rule that an API
+credential alone never authorizes issuer signing. The focused test and all 16
+`marty-signing-keys --test http_golden_vectors` cases pass locally. This fix
+is held for a grouped push until the running image, OpenBao and Canvas jobs
+finish and their results are inspected.
