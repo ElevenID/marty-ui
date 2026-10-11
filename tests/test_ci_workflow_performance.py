@@ -20,6 +20,20 @@ CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_TEST_COMMAND = "python -m pytest tests -v --tb=short --durations=20"
 
 
+def test_crawler_uses_the_locally_installed_puppeteer_browser_cli() -> None:
+    job = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"][
+        "test-ui-crawler-artifacts"
+    ]
+    bootstrap = next(
+        step["run"]
+        for step in job["steps"]
+        if step.get("name") == "Bootstrap released UI dependencies"
+    )
+    assert bootstrap.index("bun install") < bootstrap.index(
+        "bun x --no-install puppeteer browsers install"
+    )
+
+
 def test_selfhost_operator_guide_is_a_packaged_input() -> None:
     manifest = json.loads(
         (ROOT / "deploy-config" / "bundles" / "selfhost.json").read_text(
