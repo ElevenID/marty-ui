@@ -3393,8 +3393,13 @@ The first attempt's loader stall did not reproduce on this same-head rerun;
 its cause remains unknown. Sanitized public-builder counters showed 123
 dependency-cook and 15 release-binary cache misses, compared with zero
 release-binary misses on #1253's warm protected build. Different cache states
-do not establish a linker speedup. #1254 is in the protected merge queue;
-combined-head checks and main cache warming remain pending.
+do not establish a linker speedup. Protected combined-head
+[run 38115564108](https://github.com/ElevenID/marty-ui/actions/runs/38115564108)
+passed all required checks and #1254 merged as `917ecca57` at 06:11 UTC.
+Its reusable-test compile, public image, image-loader preparation, and
+database suite steps took 7m03s, 10m45s, 7s, and 7m10s respectively. The
+[main cache warm-up](https://github.com/ElevenID/marty-ui/actions/runs/38117238266)
+was queued immediately after merge; steady-state timings remain unproven.
 
 ## Design references
 
