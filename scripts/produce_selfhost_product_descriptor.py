@@ -19,7 +19,7 @@ from record_selfhost_bundle_preparation import record
 def _json(path: Path) -> dict:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        raise ValueError(f"{path.name} must contain a JSON object")
+        raise TypeError(f"{path.name} must contain a JSON object")
     return value
 
 
@@ -31,7 +31,7 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
         raise ValueError("preparation receipt must be unqualified")
     source_sha, run_id = receipt.get("source_sha"), receipt.get("run_id")
     if not isinstance(source_sha, str) or not isinstance(run_id, str):
-        raise ValueError("preparation receipt lacks source/run identity")
+        raise TypeError("preparation receipt lacks source/run identity")
     # Re-extract and verify the complete ZIP, its owned inventory, embedded lock,
     # rendered Compose image closure, and every recorded byte digest.
     if receipt != record(archive, image_lock, transaction, source_sha, run_id):
@@ -48,7 +48,7 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
         raise ValueError("image lock release differs from transaction")
     locked_images = lock.get("services")
     if not isinstance(locked_images, dict):
-        raise ValueError("image lock lacks service closure")
+        raise TypeError("image lock lacks service closure")
     for role in ("services", "migrations"):
         recorded = claim["images"][role]
         exact_image = recorded["uri"] + "@" + recorded["digest"]

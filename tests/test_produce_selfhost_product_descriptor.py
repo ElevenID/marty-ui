@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import release_transaction as transaction  # noqa: E402
-from produce_selfhost_product_descriptor import produce  # noqa: E402
-from record_selfhost_bundle_preparation import record  # noqa: E402
+import release_transaction as transaction
+from produce_selfhost_product_descriptor import produce
+from record_selfhost_bundle_preparation import record
 
 
 def write_json(path, value):
