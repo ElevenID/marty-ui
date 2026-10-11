@@ -1076,14 +1076,31 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
 #[tokio::test]
 #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
-    use std::str::FromStr;
+    use std::{io::Write, str::FromStr};
 
     use der::{DecodePem, Encode};
+    use marty_signing_grant::{
+        minter::GrantMinter, replay::RedisGrantReplayStore, verifier::GrantVerifier, SigningOrigin,
+    };
+    use marty_signing_keys::{
+        documents::DocumentStore, http::router_with_all_keys_and_grants, profiles::ProfileStore,
+    };
     use x509_cert::name::Name;
     use x509_cert::request::CertReq;
 
     let redis_url = disposable_signing_redis_url().await;
     let (endpoint, token) = disposable_signing_openbao().await;
+    let mint_token = std::env::var("MARTY_TEST_GRANT_MINT_TOKEN")
+        .expect("scoped GatewayService mint token for disposable OpenBao");
+    let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN")
+        .expect("scoped grant verifier token for disposable OpenBao");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, token);
+    assert_ne!(verify_token, token);
+    let mut mint_file = tempfile::NamedTempFile::new().unwrap();
+    mint_file.write_all(mint_token.as_bytes()).unwrap();
+    let mut verify_file = tempfile::NamedTempFile::new().unwrap();
+    verify_file.write_all(verify_token.as_bytes()).unwrap();
     let organization_id = format!("gateway-service-csr-{}", uuid::Uuid::new_v4().simple());
     let service_id = format!("service-csr-{}", uuid::Uuid::new_v4().simple());
     let key_reference = format!("service-csr-key-{}", uuid::Uuid::new_v4().simple());
@@ -1124,23 +1141,50 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap();
     assert!(raw.contains("auth_reference_envelope"));
     assert!(!raw.contains(&token));
-    let signing = signing_router(
+    let verifier = GrantVerifier::for_managed_openbao(
+        &endpoint,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(store.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         "internal-signing-key".into(),
         Some("dedicated-service-sign-gateway-key-000001".into()),
+        None,
+        None,
+        None,
+        None,
+        false,
         Some(store.clone()),
+        Some(DocumentStore::from_connection(store.connection())),
+        None,
+        Some(ProfileStore::from_connection(store.connection())),
         None,
         None,
-        None,
-        None,
-        None,
+        Some(verifier),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let signing_url = format!("http://{}", listener.local_addr().unwrap());
     let signing_server = tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
-    let gateway = gateway_with_signing_http(signing_url, &organization_id);
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::GatewayService,
+        mint_file.path().to_path_buf(),
+    )
+    .unwrap();
+    let mut gateway_state = signing_gateway_state(signing_url);
+    let identity = Arc::new(SigningIdentity {
+        organization_id: organization_id.clone(),
+    });
+    let state = Arc::get_mut(&mut gateway_state).unwrap();
+    state.identities = identity.clone();
+    state.memberships = identity;
+    state.service_sign_grant_minter = Some(minter);
+    let gateway = gateway_router(gateway_state);
     let route = format!("/v1/signing-keys/services/{service_id}/certificate-csr");
     let subject = json!({
-        "country":"US", "organization":"ElevenID Beta", "common_name":"Pilot DSC"
+        "country":"US", "organization":"ElevenID Beta", "common_name":"Pilot DSC",
+        "key_reference":key_reference, "algorithm":"ES256"
     });
     let request = |path: &str, body: &Value, authenticated: bool| {
         let mut builder = Request::post(path).header("content-type", "application/json");
@@ -1172,7 +1216,7 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .oneshot(request(&route, &forged, true))
         .await
         .unwrap();
-    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
 
     let response = gateway
         .clone()

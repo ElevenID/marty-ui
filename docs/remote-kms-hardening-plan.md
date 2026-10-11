@@ -14779,3 +14779,25 @@ successfully. Contracts failed at the Gateway executable fixture described
 above; the OpenBao image, Rust service image and Canvas lanes remain
 in progress at this observation. Preserve that failed CI run as evidence and
 wait for its terminal result before the next grouped push.
+
+The local service-CSR batch now uses that shared intent and exact-sign proof
+end to end. Gateway mints the dedicated GatewayService grant only for a
+tenant-authenticated `signing-key:create` request, replaces any caller-supplied
+grant, and binds subject, registered key reference, algorithm, route and
+tenant. Signing Keys requires its dedicated Gateway credential, resolves the
+registered KMS public key and algorithm, consumes the one-use grant, and
+checks the generated CSR signing bytes immediately before the remote KMS sign.
+The UI sends the selected service key reference and algorithm. The opt-in
+disposable OpenBao acceptance fixtures now require separate scoped grant mint
+and verify tokens. Gateway's focused grant test and warnings-denied Gateway /
+Signing Keys Clippy pass; the UI CSR test passes. The cross-service acceptance
+test has not yet run against live disposable infrastructure. The earlier
+hosted OpenBao plugin image lane now passes; Canvas is still running.
+
+Before publishing the next grouped head, complete the cross-service compile
+and local review, then wait for the current hosted run to terminate. Remaining
+KMS-only authorization work includes authenticated scoped producers for issuer
+certificate CSR and the five issuer certificate/CSR signs, issuance service
+signing producers, and a kernel-wide barrier so no direct `kms::sign` call can
+operate without an exact consumed or ceremony-specific proof. Preserve holder
+proof and certificate behavior while removing any private-key paths and tables.

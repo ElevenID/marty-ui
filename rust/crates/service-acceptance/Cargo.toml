@@ -21,6 +21,7 @@ marty-gateway = { path = "../../services/gateway" }
 marty-crypto.workspace = true
 marty-issuance-service = { path = "../../services/issuance" }
 marty-passport-auth = { path = "../passport-auth" }
+marty-signing-grant = { path = "../signing-grant" }
 marty-signing-keys = { path = "../../services/signing-keys" }
 marty-verification = { workspace = true, features = ["csca"] }
 mmf-platform.workspace = true

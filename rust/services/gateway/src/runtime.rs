@@ -33,7 +33,9 @@ use futures_core::Stream;
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
-use marty_signing_grant::{minter::GrantMinter, GrantBinding, GrantError, SigningOrigin};
+use marty_signing_grant::{
+    ceremony::ServiceCsrIntent, minter::GrantMinter, GrantBinding, GrantError, SigningOrigin,
+};
 use mmf_platform::{
     ContentTypeDecision, EntityTagDecision, EntityTagPolicy, GatewayProxy, GatewayRequest,
     GatewayResponse, HttpMethod, IdempotencyBegin, IdempotencyRequest, IdempotencyResponse,
@@ -1271,21 +1273,33 @@ async fn proxy_handler(
         );
     }
     overrides.body = canonical_body;
-    if is_public_service_sign_path(&public_path) {
+    if is_public_service_sign_path(&public_path) || is_public_service_csr_path(&public_path) {
         let body = overrides
             .body
             .as_deref()
             .or(gateway_request.body.as_deref());
-        let grant = match mint_public_service_sign_grant(
-            &state,
-            &identity,
-            &public_path,
-            &request_id,
-            body,
-            &overrides,
-        )
-        .await
-        {
+        let grant_result = if is_public_service_csr_path(&public_path) {
+            mint_public_service_csr_grant(
+                &state,
+                &identity,
+                &public_path,
+                &request_id,
+                body,
+                &overrides,
+            )
+            .await
+        } else {
+            mint_public_service_sign_grant(
+                &state,
+                &identity,
+                &public_path,
+                &request_id,
+                body,
+                &overrides,
+            )
+            .await
+        };
+        let grant = match grant_result {
             Ok(grant) => grant,
             Err(response) => return response,
         };
@@ -3159,7 +3173,7 @@ fn proxy_overrides(
             .headers
             .insert("x-api-key".into(), state.issuance_service_api_key.clone());
     }
-    if is_public_service_sign_path(path)
+    if (is_public_service_sign_path(path) || is_public_service_csr_path(path))
         && identity.required_permission.as_deref() == Some("signing-key:create")
         && identity.organization_id.is_some()
     {
@@ -3221,6 +3235,87 @@ fn is_public_service_sign_path(path: &str) -> bool {
     path.strip_prefix("/v1/signing-keys/services/")
         .and_then(|tail| tail.strip_suffix("/sign"))
         .is_some_and(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+}
+
+fn is_public_service_csr_path(path: &str) -> bool {
+    path.strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/certificate-csr"))
+        .is_some_and(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+}
+
+async fn mint_public_service_csr_grant(
+    state: &GatewayRuntimeState,
+    identity: &TrustedIdentityContext,
+    path: &str,
+    operation_id: &str,
+    body: Option<&[u8]>,
+    overrides: &ProxyOverrides,
+) -> Result<String, Response> {
+    let organization_id = identity
+        .organization_id
+        .as_deref()
+        .filter(|tenant| !tenant.trim().is_empty())
+        .ok_or_else(|| detail_response(403, "Trusted CSR tenant is required."))?;
+    if identity.required_permission.as_deref() != Some("signing-key:create")
+        || overrides.headers.get("x-api-key") != state.service_sign_gateway_key.as_ref()
+    {
+        return Err(detail_response(403, "CSR operation is not authorized."));
+    }
+    let service_id = path
+        .strip_prefix("/v1/signing-keys/services/")
+        .and_then(|tail| tail.strip_suffix("/certificate-csr"))
+        .filter(|service_id| !service_id.is_empty() && !service_id.contains('/'))
+        .ok_or_else(|| detail_response(404, "CSR service route not found."))?;
+    let request: ServiceCsrIntent = body
+        .and_then(|bytes| serde_json::from_slice(bytes).ok())
+        .ok_or_else(|| detail_response(422, "CSR request is invalid."))?;
+    if request
+        .organization_id
+        .as_deref()
+        .is_some_and(|tenant| tenant != organization_id)
+    {
+        return Err(detail_response(
+            403,
+            "CSR tenant does not match authorization.",
+        ));
+    }
+    if request.key_reference.is_empty()
+        || request.key_reference != request.key_reference.trim()
+        || !matches!(request.algorithm.as_str(), "ES256" | "ES384" | "ES512")
+    {
+        return Err(detail_response(
+            422,
+            "CSR key reference or algorithm is invalid.",
+        ));
+    }
+    let minter = state
+        .service_sign_grant_minter
+        .as_ref()
+        .ok_or_else(|| detail_response(503, "CSR grant minter is unavailable."))?;
+    let payload = request.bound_payload();
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id,
+        organization_id,
+        route: path,
+        service_id: Some(service_id),
+        issuer_did: None,
+        key_reference: Some(&request.key_reference),
+        key_purpose: "x509_csr",
+        algorithm: &request.algorithm,
+        payload: &payload,
+    };
+    minter
+        .mint(&binding)
+        .await
+        .map_err(|error| match error {
+            GrantError::Malformed | GrantError::BindingMismatch | GrantError::Expired => {
+                detail_response(422, "CSR grant binding is invalid.")
+            }
+            _ => detail_response(503, "CSR grant minter is unavailable."),
+        })?
+        .to_header_value()
+        .map_err(|_| detail_response(503, "CSR grant minter is unavailable."))
 }
 
 async fn mint_public_service_sign_grant(
@@ -7945,30 +8040,77 @@ mod tests {
             .header(marty_signing_grant::HEADER_NAME, "forged-grant")
             .body(Body::from(body.to_string()))
             .unwrap();
-        let response = router.oneshot(request).await.unwrap();
+        let response = router.clone().oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 1);
+            let forwarded = &calls[0].1;
+            let header = forwarded
+                .headers
+                .get(marty_signing_grant::HEADER_NAME)
+                .expect("trusted Gateway grant");
+            assert_ne!(header, "forged-grant");
+            let grant = marty_signing_grant::GrantEnvelope::from_header_value(header).unwrap();
+            assert_eq!(grant.claims.origin, SigningOrigin::GatewayService);
+            assert_eq!(grant.claims.organization_id, "org-1");
+            assert_eq!(grant.claims.route, forwarded.path);
+            assert_eq!(grant.claims.service_id.as_deref(), Some("service-1"));
+            assert_eq!(grant.claims.key_reference.as_deref(), Some("issuer-key-1"));
+            assert_eq!(grant.claims.key_purpose, "vc_jwt_issuer");
+            assert_eq!(grant.claims.algorithm, "ES256");
+            assert_eq!(
+                grant.claims.payload_sha256_b64,
+                URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(b"payload"))
+            );
+            assert_eq!(
+                forwarded.headers.get("x-api-key").map(String::as_str),
+                Some("dedicated-service-sign-gateway-key-000001")
+            );
+        }
+        let csr_body = json!({
+            "country": "US",
+            "organization": "ElevenID Beta",
+            "common_name": "signer.example.test",
+            "key_reference": "issuer-key-1",
+            "algorithm": "ES256"
+        });
+        let csr_request = Request::builder()
+            .method("POST")
+            .uri("/v1/signing-keys/services/service-1/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .header(marty_signing_grant::HEADER_NAME, "forged-grant")
+            .body(Body::from(csr_body.to_string()))
+            .unwrap();
+        let csr_response = router.oneshot(csr_request).await.unwrap();
+        assert_eq!(csr_response.status(), StatusCode::OK);
         let calls = recorder.0.lock().unwrap();
-        assert_eq!(calls.len(), 1);
-        let forwarded = &calls[0].1;
-        let header = forwarded
+        assert_eq!(calls.len(), 2);
+        let forwarded_csr = &calls[1].1;
+        let csr_header = forwarded_csr
             .headers
             .get(marty_signing_grant::HEADER_NAME)
-            .expect("trusted Gateway grant");
-        assert_ne!(header, "forged-grant");
-        let grant = marty_signing_grant::GrantEnvelope::from_header_value(header).unwrap();
-        assert_eq!(grant.claims.origin, SigningOrigin::GatewayService);
-        assert_eq!(grant.claims.organization_id, "org-1");
-        assert_eq!(grant.claims.route, forwarded.path);
-        assert_eq!(grant.claims.service_id.as_deref(), Some("service-1"));
-        assert_eq!(grant.claims.key_reference.as_deref(), Some("issuer-key-1"));
-        assert_eq!(grant.claims.key_purpose, "vc_jwt_issuer");
-        assert_eq!(grant.claims.algorithm, "ES256");
+            .expect("trusted CSR grant");
+        assert_ne!(csr_header, "forged-grant");
+        let csr_grant = marty_signing_grant::GrantEnvelope::from_header_value(csr_header).unwrap();
+        let csr_intent: ServiceCsrIntent = serde_json::from_value(csr_body).unwrap();
+        assert_eq!(csr_grant.claims.origin, SigningOrigin::GatewayService);
+        assert_eq!(csr_grant.claims.organization_id, "org-1");
+        assert_eq!(csr_grant.claims.route, forwarded_csr.path);
+        assert_eq!(csr_grant.claims.service_id.as_deref(), Some("service-1"));
         assert_eq!(
-            grant.claims.payload_sha256_b64,
-            URL_SAFE_NO_PAD.encode(<sha2::Sha256 as sha2::Digest>::digest(b"payload"))
+            csr_grant.claims.key_reference.as_deref(),
+            Some("issuer-key-1")
+        );
+        assert_eq!(csr_grant.claims.key_purpose, "x509_csr");
+        assert_eq!(csr_grant.claims.algorithm, "ES256");
+        assert_eq!(
+            csr_grant.claims.payload_sha256_b64,
+            marty_signing_grant::payload_digest(&csr_intent.bound_payload())
         );
         assert_eq!(
-            forwarded.headers.get("x-api-key").map(String::as_str),
+            forwarded_csr.headers.get("x-api-key").map(String::as_str),
             Some("dedicated-service-sign-gateway-key-000001")
         );
         drop(calls);

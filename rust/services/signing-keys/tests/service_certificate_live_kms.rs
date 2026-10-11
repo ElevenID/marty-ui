@@ -8,11 +8,18 @@ use axum::{
     Json, Router,
 };
 use der::DecodePem;
+use marty_signing_grant::{
+    ceremony::ServiceCsrIntent, mint_bound, replay::RedisGrantReplayStore,
+    transit::TransitGrantClient, verifier::GrantVerifier, GrantBinding, SigningOrigin, HEADER_NAME,
+};
 use marty_signing_keys::{
-    documents::DocumentStore, http::router_with_dependencies, profiles::ProfileStore,
+    documents::DocumentStore,
+    http::{router_with_all_keys_and_grants, router_with_dependencies},
+    profiles::ProfileStore,
     registry::RegistryStore,
 };
 use serde_json::{json, Value};
+use std::io::Write;
 use tokio::net::TcpListener;
 use tower::ServiceExt;
 use x509_cert::request::CertReq;
@@ -115,11 +122,22 @@ async fn public_config_rejects_private_material_without_changing_registry() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL, MARTY_TEST_OPENBAO_URL, and MARTY_TEST_OPENBAO_TOKEN"]
+#[ignore = "requires disposable Redis/OpenBao plus distinct scoped Gateway grant mint and verify tokens"]
 async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let bao_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    let mint_token =
+        std::env::var("MARTY_TEST_GRANT_MINT_TOKEN").expect("scoped Gateway mint token");
+    let verify_token =
+        std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN").expect("scoped grant verify token");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, bao_token);
+    assert_ne!(verify_token, bao_token);
+    assert_eq!(
+        std::env::var("BAO_ADDR").ok().as_deref(),
+        Some(bao_url.as_str())
+    );
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let key_name = format!("marty-service-csr-{suffix}");
     let organization_id = format!("test-service-csr-{suffix}");
@@ -178,14 +196,33 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
             .expect("Redis document connection"),
     );
     let profiles = ProfileStore::from_connection(registry.connection());
-    let app = router_with_dependencies(
+    let mut verify_file =
+        tempfile::NamedTempFile::new().expect("temporary grant verify token file");
+    verify_file
+        .write_all(verify_token.as_bytes())
+        .expect("write scoped verify token");
+    let verifier = GrantVerifier::for_managed_openbao(
+        &bao_url,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(registry.connection()),
+    )
+    .expect("mounted grant verifier");
+    let gateway_key = "disposable-gateway-service-sign-key";
+    let app = router_with_all_keys_and_grants(
         "test-internal-only".into(),
+        Some(gateway_key.into()),
+        None,
+        None,
+        None,
+        None,
+        false,
         Some(registry.clone()),
         Some(documents),
         None,
         Some(profiles.clone()),
         None,
         Some("beta.example".into()),
+        Some(verifier),
     );
     let register = Request::builder()
         .method("PATCH")
@@ -215,15 +252,47 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
         .expect("saved service");
     assert_eq!(persisted["services"][0]["key_reference"], key_name);
 
+    let csr_input: ServiceCsrIntent = serde_json::from_value(json!({
+        "country": "US", "organization": "ElevenID Beta", "common_name": "signer.example.test",
+        "key_reference": key_name, "algorithm": "ES256"
+    }))
+    .expect("CSR intent");
+    let grant_client = TransitGrantClient::for_origin(&bao_url, SigningOrigin::GatewayService)
+        .expect("mounted Gateway service grant key");
+    let route = "/v1/signing-keys/services/service-a/certificate-csr";
+    let grant_payload = csr_input.bound_payload();
+    let operation_id = format!("disposable-csr-{suffix}");
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id: &operation_id,
+        organization_id: &organization_id,
+        route,
+        service_id: Some("service-a"),
+        issuer_did: None,
+        key_reference: Some(&key_name),
+        key_purpose: "x509_csr",
+        algorithm: "ES256",
+        payload: &grant_payload,
+    };
+    let grant = mint_bound(&grant_client, &mint_token, &binding)
+        .await
+        .expect("scoped OpenBao CSR grant")
+        .to_header_value()
+        .expect("CSR grant header");
+    let csr_body = json!({
+        "country": "US", "organization": "ElevenID Beta", "common_name": "signer.example.test",
+        "key_reference": key_name, "algorithm": "ES256"
+    })
+    .to_string();
     let request = Request::builder()
         .method("POST")
         .uri(format!(
             "/v1/signing-keys/services/service-a/certificate-csr?organization_id={organization_id}"
         ))
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "country": "US", "organization": "ElevenID Beta", "common_name": "signer.example.test"
-        }).to_string()))
+        .header("x-api-key", gateway_key)
+        .header(HEADER_NAME, &grant)
+        .body(Body::from(csr_body.clone()))
         .expect("CSR request");
     let response = app
         .clone()
@@ -231,6 +300,20 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
         .await
         .expect("CSR route response");
     assert_eq!(response.status(), StatusCode::OK);
+    let replay = Request::builder()
+        .method("POST")
+        .uri(format!("{route}?organization_id={organization_id}"))
+        .header("content-type", "application/json")
+        .header("x-api-key", gateway_key)
+        .header(HEADER_NAME, &grant)
+        .body(Body::from(csr_body))
+        .expect("replayed CSR request");
+    let replayed = app
+        .clone()
+        .oneshot(replay)
+        .await
+        .expect("replayed CSR response");
+    assert_eq!(replayed.status(), StatusCode::UNAUTHORIZED);
     let body: Value = serde_json::from_slice(
         &to_bytes(response.into_body(), 1_048_576)
             .await

@@ -2490,6 +2490,7 @@ jobs:
           container=""
           trap 'if [ -n "$container" ]; then docker rm --force "$container" >/dev/null 2>&1 || true; fi; rm -rf "$token_dir"' EXIT
           printf '%s\n' 'synthetic-gateway-grant-mint-token' > "$token_dir/gateway-grant-mint-token"
+          chmod 755 "$token_dir"
           chmod 644 "$token_dir/gateway-grant-mint-token"
           container="$(docker run --detach \
             --env ENVIRONMENT=test \

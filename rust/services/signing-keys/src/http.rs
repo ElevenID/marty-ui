@@ -59,6 +59,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_signing_grant::{
+    ceremony::ServiceCsrIntent,
     replay::ConsumedGrant,
     verifier::{GrantAuthorizationError, GrantVerifier},
     GrantBinding, GrantEnvelope, SigningOrigin, HEADER_NAME,
@@ -761,16 +762,6 @@ struct ServiceCertificateRequest {
     cert_pem: String,
     #[serde(default)]
     cert_chain_pem: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ServiceCsrRequest {
-    #[serde(default)]
-    organization_id: Option<String>,
-    country: String,
-    organization: String,
-    common_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6153,8 +6144,15 @@ async fn generate_public_service_csr(
     State(state): State<AppState>,
     Path(service_id): Path<String>,
     Query(scope): Query<OrganizationScope>,
-    Json(input): Json<ServiceCsrRequest>,
+    headers: HeaderMap,
+    Json(input): Json<ServiceCsrIntent>,
 ) -> Response {
+    if !authorize_service_sign(&state, &headers) {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "CSR service authentication required.",
+        );
+    }
     if let Err(error) =
         validate_service_scope(&scope.organization_id, input.organization_id.as_deref())
     {
@@ -6180,6 +6178,15 @@ async fn generate_public_service_csr(
             )
         }
     };
+    if service_config.get("key_reference").and_then(Value::as_str)
+        != Some(input.key_reference.as_str())
+        || input.algorithm != algorithm
+    {
+        return public_error(
+            StatusCode::CONFLICT,
+            "CSR key or algorithm changed after authorization.",
+        );
+    }
     let csr = match certificate_csr::prepare(
         &public_jwk,
         algorithm,
@@ -6192,7 +6199,61 @@ async fn generate_public_service_csr(
         Ok(csr) => csr,
         Err(error) => return public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
     };
+    let Some(header) = headers
+        .get(HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return public_error(StatusCode::UNAUTHORIZED, "CSR signing grant required.");
+    };
+    let Ok(envelope) = GrantEnvelope::from_header_value(header) else {
+        return public_error(StatusCode::UNAUTHORIZED, "CSR signing grant is invalid.");
+    };
+    let route = format!("/v1/signing-keys/services/{service_id}/certificate-csr");
+    let intent_payload = input.bound_payload();
+    let intent = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id: &envelope.claims.operation_id,
+        organization_id: &scope.organization_id,
+        route: &route,
+        service_id: Some(&service_id),
+        issuer_did: None,
+        key_reference: Some(&input.key_reference),
+        key_purpose: "x509_csr",
+        algorithm,
+        payload: &intent_payload,
+    };
+    let consumed = match consume_bound_signing_grant(&state, header, &intent).await {
+        Ok(consumed) => consumed,
+        Err(GrantAuthorizationError::Denied) => {
+            return public_error(StatusCode::UNAUTHORIZED, "CSR signing grant is denied.")
+        }
+        Err(GrantAuthorizationError::Unavailable) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CSR signing grant verifier is unavailable.",
+            )
+        }
+    };
+    let actual_sign = marty_signing_grant::replay::FinalSignBinding {
+        organization_id: &scope.organization_id,
+        route: &route,
+        service_id: Some(&service_id),
+        issuer_did: None,
+        key_reference: Some(&input.key_reference),
+        key_purpose: "x509_csr",
+        algorithm,
+        payload: csr.signing_bytes(),
+    };
+    let Some(approved) = consumed.approve_service_csr(&intent, &actual_sign) else {
+        return public_error(StatusCode::UNAUTHORIZED, "CSR signing intent changed.");
+    };
     service_config["algorithm"] = json!(algorithm);
+    if !approved.authorizes(&actual_sign) {
+        return public_error(
+            StatusCode::UNAUTHORIZED,
+            "CSR signing authorization expired or changed.",
+        );
+    }
     let signed = match kms::sign(SignRequest {
         service_config,
         payload_b64: URL_SAFE_NO_PAD.encode(csr.signing_bytes()),
@@ -9174,12 +9235,13 @@ mod public_contract_tests {
             assert!(serde_json::from_value::<ServiceCertificateRequest>(forged).is_err());
         }
         let csr = json!({
-            "country": "US", "organization": "ElevenID Beta", "common_name": "Signing Service"
+            "country": "US", "organization": "ElevenID Beta", "common_name": "Signing Service",
+            "key_reference": "registered-service-key", "algorithm": "ES256"
         });
-        assert!(serde_json::from_value::<ServiceCsrRequest>(csr.clone()).is_ok());
+        assert!(serde_json::from_value::<ServiceCsrIntent>(csr.clone()).is_ok());
         let mut forged = csr;
-        forged["key_reference"] = json!("attacker-selected-key");
-        assert!(serde_json::from_value::<ServiceCsrRequest>(forged).is_err());
+        forged["private_key"] = json!("attacker-key");
+        assert!(serde_json::from_value::<ServiceCsrIntent>(forged).is_err());
         assert!(validate_service_scope("org-a", Some("org-b")).is_err());
     }
 
@@ -9634,16 +9696,22 @@ mod public_contract_tests {
                 "POST",
                 "certificate-csr",
                 json!({
-                    "country": "US", "organization": "Test", "common_name": "Test"
+                    "country": "US", "organization": "Test", "common_name": "Test",
+                    "key_reference": "service-key", "algorithm": "ES256"
                 }),
             ))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let response = router
-            .oneshot(request("POST", "certificate-csr", json!({
-                "country": "US", "organization": "Test", "common_name": "Test", "private_key": "forged"
-            })))
+            .oneshot(request(
+                "POST",
+                "certificate-csr",
+                json!({
+                    "country": "US", "organization": "Test", "common_name": "Test",
+                    "key_reference": "service-key", "algorithm": "ES256", "private_key": "forged"
+                }),
+            ))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);

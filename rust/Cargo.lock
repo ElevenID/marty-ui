@@ -4580,6 +4580,7 @@ dependencies = [
  "marty-gateway",
  "marty-issuance-service",
  "marty-passport-auth",
+ "marty-signing-grant",
  "marty-signing-keys",
  "marty-verification",
  "mmf-platform",
