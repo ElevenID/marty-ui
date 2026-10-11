@@ -5,7 +5,7 @@ use std::{collections::HashMap, path::PathBuf};
 use thiserror::Error;
 
 use crate::{
-    replay::{RedisGrantReplayStore, ReplayError},
+    replay::{ConsumedGrant, RedisGrantReplayStore, ReplayError},
     transit::{TransitGrantClient, TransitGrantError},
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
@@ -62,7 +62,7 @@ impl GrantVerifier {
         &self,
         header_value: &str,
         binding: &GrantBinding<'_>,
-    ) -> Result<(), GrantAuthorizationError> {
+    ) -> Result<ConsumedGrant, GrantAuthorizationError> {
         let envelope = GrantEnvelope::from_header_value(header_value)
             .map_err(|_| GrantAuthorizationError::Denied)?;
         let client = self
@@ -209,12 +209,22 @@ mod tests {
         );
         assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
         assert!(
-            matches!(first, Err(GrantAuthorizationError::Denied))
-                || matches!(second, Err(GrantAuthorizationError::Denied))
+            matches!(first.as_ref(), Err(GrantAuthorizationError::Denied))
+                || matches!(second.as_ref(), Err(GrantAuthorizationError::Denied))
         );
-        assert_eq!(
-            verifier.authorize(&header, &binding).await,
+        let consumed = first
+            .ok()
+            .or_else(|| second.ok())
+            .expect("one use succeeds");
+        assert!(consumed.authorizes(&binding));
+        let altered = GrantBinding {
+            payload: b"altered.payload",
+            ..binding
+        };
+        assert!(!consumed.authorizes(&altered));
+        assert!(matches!(
+            verifier.authorize(&header, &altered).await,
             Err(GrantAuthorizationError::Denied)
-        );
+        ));
     }
 }

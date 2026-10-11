@@ -129,13 +129,16 @@ pub enum GrantError {
 /// A bound grant authenticated by OpenBao. Only this crate can construct it;
 /// callers must atomically consume it before any issuer KMS signing call.
 pub struct VerifiedGrant {
-    nonce: String,
-    expires_at: i64,
+    claims: GrantClaims,
 }
 
 impl VerifiedGrant {
     pub fn expires_at(&self) -> i64 {
-        self.expires_at
+        self.claims.expires_at
+    }
+
+    pub fn nonce(&self) -> &str {
+        &self.claims.nonce
     }
 }
 
@@ -212,8 +215,7 @@ pub async fn verify_bound(
         return Err(GrantError::InvalidHmac);
     }
     Ok(VerifiedGrant {
-        nonce: claims.nonce.clone(),
-        expires_at: claims.expires_at,
+        claims: claims.clone(),
     })
 }
 

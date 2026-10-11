@@ -14388,3 +14388,13 @@ and a marked disposable Redis DB 13, passed the opt-in concurrent authorization
 test: exactly one use succeeded, and a later replay was denied. Both
 containers were stopped. This verifier is still not wired into production
 routes, so issuer signing is not yet tenant-authorized end to end.
+
+Grant-kernel self-review tightened the authority type: replay consumption
+now yields an unforgeable, non-cloneable `ConsumedGrant` instead of `()`.
+It retains the authenticated claims and can recheck the exact tenant, route,
+operation, key, purpose, algorithm, payload and expiry at the point of KMS
+use. This lets the lower signing kernel require proof that cannot be
+constructed by a direct backend caller. The crate tests, warnings-denied
+Clippy and the fresh disposable OpenBao/Redis concurrent authorization test
+pass after the change. Production signing methods have not yet been changed
+to require this type.
