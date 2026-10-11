@@ -45,3 +45,8 @@ full-stack readiness, Gateway authentication, a customer verification or
 issuance journey, third-party image provenance, a fresh independent install,
 or release eligibility. `/health` alone is insufficient evidence: the JWKS
 read is what exercises the service's Redis-backed document store.
+
+The same opt-in consumer now follows this witness with a separate
+[Organization runtime probe](selfhost-scoped-installed-organization-runtime-probe.md).
+It reuses the exact bundle and disposable migrations but does not turn either
+probe into a release gate or a full-stack qualification.

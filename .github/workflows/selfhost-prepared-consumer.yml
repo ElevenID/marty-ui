@@ -186,6 +186,25 @@ jobs:
             "$RUNNER_TEMP/selfhost-installed-signing.json" >/dev/null
           cp "$RUNNER_TEMP/selfhost-installed-signing.json" ./selfhost-installed-signing.json
           cp "$RUNNER_TEMP/producer-binding.json" ./selfhost-producer-binding.json
+      - name: Probe scoped Organization runtime on exact Linux amd64 image
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/probe_selfhost_installed_organization.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --source-sha "$GITHUB_SHA" --run-id "$STACK_RUN_ID" \
+            > "$RUNNER_TEMP/selfhost-installed-organization.json"
+          jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2 and .runtime.schema == "marty.selfhost-organization-runtime-probe/v1" and .runtime.qualification == "unqualified" and .runtime.service == "organization" and .runtime.seeded_organization_id == "00000000-0000-0000-0000-000000000001" and .runtime.organization_count >= 1 and .runtime.missing_token_status == 401 and .runtime.wrong_token_status == 401' \
+            "$RUNNER_TEMP/selfhost-installed-organization.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-installed-organization.json" ./selfhost-installed-organization.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: steps.select.outputs.present == 'true'
         with:
@@ -193,6 +212,7 @@ jobs:
           path: |
             selfhost-installed-bootstrap.json
             selfhost-installed-signing.json
+            selfhost-installed-organization.json
             selfhost-runtime-plan.json
             selfhost-producer-binding.json
           if-no-files-found: error

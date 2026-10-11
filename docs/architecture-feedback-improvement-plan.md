@@ -3477,6 +3477,20 @@ merged as `b3603a401` after successful protected
 Its staged Linux bootstrap smoke is not proof of a fresh installed product. Keep all these
 probes outside official release gates and supported-product claims.
 
+October 11 PKG02 continuation: [#1269](https://github.com/ElevenID/marty-ui/pull/1269)
+merged an exact DIDComm test-source PR-feedback boundary as `44bb0b25f`;
+it did not qualify a self-host installation. [#1270](https://github.com/ElevenID/marty-ui/pull/1270)
+merged the fail-closed extracted self-host runtime DAG plan as `895dea482`.
+The plan binds the verified ZIP, image lock, transaction, source and run to all
+31 rendered roles, their health/completion dependencies, secret declarations,
+and acyclic startup order, but does not start the complete stack. The next
+local, unmerged PKG02 candidate adds an opt-in Organization installed-image
+probe after the prepared consumer's bootstrap and signing probes: exact locked
+Linux/amd64 services image, isolated twice-migrated PostgreSQL/Redis fixture,
+private generated service token, seeded authenticated read and missing/wrong
+token denial, with owned cleanup. This remains explicitly unqualified and
+does not change an official gate, release tier, or supported-product claim.
+
 October 11 A0-A7 reconciliation: [#1236](https://github.com/ElevenID/marty-ui/pull/1236)
 inventoried four residual service-owned test targets, and [#1238](https://github.com/ElevenID/marty-ui/pull/1238)
 added a fail-closed gRPC constructor inventory; neither completes all runtime
