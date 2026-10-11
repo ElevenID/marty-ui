@@ -83,8 +83,17 @@ impl SigningOrigin {
                         && matches!(claims.key_purpose.as_str(), "csca" | "x509_doc_signer")
                         && matches!(claims.algorithm.as_str(), "ES256" | "ES384" | "ES512"))
             }
-            Self::IssuanceCredential | Self::IssuanceCanvas | Self::IssuancePassport => {
+            Self::IssuanceCredential => {
                 issuer_did_route_shape(claims)
+                    && matches!(claims.key_purpose.as_str(), "vc_jwt_issuer" | "mdoc_dsc")
+            }
+            Self::IssuanceCanvas => {
+                issuer_did_route_shape(claims)
+                    && claims.key_purpose == "lti_tool_signing"
+                    && claims.algorithm == "RS256"
+            }
+            Self::IssuancePassport => {
+                issuer_did_route_shape(claims) && claims.key_purpose == "x509_doc_signer"
             }
         }
     }
@@ -512,8 +521,19 @@ mod tests {
             claims.route = "/internal/compat/issuer-dids/sign".into();
             claims.service_id = None;
             claims.issuer_did = Some("did:web:issuer.example".into());
-            if origin == SigningOrigin::FlowWalletRequest {
-                claims.key_purpose = "oid4vp_request_signing".into();
+            match origin {
+                SigningOrigin::FlowWalletRequest => {
+                    claims.key_purpose = "oid4vp_request_signing".into();
+                }
+                SigningOrigin::IssuanceCanvas => {
+                    claims.key_purpose = "lti_tool_signing".into();
+                    claims.algorithm = "RS256".into();
+                }
+                SigningOrigin::IssuancePassport => {
+                    claims.key_purpose = "x509_doc_signer".into();
+                }
+                SigningOrigin::GatewayIssuerDid | SigningOrigin::IssuanceCredential => {}
+                SigningOrigin::GatewayService => unreachable!("not an issuer-DID origin"),
             }
             let binding = GrantBinding {
                 origin,
@@ -555,5 +575,64 @@ mod tests {
             bound_input(&claims, &binding(b"exact.payload"), 1_700_000_001),
             Err(GrantError::Malformed)
         );
+    }
+
+    #[test]
+    fn issuance_tokens_cannot_cross_credential_canvas_or_passport_purposes() {
+        for (origin, allowed_purpose, algorithm) in [
+            (SigningOrigin::IssuanceCredential, "vc_jwt_issuer", "ES256"),
+            (SigningOrigin::IssuanceCredential, "mdoc_dsc", "ES256"),
+            (SigningOrigin::IssuanceCanvas, "lti_tool_signing", "RS256"),
+            (SigningOrigin::IssuancePassport, "x509_doc_signer", "ES256"),
+        ] {
+            let mut claims = sample_claims();
+            claims.origin = origin;
+            claims.route = "/internal/compat/issuer-dids/sign".into();
+            claims.service_id = None;
+            claims.issuer_did = Some("did:web:issuer.example".into());
+            claims.key_purpose = allowed_purpose.into();
+            claims.algorithm = algorithm.into();
+            let binding = GrantBinding {
+                origin,
+                operation_id: &claims.operation_id,
+                organization_id: &claims.organization_id,
+                route: &claims.route,
+                service_id: None,
+                issuer_did: claims.issuer_did.as_deref(),
+                key_reference: claims.key_reference.as_deref(),
+                key_purpose: &claims.key_purpose,
+                algorithm: &claims.algorithm,
+                payload: b"exact.payload",
+            };
+            assert!(bound_input(&claims, &binding, 1_700_000_001).is_ok());
+            for forbidden in [
+                "vc_jwt_issuer",
+                "mdoc_dsc",
+                "lti_tool_signing",
+                "x509_doc_signer",
+            ] {
+                if forbidden == allowed_purpose {
+                    continue;
+                }
+                let mut elevated = claims.clone();
+                elevated.key_purpose = forbidden.into();
+                let result = bound_input(&elevated, &binding, 1_700_000_001);
+                if origin == SigningOrigin::IssuanceCredential
+                    && matches!(forbidden, "vc_jwt_issuer" | "mdoc_dsc")
+                {
+                    assert_eq!(result, Err(GrantError::BindingMismatch));
+                } else {
+                    assert_eq!(result, Err(GrantError::Malformed));
+                }
+            }
+            if origin == SigningOrigin::IssuanceCanvas {
+                let mut elevated = claims.clone();
+                elevated.algorithm = "ES256".into();
+                assert_eq!(
+                    bound_input(&elevated, &binding, 1_700_000_001),
+                    Err(GrantError::Malformed)
+                );
+            }
+        }
     }
 }

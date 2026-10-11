@@ -14904,3 +14904,15 @@ OpenBao policies, but Issuance has no minter dependency or production token
 mount yet. Also narrow each Issuance origin's route/purpose/algorithm
 capabilities in the shared grant crate after the final caller inventory;
 currently those three origins accept the generic issuer-DID route shape.
+
+Issuance origin capability hardening, local grouped follow-up: the shared
+grant validator now limits the credential token to `vc_jwt_issuer` or
+`mdoc_dsc`, the Canvas token to `lti_tool_signing` with RS256, and the
+passport token to `x509_doc_signer`. This prevents a compromised producer's
+scoped OpenBao token from authenticating another Issuance product's purpose
+on the shared issuer-DID route. The bound request still requires an exact
+tenant, DID, resolved key, algorithm, payload and operation match. The
+cross-purpose regression, all signing-grant unit tests (16 pass, three
+explicitly live-only ignored) and warnings-denied all-target Clippy pass
+locally. This narrows existing claims; producer minting and operation-record
+authority remain to implement before K6 is complete.
