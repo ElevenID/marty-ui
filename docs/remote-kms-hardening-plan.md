@@ -14885,3 +14885,22 @@ before the Gateway forwards to Signing Keys. Do not infer an origin from
 credential format or mint a broad Gateway grant for arbitrary body fields.
 The current hosted head remains active; keep this producer work local until
 its CI evidence is collected.
+
+Issuance producer design audit: `HttpDidSigner` currently has no grant header,
+origin, operation ID or key reference. Credential context parsing validates
+`signing_key_reference` in the resolved response but only retains it in
+`raw_context`; make it a typed value at the signing boundary so the grant
+binds the key selected by the issuer profile. Canvas's resolved identity
+returns the full resolver response, but its signature-provider trait passes
+only tenant, DID, verification method and bytes. Extend that trait with the
+validated resolved key reference and an operation ID supplied by each Canvas
+caller. Passport's managed context likewise retains profile, method and
+certificate but drops the resolved key reference; pass the persisted job ID
+from `PassportHttpService::sign` and the validated reference into the shared
+signer. Configure three fixed-origin minters with separate token files for
+credential, Canvas and passport operations, and require a grant before any
+production signing HTTP call. The existing bootstrap creates their scoped
+OpenBao policies, but Issuance has no minter dependency or production token
+mount yet. Also narrow each Issuance origin's route/purpose/algorithm
+capabilities in the shared grant crate after the final caller inventory;
+currently those three origins accept the generic issuer-DID route shape.
