@@ -334,6 +334,8 @@ pub fn bound_input(
             .nonce
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || (claims.origin == SigningOrigin::IssuanceReadiness
+            && !readiness_challenge_matches_operation(binding))
     {
         return Err(GrantError::Malformed);
     }
@@ -373,6 +375,17 @@ pub fn payload_digest(payload: &[u8]) -> String {
 
 fn bounded(value: &str, max_bytes: usize) -> bool {
     !value.is_empty() && value.len() <= max_bytes && !value.chars().any(char::is_control)
+}
+
+fn readiness_challenge_matches_operation(binding: &GrantBinding<'_>) -> bool {
+    binding
+        .payload
+        .strip_prefix(b"marty-canvas-readiness-v1\0")
+        .and_then(|rest| rest.strip_prefix(binding.organization_id.as_bytes()))
+        .and_then(|rest| rest.strip_prefix(b"\0"))
+        .is_some_and(|nonce| {
+            nonce.len() == 32 && binding.operation_id == URL_SAFE_NO_PAD.encode(nonce)
+        })
 }
 
 #[cfg(test)]
@@ -554,6 +567,17 @@ mod tests {
                 SigningOrigin::GatewayService => unreachable!("not an issuer-DID origin"),
                 SigningOrigin::GatewayIssuerDid => unreachable!("CSR-only origin"),
             }
+            let payload = if origin == SigningOrigin::IssuanceReadiness {
+                let mut challenge = b"marty-canvas-readiness-v1\0".to_vec();
+                challenge.extend_from_slice(claims.organization_id.as_bytes());
+                challenge.push(0);
+                challenge.extend_from_slice(&[42; 32]);
+                claims.operation_id = URL_SAFE_NO_PAD.encode([42; 32]);
+                challenge
+            } else {
+                b"exact.payload".to_vec()
+            };
+            claims.payload_sha256_b64 = payload_digest(&payload);
             let binding = GrantBinding {
                 origin,
                 operation_id: &claims.operation_id,
@@ -564,7 +588,7 @@ mod tests {
                 key_reference: claims.key_reference.as_deref(),
                 key_purpose: &claims.key_purpose,
                 algorithm: &claims.algorithm,
-                payload: b"exact.payload",
+                payload: &payload,
             };
             assert!(bound_input(&claims, &binding, 1_700_000_001).is_ok());
             let mut missing_key = claims.clone();
@@ -655,6 +679,17 @@ mod tests {
             claims.issuer_did = Some("did:web:issuer.example".into());
             claims.key_purpose = allowed_purpose.into();
             claims.algorithm = algorithm.into();
+            let payload = if origin == SigningOrigin::IssuanceReadiness {
+                let mut challenge = b"marty-canvas-readiness-v1\0".to_vec();
+                challenge.extend_from_slice(claims.organization_id.as_bytes());
+                challenge.push(0);
+                challenge.extend_from_slice(&[42; 32]);
+                claims.operation_id = URL_SAFE_NO_PAD.encode([42; 32]);
+                challenge
+            } else {
+                b"exact.payload".to_vec()
+            };
+            claims.payload_sha256_b64 = payload_digest(&payload);
             let binding = GrantBinding {
                 origin,
                 operation_id: &claims.operation_id,
@@ -665,7 +700,7 @@ mod tests {
                 key_reference: claims.key_reference.as_deref(),
                 key_purpose: &claims.key_purpose,
                 algorithm: &claims.algorithm,
-                payload: b"exact.payload",
+                payload: &payload,
             };
             assert!(bound_input(&claims, &binding, 1_700_000_001).is_ok());
             for forbidden in [
@@ -713,7 +748,7 @@ mod tests {
                         key_reference: claims.key_reference.as_deref(),
                         key_purpose: &claims.key_purpose,
                         algorithm: supported,
-                        payload: b"exact.payload",
+                        payload: &payload,
                     };
                     assert!(
                         bound_input(&supported_claims, &supported_binding, 1_700_000_001).is_ok()
@@ -727,5 +762,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn readiness_token_only_signs_the_tenant_bound_fresh_challenge() {
+        let mut claims = sample_claims();
+        claims.origin = SigningOrigin::IssuanceReadiness;
+        claims.route = "/internal/compat/issuer-dids/sign".into();
+        claims.service_id = None;
+        claims.issuer_did = Some("did:web:issuer.example".into());
+        claims.key_purpose = "vc_jwt_issuer".into();
+        claims.operation_id = URL_SAFE_NO_PAD.encode([7; 32]);
+        let mut payload = b"marty-canvas-readiness-v1\0".to_vec();
+        payload.extend_from_slice(claims.organization_id.as_bytes());
+        payload.push(0);
+        payload.extend_from_slice(&[7; 32]);
+        fn binding<'a>(claims: &'a GrantClaims, payload: &'a [u8]) -> GrantBinding<'a> {
+            GrantBinding {
+                origin: claims.origin,
+                operation_id: &claims.operation_id,
+                organization_id: &claims.organization_id,
+                route: &claims.route,
+                service_id: None,
+                issuer_did: claims.issuer_did.as_deref(),
+                key_reference: claims.key_reference.as_deref(),
+                key_purpose: &claims.key_purpose,
+                algorithm: &claims.algorithm,
+                payload,
+            }
+        }
+        claims.payload_sha256_b64 = payload_digest(&payload);
+        assert!(bound_input(&claims, &binding(&claims, &payload), 1_700_000_001).is_ok());
+        for mutation in [0, 26, payload.len() - 1] {
+            let mut invalid = payload.clone();
+            invalid[mutation] ^= 1;
+            let mut altered_claims = claims.clone();
+            altered_claims.payload_sha256_b64 = payload_digest(&invalid);
+            assert_eq!(
+                bound_input(
+                    &altered_claims,
+                    &binding(&altered_claims, &invalid),
+                    1_700_000_001
+                ),
+                Err(GrantError::Malformed)
+            );
+        }
+        let mut arbitrary_claims = claims.clone();
+        arbitrary_claims.payload_sha256_b64 = payload_digest(b"arbitrary signing bytes");
+        assert_eq!(
+            bound_input(
+                &arbitrary_claims,
+                &binding(&arbitrary_claims, b"arbitrary signing bytes"),
+                1_700_000_001
+            ),
+            Err(GrantError::Malformed)
+        );
     }
 }

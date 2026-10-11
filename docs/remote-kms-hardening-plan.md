@@ -15021,3 +15021,9 @@ bootstrap include this eighth grant token. The signing-grant suite passes
 and all three edited shell scripts pass syntax checks. This is not an active
 producer: Issuance's readiness signer, deployment mounts, and closed-model
 fixtures still need the binding work before it can sign under this origin.
+The readiness origin additionally validates the exact challenge structure
+(`marty-canvas-readiness-v1`, tenant ID, 32-byte nonce) and requires its
+operation ID to encode that nonce. This means its scoped token cannot mint
+a valid grant for arbitrary credential-signing bytes. A positive and altered
+prefix/tenant/nonce regression now pass; the focused suite is 18 passing,
+three live-only ignored, with warnings-denied all-target Clippy clean.
