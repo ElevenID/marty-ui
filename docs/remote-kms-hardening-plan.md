@@ -15427,3 +15427,22 @@ merge suite passes 97 tests and 421 subtests with two opt-in cases skipped;
 the disposable live OpenBao bootstrap case separately passed. The exact
 installed signing image has not yet been run by this local check, so the
 consumer remains explicitly unqualified pending a prepared bundle.
+
+The merge reconciliation was pushed as UI #1192 head `70d208161` and exact-head
+CI run `38147716458`. A subsequent self-review separated the installed
+Signing Keys consumer's OpenBao token from migration custody: the disposable
+bootstrap now mints a managed-signing token with its own policy, alongside a
+verify-only signing-grant token, and keeps both out of the migration container.
+The live disposable OpenBao bootstrap passed its four scoped token ACL checks;
+the installed-signing and migration probes passed locally. This correction is
+committed locally as `46bf65830` and held for a grouped push after the running
+CI's complete outcome is inspected. The installed consumer is still unqualified
+until its exact image and bundle are exercised.
+
+Run `38147716458` exposed a shared Rust fixture's undeclared
+`marty-signing-grant` test dependency in `marty-flow-acceptance`. The same
+compile error accounts for its lint, contract, and Canvas job failures. The
+local correction declares the dev dependency and updates `Cargo.lock`;
+`cargo +1.95.0 check --locked --offline -p marty-flow-acceptance --tests`
+passes. Other jobs were still running when this finding was recorded. Batch
+this fix with the separate-token correction, then rerun exact-head CI.

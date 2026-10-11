@@ -28,6 +28,7 @@ marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-release-evidence = { path = "../release-evidence" }
+marty-signing-grant = { path = "../signing-grant" }
 marty-verification = { workspace = true, features = ["csca"] }
 mmf-platform.workspace = true
 mmf-security.workspace = true
