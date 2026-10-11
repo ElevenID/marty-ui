@@ -345,6 +345,15 @@ impl CanvasLifecycleDeliverySynchronizer {
                     .ok_or(CanvasLifecycleSyncError::TextEncoding)
             })
             .transpose()?;
+        let metadata_value: Value = serde_json::from_str(metadata.get())
+            .map_err(|_| CanvasLifecycleSyncError::TextEncoding)?;
+        if marty_key_material_policy::contains_private_key(&metadata_value)
+            || last_error.is_some_and(|value| {
+                marty_key_material_policy::contains_private_key(&Value::String(value.to_owned()))
+            })
+        {
+            return Err(error("private key material in Canvas lifecycle delivery").into());
+        }
         let rows = self
             .store
             .save(
@@ -776,6 +785,42 @@ mod tests {
                 .to_string(),
             "-18446744073709551615"
         );
+    }
+
+    #[tokio::test]
+    async fn mock_store_rejects_private_delivery_metadata_before_save() {
+        let store = Arc::new(MemoryStore::new(json!({
+            "canvas_program_binding_id": "binding-a"
+        })));
+        struct PrivateProvider;
+        #[async_trait]
+        impl CanvasLifecycleStatusProvider for PrivateProvider {
+            async fn synchronize(
+                &self,
+                _context: CanvasLifecycleCredential<'_>,
+                _platform: &Value,
+                _delivery: &Value,
+                _action: CredentialLifecycleAction,
+                _reason: Option<&str>,
+            ) -> Result<LosslessObject, CanvasLifecycleProviderError> {
+                Ok(crate::lossless_json::object(
+                    json!({"provider_result": {"private_jwk": {"kty": "OKP", "d": "private-seed"}}})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                ))
+            }
+        }
+        let synchronizer = CanvasLifecycleDeliverySynchronizer {
+            store: store.clone(),
+            provider: Arc::new(PrivateProvider),
+        };
+        let error = synchronizer
+            .synchronize(&credential(), CredentialLifecycleAction::Suspend, None)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("private key material"));
+        assert!(store.saves.lock().unwrap().is_empty());
     }
 
     #[test]

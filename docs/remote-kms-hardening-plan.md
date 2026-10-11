@@ -16112,3 +16112,13 @@ sync-reason rejection with unchanged credential/event/delivery rows; normal
 lifecycle and Canvas retry behavior still passed. Issuance all-targets
 warnings-denied Clippy passed and the disposable database was removed. This
 stays in the grouped local batch.
+
+K10 Canvas lifecycle final-write follow-up: a configured status provider can
+merge its result or failure diagnostic into delivery metadata after the
+credential-management input guard. The synchronizer's final save now parses
+the exact lossless JSON payload and rejects private material in metadata or
+last-error text before the store call. A provider-returned private JWK was
+rejected with zero saves in the focused lifecycle suite (8 passed); normal
+provider success, failure retry and profile-gate cases still passed. Issuance
+all-targets warnings-denied Clippy passed. This remains in the grouped local
+batch pending the previous hosted Canvas result.
