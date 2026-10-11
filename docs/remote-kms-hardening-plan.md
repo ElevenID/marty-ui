@@ -13768,3 +13768,52 @@ The complete published-preflight suite passed 226/226 with one skipped in
 14m12s, including the six updated exact registration-roster hashes and both
 routine/full native-validation tier selections. Hosted Linux routine/full
 qualification is still required before this retirement is accepted.
+
+The grouped logging/Facts/Retry/validation retirement was published as UI
+#1192 head `2acb9f8cdd27f1fc10db562a2ed110e17c7354af` after the prior
+head's exact CI and CodeQL passed. Its new
+[CI 38104474349](https://github.com/ElevenID/marty-ui/actions/runs/38104474349)
+and [Rust CodeQL 38104474303](https://github.com/ElevenID/marty-ui/actions/runs/38104474303)
+are live, not qualification evidence yet. Keep this publication note in the
+next grouped source batch rather than trigger CI for documentation alone.
+
+Further K6 authority-source audit: Flow's HTTP `authorize` reads the
+gateway-supplied `x-user-id` and checks organization membership, while Gateway
+removes a caller's forged `x-user-id` before forwarding and then inserts its
+trusted identity. Request-object signing can occur later on a public wallet
+GET, after Flow has persisted the authorized instance; the original user
+session is not a signer request credential. Any purpose-scoped grant should
+therefore be issued from the authorized start/instance record and bound to
+the eventual signing bytes. Signing Keys must verify it independently; merely
+forwarding `x-user-id` or trusting Flow's body tenant repeats the current
+cross-tenant gap. The exact grant issuer/verifier and replay control remain
+an implementation gate.
+
+K6 deferred-sign detail: verification start already stores the authorized
+principal as `_marty_verification_principal_id` in the Flow instance context,
+alongside the resolved signing identity. A later public wallet GET loads that
+instance, prepares the compact JWT, asks the signing provider to sign its
+exact JWS input, and only then compare-and-swaps the request snapshot. The
+current `SigningRequest` omits instance ID, principal and any authority
+proof, and the HTTP provider forwards a caller-selected organization in both
+query and body. The stored principal and organization can anchor a delegated
+request-object operation, but Signing Keys must verify the grant against an
+authority independent of the caller, bind it to the exact JWS input and
+issuer profile, and reject replay before remote KMS. The current post-sign
+snapshot compare-and-swap cannot serve as the replay guard because two
+concurrent GETs can both reach the signer before one loses the swap. Preserve
+the public wallet retrieval and authorized start behavior while moving the
+authorization and one-use decision ahead of the remote sign.
+
+Exact-head UI `2acb9f8cd` qualification update: [CI
+38104474349](https://github.com/ElevenID/marty-ui/actions/runs/38104474349)
+exposed a stale offline capture example left by validation-oracle retirement.
+Rust Lint and Packaging and Rust Service Tests (contracts) failed while
+compiling `capture_canvas_published_oracle.rs`: it still called the removed
+`PublishedDatabase::start_with_worker_validation`. The local follow-up
+removes only that obsolete capture scenario and its stale usage text;
+the frozen validation corpus and native worker owner remain intact. The
+targeted Rust example `cargo check` and Clippy with warnings denied pass
+locally using toolchain 1.95.0; Rustfmt and diff hygiene pass. Other
+jobs and the exact-head CodeQL run are still active, and this local fix is
+not hosted qualification until a later grouped head passes.
