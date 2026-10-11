@@ -2486,12 +2486,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          token_dir="$(mktemp -d)"
+          container=""
+          trap 'if [ -n "$container" ]; then docker rm --force "$container" >/dev/null 2>&1 || true; fi; rm -rf "$token_dir"' EXIT
+          printf '%s\n' 'synthetic-gateway-grant-mint-token' > "$token_dir/gateway-grant-mint-token"
+          chmod 644 "$token_dir/gateway-grant-mint-token"
           container="$(docker run --detach \
             --env ENVIRONMENT=test \
             --env RATE_LIMIT_RPM=0 \
+            --env BAO_ADDR=http://127.0.0.1:8200 \
+            --env GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE=/run/secrets/gateway-grant-mint-token \
+            --volume "$token_dir:/run/secrets:ro" \
             --publish 127.0.0.1::8000 \
             marty-gateway:ci)"
-          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
           port="$(docker inspect \
             --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' \
             "$container")"

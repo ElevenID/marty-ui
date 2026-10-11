@@ -3,7 +3,7 @@
 use redis::aio::ConnectionManager;
 use thiserror::Error;
 
-use crate::{bound_input, GrantBinding, GrantClaims, VerifiedGrant};
+use crate::{bound_input, payload_digest, GrantBinding, GrantClaims, SigningOrigin, VerifiedGrant};
 
 const KEY_PREFIX: &str = "marty:issuer-signing-grant:used:v1:";
 const MAX_REPLAY_TTL_SECONDS: i128 = 66;
@@ -43,6 +43,32 @@ pub struct FinalSignBinding<'a> {
     pub payload: &'a [u8],
 }
 
+/// A CSR signing operation approved from one consumed Gateway grant after
+/// deriving the exact CSR bytes from the selected remote public key.
+pub struct ApprovedServiceCsrSign {
+    organization_id: String,
+    route: String,
+    service_id: String,
+    key_reference: String,
+    algorithm: String,
+    payload_sha256_b64: String,
+    expires_at: i64,
+}
+
+impl ApprovedServiceCsrSign {
+    pub fn authorizes(self, actual: &FinalSignBinding<'_>) -> bool {
+        chrono::Utc::now().timestamp() <= self.expires_at
+            && self.organization_id == actual.organization_id
+            && self.route == actual.route
+            && Some(self.service_id.as_str()) == actual.service_id
+            && actual.issuer_did.is_none()
+            && Some(self.key_reference.as_str()) == actual.key_reference
+            && actual.key_purpose == "x509_csr"
+            && self.algorithm == actual.algorithm
+            && self.payload_sha256_b64 == payload_digest(actual.payload)
+    }
+}
+
 impl ConsumedGrant {
     /// Recheck the exact operation at the point of KMS use, including expiry.
     /// Consuming the proof prevents a caller from using one grant for two signs.
@@ -66,6 +92,36 @@ impl ConsumedGrant {
             payload: actual.payload,
         };
         bound_input(&self.claims, &binding, chrono::Utc::now().timestamp()).is_ok()
+    }
+
+    pub fn approve_service_csr(
+        self,
+        intent: &GrantBinding<'_>,
+        actual: &FinalSignBinding<'_>,
+    ) -> Option<ApprovedServiceCsrSign> {
+        if self.claims.origin != SigningOrigin::GatewayService
+            || !intent.route.ends_with("/certificate-csr")
+            || intent.key_purpose != "x509_csr"
+            || bound_input(&self.claims, intent, chrono::Utc::now().timestamp()).is_err()
+            || actual.organization_id != intent.organization_id
+            || actual.route != intent.route
+            || actual.service_id != intent.service_id
+            || actual.issuer_did.is_some()
+            || actual.key_reference != intent.key_reference
+            || actual.key_purpose != "x509_csr"
+            || actual.algorithm != intent.algorithm
+        {
+            return None;
+        }
+        Some(ApprovedServiceCsrSign {
+            organization_id: actual.organization_id.to_owned(),
+            route: actual.route.to_owned(),
+            service_id: actual.service_id?.to_owned(),
+            key_reference: actual.key_reference?.to_owned(),
+            algorithm: actual.algorithm.to_owned(),
+            payload_sha256_b64: payload_digest(actual.payload),
+            expires_at: self.claims.expires_at,
+        })
     }
 }
 
@@ -113,7 +169,80 @@ impl RedisGrantReplayStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{payload_digest, SigningOrigin};
+    use crate::ceremony::ServiceCsrIntent;
+
+    #[test]
+    fn csr_approval_rechecks_generated_bytes_at_final_sign() {
+        let now = chrono::Utc::now().timestamp();
+        let csr: ServiceCsrIntent = serde_json::from_str(
+            r#"{"country":"US","organization":"Example","common_name":"example.invalid","key_reference":"key-1","algorithm":"ES256"}"#,
+        )
+        .unwrap();
+        let bound_payload = csr.bound_payload();
+        let route = "/v1/signing-keys/services/service-1/certificate-csr";
+        let claims = GrantClaims {
+            version: 1,
+            origin: SigningOrigin::GatewayService,
+            operation_id: "gateway-request-1".into(),
+            organization_id: "tenant-1".into(),
+            route: route.into(),
+            service_id: Some("service-1".into()),
+            issuer_did: None,
+            key_reference: Some("key-1".into()),
+            key_purpose: "x509_csr".into(),
+            algorithm: "ES256".into(),
+            payload_sha256_b64: payload_digest(&bound_payload),
+            issued_at: now,
+            expires_at: now + 30,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
+        };
+        let intent = GrantBinding {
+            origin: SigningOrigin::GatewayService,
+            operation_id: "gateway-request-1",
+            organization_id: "tenant-1",
+            route,
+            service_id: Some("service-1"),
+            issuer_did: None,
+            key_reference: Some("key-1"),
+            key_purpose: "x509_csr",
+            algorithm: "ES256",
+            payload: &bound_payload,
+        };
+        let final_sign = FinalSignBinding {
+            organization_id: "tenant-1",
+            route,
+            service_id: Some("service-1"),
+            issuer_did: None,
+            key_reference: Some("key-1"),
+            key_purpose: "x509_csr",
+            algorithm: "ES256",
+            payload: b"generated CSR signing bytes",
+        };
+        let approved = ConsumedGrant {
+            claims: claims.clone(),
+        }
+        .approve_service_csr(&intent, &final_sign)
+        .unwrap();
+        assert!(approved.authorizes(&final_sign));
+        let approved = ConsumedGrant {
+            claims: claims.clone(),
+        }
+        .approve_service_csr(&intent, &final_sign)
+        .unwrap();
+        assert!(!approved.authorizes(&FinalSignBinding {
+            payload: b"different CSR bytes",
+            ..final_sign
+        }));
+        assert!(ConsumedGrant { claims }
+            .approve_service_csr(
+                &intent,
+                &FinalSignBinding {
+                    key_reference: Some("other-key"),
+                    ..final_sign
+                }
+            )
+            .is_none());
+    }
 
     #[test]
     fn final_sign_rechecks_resolved_key_and_actual_bytes() {

@@ -14759,6 +14759,21 @@ Gateway minting, Signing Keys verification, the transition from verified
 intent to an exact generated-CSR signing proof, and live KMS acceptance remain
 open. Do not publish this partial feature independently.
 
+The shared grant crate now derives a move-only `ApprovedServiceCsrSign` only
+after one consumed Gateway service grant matches the canonical CSR intent,
+resolved tenant/service/key/algorithm and generated CSR signing bytes. It
+rechecks those exact bytes and expiry at the final sign call. Focused CSR
+mutation tests and warnings-denied Clippy pass. Gateway and Signing Keys have
+not yet adopted this API, so the service CSR route remains unprotected.
+
+The same hosted run's Rust Service Images lane failed at its Gateway image
+health smoke: the container exited before Docker exposed port 8000 because
+the workflow omitted the new OpenBao grant minter settings. The local CI
+fixture mounts a disposable synthetic grant token and sets the required
+address/file path; no live mint is implied by the health check. The workflow
+YAML parses and all 145 workflow-performance tests pass. The OpenBao image
+and Canvas lanes are still running at this observation.
+
 The current `5db9a4b7f` hosted release-contract lane has now completed
 successfully. Contracts failed at the Gateway executable fixture described
 above; the OpenBao image, Rust service image and Canvas lanes remain
