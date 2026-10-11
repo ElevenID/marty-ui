@@ -15604,3 +15604,5 @@ route with the rotated bearer, verifies the returned Ed25519 signature, checks
 `Cache-Control: no-store`, and requires 403 after deactivation. The complete
 `--rust-adapter` probe passed with this case, and warnings-denied Clippy for
 the test passed. Hold this addition for grouping with exact-head CI findings.
+The public route now also rejects the old bearer immediately after rotation;
+the complete disposable-stack probe passed again with that denial.

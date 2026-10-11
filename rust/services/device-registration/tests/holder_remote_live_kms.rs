@@ -434,6 +434,15 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         .await
         .expect("old bearer trust denial");
     assert_eq!(stale_snapshot.status(), reqwest::StatusCode::FORBIDDEN);
+    let stale_signature = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&enrolled.device_credential)
+        .json(&json!({"purpose":"holder_binding","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
+        .await
+        .expect("old bearer signing HTTP response");
+    assert_eq!(stale_signature.status(), reqwest::StatusCode::FORBIDDEN);
     assert_eq!(
         confirmations
             .profile_for_bearer(&replacement)
