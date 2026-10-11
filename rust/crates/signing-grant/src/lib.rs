@@ -43,6 +43,33 @@ impl SigningOrigin {
             Self::IssuancePassport => "marty-sign-grant-issuance-passport-v1",
         }
     }
+
+    fn authorizes_route_shape(self, claims: &GrantClaims) -> bool {
+        match self {
+            Self::GatewayService => claims
+                .route
+                .strip_prefix("/v1/signing-keys/services/")
+                .and_then(|tail| tail.strip_suffix("/sign"))
+                .is_some_and(|service_id| {
+                    !service_id.is_empty()
+                        && !service_id.contains('/')
+                        && claims.service_id.as_deref() == Some(service_id)
+                        && claims.issuer_did.is_none()
+                }),
+            Self::GatewayIssuerDid
+            | Self::FlowWalletRequest
+            | Self::IssuanceCredential
+            | Self::IssuanceCanvas
+            | Self::IssuancePassport => {
+                claims.route == "/internal/compat/issuer-dids/sign"
+                    && claims.service_id.is_none()
+                    && claims
+                        .issuer_did
+                        .as_deref()
+                        .is_some_and(|did| did.starts_with("did:"))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -229,6 +256,7 @@ pub fn bound_input(
     now_seconds: i64,
 ) -> Result<Vec<u8>, GrantError> {
     if claims.version != 1
+        || !claims.origin.authorizes_route_shape(claims)
         || !bounded(&claims.operation_id, 128)
         || !bounded(&claims.organization_id, 128)
         || !bounded(&claims.route, 256)
@@ -378,7 +406,7 @@ mod tests {
         claims.origin = SigningOrigin::FlowWalletRequest;
         assert_eq!(
             bound_input(&claims, &binding(b"exact.payload"), 1_700_000_001),
-            Err(GrantError::BindingMismatch)
+            Err(GrantError::Malformed)
         );
         claims = sample_claims();
         claims.key_reference = Some("other-key".into());
@@ -412,6 +440,47 @@ mod tests {
         assert_eq!(
             bound_input(&claims, &binding(b"exact.payload"), i64::MIN),
             Err(GrantError::Expired)
+        );
+    }
+
+    #[test]
+    fn origin_keys_cannot_authorize_a_different_signing_route() {
+        for origin in [
+            SigningOrigin::GatewayIssuerDid,
+            SigningOrigin::FlowWalletRequest,
+            SigningOrigin::IssuanceCredential,
+            SigningOrigin::IssuanceCanvas,
+            SigningOrigin::IssuancePassport,
+        ] {
+            let mut claims = sample_claims();
+            claims.origin = origin;
+            claims.route = "/internal/compat/issuer-dids/sign".into();
+            claims.service_id = None;
+            claims.issuer_did = Some("did:web:issuer.example".into());
+            let binding = GrantBinding {
+                origin,
+                operation_id: &claims.operation_id,
+                organization_id: &claims.organization_id,
+                route: "/internal/compat/issuer-dids/sign",
+                service_id: None,
+                issuer_did: Some("did:web:issuer.example"),
+                key_reference: claims.key_reference.as_deref(),
+                key_purpose: &claims.key_purpose,
+                algorithm: &claims.algorithm,
+                payload: b"exact.payload",
+            };
+            assert!(bound_input(&claims, &binding, 1_700_000_001).is_ok());
+            claims.route = "/v1/signing-keys/services/service-1/sign".into();
+            assert_eq!(
+                bound_input(&claims, &binding, 1_700_000_001),
+                Err(GrantError::Malformed)
+            );
+        }
+        let mut claims = sample_claims();
+        claims.service_id = Some("different-service".into());
+        assert_eq!(
+            bound_input(&claims, &binding(b"exact.payload"), 1_700_000_001),
+            Err(GrantError::Malformed)
         );
     }
 }

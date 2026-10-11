@@ -14493,3 +14493,13 @@ non-printable credentials without disclosing them. Grant crate tests (seven
 passed, three guarded live tests ignored), warnings-denied Clippy and Rustfmt
 pass. Production producer configuration, token mounts and end-to-end kernel
 enforcement remain open.
+
+Grant route/origin self-review: the shared authenticated-claim validator now
+requires a Gateway service origin to bind the service ID in its exact public
+sign route and forbids an issuer DID there. Issuer-DID origins require the
+exact internal issuer-DID route, an issuer DID and no service ID. This stops
+an origin-scoped Transit mint token from being used for a different signing
+route even if a caller could supply matching request fields. Eight local
+grant tests and warnings-denied Clippy pass. Certificate and CSR ceremonies
+need explicit, separately reviewed route/authority shapes before kernel
+enforcement; they cannot silently reuse an unrestricted issuer grant.
