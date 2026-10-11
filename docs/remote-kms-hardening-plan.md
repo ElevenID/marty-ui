@@ -13867,8 +13867,9 @@ acceptance compile/tier guard subsequently passed locally: 18 historical
 references, one native roster owner, one native validation owner and 132
 package-migrated cases were discovered from the compiled executable. The
 Canvas acceptance Clippy with warnings denied also passes locally. The
-complete published preflight is still running, and hosted Linux process
-qualification is required before this retirement is accepted.
+complete published preflight passed 226 tests with one skip in 12m02s,
+including exact registration pins and routine/full selection. Hosted Linux
+process qualification is still required before this retirement is accepted.
 
 K6 Issuance signer-origin review: `HttpDidSigner` is shared by credential
 building, Canvas LTI tool JWT signing, Canvas readiness challenge signing,
