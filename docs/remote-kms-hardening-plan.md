@@ -15372,3 +15372,15 @@ origin, tenant, issuer DID, resolved key reference, route, and exact payload
 digest before returning its remote Transit signature. These post-push review
 improvements remain local for the next grouped correction after the running
 exact-head CI reports its complete results.
+
+On run `38144557664`, Rust contracts failed only the native-Issuance
+`BAO_ADDR` negative assertion identified and corrected locally in
+`8c24c8c4a`; the other 15 Kubernetes contract cases passed on hosted Linux.
+Release Contract Tests failed eight cases in the Python native Kubernetes
+inventory that still expected the previous two-mount, no-`BAO_ADDR` template.
+Local `63cc6cd12` aligns that exact inventory with the four scoped grant
+tokens and third readonly mount, and adds missing-mount and wrong-token
+negative cases. The file passes 34 tests locally and Ruff is clean. The
+packaged image, Canvas composition and OpenBao plugin lanes were still live
+when these two fixes were committed locally; defer the next grouped push until
+their final outcomes are inspected.
