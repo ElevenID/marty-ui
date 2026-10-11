@@ -15280,3 +15280,6 @@ synthetic duplicate-origin, grant/provider, and provider/provider cases are
 rejected. The focused self-host credential and secret-closure suites pass.
 This remains local while the exact-head hosted run is active, to avoid an
 overlapping full CI run.
+The broader local Canvas worker, self-host credential, production deployment,
+and self-host runtime suites then passed 138 tests with the same preflight
+change; the current hosted PR head remains unchanged while its CI runs.
