@@ -294,6 +294,7 @@ cmd_setup_secrets() {
   local issuance_api_key token_hmac_key grpc_service_token device_registration_gateway_key device_registration_signing_keys_key service_sign_gateway_key flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
   local canvas_credentials_shared_secret openbao_service_token signing_keys_openbao_token didcomm_issuance_openbao_token
+  local flow_sign_grant_mint_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
   local flow_workload_client_cert flow_workload_client_key
   local flow_workload_server_cert flow_workload_server_key
@@ -386,6 +387,8 @@ cmd_setup_secrets() {
   signing_keys_openbao_token="$(resolve_secret_input SIGNING_KEYS_OPENBAO_TOKEN)"
   didcomm_issuance_openbao_token="$(resolve_secret_input DIDCOMM_ISSUANCE_OPENBAO_TOKEN)"
   require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"
+  flow_sign_grant_mint_token="$(resolve_secret_input FLOW_SIGN_GRANT_MINT_TOKEN)"
+  require_resolved_secret FLOW_SIGN_GRANT_MINT_TOKEN "$flow_sign_grant_mint_token"
   notification_openbao_token="$(resolve_secret_input NOTIFICATION_OPENBAO_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 
@@ -433,6 +436,7 @@ cmd_setup_secrets() {
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
     --from-literal=SIGNING_KEYS_OPENBAO_TOKEN="$signing_keys_openbao_token" \
     --from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token" \
+    --from-literal=FLOW_SIGN_GRANT_MINT_TOKEN="$flow_sign_grant_mint_token" \
     --from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"

@@ -222,11 +222,13 @@ services:
     environment:
       BAO_ADDR: "http://openbao:8200"
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_GRANT_TOKEN_DIR: /bao/grants
     depends_on:
       openbao:
         condition: service_healthy
     volumes:
       - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+      - openbao_grants:/bao/grants
     restart: "no"
     networks:
       - marty-network
@@ -878,6 +880,8 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
+      BAO_ADDR: http://openbao:8200
+      FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /bao/grants/sign_grant_mint_flow_wallet_token
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       REDIS_URL: redis://redis:6379
@@ -889,6 +893,8 @@ services:
     ports:
       - "127.0.0.1:8011:8011"
       - "127.0.0.1:9011:9011"
+    volumes:
+      - openbao_grants:/bao/grants:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -904,6 +910,8 @@ services:
         condition: service_healthy
       issuance-native:
         condition: service_healthy
+      openbao-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
       interval: 10s
@@ -1307,6 +1315,7 @@ volumes:
   applicant_data:
   envoy_proto_descriptor:
   openbao_data:
+  openbao_grants:
 
 networks:
   marty-network:

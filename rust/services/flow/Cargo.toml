@@ -22,6 +22,7 @@ marty-oid4vci = { workspace = true, features = ["issuer", "verifier", "sd_jwt"] 
 marty-oid4vp-contract = { path = "../../crates/oid4vp-contract" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-verification.workspace = true
 p256.workspace = true
 percent-encoding.workspace = true

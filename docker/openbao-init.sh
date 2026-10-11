@@ -163,6 +163,13 @@ done
 for grant_origin in ${grant_origins}; do
     printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "${grant_origin}"
 done | bao policy write -address="${BAO_ADDR}" sign-grant-verify -
+if [ -n "${BAO_GRANT_TOKEN_DIR:-}" ]; then
+    mkdir -p "${BAO_GRANT_TOKEN_DIR}"
+    grant_token="$(bao token create -address="${BAO_ADDR}" -policy=sign-grant-mint-flow-wallet -no-default-policy -orphan -field=token)"
+    [ -n "${grant_token}" ] || { echo 'Could not mint Flow signing grant token.' >&2; exit 1; }
+    printf '%s\n' "${grant_token}" > "${BAO_GRANT_TOKEN_DIR}/sign_grant_mint_flow_wallet_token"
+    chmod 0444 "${BAO_GRANT_TOKEN_DIR}/sign_grant_mint_flow_wallet_token"
+fi
 bao write -address="${BAO_ADDR}" -f transit/keys/notification-webhook-envelope-marty-aes256 \
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  notification-webhook-envelope-marty-aes256 already exists"
 

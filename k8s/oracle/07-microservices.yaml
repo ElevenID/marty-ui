@@ -1778,6 +1778,8 @@ spec:
                   key: ISSUANCE_API_KEY
             - name: FLOW_SERVICE_PORT
               value: "8011"
+            - name: FLOW_SIGN_GRANT_MINT_TOKEN_FILE
+              value: /var/run/secrets/marty/flow-sign-grant/token
             - name: ISSUANCE_GRPC_TARGET
               value: "issuance-native:9005"
             - name: ISSUANCE_SERVICE_URL
@@ -1817,6 +1819,9 @@ spec:
             - name: flow-server-workload-tls
               mountPath: /var/run/secrets/marty/flow-server-workload
               readOnly: true
+            - name: flow-sign-grant
+              mountPath: /var/run/secrets/marty/flow-sign-grant
+              readOnly: true
           resources:
             requests:
               memory: "256Mi"
@@ -1843,6 +1848,12 @@ spec:
         - name: flow-server-workload-tls
           secret:
             secretName: flow-server-workload-tls
+        - name: flow-sign-grant
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: FLOW_SIGN_GRANT_MINT_TOKEN
+                path: token
 ---
 apiVersion: v1
 kind: Service

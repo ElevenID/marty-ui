@@ -63,6 +63,8 @@ pub struct FlowServiceConfig {
     pub deployment_profile_url: String,
     pub signing_keys_api_key: Option<String>,
     pub issuer_sign_key: Option<String>,
+    pub sign_grant_bao_addr: Option<String>,
+    pub sign_grant_mint_token_file: Option<PathBuf>,
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
@@ -176,6 +178,11 @@ impl fmt::Debug for FlowServiceConfig {
                 &redacted(&self.signing_keys_api_key),
             )
             .field("issuer_sign_key", &redacted(&self.issuer_sign_key))
+            .field("sign_grant_bao_addr", &self.sign_grant_bao_addr)
+            .field(
+                "sign_grant_mint_token_file",
+                &self.sign_grant_mint_token_file,
+            )
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
@@ -471,6 +478,9 @@ impl FlowServiceConfig {
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
         let issuer_sign_key =
             optional_secret(&values, "SIGNING_KEYS_ISSUER_SIGN_KEY", environment)?;
+        let sign_grant_bao_addr = value(&values, "BAO_ADDR").map(str::to_owned);
+        let sign_grant_mint_token_file =
+            value(&values, "FLOW_SIGN_GRANT_MINT_TOKEN_FILE").map(PathBuf::from);
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
         if issuer_sign_key.as_ref().is_some_and(|key| {
             signing_keys_api_key.as_ref() == Some(key)
@@ -570,6 +580,8 @@ impl FlowServiceConfig {
             deployment_profile_url,
             signing_keys_api_key,
             issuer_sign_key,
+            sign_grant_bao_addr,
+            sign_grant_mint_token_file,
             issuance_url,
             issuance_native_url,
             issuance_api_key,

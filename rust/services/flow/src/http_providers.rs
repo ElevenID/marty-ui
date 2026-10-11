@@ -5,6 +5,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
+use marty_signing_grant::{minter::GrantMinter, GrantBinding, SigningOrigin, HEADER_NAME};
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -18,6 +19,13 @@ use crate::{
 };
 
 const MAXIMUM_RESPONSE_BYTES: usize = 1024 * 1024;
+
+#[derive(Default)]
+struct RequestContext<'a> {
+    principal_id: Option<&'a str>,
+    organization_id: Option<&'a str>,
+    grant: Option<&'a str>,
+}
 
 #[derive(Clone)]
 struct BoundedHttpClient {
@@ -103,8 +111,17 @@ impl BoundedHttpClient {
         body: Option<Value>,
         principal_id: Option<&str>,
     ) -> Result<T, FlowProviderError> {
-        self.json_with_context(method, path, query, body, principal_id, None)
-            .await
+        self.json_with_context(
+            method,
+            path,
+            query,
+            body,
+            RequestContext {
+                principal_id,
+                ..RequestContext::default()
+            },
+        )
+        .await
     }
 
     async fn json_for_organization<T: DeserializeOwned>(
@@ -115,8 +132,38 @@ impl BoundedHttpClient {
         body: Option<Value>,
         organization_id: &str,
     ) -> Result<T, FlowProviderError> {
-        self.json_with_context(method, path, query, body, None, Some(organization_id))
-            .await
+        self.json_with_context(
+            method,
+            path,
+            query,
+            body,
+            RequestContext {
+                organization_id: Some(organization_id),
+                ..RequestContext::default()
+            },
+        )
+        .await
+    }
+
+    async fn json_with_grant<T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        query: &[(&str, &str)],
+        body: Option<Value>,
+        grant: &str,
+    ) -> Result<T, FlowProviderError> {
+        self.json_with_context(
+            method,
+            path,
+            query,
+            body,
+            RequestContext {
+                grant: Some(grant),
+                ..RequestContext::default()
+            },
+        )
+        .await
     }
 
     async fn json_with_context<T: DeserializeOwned>(
@@ -125,8 +172,7 @@ impl BoundedHttpClient {
         path: &str,
         query: &[(&str, &str)],
         body: Option<Value>,
-        principal_id: Option<&str>,
-        organization_id: Option<&str>,
+        context: RequestContext<'_>,
     ) -> Result<T, FlowProviderError> {
         let url = self
             .base_url
@@ -139,11 +185,14 @@ impl BoundedHttpClient {
         if let Some(service_token) = &self.service_token {
             request = request.header("X-Service-Token", service_token);
         }
-        if let Some(principal_id) = principal_id {
+        if let Some(principal_id) = context.principal_id {
             request = request.header("X-User-ID", principal_id);
         }
-        if let Some(organization_id) = organization_id {
+        if let Some(organization_id) = context.organization_id {
             request = request.header("X-Organization-ID", organization_id);
+        }
+        if let Some(grant) = context.grant {
+            request = request.header(HEADER_NAME, grant);
         }
         if let Some(body) = body {
             request = request.json(&body);
@@ -343,6 +392,7 @@ pub struct HttpSigningProvider {
     signing: BoundedHttpClient,
     issuer_signing: BoundedHttpClient,
     envelopes: BoundedHttpClient,
+    grant_minter: Option<GrantMinter>,
 }
 
 impl HttpSigningProvider {
@@ -378,7 +428,13 @@ impl HttpSigningProvider {
                 Duration::from_secs(10),
             )?,
             envelopes,
+            grant_minter: None,
         })
+    }
+
+    pub fn with_grant_minter(mut self, grant_minter: GrantMinter) -> Self {
+        self.grant_minter = Some(grant_minter);
+        self
     }
 
     pub async fn health_check(&self) -> Result<(), FlowProviderError> {
@@ -422,6 +478,39 @@ impl SigningIdentityProvider for HttpSigningProvider {
     }
 
     async fn sign(&self, request: &SigningRequest) -> Result<SigningResult, FlowProviderError> {
+        let minter = self
+            .grant_minter
+            .as_ref()
+            .ok_or(FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?;
+        let payload = URL_SAFE_NO_PAD
+            .decode(&request.payload_b64url)
+            .map_err(|_| invalid_config("signing_identity"))?;
+        if payload.is_empty() || URL_SAFE_NO_PAD.encode(&payload) != request.payload_b64url {
+            return Err(invalid_config("signing_identity"));
+        }
+        let grant = minter
+            .mint(&GrantBinding {
+                origin: SigningOrigin::FlowWalletRequest,
+                operation_id: &request.operation_id,
+                organization_id: &request.organization_id,
+                route: "/internal/compat/issuer-dids/sign",
+                service_id: None,
+                issuer_did: Some(&request.issuer_did),
+                key_reference: None,
+                key_purpose: &request.key_purpose,
+                algorithm: &request.algorithm,
+                payload: &payload,
+            })
+            .await
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?
+            .to_header_value()
+            .map_err(|_| FlowProviderError::Unavailable {
+                provider: "signing_identity",
+            })?;
         let body = json!({
             "organization_id": request.organization_id,
             "issuer_did": request.issuer_did,
@@ -432,11 +521,12 @@ impl SigningIdentityProvider for HttpSigningProvider {
         });
         let response: Value = self
             .issuer_signing
-            .json(
+            .json_with_grant(
                 Method::POST,
                 "issuer-dids/sign",
                 &[("organization_id", &request.organization_id)],
                 Some(body),
+                &grant,
             )
             .await?;
         let signature = raw_signature(&response)?;
@@ -765,6 +855,7 @@ fn http_status(provider: &'static str, status: StatusCode) -> FlowProviderError 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
     use std::sync::{Arc, Mutex};
 
     use axum::{
@@ -1008,37 +1099,78 @@ mod tests {
         let captured = CapturedRequest::default();
         let router = Router::new()
             .route("/internal/compat/issuer-dids/sign", post(signing_signer))
+            .route(
+                "/v1/transit/hmac/marty-sign-grant-flow-wallet-v1/sha2-256",
+                post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+                    assert_eq!(headers.get("x-vault-token").unwrap(), "flow-mint-token");
+                    assert!(STANDARD
+                        .decode(body["input"].as_str().unwrap())
+                        .unwrap()
+                        .starts_with(b"marty:issuer-signing-grant:v1\n"));
+                    Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+                }),
+            )
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let provider = HttpSigningProvider::new(
+        let endpoint = format!("http://{address}");
+        let prior_bao_addr = std::env::var_os("BAO_ADDR");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let token_file =
+            std::env::temp_dir().join(format!("flow-grant-{}.token", uuid::Uuid::new_v4()));
+        std::fs::write(&token_file, "flow-mint-token\n").unwrap();
+        let minter = GrantMinter::for_managed_openbao(
+            &endpoint,
+            SigningOrigin::FlowWalletRequest,
+            token_file.clone(),
+        )
+        .unwrap();
+        let unconfigured = HttpSigningProvider::new(
             &format!("http://{address}/internal/"),
             api_key,
             &"b".repeat(32),
         )
         .unwrap();
 
-        let result = provider
-            .sign(&SigningRequest {
-                operation_id: "instance-1".into(),
-                organization_id: "org-1".into(),
-                issuer_did: "did:web:issuer.example".into(),
-                verification_method_id: "did:web:issuer.example#key-1".into(),
-                key_purpose: "oid4vp_request_signing".into(),
-                credential_format: "oauth-authz-req+jwt".into(),
-                algorithm: "ES256".into(),
-                payload_b64url: "cGF5bG9hZA".into(),
+        let request = SigningRequest {
+            operation_id: "instance-1".into(),
+            organization_id: "org-1".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            verification_method_id: "did:web:issuer.example#key-1".into(),
+            key_purpose: "oid4vp_request_signing".into(),
+            credential_format: "oauth-authz-req+jwt".into(),
+            algorithm: "ES256".into(),
+            payload_b64url: "cGF5bG9hZA".into(),
+        };
+        assert!(matches!(
+            unconfigured.sign(&request).await,
+            Err(FlowProviderError::Unavailable {
+                provider: "signing_identity"
             })
-            .await
-            .unwrap();
+        ));
+        assert!(captured.lock().unwrap().is_none());
+        let provider = unconfigured.with_grant_minter(minter);
+
+        let result = provider.sign(&request).await.unwrap();
         assert_eq!(result.signature_raw_b64url, "c2lnbmF0dXJl");
 
         let (headers, uri, body) = captured.lock().unwrap().take().unwrap();
         assert_eq!(uri.path(), "/internal/compat/issuer-dids/sign");
         assert_eq!(uri.query(), Some("organization_id=org-1"));
         assert_eq!(headers.get("x-api-key").unwrap(), &"b".repeat(32));
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+            headers.get(HEADER_NAME).unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grant.claims.operation_id, "instance-1");
+        assert_eq!(grant.claims.organization_id, "org-1");
+        assert_eq!(grant.claims.route, "/internal/compat/issuer-dids/sign");
+        assert_eq!(
+            grant.claims.payload_sha256_b64,
+            marty_signing_grant::payload_digest(b"payload")
+        );
         assert_eq!(
             body,
             json!({
@@ -1051,6 +1183,11 @@ mod tests {
             })
         );
         server.abort();
+        std::fs::remove_file(token_file).unwrap();
+        match prior_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
     }
 
     #[tokio::test]

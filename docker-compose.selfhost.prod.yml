@@ -1005,6 +1005,8 @@ services:
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
+      BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Flow signing grants}
+      FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_flow_wallet_token
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       DEPLOYMENT_PROFILE_SERVICE_URL: http://deployment-profile:8010
@@ -1029,6 +1031,7 @@ services:
       - flow_application_event_hmac_key
       - issuance_api_key
       - signing_keys_issuer_sign_key
+      - sign_grant_mint_flow_wallet_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1280,6 +1283,8 @@ services:
     restart: unless-stopped
 
 secrets:
+  sign_grant_mint_flow_wallet_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/sign_grant_mint_flow_wallet_token
   postgres_password:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/postgres_password
   keycloak_db_password:

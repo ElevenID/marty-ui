@@ -14527,3 +14527,28 @@ limits `FlowWalletRequest` grants to the actual OID4VP request-object purpose
 authenticate a passport/credential key purpose even on the shared issuer-DID
 route. The grant suite and warnings-denied Clippy pass locally. Other origin
 capability restrictions still require their complete producer call inventories.
+
+Flow grant producer, local grouped follow-up: production Flow now constructs
+its fixed `FlowWalletRequest` OpenBao minter from the exact `BAO_ADDR` and an
+absolute, dedicated token-file path. Request-object signing decodes the
+canonical payload, mints a short-lived grant bound to the validated Flow
+instance ID, organization, issuer DID, exact internal route, purpose, ES256
+and payload bytes, then sends it in `x-marty-signing-grant`. A missing minter
+fails before the signing HTTP request. The development compose stack creates
+and mounts a scoped Flow token; self-hosted compose mounts the token generated
+by the existing OpenBao bootstrap; Kubernetes requires a separate scoped
+operator-supplied token, mounted as a file. The focused Flow HTTP test covers
+fail-closed behavior, grant claims and header forwarding; eight request-object
+behavior tests, Flow all-target warnings-denied Clippy, shell syntax, YAML
+parse and `git diff --check` pass. The published UI PR has not yet received
+this local grouped batch.
+
+This is producer wiring only: Signing Keys still accepts the static issuer
+sign API key without verifying or consuming the grant. Before any KMS-only
+claim, implement exact-request verification, one-use replay consumption and
+the origin-specific capability checks in the Rust Signing Keys kernel, then
+prove that a missing, changed, expired or replayed grant cannot reach the
+remote KMS signing call. Extend the same producer/receiver contract to the
+Gateway and the four distinct Issuance signing call paths, with their actual
+operation authority. Review and qualify token provisioning and rotation in
+each deployment model.

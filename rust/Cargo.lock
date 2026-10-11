@@ -4040,6 +4040,7 @@ dependencies = [
  "marty-oid4vp-contract",
  "marty-passport-auth",
  "marty-schema-startup",
+ "marty-signing-grant",
  "marty-verification",
  "mmf-core",
  "mmf-messaging",
