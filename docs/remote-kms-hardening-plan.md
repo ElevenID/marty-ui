@@ -15912,3 +15912,11 @@ private JWK is rejected and a public JWK plus remote reference remains valid.
 The focused Canvas management suite passed 39 tests. This local change remains
 batched with the binding and Application Template guards pending the hosted
 Canvas result.
+
+K10 OID4VCI registered-client follow-up: the management service already
+normalizes public verification JWKS, but its PostgreSQL adapter accepted a
+direct internal `RegisteredClientWrite` without a final custody check. The
+local adapter now applies the shared Rust private-material policy before its
+upsert. A private EC JWK fails, and a public JWK remains accepted; all seven
+focused OID4VCI management library tests passed. This remains in the local
+grouped security batch while hosted Canvas completes.
