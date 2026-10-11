@@ -1749,7 +1749,7 @@ fn require_gcp_response_name(
     required: bool,
 ) -> Result<(), KmsError> {
     let name = response.get("name").and_then(Value::as_str);
-    if name == Some(key_reference) || (!required && name.is_none()) {
+    if name == Some(key_reference) || (!required && response.get("name").is_none()) {
         return Ok(());
     }
     Err(KmsError::InvalidResponse(
@@ -2815,12 +2815,15 @@ mod tests {
         for response in [
             json!({}),
             json!({"name": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/2"}),
+            json!({"name": null}),
         ] {
             assert!(matches!(
                 require_gcp_response_name(&response, reference, true),
                 Err(KmsError::InvalidResponse(_))
             ));
         }
+        assert!(require_gcp_response_name(&json!({}), reference, false).is_ok());
+        assert!(require_gcp_response_name(&json!({"name": null}), reference, false).is_err());
     }
 
     #[tokio::test]
