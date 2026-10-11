@@ -380,13 +380,14 @@ def produce(args: argparse.Namespace) -> None:
     require(
         os.environ.get("GITHUB_ACTIONS") == "true"
         and os.environ.get("GITHUB_REPOSITORY") == "ElevenID/marty-ui"
-        and os.environ.get("GITHUB_REF") == "refs/heads/main"
+        and re.fullmatch(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+",
+                         os.environ.get("GITHUB_REF", "")) is not None
         and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
         and os.environ.get("GITHUB_RUN_ATTEMPT") == "1"
         and os.environ.get("GITHUB_WORKFLOW_REF")
         == (
             "ElevenID/marty-ui/.github/workflows/"
-            "passport-beta-final-acceptance.yml@refs/heads/main"
+            f"passport-beta-final-acceptance.yml@{os.environ.get('GITHUB_REF')}"
         )
         and SHA.fullmatch(source) is not None
         and run_id.isdecimal()

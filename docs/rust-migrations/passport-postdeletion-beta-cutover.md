@@ -29,17 +29,18 @@ check and is never a deployment target.
    wrote an artifact into the protected checkout before checking source
    cleanliness. The signed v1.1.241 release passed qualification, but the
    read-only fence rebind exposed `psql` status lines before its JSON result.
-   The signed v1.1.242 release was rebound to the live fence, then protected
-   main advanced before maintenance. Rebind the current host record again
-   from its v1.1.242 receipt to the next signed source: supply that receipt,
-   its signed v1.1.242 manifest, the new signed manifest, approved beta
+   The signed v1.1.242 and v1.1.243 releases were rebound to the live fence,
+   then protected main advanced before maintenance. Rebind the current host
+   record from its v1.1.243 receipt to the next signed source: supply that receipt,
+   its signed v1.1.243 manifest, the new signed manifest, approved beta
    baseline, saved preinstallation target, and a fresh private output path.
    The operator checks signed receipt lineage, unchanged SQL and the live
    fence, repeats rollback-only direct write probes, preserves earlier
    rebind evidence, and atomically replaces only the host receipt record.
    Preserve every prior receipt and host-record backup. Use the latest receipt
    in every subsequent step.
-3. Dispatch the protected-main `passport-beta-rust-readiness.yml` workflow with
+3. Dispatch `passport-beta-rust-readiness.yml` on the exact annotated release
+   tag (`gh workflow run passport-beta-rust-readiness.yml --ref v1.1.244`) with
    the merged `marty-credentials` PR #305 head and the fenced receipt's WSL
    path. Download its three artifacts: the exact fence installation receipt,
    fresh cutover snapshot, and Rust readiness report. Keep their bytes intact.
@@ -67,8 +68,10 @@ check and is never a deployment target.
    Gateway and KMS, proves the chain, then switches to the signed Rust owner.
    The aggregate receipt must bind the source, service images, references,
    native migration, KMS proof, and production postflight.
-7. Complete public beta Flow, passport lifecycle, D-12 recording and YouTube
-   evidence, and the uninterrupted beta soak against the same release and
+7. Dispatch preliminary recording, D-12 publication, soak samples, and final
+   acceptance on that same release tag. Complete public beta Flow, passport
+   lifecycle, recording and YouTube evidence, and the uninterrupted beta soak
+   against the same release and
    aggregate receipt. Accept only the source-bound protected evidence. A failed
    cutover retains its pending marker and separate production postflight;
    resolve that state before another attempt.

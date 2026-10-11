@@ -86,11 +86,12 @@ def protected_context(environment: dict[str, str]) -> dict[str, str]:
     source = environment.get("GITHUB_SHA", "")
     require(environment.get("GITHUB_ACTIONS") == "true"
             and environment.get("GITHUB_REPOSITORY") == "ElevenID/marty-ui"
-            and environment.get("GITHUB_REF") == "refs/heads/main"
+            and re.fullmatch(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+",
+                             environment.get("GITHUB_REF", "")) is not None
             and environment.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
             and environment.get("GITHUB_WORKFLOW_REF") == (
                 "ElevenID/marty-ui/.github/workflows/"
-                "passport-beta-soak-sample.yml@refs/heads/main")
+                f"passport-beta-soak-sample.yml@{environment.get('GITHUB_REF')}")
             and environment.get("GITHUB_RUN_ATTEMPT") == "1"
             and run_id.isdecimal() and int(run_id) > 0
             and re.fullmatch(r"[0-9a-f]{40}", source) is not None,

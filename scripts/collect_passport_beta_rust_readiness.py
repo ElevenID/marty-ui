@@ -186,8 +186,9 @@ def main() -> int:
     parser.add_argument("--deletion-head", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    require(os.environ.get("GITHUB_REF") == "refs/heads/main",
-            "Beta readiness requires protected main")
+    require(re.fullmatch(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+",
+                         os.environ.get("GITHUB_REF", "")) is not None,
+            "Beta readiness requires an immutable release tag")
     source = protected_source(run)
     require(os.environ.get("GITHUB_SHA") == source,
             "Beta readiness checkout differs from workflow source")

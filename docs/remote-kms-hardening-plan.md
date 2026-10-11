@@ -15788,3 +15788,11 @@ secret. The new DAG plan, preparation-artifact and release-preparation suites
 passed 46 tests; Ruff, YAML parsing and diff checks passed. This merge and
 tracker update remain local until the current exact-head run terminates, so
 one grouped correction can be pushed if that run finds anything else.
+
+Main #1271 subsequently pinned post-deletion passport beta gates to an
+annotated release tag and advanced the stack lock to `marty-ui@1.1.244`.
+It merged locally without conflicts, preserving the KMS Core pins and
+KMS-only release paths. Eight affected passport/release contract files passed
+157 tests with one existing skip; Ruff, workflow YAML parsing, JavaScript
+syntax and diff checks passed. This upstream merge is held with #1270 until
+the running hosted head yields its full result.

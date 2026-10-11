@@ -206,7 +206,9 @@ function protectedReceipt(runId, expectedSha256, sourceCommit) {
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   requireProof(
     run.status === 'completed' && run.conclusion === 'success'
-    && run.head_sha === sourceCommit && run.head_branch === 'main'
+    && run.head_sha === sourceCommit
+    && /^v[0-9]+\.[0-9]+\.[0-9]+$/.test(run.head_branch)
+    && run.event === 'workflow_dispatch' && run.run_attempt === 1
     && run.path === '.github/workflows/passport-beta-preliminary.yml'
     && run.repository?.full_name === 'ElevenID/marty-ui'
     && run.head_repository?.full_name === 'ElevenID/marty-ui',
