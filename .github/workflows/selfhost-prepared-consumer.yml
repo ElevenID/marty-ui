@@ -115,6 +115,38 @@ jobs:
             --expected-run-id "$STACK_RUN_ID" --verify-archive-only
           mkdir "$RUNNER_TEMP/selfhost-installed"
           unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-installed"
+      - name: Plan the complete extracted Compose runtime DAG (unqualified)
+        if: steps.select.outputs.present == 'true'
+        env:
+          STACK_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/selfhost-plan-state" "$RUNNER_TEMP/selfhost-plan-secrets"
+          export SELFHOST_STATE_DIR="$RUNNER_TEMP/selfhost-plan-state"
+          export SELFHOST_SECRET_DIR="$RUNNER_TEMP/selfhost-plan-secrets"
+          (
+            cd "$RUNNER_TEMP/selfhost-installed/selfhost-prepared"
+            docker compose --profile '*' --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --format json \
+              > "$RUNNER_TEMP/selfhost-plan-compose.json"
+          )
+          python scripts/check_selfhost_installed_runtime_plan.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --compose-model "$RUNNER_TEMP/selfhost-plan-compose.json" \
+            --source-checkout "$GITHUB_WORKSPACE" \
+            --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
+            --state-root "$SELFHOST_STATE_DIR" \
+            --secret-root "$SELFHOST_SECRET_DIR" \
+            --expected-source-sha "$GITHUB_SHA" --expected-run-id "$STACK_RUN_ID" \
+            --output "$RUNNER_TEMP/selfhost-runtime-plan.json"
+          jq -e '.schema == "marty.selfhost-installed-runtime-plan/v1" and .qualification == "unqualified" and .service_count == 31 and .default_service_count == 29 and .beta_tunnel_service_count == 2' \
+            "$RUNNER_TEMP/selfhost-runtime-plan.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-runtime-plan.json" ./selfhost-runtime-plan.json
       - name: Probe extracted OpenBao bootstrap handoff on disposable Linux state
         if: steps.select.outputs.present == 'true'
         env:
@@ -161,6 +193,7 @@ jobs:
           path: |
             selfhost-installed-bootstrap.json
             selfhost-installed-signing.json
+            selfhost-runtime-plan.json
             selfhost-producer-binding.json
           if-no-files-found: error
           retention-days: 30
