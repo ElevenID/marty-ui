@@ -92,7 +92,12 @@ impl SigningOrigin {
                     && claims.algorithm == "RS256"
             }
             Self::IssuancePassport => {
-                issuer_did_route_shape(claims) && claims.key_purpose == "x509_doc_signer"
+                issuer_did_route_shape(claims)
+                    && claims.key_purpose == "x509_doc_signer"
+                    && matches!(
+                        claims.algorithm.as_str(),
+                        "ES256" | "ES384" | "RS256" | "EdDSA"
+                    )
             }
         }
     }
@@ -670,6 +675,33 @@ mod tests {
             if origin == SigningOrigin::IssuanceCanvas {
                 let mut elevated = claims.clone();
                 elevated.algorithm = "ES256".into();
+                assert_eq!(
+                    bound_input(&elevated, &binding, 1_700_000_001),
+                    Err(GrantError::Malformed)
+                );
+            }
+            if origin == SigningOrigin::IssuancePassport {
+                for supported in ["ES256", "ES384", "RS256", "EdDSA"] {
+                    let mut supported_claims = claims.clone();
+                    supported_claims.algorithm = supported.into();
+                    let supported_binding = GrantBinding {
+                        origin,
+                        operation_id: &claims.operation_id,
+                        organization_id: &claims.organization_id,
+                        route: &claims.route,
+                        service_id: None,
+                        issuer_did: claims.issuer_did.as_deref(),
+                        key_reference: claims.key_reference.as_deref(),
+                        key_purpose: &claims.key_purpose,
+                        algorithm: supported,
+                        payload: b"exact.payload",
+                    };
+                    assert!(
+                        bound_input(&supported_claims, &supported_binding, 1_700_000_001).is_ok()
+                    );
+                }
+                let mut elevated = claims.clone();
+                elevated.algorithm = "ES512".into();
                 assert_eq!(
                     bound_input(&elevated, &binding, 1_700_000_001),
                     Err(GrantError::Malformed)

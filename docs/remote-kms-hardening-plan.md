@@ -14953,3 +14953,11 @@ through `CanvasLtiToolJwtSigner` and the signature-provider boundary from
 these three sites, then bind the resolved profile key and exact canonical JWT
 signing input in the grant. Do not infer authority solely from a payload
 claim or use one default Canvas operation ID for all callers.
+
+Passport origin capability review: the pinned Rust
+`SodSignatureAlgorithm` parser accepts ES256, ES384, RS256 and EdDSA.
+The passport grant origin now permits exactly those algorithms with the
+`x509_doc_signer` purpose; a regression accepts all four and rejects ES512
+before HMAC. This preserves the supported managed SOD formats while limiting
+the scoped passport token. The focused grant suite and warnings-denied
+all-target Clippy pass locally after this change.
