@@ -27,6 +27,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
+use std::time::Instant;
 
 struct RuntimeState {
     pool: PgPool,
@@ -1318,6 +1319,7 @@ async fn run_body(
     let mut count = 0;
     for (case, observation) in cases.iter().zip(observations) {
         assert_eq!(case["name"], observation["name"]);
+        let case_started = depth.then(Instant::now);
         *state.response_override.lock().unwrap() = Some(case.clone());
         let routes = observation["credential_routes"].as_array().unwrap();
         assert_eq!(routes.len(), 3);
@@ -1517,6 +1519,19 @@ async fn run_body(
                 assert_eq!(calls[1]["persisted_status"], "active");
                 *state.response_override.lock().unwrap() = Some(case.clone());
             }
+        }
+        if let Some(started) = case_started {
+            // Only the frozen synthetic case ID and elapsed time leave this
+            // test. The CI collector allowlists every emitted identity.
+            eprintln!(
+                "MARTY_CI_PHASE_V1 {}",
+                json!({
+                    "phase": "scenario",
+                    "name": format!("json_depth_route.{}", case["name"].as_str().unwrap()),
+                    "duration_ms": u64::try_from(started.elapsed().as_millis()).unwrap(),
+                    "status": "ok",
+                })
+            );
         }
     }
     assert_eq!(count, expected_cases * 3);

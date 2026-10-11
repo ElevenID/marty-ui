@@ -24,6 +24,28 @@ GATEWAY_ISSUER_RESOLUTION_ROUTE = {
     "provider_operation_marker": '(HttpMethod::Get, "resolve-issuer-did")',
 }
 
+# This beta-only operation uses an already-observed Gateway/Issuance package
+# relationship, but a different signed webhook route and deployment profile.
+# It is a witness for obligation inventory, not evidence to narrow CI lanes.
+PASSPORT_BETA_GATEWAY_CALLBACK_WITNESS = {
+    "package": "marty-issuance-service",
+    "conditional": "beta passport Gateway callback profile only",
+    "config_evidence": "rust/services/issuance/src/bin/passport_beta_bureau.rs",
+    "binding": 'required_url("PASSPORT_BUREAU_CALLBACK_URL")?',
+    "selection_marker": 'Some("true") => Ok(private_gateway_callback(url))',
+    "handoff_evidence": "rust/services/issuance/src/passport_callback_handoff.rs",
+    "handoff_marker": ".post(callback_url.clone())",
+    "signature_marker": '.header("x-personalization-signature", signature)',
+    "route_evidence": "rust/services/gateway/src/issuance_native.rs",
+    "route_marker": 'path == "/v1/passport/webhooks/personalization"',
+    "forwarding_test_evidence": "rust/services/gateway/src/runtime.rs",
+    "forwarding_test_marker": "signed_passport_webhook_preserves_raw_body_and_switches_owner_without_tenant_key",
+    "profile_evidence": "docker-compose.profile.passport-native-beta.yml",
+    "profile_service": "passport-beta-bureau",
+    "profile_gateway_service": "gateway",
+    "profile_callback_url": "http://gateway:8000/v1/passport/webhooks/personalization",
+}
+
 # These are observed HTTP/deployment consumers, not a complete runtime graph.
 # Keep the service fallback below until every service and its transitive inputs
 # have an obligation owner. The paths document the source of each observation.
@@ -125,6 +147,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "deployment_service": "issuance",
             "deployment_marker": "DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}",
         },
+        PASSPORT_BETA_GATEWAY_CALLBACK_WITNESS,
     ],
     # Auth connects to these services at runtime. Their package changes can
     # affect Auth even though Cargo has no reverse dependency on them.
