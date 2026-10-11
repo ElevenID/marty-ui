@@ -16301,10 +16301,26 @@ lockfile plus K10 audit in one grouped follow-up push.
 The repaired lockfile and five-service K10 audit were published together in
 `87ae71b10`, followed by an evidence-only checkpoint at `5f235b835`.
 [Exact-head CI 38180019573](https://github.com/ElevenID/marty-ui/actions/runs/38180019573)
-is queued for that new head. In a further local run, the K10 harness now also
+is running for that new head. Its Rust Feature Regression Probe and Rust Lint
+and Packaging have passed, confirming the repaired standalone lockfile on
+hosted Linux; Canvas, contracts and OpenBao remain in progress. In a further
+local run, the K10 harness now also
 executes Flow's actual Rust migration and validation twice against a sixth
 fresh PostgreSQL 16 database. The seeded deployment-profile link remained
 idempotent; the resulting eight Flow tables and 95 columns passed the shared
 catalog and content custody scans. The other five cases passed again, and the
 disposable database was removed. The updated receipt remains local for the
 next grouped push. This still does not qualify a signed release image.
+
+Credentials #313 self-review found that the pinned-Core graph guard ran only
+for Python, even though native and browser bindings are shipped. It now checks
+the native and WASM graphs too, using the WASM target platform, and rejects a
+deliberately injected forbidden Core feature. The binding package also dropped
+unused direct local-signing dependencies (`ssi-crypto`, `ssi-jwk`, `rsa`,
+`bs58`, `ed25519-dalek` and production `p256`); the public-point mdoc fixture
+keeps `p256` as dev-only. Local locked Python/native builds, an actual Rust
+1.95 WASM target build, all three metadata graph checks, native test
+compilation, Ruff and diff hygiene passed. Both corrections were grouped in
+draft Credentials PR #313 head `f22414f`; new exact-head CI is pending. The
+prior head `46d5a63` had passed all required hosted checks. Keep artifact and
+native UI cutover qualification open.
