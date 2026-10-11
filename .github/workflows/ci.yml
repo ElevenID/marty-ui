@@ -1853,9 +1853,16 @@ jobs:
             | tee "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
           grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
             "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
+          envelope_policy='path "transit/encrypt/integration-secret-envelope-marty-aes256" { capabilities = ["create", "update"] }
+          path "transit/decrypt/integration-secret-envelope-marty-aes256" { capabilities = ["create", "update"] }
+          path "transit/keys/integration-secret-envelope-marty-aes256" { capabilities = ["read"] }'
+          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+            --header 'Content-Type: application/json' --request PUT \
+            --data "$(jq -nc --arg policy "$envelope_policy" '{policy:$policy}')" \
+            "${BAO_ADDR}/v1/sys/policies/acl/kms-gateway-envelope-test" >/dev/null
           envelope_token="$(curl --silent --show-error --fail \
             --header 'X-Vault-Token: test-only' --header 'Content-Type: application/json' \
-            --request POST --data '{"policies":["credential-service"],"no_default_policy":true}' \
+            --request POST --data '{"policies":["kms-gateway-envelope-test"],"no_default_policy":true}' \
             "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
           [[ -n "$envelope_token" && "$envelope_token" != test-only ]]
           for test_name in authenticated_gateway_reaches_remaining_rust_signing_handlers \

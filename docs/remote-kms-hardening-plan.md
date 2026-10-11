@@ -15714,3 +15714,19 @@ was omitted; that empty result was rejected and is not counted as evidence.
 The disposable database was removed. This still does not qualify the signed
 release artifact or the other services' migration functions and runtime
 writes.
+
+Exact-head UI run `38157856593` exposed two local-batch corrections. Release
+Contracts passed 6,418 tests and 421 subtests but failed one stale workflow
+assertion: the managed Gateway test command now occurs five times, while all
+five named cases remain selected. Rust Service Tests (contracts) passed the
+preceding VDS-NC and rotation contracts, then Gateway VDS-NC registration
+returned 503 on registry save. The hosted OpenBao fixture created the envelope
+Transit key but never installed the `credential-service` ACL used by that
+step's token; the separate local probe had installed it. The workflow now
+installs a dedicated minimal encrypt/decrypt/key-read policy before minting its
+scoped Gateway token, and the contract asserts that setup. A fresh raw
+CI-style disposable OpenBao and Redis pair, with only this policy and the
+sentinel/key setup, passed the exact failing Gateway case locally. The complete
+local CI-workflow contract file passed 145 tests; Ruff, YAML parsing and diff
+checks passed. Hosted image and plugin jobs passed; Canvas is still running at
+this checkpoint. Hold the grouped push until its terminal result is reviewed.

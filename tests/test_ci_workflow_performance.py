@@ -304,6 +304,14 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
     managed_chain = next(
         step for step in rust["steps"] if step.get("name") == chain_step_name
     )["run"]
+    assert 'sys/policies/acl/kms-gateway-envelope-test' in managed_chain
+    assert '"policies":["kms-gateway-envelope-test"]' in managed_chain
+    for operation in ("encrypt", "decrypt"):
+        assert (
+            f'transit/{operation}/integration-secret-envelope-marty-aes256'
+            in managed_chain
+        )
+    assert 'transit/keys/integration-secret-envelope-marty-aes256' in managed_chain
     assert "--test passport_managed_kms_chain" in managed_chain
     assert (
         "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
@@ -322,7 +330,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         managed_chain.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 6
+        == 5
     )
     for case in (
         "authenticated_gateway_reaches_remaining_rust_signing_handlers",
