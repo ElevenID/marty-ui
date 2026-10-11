@@ -15657,3 +15657,8 @@ the Canvas pilot/current-inputs suite passed 28 tests, three focused CI
 workflow tests passed, the merged Canvas acceptance target compiled offline,
 and warnings-denied Clippy, Ruff, YAML/JSON and diff checks passed. This
 batch is ready for one exact-head push and a fresh CI gate.
+
+The grouped batch was pushed as UI #1192 head `0fbfe3864`; GitHub reports it
+mergeable against main `42dd1329f`. Exact-head CI run `38157856593` started,
+alongside policy, Organization Quality and CodeQL. PR #1192 remains draft
+pending this head's full gate and the assembled release/cutover qualification.
