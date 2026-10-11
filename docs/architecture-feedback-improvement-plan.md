@@ -1,8 +1,8 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-11 UTC checkpoint; UI main `49a0a2454`).
-Self-host preparation and opt-in consumer probes through #1264 are merged, but
+Status: active implementation (2026-10-11 UTC checkpoint; UI main `b3603a401`).
+Self-host preparation and opt-in consumer probes through #1266 are merged, but
 there is no qualified or released self-host bundle or standalone verifier.
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
@@ -3464,16 +3464,17 @@ digest association. It remains a no-start preflight, not installed-runtime
 qualification. [UI #1261](https://github.com/ElevenID/marty-ui/pull/1261)
 merged as `d91261c2d` after protected validation. [#1263](https://github.com/ElevenID/marty-ui/pull/1263)
 then merged the opt-in exact-bundle disposable migration probe, and
-[#1264](https://github.com/ElevenID/marty-ui/pull/1264) merged the successful
-opt-in Stack-release-triggered prepared consumer with exact current-main
+[#1264](https://github.com/ElevenID/marty-ui/pull/1264) merged the opt-in
+Stack-release-triggered prepared consumer workflow with exact current-main
 producer identity, archive/receipt verification, disposable migration and
 signing/JWKS checks. #1264 also adds the Credential Template-to-Issuance
 Canvas readiness HTTP edge to the shadow planner; it does not narrow Rust
 selection. The latest successful Stack release did not opt in to a prepared
 ZIP, so these probes have no current-main artifact-bound qualification run.
 The archive/bootstrap follow-on [#1266](https://github.com/ElevenID/marty-ui/pull/1266)
-is independently reviewed and in protected merge-group CI; its staged Linux
-bootstrap smoke is not proof of a fresh installed product. Keep all these
+merged as `b3603a401` after successful protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38149094213).
+Its staged Linux bootstrap smoke is not proof of a fresh installed product. Keep all these
 probes outside official release gates and supported-product claims.
 
 October 11 A0-A7 reconciliation: [#1236](https://github.com/ElevenID/marty-ui/pull/1236)
