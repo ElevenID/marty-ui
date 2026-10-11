@@ -4,7 +4,7 @@
     "does not audit Python metadata or installed-stack cutover"
   ],
   "postgres_image": "docker.io/library/postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229",
-  "probe_sha256": "2872defe49e4840510a74f445b88922a447f275bd258849735198fd1158960c0",
+  "probe_sha256": "7412b268b1779c679841168fed162fad7e8239ab05be48cd6e12b764e2f9aa35",
   "qualification": "local-disposable-runtime-only",
   "schema": "marty.kms-native-service-migration-audit/v1",
   "services": [
@@ -45,6 +45,15 @@
       "tables": 1
     },
     {
+      "columns": 95,
+      "contract": "marty-flow/migration_behavior/fresh_postgres_migration_is_idempotent_when_configured",
+      "private_key_catalog_entries": 0,
+      "private_key_content_scan": "passed",
+      "schema": "flow_service",
+      "service": "flow",
+      "tables": 8
+    },
+    {
       "columns": 1,
       "contract": "marty-verification-service/binary:marty-verification-service/migrate",
       "private_key_catalog_entries": 0,
@@ -55,5 +64,5 @@
       "tables": 1
     }
   ],
-  "source_sha": "58ee4dbd3554874e06c2992fab3f450da81d5f1e"
+  "source_sha": "5f235b83580e6ab77ad99bb66d475c597d8673ec"
 }

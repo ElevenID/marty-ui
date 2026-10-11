@@ -25,6 +25,7 @@ CASES = (
     ("organization", "marty-organization", "postgres_integration", "complete_repository_round_trip_is_tenant_bound_when_configured", "ORGANIZATION_POSTGRES_TEST_URL", "organization_service"),
     ("credential_template", "marty-credential-template", "postgres_integration", "complete_repository_round_trip_is_tenant_bound_when_configured", "CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL", "credential_template_service"),
     ("presentation_policy", "marty-presentation-policy", "postgres_integration", "migration_and_complete_repository_round_trip_when_configured", "PRESENTATION_POLICY_POSTGRES_TEST_URL", "presentation_policy_service"),
+    ("flow", "marty-flow", "migration_behavior", "fresh_postgres_migration_is_idempotent_when_configured", "FLOW_MIGRATION_AUDIT_URL", "flow_service"),
     ("verification", "marty-verification-service", "binary:marty-verification-service", "migrate", "DATABASE_URL", "verification_service"),
 )
 
