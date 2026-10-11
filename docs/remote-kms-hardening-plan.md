@@ -15606,3 +15606,6 @@ route with the rotated bearer, verifies the returned Ed25519 signature, checks
 the test passed. Hold this addition for grouping with exact-head CI findings.
 The public route now also rejects the old bearer immediately after rotation;
 the complete disposable-stack probe passed again with that denial.
+The rotated bearer additionally signs through the public presentation route;
+the test verifies its DER P-256 signature with the original public key. The
+full live probe passed again, so rotation preserves both holder key purposes.

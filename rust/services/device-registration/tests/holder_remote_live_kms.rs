@@ -517,6 +517,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     .unwrap();
     verifying.verify_strict(payload, &signature).unwrap();
 
+    let rotated_presentation = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&replacement)
+        .json(&json!({"purpose":"presentation_signing","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
+        .await
+        .expect("rotated presentation signing HTTP response");
+    assert!(rotated_presentation.status().is_success());
+    let rotated_presentation: HolderSignature = rotated_presentation.json().await.unwrap();
+    assert_eq!(rotated_presentation.signature_encoding, "der");
+    let signature = P256Signature::from_der(
+        &URL_SAFE_NO_PAD
+            .decode(rotated_presentation.signature_b64)
+            .unwrap(),
+    )
+    .unwrap();
+    verifier.verify(payload, &signature).unwrap();
+
     devices
         .deactivate(&registration.id)
         .await
