@@ -544,6 +544,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
                     "BAO_TOKEN": managed,
                     "MARTY_TEST_GRANT_MINT_TOKEN": grant_mint_tokens["gateway-service"],
+                    "MARTY_TEST_GRANT_ISSUER_MINT_TOKEN": grant_mint_tokens["gateway-issuer-did"],
                     "MARTY_TEST_GRANT_VERIFY_TOKEN": grant_verify_token,
                     "MARTY_TEST_REDIS_URL": f"redis://127.0.0.1:{redis_port}/13",
                     "MARTY_TEST_REDIS_DISPOSABLE_NONCE": redis_nonce,
@@ -847,6 +848,22 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
                     f"Rust Gateway managed-key route check failed:\n{detail[-2000:]}"
+                )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
+                    "--test", "gateway_signing_acceptance", "--locked", "--offline",
+                    "-j2", "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
+                    "--", "--ignored", "--exact", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                raise RuntimeError(
+                    f"Rust Gateway profile CSR check failed:\n{detail[-2000:]}"
                 )
             result = subprocess.run(
                 [

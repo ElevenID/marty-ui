@@ -15557,3 +15557,12 @@ root token only for the disposable marker. The local policy probe uses the
 stricter production-style scoped token and passed. The hosted test token's
 Transit-wide ACL remains a CI-only fixture and is not evidence for production
 policy qualification.
+
+The next live-case audit added Gateway issuer-profile CSR creation for both
+CSCA and DSC to the same disposable `--rust-adapter` run. The probe passes a
+distinct GatewayIssuerDid mint token to that case; the GatewayService and
+GatewayIssuerDid grants remain origin-isolated. The full probe passed with
+this additional case. In hosted run `38152537463`, the OpenBao DIDComm plugin
+job also passed; only Canvas remained active when this checkpoint was
+recorded. The Rust contracts failure remains the single known substantive
+failure and the grouped local correction is still held.
