@@ -15604,8 +15604,10 @@ route with the rotated bearer, verifies the returned Ed25519 signature, checks
 `Cache-Control: no-store`, and requires 403 after deactivation. The complete
 `--rust-adapter` probe passed with this case, and warnings-denied Clippy for
 the test passed. Hold this addition for grouping with exact-head CI findings.
+
 The public route now also rejects the old bearer immediately after rotation;
 the complete disposable-stack probe passed again with that denial.
+
 The rotated bearer additionally signs through the public presentation route;
 the test verifies its DER P-256 signature with the original public key. The
 full live probe passed again, so rotation preserves both holder key purposes.
@@ -15626,3 +15628,9 @@ purposes after rotation, and the managed DSC ceremony. Warnings-denied Clippy,
 Ruff, YAML parsing and diff checks passed. At this checkpoint the hosted
 Canvas lane is still running; hold the local corrections for one grouped push
 after its terminal result.
+
+The two envelope-oriented Gateway cases were rerun with the exact
+`credential-service`-only token role minted by the local OpenBao bootstrap,
+matching the hosted fixture rather than the broader managed-signing token;
+the full probe passed again. All six Gateway acceptance cases are now selected
+by the disposable local probe.

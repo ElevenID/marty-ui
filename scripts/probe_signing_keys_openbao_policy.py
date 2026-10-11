@@ -849,6 +849,9 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(
                     f"Rust Gateway managed-key route check failed:\n{detail[-2000:]}"
                 )
+            envelope_environment = dict(
+                environment, MARTY_TEST_OPENBAO_TOKEN=plain, BAO_TOKEN=plain,
+            )
             for test_name in (
                 "authenticated_gateway_reaches_remaining_rust_signing_handlers",
                 "authenticated_gateway_rotates_only_a_dedicated_signing_service",
@@ -859,12 +862,13 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                         "--test", "gateway_signing_acceptance", "--locked", "--offline",
                         "-j2", test_name, "--", "--ignored", "--exact", "--nocapture",
                     ],
-                    cwd=ROOT / "rust", env=environment,
+                    cwd=ROOT / "rust", env=envelope_environment,
                     capture_output=True, text=True, timeout=600, check=False,
                 )
                 if result.returncode:
                     detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                     detail = detail.replace(managed, "[scoped]")
+                    detail = detail.replace(plain, "[envelope]")
                     raise RuntimeError(
                         f"Rust Gateway scoped envelope case {test_name} failed:\n{detail[-2000:]}"
                     )
