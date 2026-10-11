@@ -14002,7 +14002,8 @@ K6 tenant-signing grant acceptance matrix for the next cohesive Rust feature:
 | Gateway public service-sign | Authorized principal has `signing-key:create` in the Gateway-selected organization. | Signing Keys verifies a one-use grant for that organization, service, algorithm and exact payload; direct use of the transport key alone fails. |
 | Flow wallet request object | Authorized verification start persisted the organization, principal, instance and issuer identity before the later public wallet GET. | Signing Keys verifies a one-use grant bound to that instance and exact JWS input before signing; concurrent GETs cannot both consume it. |
 | Issuance credential, Canvas LTI/readiness and passport SOD | Each machine or user entry point has its own authorized tenant and operation record. | Signing Keys verifies the specific origin, tenant, key purpose, algorithm and exact bytes; a generic Issuance service credential cannot select another tenant. |
-| Gateway issuer-DID compatibility route | No independent tenant authority currently accompanies the query tenant. | Remove this route if unused by supported clients, or require the same verified grant; static credential plus query scope is insufficient. |
+| Gateway issuer-DID compatibility route | Supported Flow and Issuance consumers use this route; the query tenant and static credential are not independent authority. | Require a verified one-use grant bound to the producer's authorized operation and exact bytes. |
+| Signing Keys certificate CSR and managed issuer certificate paths | Gateway-approved service/issuer and certificate ceremony authority, including tenant, operator and key purpose. | Carry an operation-specific authority through internal `sign_with_issuer_did` and the direct service CSR `kms::sign` call before any KMS signature. |
 
 The grant must have an independently trusted issuer, bounded lifetime and
 atomic one-use record before KMS invocation. A second shared service key or
@@ -14398,3 +14399,12 @@ constructed by a direct backend caller. The crate tests, warnings-denied
 Clippy and the fresh disposable OpenBao/Redis concurrent authorization test
 pass after the change. Production signing methods have not yet been changed
 to require this type.
+
+The kernel call-graph review found that `SigningCompatibilityService` has
+both public service and issuer-DID methods, and the latter calls the former.
+Signing Keys HTTP also invokes issuer-DID signing from CSR and managed
+certificate ceremonies; `generate_public_service_csr` calls `kms::sign`
+directly. Those paths must receive operation-specific authority and the
+lower-level sign methods must recheck it; guarding only the two HTTP sign
+handlers would leave bypasses. Holder/device proof signing is separately
+scoped and must retain its supported behavior.
