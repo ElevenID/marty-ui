@@ -14924,3 +14924,19 @@ is now CSR-only; an explicit regression denies ordinary signing with this
 token. The revised signing-grant suite passes 17 tests (three live-only
 ignored), with warnings-denied all-target Clippy clean. The public issuer-DID
 relay still accepts separate Issuance and Flow grants as designed.
+
+Hosted UI run 38126745463 exposed two additional packaging checks affected
+by the new grant mounts. `Release Contract Tests` failed the same approved
+self-host checksum that was already repinned locally in `ebdef37c7`.
+`Rust Service Tests (contracts)` reached the extracted self-host bundle and
+rejected its closed runtime model at the exact expected-secret-set check:
+the Rust fixture still listed the pre-grant Gateway and Flow mounts. The
+fixture now requires both Gateway mint-token mounts and the Flow mint-token
+mount, and maps each `_FILE` selector to its exact secret. Rust formatting,
+the signing-keys library suite (185 pass, nine live-only ignored), and the
+Gateway library suite (163 pass, one ignored) pass locally. The focused
+extracted-bundle CLI test compiles locally but cannot reach its model check
+on Windows because the synthetic `docker compose config` call is rejected;
+the Linux hosted rerun must confirm the fixture correction. Do not count
+this local run as a pass. Remaining lanes on the published head are still
+running; retain the local fixes for one grouped push after terminal CI.

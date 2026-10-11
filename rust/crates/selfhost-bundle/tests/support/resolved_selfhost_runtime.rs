@@ -354,6 +354,8 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
         "gateway" => [
             "issuance_api_key",
             "signing_keys_service_sign_gateway_key",
+            "sign_grant_mint_gateway_service_token",
+            "sign_grant_mint_gateway_issuer_did_token",
             "signing_keys_issuer_sign_key",
             "openbao_service_token",
             "grpc_service_token",
@@ -373,6 +375,7 @@ pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "flow_application_event_hmac_key",
             "issuance_api_key",
             "signing_keys_issuer_sign_key",
+            "sign_grant_mint_flow_wallet_token",
         ]
         .into_iter()
         .collect(),
@@ -387,6 +390,11 @@ fn secret_field(key: &str) -> Result<&'static str> {
         "DEVICE_REGISTRATION_GATEWAY_KEY_FILE" => Ok("device_registration_gateway_key"),
         "ISSUANCE_API_KEY_FILE" | "SIGNING_KEYS_INTERNAL_API_KEY_FILE" => Ok("issuance_api_key"),
         "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE" => Ok("signing_keys_service_sign_gateway_key"),
+        "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_gateway_service_token"),
+        "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_gateway_issuer_did_token")
+        }
+        "FLOW_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_flow_wallet_token"),
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" => Ok("signing_keys_integration_secret_key"),
         "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
