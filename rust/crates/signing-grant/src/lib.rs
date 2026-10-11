@@ -600,6 +600,23 @@ mod tests {
             bound_input(&claims, &binding, 1_700_000_001),
             Err(GrantError::Malformed)
         );
+
+        claims.route = "/v1/signing-keys/issuer-identities/certificate-csr".into();
+        claims.key_reference = None;
+        claims.key_purpose = "csca".into();
+        let csr_binding = GrantBinding {
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id: &claims.operation_id,
+            organization_id: &claims.organization_id,
+            route: &claims.route,
+            service_id: None,
+            issuer_did: claims.issuer_did.as_deref(),
+            key_reference: None,
+            key_purpose: &claims.key_purpose,
+            algorithm: &claims.algorithm,
+            payload: b"exact.payload",
+        };
+        assert!(bound_input(&claims, &csr_binding, 1_700_000_001).is_ok());
     }
 
     #[test]
