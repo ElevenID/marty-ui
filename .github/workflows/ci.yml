@@ -19,6 +19,12 @@ on:
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
+    inputs:
+      canvas_migrated_base_pilot:
+        description: 'Opt in to isolated Canvas migrated-base reuse qualification'
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: '17 4 * * 0'
 
@@ -1837,6 +1843,8 @@ jobs:
       - name: Run isolated database contract suites concurrently
         working-directory: rust
         shell: bash
+        env:
+          MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT: ${{ github.event_name == 'workflow_dispatch' && inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas' && '1' || '0' }}
         run: |
           set -euo pipefail
           if [[ "${{ matrix.lane }}" == worker ]]; then
@@ -1849,6 +1857,28 @@ jobs:
           else
             python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
           fi
+      - name: Verify opted-in Canvas migrated-base parity and isolation
+        if: github.event_name == 'workflow_dispatch' && inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas'
+        working-directory: rust
+        shell: bash
+        env:
+          MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT: '1'
+          MARTY_CANVAS_PUBLISHED_SCHEMA_TEST: '1'
+        run: |
+          set -euo pipefail
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("#marty-canvas-acceptance@"))
+            | select(.target.name == "canvas_published_schema_contract")
+            | select(.executable != null) | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          for test_name in \
+            canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads \
+            canvas_published_database::diagnostic_tests::immutable_published_base_keeps_revision_parity_and_case_isolation \
+            canvas_published_database::diagnostic_tests::failed_published_base_restore_removes_only_its_owned_container; do
+            python3 ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" "$test_name"
+          done
       - name: Test packaged passport self-signed mode
         if: matrix.lane == 'contracts'
         working-directory: rust

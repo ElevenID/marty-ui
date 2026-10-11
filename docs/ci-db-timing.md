@@ -94,3 +94,32 @@ runner caches were identical. Compare later PR and merge-group runs separately
 under the same toolchain, target, features, runner class, and qualification
 tier; record cache state and required-case completion alongside elapsed time.
 The new JSONL explains the DB aggregate but does not by itself shorten it.
+
+## Opt-in immutable-base pilot (2026-10-11)
+
+`MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1` is an **off-by-default pilot**.
+Routine PR, merge-group, and scheduled CI keep it off. Only an explicit
+`workflow_dispatch` boolean enables it in the Canvas database step, with
+exact ignored parity, isolation, and failed-restore checks afterward. Manual
+runs still retain full qualification. It is not a release selector. The pilot
+applies only to `PublishedDatabase::start()` with the fixed `published_probe`
+setup. The first call still runs the exact pinned producer and validates its
+source digest and
+migration revisions, then captures a bounded SQL dump in this test process and
+removes its owned containers. Later calls restore that immutable dump into a
+new case-owned tmpfs PostgreSQL container. Scoped recovery, oracle-specific
+fixtures, recovery overlays, and their cleanup remain on the original path.
+PostgreSQL readiness now requires TCP `127.0.0.1`; the entrypoint's temporary
+Unix-socket initialization server can otherwise appear ready before the final
+server accepts the restore.
+
+On one local Windows/Docker Desktop host, the same ignored eight-case
+sequential migration-head test took 39.43 seconds with the switch off and
+23.22 seconds with it on. A three-case comparison was 14.90 versus
+14.05 seconds. These are local fixture measurements, not CI speedup evidence:
+the real Canvas targets run multiple tests concurrently, and runner load and
+cache state differ. The opt-in path also passed pinned-Docker revision parity,
+case-isolation, and failed-restore cleanup tests. Keep the switch off in
+routine CI and release qualification until the manual Linux full Canvas pilot
+and independent review confirm case inventory, provenance, cleanup, and
+comparable hosted wall time.

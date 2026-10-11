@@ -9,6 +9,9 @@ use std::{
 use uuid::Uuid;
 
 const LABEL: &str = "com.elevenid.test.canvas-published-schema";
+const DATABASE: &str = "canvas_published_schema_test";
+const BASE_REUSE_SWITCH: &str = "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT";
+static PUBLISHED_BASE: tokio::sync::OnceCell<Vec<u8>> = tokio::sync::OnceCell::const_new();
 
 fn selected_postgres_image(fixture: &Value, supplied: Option<&str>) -> Result<String, String> {
     let canonical = fixture["observed_postgres_image"]
@@ -353,6 +356,59 @@ pub(super) fn docker_output_with_timeout(
     Ok(output)
 }
 
+// Plain SQL stays in this test process only. The pinned probe has completed
+// and its migration revisions/source digest have been checked before capture.
+// There is no cross-run cache, shared Docker volume, or deployment database.
+fn dump_published_base(postgres: &str) -> Result<Vec<u8>, String> {
+    let output = docker_output_with_timeout(
+        &[
+            "exec",
+            postgres,
+            "pg_dump",
+            "--no-owner",
+            "--no-privileges",
+            "--format=plain",
+            "-U",
+            "oracle",
+            "-d",
+            DATABASE,
+        ],
+        Duration::from_secs(120),
+        64 * 1024 * 1024,
+    )?;
+    if output.stdout.is_empty() {
+        return Err("Pinned published base dump is empty".into());
+    }
+    Ok(output.stdout)
+}
+
+fn restore_published_base(postgres: &str, base: &[u8]) -> Result<(), String> {
+    use super::bounded_fixture_command::run;
+    let output = run(
+        Command::new("docker").args([
+            "exec",
+            "--interactive",
+            postgres,
+            "psql",
+            "-X",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            "oracle",
+            "-d",
+            DATABASE,
+        ]),
+        Some(base),
+        Duration::from_secs(120),
+        8 * 1024 * 1024,
+    )
+    .map_err(|_| "Pinned published base restore unavailable or exceeded bounds")?;
+    if !output.status.success() {
+        return Err("Pinned published base restore failed".into());
+    }
+    Ok(())
+}
+
 pub(super) fn inspect(id: &str) -> Result<Value, String> {
     inspect_with_timeout(id, Duration::from_secs(120))
 }
@@ -645,7 +701,49 @@ impl PublishedDatabase {
     }
 
     pub async fn start() -> Result<Self, String> {
+        if std::env::var(BASE_REUSE_SWITCH).as_deref() == Ok("1") {
+            // Only the exact default constructor can use this immutable base.
+            // Scoped recovery and every oracle/recovery overlay retain the
+            // original published process, resource identity, and cleanup path.
+            let base = PUBLISHED_BASE
+                .get_or_try_init(|| async {
+                    let owned = Self::start_probe_with_scope(
+                        None,
+                        None,
+                        false,
+                        Uuid::new_v4(),
+                        "published_probe",
+                    )
+                    .await?;
+                    let dump = dump_published_base(
+                        owned
+                            .postgres
+                            .as_deref()
+                            .ok_or("Missing pinned base database")?,
+                    );
+                    owned.close_verified()?;
+                    dump
+                })
+                .await?;
+            return Self::start_from_published_base(base).await;
+        }
         Self::start_probe(None).await
+    }
+
+    async fn start_from_published_base(base: &[u8]) -> Result<Self, String> {
+        Self::start_from_published_base_with_scope(Uuid::new_v4(), base).await
+    }
+
+    async fn start_from_published_base_with_scope(
+        scope: Uuid,
+        base: &[u8],
+    ) -> Result<Self, String> {
+        let owned = Self::start_empty_postgres(scope).await?;
+        let postgres = owned.postgres.as_deref().ok_or("Missing owned database")?;
+        let timing = PhaseTimer::start("migration_seed", "published_probe");
+        restore_published_base(postgres, base)?;
+        timing.success();
+        Ok(owned)
     }
 
     pub async fn start_for_worker_validation_template() -> Result<Self, String> {
@@ -1449,13 +1547,7 @@ impl PublishedDatabase {
         .await
     }
 
-    async fn start_probe_with_scope(
-        oracle: Option<(&str, &str, &str, &str)>,
-        extra_fixture: Option<&'static str>,
-        recovery_schema: bool,
-        scope: Uuid,
-        timing_name: impl Into<String>,
-    ) -> Result<Self, String> {
+    async fn start_empty_postgres(scope: Uuid) -> Result<Self, String> {
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -1500,6 +1592,8 @@ impl PublishedDatabase {
                 "exec",
                 &postgres,
                 "pg_isready",
+                "-h",
+                "127.0.0.1",
                 "-U",
                 "oracle",
                 "-d",
@@ -1524,6 +1618,23 @@ impl PublishedDatabase {
         }
         readiness_timing.success();
         owned.url = format!("postgresql://oracle:synthetic-local-only@127.0.0.1:{port}/canvas_published_schema_test");
+        Ok(owned)
+    }
+
+    async fn start_probe_with_scope(
+        oracle: Option<(&str, &str, &str, &str)>,
+        extra_fixture: Option<&'static str>,
+        recovery_schema: bool,
+        scope: Uuid,
+        timing_name: impl Into<String>,
+    ) -> Result<Self, String> {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let mut owned = Self::start_empty_postgres(scope).await?;
+        let postgres = owned.postgres.as_deref().ok_or("Missing owned database")?;
+        let label = format!("{LABEL}={}", owned.scope);
         let root = repository_root();
         // Mount only the two public test inputs, not the checkout or its Git
         // configuration. The native client connects through an owned loopback

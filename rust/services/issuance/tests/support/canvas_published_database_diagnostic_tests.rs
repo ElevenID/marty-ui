@@ -3,6 +3,127 @@ mod diagnostic_tests {
     use super::*;
     use serde_json::json;
 
+    fn installed_revisions(postgres: &str) -> String {
+        docker(&[
+            "exec",
+            postgres,
+            "psql",
+            "-X",
+            "-A",
+            "-t",
+            "-U",
+            "oracle",
+            "-d",
+            DATABASE,
+            "-c",
+            "SELECT string_agg(version_num, ',' ORDER BY version_num) FROM issuance_service.alembic_version",
+        ])
+        .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "pinned Docker images required; run exact test in separate baseline and opt-in processes"]
+    async fn eight_fixed_published_databases_keep_migration_heads() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let expected = fixture["migration_revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|revision| revision.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(",");
+        for _ in 0..8 {
+            let owned = PublishedDatabase::start().await.unwrap();
+            assert_eq!(
+                installed_revisions(owned.postgres.as_deref().unwrap()),
+                expected
+            );
+            owned.close_verified().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in pinned Docker image pilot; run alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1"]
+    async fn immutable_published_base_keeps_revision_parity_and_case_isolation() {
+        assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
+        let first = PublishedDatabase::start().await.unwrap();
+        assert!(PUBLISHED_BASE.get().is_some());
+        let second = PublishedDatabase::start().await.unwrap();
+        let first_id = first.postgres.as_ref().unwrap().clone();
+        let second_id = second.postgres.as_ref().unwrap().clone();
+        assert_ne!(first_id, second_id);
+        assert_ne!(first.scope, second.scope);
+
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let expected = fixture["migration_revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|revision| revision.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(installed_revisions(&first_id), expected);
+        assert_eq!(installed_revisions(&second_id), expected);
+        docker(&[
+            "exec",
+            &first_id,
+            "psql",
+            "-X",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-U",
+            "oracle",
+            "-d",
+            DATABASE,
+            "-c",
+            "CREATE TABLE public.marty_pilot_marker (id integer)",
+        ])
+        .unwrap();
+        let marker_absent = |postgres| {
+            docker(&[
+                "exec",
+                postgres,
+                "psql",
+                "-X",
+                "-A",
+                "-t",
+                "-U",
+                "oracle",
+                "-d",
+                DATABASE,
+                "-c",
+                "SELECT to_regclass('public.marty_pilot_marker') IS NULL",
+            ])
+            .unwrap()
+        };
+        assert_eq!(marker_absent(&second_id), "t");
+        first.close_verified().unwrap();
+        second.close_verified().unwrap();
+        let third = PublishedDatabase::start().await.unwrap();
+        assert_eq!(marker_absent(third.postgres.as_deref().unwrap()), "t");
+        third.close_verified().unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in pinned Docker image pilot; run alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1"]
+    async fn failed_published_base_restore_removes_only_its_owned_container() {
+        assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
+        let scope = Uuid::new_v4();
+        assert!(PublishedDatabase::start_from_published_base_with_scope(
+            scope,
+            b"THIS IS NOT SQL;\n",
+        )
+        .await
+        .is_err());
+        assert!(scope_ids(scope, &docker).unwrap().is_empty());
+    }
+
     #[test]
     fn published_postgres_registry_fallback_keeps_the_frozen_digest() {
         let fixture: Value = serde_json::from_str(include_str!(
