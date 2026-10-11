@@ -16442,3 +16442,35 @@ database audit, the retired `marty-common` release graph and seed migration,
 the fail-closed release manifest guard, and the fresh local
 OpenBao/PostgreSQL/Redis Rust-adapter probe. Publish that batch together to
 draft PR #1192, then qualify its exact new head.
+The prior UI CI Gate completed successfully. The 37-file grouped UI batch was
+pushed as PR #1192 head `e757a8acc`; [exact-head CI 38182806875](https://github.com/ElevenID/marty-ui/actions/runs/38182806875)
+was queued at this checkpoint. The PR description now reflects the six-service
+database audit, full `marty-common` release retirement, fail-closed promotion
+guard and local OpenBao/PostgreSQL/Redis proof. Keep release-image
+qualification and coordinated dependent PR landing open.
+Credentials full Python source/contract suite uncovered four more retirement
+assertions that treated the leftover ignored bytecode directory as source.
+Five assertions now share one test helper that rejects any restored source
+file while ignoring only stale `.pyc` under `__pycache__`; mutation cases prove
+that reintroducing `issuer.py` or a directly importable `issuer.pyc` still
+fails. The complete local Python suite passed 314 cases
+with two pre-existing skips, and Ruff/diff hygiene passed. This is included
+in the held Credentials follow-up batch after the prior-head WASM job ends.
+The prior Credentials head's WASM, Rust, Core wheel and security jobs finished
+successfully; Python Tests failed only at the undeclared PyYAML import, and
+the aggregate gate recorded that failure. The complete local follow-up was
+then pushed together as PR #313 head `1bdab09`; [exact-head CI 38182965192](https://github.com/ElevenID/marty-credentials/actions/runs/38182965192)
+was queued at this checkpoint. The PR description now reflects the retired
+historical wheel installer, unified Core pin, explicit test dependency and
+full Python suite result. Keep signed native wheel/browser artifacts and UI
+cutover open.
+Release-custody self-review found `release/stack-lock.json` still marked
+`eligible` while its three Core Python wheel artifacts are v0.1.61 at
+`a3adbbdc`, predating the reviewed KMS-only Core revision. The local
+correction sets the lock to `hold` until hardened signed wheels are pinned;
+the real stack-tag gate now rejects a tag from this checkout. The release
+transaction and nightly claim paths already require `eligible`. The affected
+stack tag, release transaction, nightly and contract suites passed 133 cases
+with two pre-existing skips. This is a release stop, not artifact
+qualification or a substitute for publishing and verifying the hardened
+Core wheels. Keep it in the next broad UI batch after current exact-head CI.
