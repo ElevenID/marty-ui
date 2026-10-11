@@ -79,6 +79,62 @@ def test_bundle_roles_derive_only_from_verified_lock(tmp_path, monkeypatch):
                             "f" * 40, "123")
 
 
+def test_pulled_images_match_linux_amd64_and_exact_digest():
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        assert kwargs == {"check": True, "capture_output": True, "text": True}
+        output = "" if args[1] == "pull" else json.dumps({
+            "Os": "linux", "Architecture": "amd64", "RepoDigests": [args[3]]})
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    probe.verify_local_platforms(IMAGES, run)
+    assert len(calls) == 8
+    assert all(args[2] == "--platform" and args[3] == "linux/amd64"
+               for args in calls if args[1] == "pull")
+
+
+@pytest.mark.parametrize("platform,digests", [
+    ("arm64", [IMAGES["migrations"]]),
+    ("amd64", ["ghcr.io/other/migrations@sha256:" + "a" * 64]),
+    ("amd64", []),
+])
+def test_pulled_image_rejects_wrong_platform_or_digest(platform, digests):
+    def run(args, **kwargs):
+        reference = args[3]
+        affected = reference == IMAGES["migrations"]
+        output = "" if args[1] == "pull" else json.dumps({
+            "Os": "linux", "Architecture": platform if affected else "amd64",
+            "RepoDigests": digests if affected else [reference]})
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    with pytest.raises(probe.QualificationError):
+        probe.verify_local_platforms(IMAGES, run)
+
+
+def test_official_docker_hub_alias_preserves_exact_postgres_binding():
+    images = {**IMAGES, "postgres": "docker.io/library/postgres@sha256:" + "b" * 64}
+
+    def run(args, **kwargs):
+        digest = args[3]
+        reported = ("postgres@" + digest.split("@", 1)[1]
+                    if digest.startswith("docker.io/library/postgres@") else digest)
+        output = "" if args[1] == "pull" else json.dumps({
+            "Os": "linux", "Architecture": "amd64", "RepoDigests": [reported]})
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    probe.verify_local_platforms(images, run)
+
+
+def test_platform_probe_fails_closed_on_pull_error():
+    def fail(args, **kwargs):
+        raise subprocess.CalledProcessError(1, args)
+
+    with pytest.raises(probe.QualificationError, match="cannot be pulled"):
+        probe.verify_local_platforms(IMAGES, fail)
+
+
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Compose CLI unavailable")
 def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
     install = tmp_path / "bundle"
@@ -109,6 +165,8 @@ def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
                       "target": "/run/secrets/bao_root_token"}]),
         lambda item: item["services"]["openbao-bootstrap"].update(
             ports=["8200:8200"]),
+        lambda item: item["services"]["db-migrate"].update(platform="linux/arm64"),
+        lambda item: item["services"]["openbao"].pop("platform"),
         lambda item: item["networks"]["private"].update(internal=False),
     ):
         changed = deepcopy(model)
@@ -118,7 +176,8 @@ def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Compose CLI unavailable")
-def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(tmp_path):
+def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(tmp_path, monkeypatch):
+    monkeypatch.setattr(probe, "verify_local_platforms", lambda images: None)
     install = tmp_path / "bundle"
     (install / "docker").mkdir(parents=True)
     (install / "docker/openbao-init.sh").write_text("fixture", encoding="utf-8")
@@ -156,6 +215,7 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(tmp_path):
 def test_failed_bootstrap_still_tears_down(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(probe, "validate_scoped_model", lambda *args: None)
+    monkeypatch.setattr(probe, "verify_local_platforms", lambda images: None)
 
     def run(args, environment, timeout=90):
         calls.append(args)

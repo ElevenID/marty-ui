@@ -22,6 +22,7 @@ if __package__:
         verify_descriptor, verify_extracted_bundle, verify_receipt,
     )
     from .passport_supported_infra_images import registry_index
+    from .check_selfhost_locked_image_platform import accepted_repo_digests
     from .qualify_selfhost_migrations import (
         QualificationError, _assert_run, _checked, _empty_project, command,
         validate_images, validate_model,
@@ -31,6 +32,7 @@ else:
         verify_descriptor, verify_extracted_bundle, verify_receipt,
     )
     from passport_supported_infra_images import registry_index
+    from check_selfhost_locked_image_platform import accepted_repo_digests
     from qualify_selfhost_migrations import (
         QualificationError, _assert_run, _checked, _empty_project, command,
         validate_images, validate_model,
@@ -106,6 +108,31 @@ def bundle_images(archive: Path, lock_path: Path, transaction: Path,
     return images, receipt
 
 
+def verify_local_platforms(
+    images: dict[str, str],
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> None:
+    """Bind each selected local linux/amd64 image to its exact repository digest."""
+    validate_images(images)
+    for reference in sorted(set(images.values())):
+        try:
+            run(["docker", "pull", "--platform", "linux/amd64", reference],
+                check=True, capture_output=True, text=True)
+            inspected = run(["docker", "image", "inspect", reference,
+                             "--format", "{{json .}}"],
+                            check=True, capture_output=True, text=True)
+            image = json.loads(inspected.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError) as exc:
+            raise QualificationError("Exact probe image cannot be pulled or inspected") from exc
+        require(isinstance(image, dict) and image.get("Os") == "linux"
+                and image.get("Architecture") == "amd64",
+                "Selected probe image is not linux/amd64")
+        digests = image.get("RepoDigests")
+        require(isinstance(digests, list) and any(
+            isinstance(item, str) and item in accepted_repo_digests(reference)
+            for item in digests), "Selected probe image differs from exact digest")
+
+
 def validate_scoped_model(model: dict, images: dict[str, str],
                           secret_dir: Path, install_root: Path, project: str) -> None:
     """Validate exact disposable topology, then reuse the mature base contract."""
@@ -116,9 +143,13 @@ def validate_scoped_model(model: dict, images: dict[str, str],
     require(isinstance(services, dict) and set(services) ==
             {"postgres", "redis", "openbao", "openbao-bootstrap", "db-migrate"},
             "Disposable service set changed")
+    require(all(isinstance(service, dict)
+                and service.get("platform") == "linux/amd64"
+                for service in services.values()),
+            "Disposable service platform changed")
     bootstrap = services["openbao-bootstrap"]
     require(isinstance(bootstrap, dict) and set(bootstrap) ==
-            {"image", "networks", "command", "entrypoint", "environment", "configs", "secrets",
+            {"image", "platform", "networks", "command", "entrypoint", "environment", "configs", "secrets",
              "volumes", "depends_on", "restart"}
             and bootstrap["command"] is None
             and bootstrap["image"] == images["openbao"]
@@ -170,6 +201,8 @@ def validate_scoped_model(model: dict, images: dict[str, str],
                     for name, path in config_paths.items()),
             "Disposable OpenBao fixture files changed")
     baseline = deepcopy(model)
+    for service in baseline["services"].values():
+        del service["platform"]
     del baseline["services"]["openbao-bootstrap"]
     baseline["services"]["db-migrate"]["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/bao_root_token"
     baseline["services"]["db-migrate"]["secrets"][1] = {
@@ -219,6 +252,7 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
         except (TypeError, ValueError, KeyError) as exc:
             raise QualificationError("Disposable Compose model is invalid") from exc
         _empty_project(project, environment, run)
+        verify_local_platforms(images)
         started = False
         try:
             started = True

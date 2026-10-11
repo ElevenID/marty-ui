@@ -23,6 +23,9 @@ The probe rechecks the exact ZIP, descriptor, receipt, lock, and extracted
 inventory. It takes the migrations, PostgreSQL, and Redis images only from the
 bundle lock. The separate OpenBao 2.5.2 pin has an explicit Linux amd64,
 disposable self-host migration scope and is checked against the registry index.
+All five Compose services select `linux/amd64`; before startup the probe pulls
+each distinct exact reference for that platform and checks the selected local
+image's OS, architecture, and repository-digest association.
 The disposable project has an internal network, no host ports or persistent
 volumes, and no source builds. A root token is available only to OpenBao and
 the one-shot bootstrap container; the migration receives distinct scoped

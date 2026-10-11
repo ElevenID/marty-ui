@@ -3,6 +3,7 @@
 services:
   postgres:
     image: ${PROBE_POSTGRES_IMAGE:?exact bundle digest required}
+    platform: linux/amd64
     environment:
       POSTGRES_DB: marty
       POSTGRES_USER: marty
@@ -15,6 +16,7 @@ services:
     networks: [private]
   redis:
     image: ${PROBE_REDIS_IMAGE:?exact bundle digest required}
+    platform: linux/amd64
     healthcheck:
       test: [CMD, redis-cli, ping]
       interval: 2s
@@ -22,6 +24,7 @@ services:
     networks: [private]
   openbao:
     image: ${PROBE_OPENBAO_IMAGE:?reviewed disposable digest required}
+    platform: linux/amd64
     entrypoint: [/bin/sh, /usr/local/bin/passport-supported-openbao-start]
     configs:
       - source: openbao_start
@@ -34,6 +37,7 @@ services:
     networks: [private]
   openbao-bootstrap:
     image: ${PROBE_OPENBAO_IMAGE:?reviewed disposable digest required}
+    platform: linux/amd64
     entrypoint: [/bin/sh, /usr/local/bin/selfhost-migration-openbao-bootstrap]
     environment:
       BAO_ADDR: http://openbao:8200
@@ -53,6 +57,7 @@ services:
     restart: "no"
   db-migrate:
     image: ${PROBE_MIGRATIONS_IMAGE:?exact bundle digest required}
+    platform: linux/amd64
     environment:
       ENVIRONMENT: production
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
