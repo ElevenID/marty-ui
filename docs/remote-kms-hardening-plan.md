@@ -13673,3 +13673,14 @@ and ten frozen native OAuth owners. At this checkpoint GitHub reports no
 check suite or workflow run for the new head; exact-head qualification remains
 pending. Keep this evidence update in the next grouped local batch rather
 than spending a separate CI run on documentation alone.
+
+UI #1192 integration update: GitHub reported the published OAuth head as
+`DIRTY` against `main` and created no check suites. Fetched current main
+`1fe6860b4` and merged its four changed paths. The only content conflict was
+the CI acceptance-test source classifier; retained upstream's consolidated
+checked-out six-context/sole-owner verifier in place of the branch's older
+three separate classifiers. The full Rust matrix remains the conservative
+path for this broad feature PR. The focused compile-scope, exact test-source
+ownership and CI performance suite passed 210/210 after resolution; YAML
+parsing and staged diff hygiene passed. This merge still requires exact-head
+hosted qualification.
