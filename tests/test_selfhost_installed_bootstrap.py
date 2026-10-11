@@ -2,6 +2,7 @@
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +33,7 @@ def owned_model(
             "Config": {
                 "Labels": {bootstrap.OWNED: name},
                 "Image": bootstrap.HELPER_IMAGE,
+                "User": "1000:1000" if mounts else "openbao",
             },
             "HostConfig": {
                 "NetworkMode": "default" if mounts else "bridge",
@@ -125,19 +127,25 @@ def test_shipped_helper_inherits_token_without_argv_value(
     docker.write_text(
         "#!/bin/sh\n"
         'printf "%s\\n" "$@" > "$FAKE_DOCKER_ARGV"\n'
-        'printf "%s" "$BAO_TOKEN" > "$FAKE_DOCKER_ENV"\n',
+        'printf "%s" "$BAO_TOKEN" > "$FAKE_DOCKER_ENV"\n'
+        "for name in openbao_service_token notification_openbao_token passport_callback_signer_bao_token; do\n"
+        '  printf "%s" synthetic-scoped-token > "$SELFHOST_SECRET_DIR/$name"\n'
+        '  chmod 600 "$SELFHOST_SECRET_DIR/$name"\n'
+        "done\n",
         encoding="ascii",
     )
     docker.chmod(0o700)
     synthetic_token = "synthetic-bootstrap-token-not-a-secret"
     argv_file = tmp_path / "argv"
     env_file = tmp_path / "env"
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir(mode=0o700)
     environment = {
         **os.environ,
         "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
         "BAO_ADDR": "http://127.0.0.1:8200",
         "BAO_TOKEN": synthetic_token,
-        "SELFHOST_SECRET_DIR": str(tmp_path / "secrets"),
+        "SELFHOST_SECRET_DIR": str(secret_dir),
         "FAKE_DOCKER_ARGV": str(argv_file),
         "FAKE_DOCKER_ENV": str(env_file),
     }
@@ -157,10 +165,14 @@ def test_shipped_helper_inherits_token_without_argv_value(
     assert synthetic_token not in argv_file.read_text(encoding="ascii")
     assert synthetic_token not in completed.stdout + completed.stderr
     args = argv_file.read_text(encoding="ascii").splitlines()
+    assert args[args.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
     assert ("--name" in args) is named
     if named:
         assert args[args.index("--name") + 1] == disposable_name
         assert ("marty.selfhost.bootstrap-handoff=" + disposable_name) in args
+    assert stat.S_IMODE(secret_dir.stat().st_mode) == 0o700
+    for token_name in bootstrap.TOKEN_NAMES:
+        assert stat.S_IMODE((secret_dir / token_name).stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize(

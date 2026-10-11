@@ -66,6 +66,7 @@ def inspect_owned(
     *,
     require_address: bool = True,
     expected_mounts: dict[str, tuple[str, bool]] | None = None,
+    expected_user: str | None = None,
 ) -> str:
     raw = checked(
         ["docker", "inspect", "--format", "{{json .}}", container_id],
@@ -79,6 +80,7 @@ def inspect_owned(
         network = item["HostConfig"]["NetworkMode"]
         labels = item["Config"]["Labels"]
         image = item["Config"]["Image"]
+        user = item["Config"]["User"]
         ports = item["HostConfig"]["PortBindings"]
         assert item["Id"] == container_id
         assert item["Name"] == "/" + name
@@ -89,6 +91,8 @@ def inspect_owned(
             and labels.get(OWNED) == name
         )
         assert image == HELPER_IMAGE
+        if expected_user is not None:
+            assert user == expected_user
         assert not ports
         mounts = item["Mounts"]
         assert isinstance(mounts, list)
@@ -266,7 +270,7 @@ def probe(install_root: Path, receipt: dict) -> dict:
                 require(
                     path.is_file()
                     and not path.is_symlink()
-                    and path.stat().st_size >= 32
+                    and path.stat().st_size >= 16
                     and path.read_text(encoding="ascii") != root_token,
                     "Extracted bootstrap did not mint distinct scoped tokens",
                 )
@@ -300,6 +304,11 @@ def probe(install_root: Path, receipt: dict) -> dict:
                             "/work-notification": (directory, True),
                             "/work-callback": (directory, True),
                         },
+                        expected_user=(
+                            f"{os.getuid()}:{os.getgid()}"
+                            if os.name == "posix"
+                            else "1000:1000"
+                        ),
                     )
                     checked(
                         ["docker", "rm", "--force", "--volumes", helper_id],

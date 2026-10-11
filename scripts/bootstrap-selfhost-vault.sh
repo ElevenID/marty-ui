@@ -72,6 +72,11 @@ if [ -n "${SELFHOST_BOOTSTRAP_CONTAINER_NAME:-}" ]; then
 else
     set --
 fi
+# The shipped Linux install uses an external, caller-owned private secret dir.
+# The image's default UID cannot write it; the CLI itself needs no image-owned state.
+if [ "$(uname -s)" = "Linux" ]; then
+    set -- "$@" --user "$(id -u):$(id -g)"
+fi
 
 docker run --rm "$@" \
     -e BAO_ADDR="${BAO_ADDR}" \

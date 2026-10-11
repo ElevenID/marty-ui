@@ -94,6 +94,7 @@ remain external; packaging does not load their values.
 5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write `openbao_service_token`, or place an equivalent least-privilege token in `SELFHOST_SECRET_DIR` yourself:
 
    The bundled helper runs OpenBao 2.7.1 by its immutable multi-architecture image digest (`quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`). This pins the helper executable, not the external OpenBao server or a qualified installed-bundle release.
+   On Linux the helper runs that CLI container as the invoking UID:GID so it can write scoped token files into a caller-owned private secret directory; the files remain mode `0600`. Do not make the secret directory world-writable.
 
 ```bash
 BAO_ADDR=https://vault.example.com \
