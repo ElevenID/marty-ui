@@ -16215,3 +16215,14 @@ Service Tests (contracts), and the OpenBao DIDComm plugin image job on pushed
 head `44e94b746`. The earlier standalone lockfile failure is resolved in
 hosted CI. Canvas remains live in its public self-host image build; keep its
 terminal result and aggregate CI Gate open before the next grouped push.
+
+Pre-push local follow-up probe: after the final credential/DIDComm read guards
+and the two mainline merges, the full
+`probe_signing_keys_openbao_policy.py --rust-adapter` run passed again against
+fresh disposable OpenBao, Redis and PostgreSQL. It covered six managed
+signing prefixes, seven origin-bound grants, provider HMAC isolation, Rust
+managed keys, ES256/384/512 CSR custody, holder lifecycle, credential
+durability, Redis pairing, tenant and managed-profile routes. The disposable
+containers were removed. Incremental Rust compilation was disabled after the
+scoped cache cleanup. This remains local source-built evidence, not an exact
+release-image qualification, while hosted Canvas is still running.
