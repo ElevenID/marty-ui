@@ -1,10 +1,12 @@
 # Local draft: exact-bundle signing-key runtime continuation
 
-`scripts/probe_selfhost_installed_signing_keys.py` is opt-in and local-only. It
+`scripts/probe_selfhost_installed_signing_keys.py` is opt-in. The manual,
+unqualified prepared-consumer workflow runs it against an exact same-SHA
+bundle; it is also available locally. It
 accepts the same exact archive, lock, transaction, receipt, descriptor,
 extracted root, source SHA, and run ID as the [scoped migration
-probe](selfhost-scoped-installed-migration-probe.md). It is not part of a CI or
-release gate and always reports `qualification: unqualified`.
+probe](selfhost-scoped-installed-migration-probe.md). It is not part of an
+ordinary CI or release gate and always reports `qualification: unqualified`.
 
 The script first repeats that probe's exact-bundle and disposable migration
 checks. It takes `signing-keys` only from the verified image lock, pulls its

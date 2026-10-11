@@ -100,7 +100,11 @@ def test_manual_workflow_is_separate_unqualified_and_cannot_publish() -> None:
     assert "run_attempt" not in source  # enforced by the tested checker
     assert "check_prepared_selfhost_consumer.py" in source
     assert source.index("--verify-archive-only") < source.index("unzip -q")
-    assert "probe_selfhost_installed_migrations.py" in source
-    assert "selfhost-installed-migrations-unqualified-" in str(job)
+    assert "probe_selfhost_installed_signing_keys.py" in source
+    assert "probe_selfhost_installed_migrations.py" not in source
+    assert '"marty.selfhost-signing-runtime-probe/v1"' in source
+    assert ".runtime.public_jwk_count >= 2" in source
+    assert ".runtime.unknown_organization_keys == 0" in source
+    assert "selfhost-installed-signing-unqualified-" in str(job)
     assert "publish-manifest" not in str(job)
     assert "cosign sign" not in source

@@ -93,13 +93,13 @@ jobs:
             --expected-run-id "$STACK_RUN_ID" --verify-archive-only
           mkdir "$RUNNER_TEMP/selfhost-installed"
           unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-installed"
-      - name: Probe scoped installed migrations on exact Linux amd64 images
+      - name: Probe scoped migrations and signing runtime on exact Linux amd64 images
         env:
           STACK_RUN_ID: ${{ inputs.stack_run_id }}
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/probe_selfhost_installed_migrations.py \
+          python scripts/probe_selfhost_installed_signing_keys.py \
             --archive prepared/prepared-selfhost-bundle.zip \
             --image-lock prepared/prepared-selfhost-images.json \
             --transaction transaction/release-transaction.json \
@@ -107,16 +107,16 @@ jobs:
             --descriptor prepared/prepared-selfhost-product-descriptor.json \
             --install-root "$RUNNER_TEMP/selfhost-installed/selfhost-prepared" \
             --source-sha "$GITHUB_SHA" --run-id "$STACK_RUN_ID" \
-            > "$RUNNER_TEMP/selfhost-installed-migrations.json"
-          jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2' \
-            "$RUNNER_TEMP/selfhost-installed-migrations.json" >/dev/null
-          cp "$RUNNER_TEMP/selfhost-installed-migrations.json" ./selfhost-installed-migrations.json
+            > "$RUNNER_TEMP/selfhost-installed-signing.json"
+          jq -e '.schema == "marty.selfhost-installed-migrations-probe/v1" and .qualification == "unqualified" and .runs == 2 and .runtime.schema == "marty.selfhost-signing-runtime-probe/v1" and .runtime.qualification == "unqualified" and .runtime.public_jwk_count >= 2 and .runtime.unknown_organization_keys == 0' \
+            "$RUNNER_TEMP/selfhost-installed-signing.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-installed-signing.json" ./selfhost-installed-signing.json
           cp "$RUNNER_TEMP/producer-binding.json" ./selfhost-producer-binding.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: selfhost-installed-migrations-unqualified-${{ github.run_id }}
+          name: selfhost-installed-signing-unqualified-${{ github.run_id }}
           path: |
-            selfhost-installed-migrations.json
+            selfhost-installed-signing.json
             selfhost-producer-binding.json
           if-no-files-found: error
           retention-days: 30
