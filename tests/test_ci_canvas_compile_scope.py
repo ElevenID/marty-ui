@@ -6,7 +6,6 @@ import shlex
 from pathlib import Path
 
 import pytest
-import tomllib
 import yaml
 
 ROOT = Path(__file__).parents[1]
@@ -213,6 +212,8 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
 
 
 def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None:
+    import tomllib
+
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     )
