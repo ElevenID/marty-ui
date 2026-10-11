@@ -15803,3 +15803,17 @@ failure from the prior head. At this checkpoint the run has 17 successful
 jobs and four still running, including Rust service contracts, Canvas, service
 images and the OpenBao DIDComm plugin recovery job. This does not yet close
 the exact-head CI gate.
+
+The same pushed head passed its OpenBao DIDComm plugin image lane and the
+Gateway CSR/VDS-NC envelope path, but Rust service contracts failed in four
+beta passport reconciliation cases: each returned 502 before reaching the
+expected bureau rejection. A fresh local PostgreSQL 16 instance reproduced
+the failure. The mock managed issuer profile omitted the now-required remote
+`signing_key_reference`; the signer correctly rejected that incomplete KMS
+context. The local fixture now provides matching flattened and nested Transit
+key references and retains the response body in its failure assertion. All
+five database-backed reconciliation tests then passed against a second fresh
+local PostgreSQL instance. The complete Issuance library suite also passed
+(572 passed, 8 ignored), as did direct rustfmt and diff checks. The correction
+is held for a grouped push with the two upstream merges after Canvas finishes
+on the prior hosted head.

@@ -716,10 +716,11 @@ async fn run_beta_batch_http_recovery(
                     "organization_id": "org-a",
                     "issuer_did": "did:web:issuer.example:orgs:org-a",
                     "issuer_profile_id": "issuer-profile-test",
-                    "issuer_profile": {"id": "issuer-profile-test", "credential_format": "ICAO_EMRTD"},
+                    "issuer_profile": {"id": "issuer-profile-test", "credential_format": "ICAO_EMRTD", "signing_key_reference": "transit/keys/passport-dsc-test"},
                     "key_purpose": "x509_doc_signer",
                     "algorithm": "ES256",
                     "verification_method_id": "did:web:issuer.example:orgs:org-a#dsc",
+                    "signing_key_reference": "transit/keys/passport-dsc-test",
                     "issuer_x5c": [dsc, csca]
                 }))
             }
@@ -985,7 +986,16 @@ async fn run_beta_batch_http_recovery(
     };
     *mock.reject_single_for.lock().unwrap() = Some(jobs[0].id.clone());
     let first = call(&app).await.unwrap();
-    assert_eq!(first.status(), StatusCode::CONFLICT);
+    let first_status = first.status();
+    let first_body = axum::body::to_bytes(first.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(
+        first_status,
+        StatusCode::CONFLICT,
+        "{}",
+        String::from_utf8_lossy(&first_body)
+    );
     assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     let pending = repository
         .beta_batch_jobs(&principal, batch_id)
