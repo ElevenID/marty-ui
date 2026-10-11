@@ -495,7 +495,7 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
         assert!(records[2].uri.starts_with("/internal/issuer-dids/sign?"));
         assert_eq!(
             serde_json::from_slice::<Value>(&records[2].body).unwrap(),
-            json!({"issuer_did":"did:web:issuer.example", "credential_format":"jwt_vc_json", "key_purpose":"vc_jwt_issuer", "payload_b64":"Y29udHJvbGxlZC1wdWJsaWMtcGF5bG9hZA", "algorithm":"EdDSA"})
+            json!({"issuer_did":"did:web:issuer.example", "credential_format":"jwt_vc_json", "key_purpose":"vc_jwt_issuer", "key_reference":"transit/keys/issuer-1", "payload_b64":"Y29udHJvbGxlZC1wdWJsaWMtcGF5bG9hZA", "algorithm":"EdDSA"})
         );
         assert!(records[3].uri.starts_with("/internal/issuer-context?"));
         assert!(records[4].uri.starts_with("/internal/resolve-issuer-did?"));

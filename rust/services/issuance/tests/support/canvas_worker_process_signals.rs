@@ -123,6 +123,14 @@ impl OwnedWorker {
                 "SIGNING_KEYS_INTERNAL_URL",
                 remote_integration_secret::base_url().as_str(),
             )
+            // These published worker lifecycle fixtures do not authorize
+            // signing. Supply only a fail-closed grant configuration so the
+            // real startup path is exercised without a mint capability.
+            .env("BAO_ADDR", "http://127.0.0.1:1")
+            .env(
+                "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
+                "/nonexistent/marty-canvas-worker-no-grant-token",
+            )
             .env(
                 "INTEGRATION_SECRET_KMS_URL",
                 remote_integration_secret::base_url().as_str(),

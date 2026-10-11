@@ -15222,3 +15222,25 @@ self-host catalog, stack inventory, and example filenames now enumerate the
 new scoped grants and integration-secret transport inputs. The upstream
 secret-closure suite and affected self-host/deployment suites passed locally;
 the merged Linux CI head remains the next gate.
+
+The merged head `5838d2aae` is mergeable and its hosted CI run
+`38136657989` and Organization Quality run `38136658411` started. Local
+follow-up `12a1bf0ea` tightens the beta physical-provider model so Gateway,
+Flow, native Issuance and Signing Keys must carry exactly their scoped grant
+mounts; missing mounts can no longer pass the isolation validator. The
+physical-provider suite passed 51 tests, including four removal probes. The
+self-host example now lists every required grant file and the integration-
+secret transport credential. Hold this local commit until the current hosted
+head finishes, then batch any CI corrections into one next push.
+
+That hosted run passed Organization Quality, the Rust feature probe, release
+contracts, and Rust lint/packaging, but its Canvas lane failed when an isolated
+published worker fixture cleared the environment and supplied no scoped grant
+configuration. The local fixture now gives that non-signing child an
+unreachable OpenBao endpoint and a nonexistent absolute grant-token file, so
+any unexpected signing still fails closed. Its Linux acceptance target
+compiles locally on Windows; the exact Linux process gate needs the next
+hosted run. The Rust contracts lane also found one expected HTTP signing body
+missing the newly mandatory `key_reference`; its focused test now passes.
+The OpenBao plugin-image and Rust service-image jobs were still active at
+this checkpoint. Do not treat this head as a pass.
