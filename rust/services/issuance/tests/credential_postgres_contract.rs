@@ -148,6 +148,35 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     );
     credential.status = ManagedCredentialStatus::Suspended;
     credential.status_updated_at = Utc::now();
+    let mut private_audit = audit_record(
+        CredentialLifecycleAction::Suspend,
+        ManagedCredentialStatus::Active,
+        Some("manual review"),
+    );
+    private_audit.comments = Some("{\"private_jwk\":\"private-seed\"}".to_owned());
+    assert!(repository
+        .persist(&credential, ManagedCredentialStatus::Active, &private_audit)
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM issuance_service.issued_credentials WHERE id = 'credential-managed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        "active"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issuance_events
+             WHERE transaction_id = 'transaction-managed'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        0
+    );
     sqlx::query(
         "ALTER TABLE issuance_service.issuance_events
          ADD CONSTRAINT reject_suspended_audit CHECK (event_type <> 'credential_suspended')",
@@ -231,6 +260,22 @@ async fn credential_management_repository_is_concurrency_safe_and_canvas_durable
     assert_eq!(metadata["last_status_sync_action"], "suspend");
     assert_eq!(metadata["requested_credential_status"], "suspended");
     assert_eq!(metadata["requested_status_sync_reason"], "manual review");
+    assert!(repository
+        .synchronize_canvas(
+            &credential,
+            CredentialLifecycleAction::Suspend,
+            Some("-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----"),
+        )
+        .await
+        .is_err());
+    let retained_metadata: serde_json::Value = sqlx::query_scalar(
+        "SELECT metadata FROM issuance_service.credential_delivery_records
+         WHERE id = 'delivery-managed'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_metadata, metadata);
 
     let mut credential = credential;
     credential.status = ManagedCredentialStatus::Active;

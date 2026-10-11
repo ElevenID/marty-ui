@@ -16102,3 +16102,13 @@ cases with no PAR, session or notification row, plus the normal authorization,
 notification and transaction paths. Issuance all-targets warnings-denied
 Clippy passed; the disposable database was removed. This remains in the
 grouped local batch while the prior hosted Canvas run continues.
+
+K10 credential lifecycle follow-up: audit comments/reasons and Canvas sync
+reasons could enter issuance events or delivery metadata. The PostgreSQL
+repository now rejects private material before changing credential status or
+calling either the direct metadata writer or configured Canvas synchronizer.
+The fresh PostgreSQL 16 credential contract passed private-JWK audit and PEM
+sync-reason rejection with unchanged credential/event/delivery rows; normal
+lifecycle and Canvas retry behavior still passed. Issuance all-targets
+warnings-denied Clippy passed and the disposable database was removed. This
+stays in the grouped local batch.
