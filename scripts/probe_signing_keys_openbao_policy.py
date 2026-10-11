@@ -832,6 +832,38 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(
                     f"Rust managed-profile route check failed:\n{detail[-2000:]}"
                 )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
+                    "--test", "gateway_signing_acceptance", "--locked", "--offline",
+                    "-j2", "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
+                    "--", "--ignored", "--exact", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=mock_environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                raise RuntimeError(
+                    f"Rust Gateway managed-key route check failed:\n{detail[-2000:]}"
+                )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
+                    "--test", "gateway_signing_acceptance", "--locked", "--offline",
+                    "-j2", "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
+                    "--", "--ignored", "--exact", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                raise RuntimeError(
+                    f"Rust Gateway real-provider sign/CSR check failed:\n{detail[-2000:]}"
+                )
         print(
             "Scoped signing-keys policy passed against disposable OpenBao for six managed prefixes, isolated provider HMAC verification, and seven origin-bound signing-grant keys"
         )

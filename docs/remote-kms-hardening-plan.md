@@ -15531,3 +15531,20 @@ evidence, not an installed bundle or production OpenBao qualification.
 The registered-key route fixture now additionally reads its raw Redis registry
 row and asserts the scoped OpenBao token is absent. The complete disposable
 OpenBao/Redis/PostgreSQL adapter probe passed after this assertion was added.
+
+Exact-head run `38152537463` passed Rust lint, release contracts, service
+images and the shorter lanes but its Rust service contracts job failed at the
+first opt-in Gateway managed-key fixture. That old mock expected a public sign
+to succeed without `key_purpose` or a signing-grant minter. The local correction
+requires the purpose and asserts a 503 before the mock signer is reached; the
+internal issuer-DID request without a grant now asserts 401. The same
+disposable-stack probe runs that exact fixture. To preserve positive Gateway
+signing coverage, the existing real-provider Gateway CSR acceptance now also
+uses a tenant-scoped managed key and origin-bound grant to sign through the
+public route, checking unauthorized and unbound-key denials, signature
+presence, and no token/reference disclosure. Its sentinel guard reads with
+the disposable root guard token while all signing uses the scoped token. The
+full `--rust-adapter` OpenBao/Redis/PostgreSQL probe passed with both Gateway
+cases added; targeted Rust compile/format, Ruff and diff checks pass. Hold
+this correction with the earlier local registered-service coverage until the
+running Canvas and DIDComm plugin jobs finish, then push one grouped batch.

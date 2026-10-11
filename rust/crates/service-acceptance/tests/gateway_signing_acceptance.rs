@@ -555,7 +555,7 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let service_sign_path = "/v1/signing-keys/services/managed-openbao-transit/sign";
     let service_sign_body = json!({
         "payload_b64": "cGF5bG9hZA", "key_reference": reference,
-        "algorithm": "ES256"
+        "key_purpose": "vc_jwt_issuer", "algorithm": "ES256"
     });
     let service_sign_request = |authenticated: bool| {
         let mut request =
@@ -586,10 +586,10 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(status, StatusCode::OK, "{signed_service}");
-    assert_eq!(signed_service["ok"], true);
-    assert_eq!(fixture.signs.lock().unwrap().len(), 1);
-    fixture.signs.lock().unwrap().clear();
+    // This mock Transit fixture has no grant minter. The Gateway must stop
+    // before reaching the signer; real OpenBao grant paths are probed apart.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{signed_service}");
+    assert!(fixture.signs.lock().unwrap().is_empty());
     let listed = gateway
         .clone()
         .oneshot(
@@ -775,16 +775,8 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(status, StatusCode::OK, "{signed}");
-    assert_eq!(signed["ok"], true);
-    assert!(!signed["signature_b64"].as_str().unwrap().is_empty());
-    assert_eq!(
-        fixture.signs.lock().unwrap().as_slice(),
-        &[(
-            profile_reference.to_owned(),
-            json!({"input":"cGF5bG9hZA==","prehashed":false})
-        )]
-    );
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{signed}");
+    assert!(fixture.signs.lock().unwrap().is_empty());
     for public in [&created, &resolved, &signed] {
         for secret in [&endpoint[..], "test-only", profile_reference] {
             assert!(!public.to_string().contains(secret), "{public}");
@@ -834,9 +826,17 @@ async fn disposable_signing_openbao() -> (String, String) {
         "CSR test requires a loopback disposable OpenBao instance"
     );
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    let guard_token = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN")
+        .expect("disposable OpenBao sentinel guard token");
+    assert_ne!(token, guard_token);
     assert!(
         std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
         "disposable OpenBao token binding does not match"
+    );
+    assert_eq!(
+        std::env::var("BAO_ADDR").ok().as_deref(),
+        Some(endpoint.as_str()),
+        "disposable OpenBao endpoint binding does not match"
     );
     let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
         .expect("pre-provisioned disposable OpenBao sentinel value");
@@ -850,7 +850,7 @@ async fn disposable_signing_openbao() -> (String, String) {
                 .join("/v1/secret/data/marty-test-disposable-guard")
                 .expect("disposable OpenBao sentinel URL"),
         )
-        .header("X-Vault-Token", &token)
+        .header("X-Vault-Token", &guard_token)
         .send()
         .await
         .expect("disposable OpenBao sentinel read");
@@ -1144,7 +1144,10 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
     verify_file.write_all(verify_token.as_bytes()).unwrap();
     let organization_id = format!("gateway-service-csr-{}", uuid::Uuid::new_v4().simple());
     let service_id = format!("service-csr-{}", uuid::Uuid::new_v4().simple());
-    let key_reference = format!("service-csr-key-{}", uuid::Uuid::new_v4().simple());
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    let key_reference = format!("cred-issuer-{namespace}-service-csr-es256");
     let client = reqwest::Client::new();
     let created_key = client
         .post(format!("{endpoint}/v1/transit/keys/{key_reference}"))
@@ -1298,6 +1301,44 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
     }
     for secret in [&endpoint[..], token.as_str(), key_reference.as_str()] {
         assert!(!result.to_string().contains(secret));
+    }
+    let sign_route = format!("/v1/signing-keys/services/{service_id}/sign");
+    let sign_body = json!({
+        "payload_b64": "cGF5bG9hZA", "key_reference": key_reference,
+        "key_purpose": "x509_doc_signer", "algorithm": "ES256"
+    });
+    let denied = gateway
+        .clone()
+        .oneshot(request(&sign_route, &sign_body, false))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    let mut unbound = sign_body.clone();
+    unbound["key_reference"] = json!("attacker-key");
+    let rejected = gateway
+        .clone()
+        .oneshot(request(&sign_route, &unbound, true))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    let signed = gateway
+        .clone()
+        .oneshot(request(&sign_route, &sign_body, true))
+        .await
+        .unwrap();
+    let status = signed.status();
+    let signed: Value = serde_json::from_slice(
+        &to_bytes(signed.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status, StatusCode::OK, "{signed}");
+    assert!(signed["signature_b64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    for secret in [&endpoint[..], token.as_str(), key_reference.as_str()] {
+        assert!(!signed.to_string().contains(secret));
     }
     let mut cleanup = store.connection();
     let _: usize = redis::cmd("DEL")
