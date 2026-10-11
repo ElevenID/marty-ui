@@ -15730,3 +15730,18 @@ sentinel/key setup, passed the exact failing Gateway case locally. The complete
 local CI-workflow contract file passed 145 tests; Ruff, YAML parsing and diff
 checks passed. Hosted image and plugin jobs passed; Canvas is still running at
 this checkpoint. Hold the grouped push until its terminal result is reviewed.
+
+K10 Deployment/Compliance runtime follow-up: source-built
+`marty-deployment-profile` and `marty-compliance-profile` binaries each started
+twice against one fresh disposable PostgreSQL 16 database on loopback. Each
+service reached its native health endpoint after executing its Rust migration
+and seed path. The resulting catalogs held 52 columns across these schemas,
+one Deployment seed row, five Compliance system profiles, and one migration
+record per service after both startups. The shared private-key catalog query
+returned zero entries and the shared JSON/text content scan passed after
+seeding. A second independent disposable run reproduced catalog digest
+`90178ca16ecadde5c7e7a31d3a96fa3626c999f6620389223551a455c9e54e1a`.
+The runnable probe is `scripts/probe_kms_profile_runtime_schema.py`; receipt
+`artifacts/kms-profile-runtime-schema-audit-20261011.json`. Ruff and diff
+checks passed. Both containers were removed. This is local source-built
+runtime evidence, not release-image qualification or proof of later API writes.
