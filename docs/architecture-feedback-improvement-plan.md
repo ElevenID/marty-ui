@@ -1853,6 +1853,17 @@ The nightly claim/intake workflows have no hosted runs yet, so no qualified
 nightly artifact or happy-path release gate is established. CICD02-04 and the
 PKG01 product boundary decision remain open; these are not CI feedback savings.
 
+October 11 product sequencing direction: the user selected Linux amd64
+self-host and offline verification library/headless verifier as the first
+independent product qualifications. Kiosk and separate issuance remain preview
+candidates until their dependency and hardware contracts are proven. This
+chooses work order, not a supported-product designation; PKG01's exact
+capability/dependency matrix and CICD02-04 artifact gates remain open. Local
+baseline checks passed: 67 no-Canvas bundle policy tests, the actual rendered
+Compose bundle check for all 20 converted Rust services, and 137 verification
+candidate build policy tests (one existing skip). None is a fresh installed
+product journey.
+
 PKG02 source check and the
 [v1.1.231 release transaction](https://github.com/ElevenID/marty-ui/releases/download/v1.1.231/release-transaction.json)
 confirm a concrete mismatch: `.github/workflows/cd.yml` declares release images under
