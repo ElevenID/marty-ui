@@ -14231,3 +14231,15 @@ stub returning a three-byte EdDSA signature. It now returns 64 bytes while
 retaining the version-mismatch assertion. The complete library suite passes
 183 tests with nine opt-in cases ignored; all-target warnings-denied Clippy
 passes.
+
+Core PR #355 head `aa69c9ca` subsequently passed its complete CI and
+release-wheel, wallet, organization-quality, license and policy workflows.
+The raw-scalar validation follow-up is published at
+`6acba9d9e079cfba7ae9f94356899b29c93466b0`; [current-head
+CI](https://github.com/ElevenID/marty-core/actions/runs/38116313173)
+and [release-wheel
+preflight](https://github.com/ElevenID/marty-core/actions/runs/38116313196)
+are running. The UI branch locally pins `6acba9d`; its Signing Keys library
+(183 passed, nine ignored) and all five provider golden cases pass against
+that exact Core dependency. Keep the UI follow-up local until its published
+head `7baec03ee` has terminal hosted evidence.
