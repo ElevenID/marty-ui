@@ -479,6 +479,7 @@ fn service_error(error: InternalApplicationServiceError) -> Response {
         InternalApplicationServiceError::Domain(error) => {
             let status = match &error {
                 ApplicationDomainError::InvalidTransition { .. } => StatusCode::BAD_REQUEST,
+                ApplicationDomainError::PrivateKeyMaterial => StatusCode::BAD_REQUEST,
                 ApplicationDomainError::TimestampOverflow => StatusCode::INTERNAL_SERVER_ERROR,
             };
             return (status, Json(json!({"detail": error.to_string()}))).into_response();

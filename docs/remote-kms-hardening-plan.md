@@ -15946,3 +15946,25 @@ installed-migrations, Organization probe and runtime-plan suites pass together:
 On pushed head `828bc6ecd`, all substantive jobs in run `38164123792`,
 including Canvas, have passed; the aggregate CI Gate was queued at this
 checkpoint.
+
+The previous UI exact-head run `38164123792` subsequently completed green,
+including CI Gate. The assembled local feature batch was pushed as
+`ec63b4de4` to draft PR #1192 after the disposable OpenBao/Redis/PostgreSQL
+probes above. Its new hosted checks are running; the PR remains draft.
+
+K10 Internal Application custody review found another neutral-JSON write
+surface: applicant form data, submitted evidence, integration context,
+derived claims, evidence facts and issuance event metadata could reach
+PostgreSQL without the shared private-material policy. The local correction
+rejects private JWK/PEM material in create, evidence submission and review
+requests with a 400 while preserving public references, then checks every
+corresponding repository insert, compare-and-swap replacement, evidence and
+event write. Reconciliation and offer event paths are included. The full
+Issuance library suite passed 581 tests with 8 ignored; the focused HTTP
+suite passed 11 tests, including private rejection and reference acceptance;
+warnings-denied Clippy passed. A dedicated fresh PostgreSQL 16 container ran
+the Internal Application repository contract successfully, including direct
+private-JWK insert and update rejection with unchanged stored state. The
+container was removed. This local correction is held for the next grouped
+push after current exact-head CI; remaining neutral JSON producers still
+need K10 review.
