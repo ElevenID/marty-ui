@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 
-CORE_REVISION = "6acba9d9e079cfba7ae9f94356899b29c93466b0"
-CORE_VERSION = "0.2.0"
+CORE_REVISION = "08489a2aa5c6215878c38f64f4b257b79e164c14"
+CORE_VERSION = "0.2.2"
 CORE_WHEEL_PREFIXES = {
     "marty-core-python": "marty_rs",
     "marty-verification-python": "marty_verification_py",

@@ -16493,3 +16493,34 @@ version or URI fail in both boundaries; the adjacent release suites passed
 116 cases, Ruff passed, and both direct-script CLIs load. This checks
 manifest provenance metadata only. The wheel bytes, signatures and installed
 exports still require exact artifact qualification after Core release.
+
+Core #355 became conflicting after new `main` work landed. The integration
+merge is being resolved locally before any consumer revision bump. Main now
+uses workspace version `0.2.1` and extracted the X.509 chain verifier into
+`marty-x509-verification`; the merge must keep its facade and offline kernel
+while moving the hardening branch's remote certificate fixtures into that new
+kernel. The old `0.2.0` official-manifest gate and consumer revision pins are
+therefore provisional; update them to the reviewed merged Core head and
+published version together, then rerun installed graph and artifact checks.
+No release hold is lifted by the metadata policy alone.
+
+Release collision found while reconciling Core: `v0.2.1` is already a
+published Core release whose annotated tag resolves to pre-merge commit
+`9bcbd1f94438dbd40414ecdddd2ebcf23fb46ced`. The hardening branch now
+reserves workspace version `0.2.2` at reviewed candidate
+`08489a2aa5c6215878c38f64f4b257b79e164c14`; the `v0.2.2` release is
+not published. UI and Credentials manifests, locks, graph policies, CI wheel
+revision inputs, and official-manifest policy must use that exact candidate
+after local graph checks. Never label or accept the older `v0.2.1` wheels as
+KMS-only. Core 0.2.2 local release contract checks passed (135 script tests,
+the standalone verifier non-live tests, and formatting); hosted exact-head
+CI and published wheel inspection remain open. Credentials' earlier exact-head
+run on the former Core 0.2.0 pin completed green, but must be rerun on 0.2.2.
+Credentials #313 now pins Core candidate `08489a2` across its Rust graph,
+Python wheel CI input, and warm-cache input at pushed head `ba0b3b6d`.
+`cargo metadata --locked` passed the KMS-only graph policy and a local
+`cargo +1.97.1 check --locked -p marty-rs --features python` passed. This
+does not qualify the new head's hosted WASM/Python wheel matrix; that run is
+pending. UI now pins the same candidate in both production and standalone
+probe locks, with graph policy and 55 official-release-policy tests passing
+locally. Its native service compilation and new-head hosted CI are pending.
