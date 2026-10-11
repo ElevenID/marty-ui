@@ -16208,3 +16208,10 @@ published-base isolation diagnostic to the hosted worker. The affected local
 Python suites passed 24 tests. Preserve the new opt-in runtime case for the
 next grouped hosted run; no extra push was started while `44e94b746` remains
 under test.
+
+Exact-head [CI run 38171770054](https://github.com/ElevenID/marty-ui/actions/runs/38171770054)
+has now passed Rust Lint and Packaging, Rust Feature Regression Probe, Rust
+Service Tests (contracts), and the OpenBao DIDComm plugin image job on pushed
+head `44e94b746`. The earlier standalone lockfile failure is resolved in
+hosted CI. Canvas remains live in its public self-host image build; keep its
+terminal result and aggregate CI Gate open before the next grouped push.
