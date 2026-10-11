@@ -2481,6 +2481,40 @@ async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepos
             .unwrap()
             .is_none());
     }
+    for (key, selective_disclosure_claims, zk_predicate_claims) in [
+        (
+            "e".repeat(64),
+            vec!["{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"private-seed\"}".to_owned()],
+            Vec::new(),
+        ),
+        (
+            "f".repeat(64),
+            transaction.selective_disclosure_claims.clone(),
+            vec!["-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----".to_owned()],
+        ),
+    ] {
+        let mut private = transaction.clone();
+        private.id = Uuid::new_v4().to_string();
+        private.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
+        private.idempotency_key_hash = Some(key.clone());
+        private.selective_disclosure_claims = selective_disclosure_claims;
+        private.zk_predicate_claims = zk_predicate_claims;
+        assert!(matches!(
+            repository.reserve_idempotently(&private).await,
+            Err(InitiationRepositoryError::Unavailable)
+        ));
+        assert!(repository
+            .recover_idempotently(
+                &private.organization_id,
+                &IdempotencyBinding {
+                    key_hash: key,
+                    request_hash: request_hash.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .is_none());
+    }
     let mut retry = transaction.clone();
     retry.id = Uuid::new_v4().to_string();
     retry.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());

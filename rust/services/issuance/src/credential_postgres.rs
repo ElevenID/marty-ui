@@ -193,6 +193,10 @@ const RESERVE_INITIATION: &str = concat!(
 
 pub(crate) fn transaction_contains_private_material(transaction: &CredentialTransaction) -> bool {
     marty_key_material_policy::contains_private_key_map(&transaction.claims)
+        || marty_key_material_policy::contains_private_key(&json!(
+            transaction.selective_disclosure_claims
+        ))
+        || marty_key_material_policy::contains_private_key(&json!(transaction.zk_predicate_claims))
         || transaction
             .wallet_configs
             .iter()

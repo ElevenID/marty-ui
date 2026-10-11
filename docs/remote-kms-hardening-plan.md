@@ -16082,3 +16082,13 @@ encoded private JWK requirement rejected and unchanged roster state; the
 normal management flow passed, as did Issuance all-targets warnings-denied
 Clippy. The disposable database was removed. This correction remains in the
 same grouped local batch pending the prior hosted Canvas job.
+
+K10 issuance-transaction self-review found that the shared reservation guard
+covered claims and wallet configuration JSON but omitted its selective-
+disclosure and predicate-claim JSON arrays. The canonical predicate now checks
+both arrays too, covering direct reservations and Canvas approval insert and
+refresh paths. A fresh PostgreSQL 16 credential contract passed encoded JWK
+and PEM rejection with no idempotency record, plus normal concurrent
+reservation and management behavior. Issuance all-targets warnings-denied
+Clippy passed; the disposable database was removed. This stays in the same
+grouped local batch.
