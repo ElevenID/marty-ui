@@ -70,6 +70,9 @@ def stop_owned(name: str, *, graceful: bool = False) -> None:
         raise RuntimeError(f"refusing to remove unowned container {name}")
     if graceful:
         run("docker", "stop", "--time", "30", name)
+        exit_code = run("docker", "inspect", "--format", "{{.State.ExitCode}}", name)
+        if exit_code != "0":
+            raise RuntimeError(f"{name} did not stop cleanly (exit {exit_code})")
         run("docker", "rm", name)
     else:
         run("docker", "rm", "-f", name)

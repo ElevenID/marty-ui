@@ -70,6 +70,8 @@ def test_cold_stop_is_graceful_and_docker_api_errors_propagate(monkeypatch: pyte
         calls.append(args)
         if args[1] == "ps":
             return "container-id"
+        if args[1] == "inspect" and args[3] == "{{.State.ExitCode}}":
+            return "0"
         if args[1] == "inspect":
             return "true"
         return ""
@@ -79,6 +81,18 @@ def test_cold_stop_is_graceful_and_docker_api_errors_propagate(monkeypatch: pyte
     assert ("docker", "stop", "--time", "30", "owned") in calls
     assert ("docker", "rm", "owned") in calls
     assert not any(args[:3] == ("docker", "rm", "-f") for args in calls)
+
+    calls.clear()
+
+    def killed(*args: str, **kwargs: object) -> str:
+        if args[1] == "inspect" and args[3] == "{{.State.ExitCode}}":
+            return "137"
+        return docker(*args, **kwargs)
+
+    monkeypatch.setattr("rehearse_selfhost_state_recovery.run", killed)
+    with pytest.raises(RuntimeError, match="did not stop cleanly"):
+        stop_owned("owned", graceful=True)
+    assert not any(args[:2] == ("docker", "rm") for args in calls)
 
     def unavailable(*args: str, **kwargs: object) -> str:
         raise subprocess.CalledProcessError(1, args)
