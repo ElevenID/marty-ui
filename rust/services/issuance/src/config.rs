@@ -23,8 +23,6 @@ pub struct PassportNativeConfig {
     pub managed_issuer_signing_enabled: bool,
     pub kms_artifacts_enabled: bool,
     pub kms_callbacks_enabled: bool,
-    pub signer_url: Option<String>,
-    pub signer_api_key: Option<String>,
     pub bureau_url: Option<String>,
     pub bureau_api_key: Option<String>,
     pub bureau_provider_profile_id: Option<String>,
@@ -47,8 +45,6 @@ impl std::fmt::Debug for PassportNativeConfig {
             )
             .field("kms_artifacts_enabled", &self.kms_artifacts_enabled)
             .field("kms_callbacks_enabled", &self.kms_callbacks_enabled)
-            .field("signer_url_configured", &self.signer_url.is_some())
-            .field("signer_api_key_configured", &self.signer_api_key.is_some())
             .field("bureau_url_configured", &self.bureau_url.is_some())
             .field("bureau_api_key_configured", &self.bureau_api_key.is_some())
             .field(
@@ -103,6 +99,15 @@ impl PassportNativeConfig {
                 "local passport callback-secret configuration is forbidden",
             ));
         }
+        if values.contains_key("ICAO_DOCUMENT_SIGNER_URL")
+            || values.contains_key("ICAO_DOCUMENT_SIGNER_API_KEY")
+            || values.contains_key("ICAO_DOCUMENT_SIGNER_API_KEY_FILE")
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "external passport signer configuration is forbidden; use managed issuer signing",
+            ));
+        }
         if !enabled {
             return Ok(Self {
                 enabled,
@@ -110,8 +115,6 @@ impl PassportNativeConfig {
                 managed_issuer_signing_enabled: false,
                 kms_artifacts_enabled: false,
                 kms_callbacks_enabled: false,
-                signer_url: None,
-                signer_api_key: None,
                 bureau_url: None,
                 bureau_api_key: None,
                 bureau_provider_profile_id: None,
@@ -173,8 +176,6 @@ impl PassportNativeConfig {
             ),
             kms_artifacts_enabled,
             kms_callbacks_enabled,
-            signer_url: configured("ICAO_DOCUMENT_SIGNER_URL"),
-            signer_api_key: secret_value(values, "ICAO_DOCUMENT_SIGNER_API_KEY")?,
             bureau_url,
             bureau_api_key: secret_value(values, "PERSONALIZATION_BUREAU_API_KEY")?,
             bureau_provider_profile_id,
@@ -201,12 +202,6 @@ impl PassportNativeConfig {
             return Err(MmfError::new(
                 ErrorCode::Configuration,
                 "beta passport bureau simulator cannot be selected as a production provider",
-            ));
-        }
-        if config.managed_issuer_signing_enabled && config.signer_url.is_some() {
-            return Err(MmfError::new(
-                ErrorCode::Configuration,
-                "managed passport issuer signing cannot be combined with an external signer",
             ));
         }
         // Tenant authentication is mandatory even for the diagnostic capability
@@ -1834,8 +1829,6 @@ mod tests {
                 "PASSPORT_TENANT_API_KEYS",
                 &format!("{{\"org-a\":\"{secret}\"}}"),
             ),
-            ("ICAO_DOCUMENT_SIGNER_URL", "https://signer.example.test"),
-            ("ICAO_DOCUMENT_SIGNER_API_KEY", "signer-secret"),
             ("PERSONALIZATION_BUREAU_URL", "https://bureau.example.test"),
             ("PERSONALIZATION_BUREAU_API_KEY", "bureau-secret"),
             (
@@ -1850,12 +1843,11 @@ mod tests {
             Some("provider-reference")
         );
         let debug = format!("{config:?}");
-        for secret in [&secret[..], "signer-secret", "bureau-secret"] {
+        for secret in [&secret[..], "bureau-secret"] {
             assert!(!debug.contains(secret));
         }
         for name in [
             "PASSPORT_KMS_ARTIFACTS_ENABLED",
-            "ICAO_DOCUMENT_SIGNER_URL",
             "PERSONALIZATION_BUREAU_URL",
         ] {
             let missing = complete
@@ -1868,17 +1860,10 @@ mod tests {
         }
         let anonymous_providers = complete
             .into_iter()
-            .filter(|(name, _)| {
-                ![
-                    "ICAO_DOCUMENT_SIGNER_API_KEY",
-                    "PERSONALIZATION_BUREAU_API_KEY",
-                ]
-                .contains(&name.as_str())
-            })
+            .filter(|(name, _)| !["PERSONALIZATION_BUREAU_API_KEY"].contains(&name.as_str()))
             .collect::<Vec<_>>();
         let anonymous = IssuanceServiceConfig::from_values(anonymous_providers).unwrap();
         assert!(anonymous.passport_native.enabled);
-        assert!(anonymous.passport_native.signer_api_key.is_none());
         assert!(anonymous.passport_native.bureau_api_key.is_none());
 
         let too_long = IssuanceServiceConfig::from_values(values(&[
@@ -1988,14 +1973,14 @@ mod tests {
     #[test]
     fn managed_passport_signing_is_explicit_and_excludes_legacy_signers() {
         let tenant_keys = format!("{{\"org-a\":\"{}\"}}", "a".repeat(32));
-        let values = values(&[
+        let configured = values(&[
             ("PASSPORT_NATIVE_HTTP_ENABLED", "true"),
             ("PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "true"),
             ("PASSPORT_TENANT_API_KEYS", &tenant_keys),
         ]);
-        let config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
+        let config = IssuanceServiceConfig::from_values(configured.clone()).unwrap();
         assert!(config.passport_native.managed_issuer_signing_enabled);
-        let mut conflicting = values;
+        let mut conflicting = configured;
         conflicting.push((
             "ICAO_DOCUMENT_SIGNER_URL".into(),
             "https://signer.example.test".into(),
@@ -2003,7 +1988,18 @@ mod tests {
         assert!(IssuanceServiceConfig::from_values(conflicting)
             .unwrap_err()
             .to_string()
-            .contains("cannot be combined"));
+            .contains("external passport signer configuration is forbidden"));
+        for name in [
+            "ICAO_DOCUMENT_SIGNER_API_KEY",
+            "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
+        ] {
+            let mut disabled = values(&[]);
+            disabled.push((name.into(), String::new()));
+            assert!(IssuanceServiceConfig::from_values(disabled)
+                .unwrap_err()
+                .to_string()
+                .contains("external passport signer configuration is forbidden"));
+        }
     }
 
     #[test]

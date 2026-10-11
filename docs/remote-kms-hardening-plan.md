@@ -15139,3 +15139,16 @@ mounted token, the worker lacks the credential/readiness/passport tokens,
 and missing mint authority blocks signing before HTTP. Further live proof
 must show Signing Keys consumes and rejects cross-origin or replayed grants
 with real OpenBao policies; fixture HMAC responses cannot establish that.
+
+Passport external-signer retirement is in progress on the same broad feature
+branch. Issuance now rejects `ICAO_DOCUMENT_SIGNER_URL`, its API-key value and
+file settings even when native passport HTTP is disabled. Its startup path no
+longer selects the external signer; native and beta Compose profiles no longer
+forward those settings. The self-host review model has a new managed-passport
+snapshot while prior snapshots remain immutable. A focused Rust test and 227
+affected Python cases passed. This closes the production configuration route,
+but `RemoteSigner` and its HTTP-oriented test fixture still exist in source.
+Before landing, replace the remaining Postgres passport test's synthetic
+external signer with managed KMS signing, remove the obsolete signer type and
+contract fragment, prove managed passport end-to-end behavior, and then run
+the full grouped validation and live OpenBao origin-denial checks.

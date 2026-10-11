@@ -542,7 +542,9 @@ def validate_physical_model(model, files, provider_registry=None):
         "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED", "PASSPORT_KMS_ARTIFACTS_ENABLED",
         "PASSPORT_KMS_CALLBACKS_ENABLED"))
         and "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED" not in native
-        and not native.get("ICAO_DOCUMENT_SIGNER_URL"),
+        and all(name not in native for name in (
+            "ICAO_DOCUMENT_SIGNER_URL", "ICAO_DOCUMENT_SIGNER_API_KEY",
+            "ICAO_DOCUMENT_SIGNER_API_KEY_FILE")),
         "Beta physical provider KMS mode is incomplete")
     for name in PASSPORT_RAW_KEY_NAMES:
         physical_require(not native.get(name) and not native.get(f"{name}_FILE"),
@@ -838,7 +840,10 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             raise PassportConfigurationError(
                 "Beta passport local callback secret is forbidden"
             )
-        if native.get("ICAO_DOCUMENT_SIGNER_URL"):
+        if any(name in native for name in (
+            "ICAO_DOCUMENT_SIGNER_URL", "ICAO_DOCUMENT_SIGNER_API_KEY",
+            "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
+        )):
             raise PassportConfigurationError("Beta passport remote signer is forbidden")
         if native.get("PERSONALIZATION_BUREAU_URL") != PRIVATE_BUREAU_URL:
             raise PassportConfigurationError("Beta passport bureau target is invalid")

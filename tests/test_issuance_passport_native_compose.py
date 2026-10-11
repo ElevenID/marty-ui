@@ -89,13 +89,13 @@ def test_compose_exposes_both_passport_selectors_without_enabling_them() -> None
         for key in (
             "PASSPORT_TENANT_API_KEYS",
             "PASSPORT_TENANT_API_KEYS_FILE",
-            "ICAO_DOCUMENT_SIGNER_URL",
-            "ICAO_DOCUMENT_SIGNER_API_KEY",
             "PERSONALIZATION_BUREAU_URL",
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
             "PERSONALIZATION_BUREAU_API_KEY",
         ):
             assert key in native
+        assert "ICAO_DOCUMENT_SIGNER_URL" not in native
+        assert "ICAO_DOCUMENT_SIGNER_API_KEY" not in native
         assert "PHYSICAL_DOCUMENT_ARTIFACT_KEY" not in native
         assert "PERSONALIZATION_BUREAU_WEBHOOK_SECRET" not in native
         assert (

@@ -50,9 +50,7 @@ use crate::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
         PassportSubmissionReservation, PassportWebhookRepositoryError, PostgresPassportRepository,
     },
-    passport_signer::{
-        ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
-    },
+    passport_signer::{ManagedProfileSigner, PassportSigner, SignedMaterial, SignerError},
     signing_grant_config::{managed_grant_minter, IssuanceGrantConfigError},
 };
 
@@ -271,11 +269,6 @@ impl PassportHttpService {
                     managed_grant_minter(SigningOrigin::IssuancePassport)?,
                 )?,
             )))
-        } else if let Some(url) = native.signer_url.as_deref() {
-            Some(PassportSigner::Remote(RemoteSigner::new(
-                url,
-                native.signer_api_key.as_deref().unwrap_or_default(),
-            )?))
         } else {
             None
         };
@@ -738,7 +731,8 @@ pub fn router(service: PassportHttpService) -> Router {
 async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value> {
     let mut blockers = Vec::new();
     if service.signer.is_none() {
-        blockers.push("Configure ICAO_DOCUMENT_SIGNER_URL. Self-signed document certificates are permitted only in explicit test mode.");
+        blockers
+            .push("Configure managed passport issuer signing with a KMS-backed issuer profile.");
     }
     let signer_blockers = blockers.clone();
     match &service.cipher {
@@ -2988,7 +2982,7 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let values = |signer_url: &str, bureau_url: &str| {
+        let values = |bureau_url: &str| {
             vec![
                 ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
                 (
@@ -3003,11 +2997,6 @@ mod tests {
                     "PASSPORT_TENANT_API_KEYS".to_owned(),
                     r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
                 ),
-                ("ICAO_DOCUMENT_SIGNER_URL".to_owned(), signer_url.to_owned()),
-                (
-                    "ICAO_DOCUMENT_SIGNER_API_KEY".to_owned(),
-                    "signer-key".to_owned(),
-                ),
                 (
                     "PERSONALIZATION_BUREAU_URL".to_owned(),
                     bureau_url.to_owned(),
@@ -3018,11 +3007,8 @@ mod tests {
                 ),
             ]
         };
-        let valid = IssuanceServiceConfig::from_values(values(
-            "https://signer.example.test",
-            "https://bureau.example.test",
-        ))
-        .unwrap();
+        let valid =
+            IssuanceServiceConfig::from_values(values("https://bureau.example.test")).unwrap();
         assert!(PassportHttpService::from_config(&valid, pool.clone())
             .unwrap()
             .is_some());
@@ -3153,26 +3139,15 @@ mod tests {
             body["detail"],
             expected["authenticated_application_create"]["detail"]
         );
-        let mut local_key = values("https://signer.example.test", "https://bureau.example.test");
+        let mut local_key = values("https://bureau.example.test");
         local_key.push((
             "PHYSICAL_DOCUMENT_ARTIFACT_KEY".to_owned(),
             "invalid-secret-artifact-key".to_owned(),
         ));
         assert!(IssuanceServiceConfig::from_values(local_key).is_err());
-        let bad_signer = IssuanceServiceConfig::from_values(values(
-            "https://user:password@signer.example.test",
-            "https://bureau.example.test",
-        ))
-        .unwrap();
-        assert!(matches!(
-            PassportHttpService::from_config(&bad_signer, pool.clone()).err(),
-            Some(PassportStartupError::Signer(SignerError::InvalidUrl))
-        ));
-        let bad_bureau = IssuanceServiceConfig::from_values(values(
-            "https://signer.example.test",
-            "https://bureau.example.test?token=secret",
-        ))
-        .unwrap();
+        let bad_bureau =
+            IssuanceServiceConfig::from_values(values("https://bureau.example.test?token=secret"))
+                .unwrap();
         assert!(matches!(
             PassportHttpService::from_config(&bad_bureau, pool).err(),
             Some(PassportStartupError::Bureau(BureauError::InvalidUrl))
@@ -3180,10 +3155,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_signer_is_selected_and_local_signing_is_rejected() {
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
-            .unwrap();
+    async fn external_signer_and_local_signing_are_rejected() {
         let values = vec![
             ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
             (
@@ -3207,24 +3179,10 @@ mod tests {
                 "https://bureau.example.test".to_owned(),
             ),
         ];
-        let remote_config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
-        let remote = PassportHttpService::from_config(&remote_config, pool)
-            .unwrap()
-            .unwrap();
-        assert_eq!(remote.signer.as_ref().unwrap().mode(), "REMOTE");
-        let response = router(remote)
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/passport/capabilities")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["signer"]["mode"], "REMOTE");
-        assert_eq!(body["supported"], true);
+        assert!(IssuanceServiceConfig::from_values(values.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("external passport signer configuration is forbidden"));
 
         let mut forbidden = values;
         forbidden.push((
