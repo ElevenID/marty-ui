@@ -18,6 +18,66 @@ use super::renewal_reference_fixture as reference;
 
 const TOKEN_HMAC_KEY: &str = "synthetic-fresh-main-hmac";
 const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";
+const CREDENTIAL_GRANT_KEY: &str =
+    marty_signing_grant::SigningOrigin::IssuanceCredential.transit_key_name();
+
+async fn credential_grant_token(directory: &std::path::Path, base_url: &str) -> std::path::PathBuf {
+    let root = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let key_url = format!("{base_url}/v1/transit/keys/{CREDENTIAL_GRANT_KEY}");
+    let lookup = client
+        .get(&key_url)
+        .header("X-Vault-Token", &root)
+        .send()
+        .await
+        .unwrap();
+    if lookup.status() == StatusCode::NOT_FOUND {
+        let created = client.post(&key_url).header("X-Vault-Token", &root)
+            .json(&json!({"type":"hmac","key_size":32,"exportable":false,"allow_plaintext_backup":false}))
+            .send().await.unwrap();
+        assert!(created.status().is_success() || created.status() == StatusCode::BAD_REQUEST);
+    } else {
+        lookup.error_for_status().unwrap();
+    }
+    let metadata: Value = client
+        .get(&key_url)
+        .header("X-Vault-Token", &root)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(metadata["data"]["type"], "hmac");
+    assert_eq!(metadata["data"]["exportable"], false);
+    assert_eq!(metadata["data"]["allow_plaintext_backup"], false);
+    let policy_name = format!("canvas-credential-grant-{}", uuid::Uuid::new_v4().simple());
+    client.put(format!("{base_url}/v1/sys/policies/acl/{policy_name}"))
+        .header("X-Vault-Token", &root)
+        .json(&json!({"policy":format!("path \"transit/hmac/{CREDENTIAL_GRANT_KEY}/sha2-256\" {{ capabilities = [\"update\"] }}")}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let issued: Value = client
+        .post(format!("{base_url}/v1/auth/token/create"))
+        .header("X-Vault-Token", &root)
+        .json(&json!({"policies":[policy_name],"no_default_policy":true,"ttl":"1h"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token_file = directory.join("credential-grant-openbao-token");
+    std::fs::write(
+        &token_file,
+        issued["auth"]["client_token"].as_str().unwrap(),
+    )
+    .unwrap();
+    token_file
+}
 
 fn access_token_digest(token: &str) -> String {
     let mut hmac = Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY.as_bytes()).unwrap();
@@ -158,6 +218,8 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         let remote_sender =
             RemoteSenderFixture::create(wallet.ca_file.parent().unwrap(), ISSUER, ORGANIZATION)
                 .await;
+        let credential_grant_file =
+            credential_grant_token(wallet.ca_file.parent().unwrap(), &remote_sender.base_url).await;
         let signer = Arc::new(
             RemoteIssuerSigner::create(
                 &remote_sender.base_url,
@@ -363,6 +425,10 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                     "rendered signer credential must match the owned signing peer"
                 );
             }
+            assert!(model.native_environment.contains_key("BAO_ADDR"));
+            assert!(model
+                .native_environment
+                .contains_key("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"));
             let command = model.native_command();
             rendered_model = Some(model);
             command
@@ -390,6 +456,12 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
             command
         };
+        // Translate deployed secret mounts to a disposable, operation-scoped
+        // token for the host process; keep every other signing origin closed.
+        command.env("BAO_ADDR", &remote_sender.base_url).env(
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            &credential_grant_file,
+        );
         drop((http_listener, grpc_listener, gateway_reservation));
         let mut child = ChildGuard(command.spawn().unwrap());
         let client = bounded_http_client(Duration::from_secs(20));

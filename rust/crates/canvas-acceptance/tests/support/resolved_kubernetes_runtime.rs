@@ -628,11 +628,26 @@ fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
         native["ISSUANCE_API_KEY"] == gateway["ISSUANCE_API_KEY"]
             && native["ISSUANCE_GRPC_ENABLED"] == "true",
     )?;
+    require(native.get("BAO_ADDR").map(String::as_str) == Some("https://vault.example.com"))?;
     require(
         !native
             .keys()
-            .any(|v| v.starts_with("BAO") || v.starts_with("OPENBAO")),
+            .any(|v| (v.starts_with("BAO") && v != "BAO_ADDR") || v.starts_with("OPENBAO")),
     )?;
+    for (name, path) in [
+        (
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            "credential",
+        ),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+    ] {
+        require(
+            native.get(name).map(String::as_str)
+                == Some(format!("/run/secrets/issuance-sign-grants/{path}").as_str()),
+        )?;
+    }
     for (name, expected) in [
         (
             "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",

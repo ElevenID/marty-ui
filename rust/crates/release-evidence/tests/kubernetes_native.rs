@@ -106,9 +106,27 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
             json!([{"configMapRef":{"name":"issuance-native-config"}}])
         );
         let native_env = env(native_owner);
+        assert_eq!(
+            native_env["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
         assert!(!native_env
             .keys()
-            .any(|v| v.starts_with("BAO") || v == "CANVAS_SYNC_PROCESSOR"));
+            .any(|v| (v.starts_with("BAO") && v != "BAO_ADDR") || v == "CANVAS_SYNC_PROCESSOR"));
+        for (name, path) in [
+            (
+                "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+                "credential",
+            ),
+            ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+            ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+            ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+        ] {
+            assert_eq!(
+                native_env[name]["value"],
+                format!("/run/secrets/issuance-sign-grants/{path}")
+            );
+        }
         for value in &mut after {
             if value["kind"] != "Deployment" {
                 continue;
@@ -169,15 +187,17 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
                     let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
-                    assert_eq!(native_mounts.len(), 4);
-                    assert_eq!(native_mounts[2..], added_mounts);
+                    assert_eq!(native_mounts.len(), 5);
+                    assert_eq!(native_mounts[2]["name"], "issuance-sign-grants");
+                    assert_eq!(native_mounts[3..], added_mounts);
                     let native_volumes = native_owner
                         .pointer("/spec/template/spec/volumes")
                         .unwrap()
                         .as_array()
                         .unwrap();
-                    assert_eq!(native_volumes.len(), 4);
-                    assert_eq!(native_volumes[2..], added_volumes);
+                    assert_eq!(native_volumes.len(), 5);
+                    assert_eq!(native_volumes[2]["name"], "issuance-sign-grants");
+                    assert_eq!(native_volumes[3..], added_volumes);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -446,7 +466,7 @@ fn absent_empty_and_explicit_settings_keep_both_owners_effectively_paired() {
                 let model = native::compose(&baseline, &template, &ready, &values).unwrap();
                 let rows = model["items"].as_array().unwrap();
                 let shared = &rows[index(rows, "ConfigMap", "issuance-native-config")]["data"];
-                let mut common = json!({"BAO_ADDR":"must-not-reach-native","CANVAS_SYNC_PROCESSOR":"legacy-only"});
+                let mut common = json!({"BAO_ADDR":"https://vault.example.com","CANVAS_SYNC_PROCESSOR":"legacy-only"});
                 if let Some(value) = existing {
                     common["DIDCOMM_ALLOW_PRIVATE_IPS"] = json!(value);
                 }
@@ -469,7 +489,7 @@ fn absent_empty_and_explicit_settings_keep_both_owners_effectively_paired() {
                         .map(String::as_str),
                     expected
                 );
-                assert!(!native_values.contains_key("BAO_ADDR"));
+                assert_eq!(native_values["BAO_ADDR"], "https://vault.example.com");
                 assert!(!native_values.contains_key("CANVAS_SYNC_PROCESSOR"));
                 assert!(!legacy_values.contains_key("MARTY_UI_SHA"));
                 assert_eq!(native_values["MARTY_UI_SHA"], "native-only-revision");

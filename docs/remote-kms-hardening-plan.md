@@ -15339,3 +15339,21 @@ when comparing the complete legacy model, and checks the native two-mount
 suffix. Its focused test passed on Rust 1.95; 14 of 15 tests in that file
 passed locally, with the remaining CLI test requiring a Linux executable.
 The image, Canvas and OpenBao lanes were still active at this checkpoint.
+
+Run `38140853256` ended with those Release and Kubernetes contract failures
+plus six Canvas composition failures; the OpenBao plugin/Raft recovery,
+packaged image, worker, self-host runtime, Flow, feature probe, lint and
+CodeQL lanes passed. Canvas native renewal reserved status entries but never
+reached issuer signing because the process fixture used a deliberately dead
+OpenBao address and absent signing-grant tokens. Inspection also found a
+deployment gap: the native Kubernetes Issuance template had no `BAO_ADDR` or
+four origin-specific signing-grant token mounts. The local correction adds
+those mounts to the closed template and renderer, asserts their presence in
+the composed contract, and gives the host-only renewal acceptance process a
+disposable, non-exportable Transit HMAC key with a narrow credential-origin
+mint token. The test process receives that scoped token and the disposable
+OpenBao address; other origins retain closed token paths. The focused
+Kubernetes model and paired-configuration tests pass locally. The Canvas
+acceptance executable compiles locally; the full Linux composition and
+Kubernetes child tests still require the next grouped hosted run. This batch
+is local and unpushed at this checkpoint.

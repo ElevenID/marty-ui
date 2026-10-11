@@ -492,6 +492,21 @@ fn native_template(resources: &[Value]) -> Result<()> {
         "DIDCOMM_KMS_ADDR",
         config_ref("DIDCOMM_KMS_ADDR", "BAO_ADDR"),
     );
+    expected.insert("BAO_ADDR", config_ref("BAO_ADDR", "BAO_ADDR"));
+    for (name, path) in [
+        (
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            "credential",
+        ),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+    ] {
+        expected.insert(
+            name,
+            json!({"name":name,"value":format!("/run/secrets/issuance-sign-grants/{path}")}),
+        );
+    }
     expected.insert(
         "DIDCOMM_KMS_TOKEN_FILE",
         json!({"name":"DIDCOMM_KMS_TOKEN_FILE","value":"/run/secrets/didcomm-kms/token"}),
@@ -586,11 +601,11 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
     if didcomm_token {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true}]),
+                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"issuance-sign-grants","mountPath":"/run/secrets/issuance-sign-grants","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}}]),
+                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
         )?;
     } else {
         require(

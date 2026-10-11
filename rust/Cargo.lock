@@ -3733,6 +3733,7 @@ dependencies = [
  "marty-issuance-service",
  "marty-oid4vci",
  "marty-release-evidence",
+ "marty-signing-grant",
  "marty-verification",
  "mmf-platform",
  "mmf-security",
