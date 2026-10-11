@@ -13,7 +13,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use base64::{engine::general_purpose::STANDARD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::config::IssuanceServiceConfig;
 use marty_issuance_service::migration;
@@ -30,8 +33,9 @@ use marty_issuance_service::passport_repository::{
     PassportJobInsert, PassportJobPatch, PassportJobStatus, PassportSubmissionReservation,
     PostgresPassportRepository,
 };
-use marty_issuance_service::passport_signer::RemoteSigner;
+use marty_issuance_service::passport_signer::{ManagedProfileSigner, PassportSigner};
 use marty_passport_auth::PassportTenantKeyring;
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -40,6 +44,9 @@ use tower::ServiceExt;
 
 #[path = "support/passport_mock_artifact_kms.rs"]
 mod passport_mock_artifact_kms;
+
+#[path = "../src/passport_test_vectors.rs"]
+mod passport_test_vectors;
 
 async fn provider_ingress_request(
     app: &Router,
@@ -116,24 +123,70 @@ async fn exercise_native_passport_http(
         omit_next_bureau_id: Arc<AtomicBool>,
         sign_calls: Arc<AtomicUsize>,
         sign_gate: SignGate,
+        vector: passport_test_vectors::PublicPassportVector,
     }
-    async fn sign(State(state): State<MockState>, Json(body): Json<Value>) -> Json<Value> {
-        assert_eq!(body["country_code"], "USA");
-        assert_eq!(body["organization"], "org-a");
-        assert_eq!(body["data_groups"], json!({"DG1":"YQ==","DG2":"Yg=="}));
-        let call = state.sign_calls.fetch_add(1, Ordering::SeqCst);
-        let sod = if call == 0 {
-            "U09E".to_owned()
-        } else if call <= 2 {
-            "U09EMg==".to_owned()
-        } else {
-            STANDARD.encode(format!("SOD{}", call + 1))
-        };
+    async fn resolve(State(state): State<MockState>) -> Json<Value> {
+        Json(json!({
+            "ok": true,
+            "organization_id": "org-a",
+            "issuer_did": "did:web:issuer.example:orgs:org-a",
+            "key_purpose": "x509_doc_signer",
+            "algorithm": "ES256",
+            "verification_method_id": "did:web:issuer.example:orgs:org-a#dsc",
+            "signing_key_reference": "transit/keys/passport-dsc-a",
+            "issuer_profile": {"id":"passport-profile-a", "credential_format":"ICAO_EMRTD", "signing_key_reference":"transit/keys/passport-dsc-a"},
+            "issuer_x5c": [state.vector.dsc_der_b64, state.vector.csca_der_b64]
+        }))
+    }
+    async fn trust(State(state): State<MockState>) -> Json<Value> {
+        Json(json!([{
+            "certificate_id":"csca-a",
+            "certificate_data":passport_test_vectors::certificate_pem(&state.vector.csca_der_b64),
+            "status":"VALID"
+        }]))
+    }
+    async fn sign(
+        State(state): State<MockState>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        assert_eq!(body["issuer_did"], "did:web:issuer.example:orgs:org-a");
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+            headers[marty_signing_grant::HEADER_NAME].to_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grant.claims.origin, SigningOrigin::IssuancePassport);
+        assert_eq!(grant.claims.organization_id, "org-a");
+        assert!(!grant.claims.operation_id.is_empty());
+        assert_eq!(
+            grant.claims.key_reference.as_deref(),
+            Some("transit/keys/passport-dsc-a")
+        );
+        let signing_input = URL_SAFE_NO_PAD
+            .decode(body["payload_b64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(
+            hex::encode(Sha256::digest(&signing_input)),
+            state.vector.signing_input_sha256
+        );
+        assert_eq!(
+            grant.claims.payload_sha256_b64,
+            marty_signing_grant::payload_digest(&signing_input)
+        );
+        state.sign_calls.fetch_add(1, Ordering::SeqCst);
         let gated = { state.sign_gate.lock().unwrap().clone() };
         if let Some(barrier) = gated {
             barrier.wait().await;
         }
-        Json(json!({"sod_der_base64":sod, "dsc_cert_pem":"synthetic-cert"}))
+        let native_signature = STANDARD.decode(&state.vector.signature_der_b64).unwrap();
+        Json(json!({
+            "ok":true,
+            "issuer_did":"did:web:issuer.example:orgs:org-a",
+            "algorithm":"ES256",
+            "verification_method_id":"did:web:issuer.example:orgs:org-a#dsc",
+            "signature_b64":URL_SAFE_NO_PAD.encode(&native_signature),
+            "signature_raw_b64":URL_SAFE_NO_PAD.encode(&native_signature)
+        }))
     }
     async fn submit(
         State(state): State<MockState>,
@@ -197,8 +250,17 @@ async fn exercise_native_passport_http(
         None::<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
     ));
     let gate_state = poll_gate.clone();
+    let vector = passport_test_vectors::public_passport_vectors()[0].clone();
     let mock = Router::new()
-        .route("/v1/icao/emrtd/sign", post(sign))
+        .route("/internal/signing-keys/resolve-issuer-did", get(resolve))
+        .route("/internal/signing-keys/csca-trust-anchors", get(trust))
+        .route("/internal/signing-keys/issuer-dids/sign", post(sign))
+        .route(
+            "/v1/transit/hmac/marty-sign-grant-issuance-passport-v1/sha2-256",
+            post(|| async {
+                Json(json!({"data":{"hmac":format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+            }),
+        )
         .route("/v1/personalization/jobs", post(submit))
         .route(
             "/v1/personalization/jobs/{job_id}",
@@ -230,27 +292,51 @@ async fn exercise_native_passport_http(
             omit_next_bureau_id: omit_next_bureau_id.clone(),
             sign_calls: sign_calls.clone(),
             sign_gate: sign_gate.clone(),
+            vector: vector.clone(),
         });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
+    let mut grant_file = tempfile::NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut grant_file, b"passport-mint-token\n").unwrap();
+    let previous_bao_addr = std::env::var_os("BAO_ADDR");
+    std::env::set_var("BAO_ADDR", &base_url);
+    let minter = GrantMinter::for_managed_openbao(
+        &base_url,
+        SigningOrigin::IssuancePassport,
+        grant_file.path().to_path_buf(),
+    )
+    .unwrap();
+    match previous_bao_addr {
+        Some(value) => std::env::set_var("BAO_ADDR", value),
+        None => std::env::remove_var("BAO_ADDR"),
+    }
+    let signing_url = url::Url::parse(&format!("{base_url}/internal/signing-keys/")).unwrap();
     let app = passport_router(
         PassportHttpService::new(
             keyring.clone(),
             repository.clone(),
             Some(cipher.clone()),
-            Some(RemoteSigner::new(&base_url, "signer-key").unwrap().into()),
+            Some(PassportSigner::Managed(Box::new(
+                ManagedProfileSigner::new_with_grant(
+                    signing_url,
+                    Some("synthetic-internal-key"),
+                    Some("synthetic-issuer-sign-key"),
+                    minter,
+                )
+                .unwrap(),
+            ))),
             Some(BureauClient::new(&base_url, "bureau-key").unwrap()),
         )
         .with_webhook_verifier(kms.webhook_verifier.clone()),
     );
     let payload = json!({
-        "organization_id":"org-a", "flow_execution_id":"flow-http",
+        "organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"flow-http",
         "application_template_id":"template-http", "credential_template_id":"credential-http",
         "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
         "country_code":"USA", "applicant":{"name":"Synthetic Sensitive"},
         "mrz":{"line_1":"P<TEST", "line_2":"SYNTHETIC"},
-        "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+        "data_groups":{"DG1":"AQ==", "DG2":"Ag=="}
     });
     let (status, _) = passport_http_request(
         &app,
@@ -336,10 +422,12 @@ async fn exercise_native_passport_http(
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(signed["status"], "SOD_SIGNED");
-    assert_eq!(signed["sod_signature_verified"], false);
+    assert_eq!(signed["sod_signature_verified"], true);
     assert_eq!(
         signed["sod_sha256"],
-        hex::encode(sha2::Sha256::digest(b"SOD"))
+        hex::encode(sha2::Sha256::digest(
+            STANDARD.decode(&vector.sod_der_b64).unwrap()
+        ))
     );
     let (status, repeated_signed) = passport_http_request(
         &app,
@@ -374,9 +462,11 @@ async fn exercise_native_passport_http(
             .signed_material
             .unwrap()
             .sod_der_base64,
-        "U09E"
+        vector.sod_der_b64
     );
-    assert!(!signed_job.secure_artifact_ciphertext.contains("U09E"));
+    assert!(!signed_job
+        .secure_artifact_ciphertext
+        .contains(&vector.sod_der_b64));
     let (entered_tx, entered_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     *submit_gate.lock().unwrap() = Some((entered_tx, release_rx));
@@ -422,7 +512,10 @@ async fn exercise_native_passport_http(
     assert_eq!(submitted["bureau_job_id"], raced_submit["bureau_job_id"]);
     assert_eq!(observed.lock().unwrap().len(), 1);
     assert_eq!(observed.lock().unwrap()[0]["document_type"], "TD1");
-    assert_eq!(observed.lock().unwrap()[0]["sod_der_base64"], "U09E");
+    assert_eq!(
+        observed.lock().unwrap()[0]["sod_der_base64"],
+        vector.sod_der_b64
+    );
     assert_eq!(raced_submit["sod_sha256"], signed["sod_sha256"]);
     assert_eq!(sign_calls.load(Ordering::SeqCst), 1);
     let (status, _) = passport_http_request(
@@ -590,10 +683,10 @@ async fn exercise_native_passport_http(
         .as_str()
         .unwrap();
     let mut wide_payload = json!({
-        "organization_id":"org-a", "flow_execution_id":"wide-data-group-test",
+        "organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"wide-data-group-test",
         "application_template_id":"template-test", "credential_template_id":"credential-test",
         "delivery_destination_profile_id":"destination-test", "country_code":"USA",
-        "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+        "applicant":{}, "mrz":{}, "data_groups":{"DG1":"AQ==", "DG2":"Ag=="}
     });
     wide_payload["data_groups"][wide_name] = json!("Yw==");
     wide_payload["data_groups"]["DG１２"] = json!("ZA==");
@@ -769,10 +862,10 @@ async fn exercise_native_passport_http(
         Some("org-a"),
         Some(key_a),
         json!({
-            "organization_id":"org-a", "flow_execution_id":"legacy-sod",
+            "organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"legacy-sod",
             "application_template_id":"template-http", "credential_template_id":"credential-http",
             "delivery_destination_profile_id":"destination-http", "country_code":"USA",
-            "applicant":{}, "mrz":{}, "data_groups":{"DG1":"YQ==", "DG2":"Yg=="}
+            "applicant":{}, "mrz":{}, "data_groups":{"DG1":"AQ==", "DG2":"Ag=="}
         }),
         None,
     )
@@ -824,7 +917,9 @@ async fn exercise_native_passport_http(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         recovered["sod_sha256"],
-        hex::encode(Sha256::digest(b"SOD2"))
+        hex::encode(Sha256::digest(
+            STANDARD.decode(&vector.sod_der_b64).unwrap()
+        ))
     );
     let recovered_job = repository
         .get(&principal, legacy_id)
@@ -868,7 +963,9 @@ async fn exercise_native_passport_http(
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         refreshed["sod_sha256"],
-        hex::encode(Sha256::digest(b"SOD2"))
+        hex::encode(Sha256::digest(
+            STANDARD.decode(&vector.sod_der_b64).unwrap()
+        ))
     );
     assert_eq!(sign_calls.load(Ordering::SeqCst), 3);
     let refreshed_job = repository
@@ -934,11 +1031,11 @@ async fn exercise_native_passport_http(
         "/v1/passport/applications",
         Some("org-a"),
         Some(key_a),
-        json!({"organization_id":"org-a", "flow_execution_id":"retry-direct",
+        json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"retry-direct",
             "application_template_id":"template-http", "credential_template_id":"credential-http",
             "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
             "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
-            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+            "data_groups":{"DG1":"AQ==","DG2":"Ag=="}}),
         None,
     )
     .await;
@@ -965,7 +1062,7 @@ async fn exercise_native_passport_http(
         .unwrap();
     assert_eq!(
         retry_artifact.data_groups.get("DG1").map(String::as_str),
-        Some("YQ==")
+        Some("AQ==")
     );
     assert!(retry_artifact.numbered_data_groups().is_ok());
     reject_next_submit.store(true, Ordering::SeqCst);
@@ -1008,11 +1105,11 @@ async fn exercise_native_passport_http(
         "/v1/passport/applications",
         Some("org-a"),
         Some(key_a),
-        json!({"organization_id":"org-a", "flow_execution_id":"server-error-submit",
+        json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"server-error-submit",
             "application_template_id":"template-http", "credential_template_id":"credential-http",
             "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
             "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
-            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+            "data_groups":{"DG1":"AQ==","DG2":"Ag=="}}),
         None,
     )
     .await;
@@ -1074,11 +1171,11 @@ async fn exercise_native_passport_http(
         "/v1/passport/applications",
         Some("org-a"),
         Some(key_a),
-        json!({"organization_id":"org-a", "flow_execution_id":"ambiguous-submit",
+        json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"ambiguous-submit",
             "application_template_id":"template-http", "credential_template_id":"credential-http",
             "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
             "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
-            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+            "data_groups":{"DG1":"AQ==","DG2":"Ag=="}}),
         None,
     )
     .await;
@@ -1143,11 +1240,11 @@ async fn exercise_native_passport_http(
         "/v1/passport/applications",
         Some("org-a"),
         Some(key_a),
-        json!({"organization_id":"org-a", "flow_execution_id":"race-submit",
+        json!({"organization_id":"org-a", "issuer_did":"did:web:issuer.example:orgs:org-a", "flow_execution_id":"race-submit",
             "application_template_id":"template-http", "credential_template_id":"credential-http",
             "delivery_destination_profile_id":"destination-http", "document_type":"TD1",
             "country_code":"USA", "applicant":{}, "mrz":{"line_1":"P<TEST","line_2":"SYNTHETIC"},
-            "data_groups":{"DG1":"YQ==","DG2":"Yg=="}}),
+            "data_groups":{"DG1":"AQ==","DG2":"Ag=="}}),
         None,
     )
     .await;

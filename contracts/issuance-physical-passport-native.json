@@ -13,15 +13,8 @@
     "signer_source_sha256": "8064185f747bae091c5164a32915f83b435ccd6526434f5ddca5114cc6661472",
     "bureau_source_sha256": "31d70c676c2b4e5e09d0e0ea6aa7bea37432b98984a5adffd5fea7e18ede9afb"
   },
-  "remote_signer": {
-    "method": "POST",
-    "path": "/v1/icao/emrtd/sign",
-    "timeout_seconds": 30,
-    "required_result_fields": ["sod_der_base64", "dsc_cert_pem"],
-    "incomplete_error": "ICAO document signer returned incomplete signing material"
-  },
   "managed_issuer_profile_signer": {
-    "scope": "beta-only extension to the frozen Python remote-signer contract",
+    "scope": "the only supported native passport signer",
     "selection": "Resolve the active organization and issuer DID profile for ICAO_EMRTD and x509_doc_signer before signing",
     "custody": "Select the signing key through the issuer profile and keep private key material inside KMS",
     "certificate_gate": "Require the attached DSC to chain to an active organization CSCA trust anchor before signing",
@@ -44,7 +37,7 @@
     "python_flag": "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true",
     "python_behavior": "When no remote signer URL is set, issue a single-use CSCA and DSC for testing and offline fixtures only",
     "native_status": "retired; PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED=true is rejected before native passport startup in every build",
-    "replacement_evidence": "managed CSCA, DSC, and SOD issuance is exercised by the disposable OpenBao acceptance chain; passport HTTP and PostgreSQL behavior use remote signer and artifact KMS clients"
+    "replacement_evidence": "managed CSCA, DSC, and SOD issuance is exercised by the disposable OpenBao acceptance chain; passport HTTP and PostgreSQL behavior use managed issuer signing and artifact KMS clients"
   },
   "bureau_batch_provider": {
     "python_reference": "contracts/physical-passport-provider-reference.json batch_http",
@@ -95,7 +88,7 @@
     "python_oracle": "released PassportApplicationRequest accepts a DG number beyond u16; _numbered_data_groups converts it with Python int",
     "input_name": "DG999999999999999999999999999999999999999999",
     "normalized_number": "999999999999999999999999999999999999999999",
-    "native_requirement": "preserve creation, remote signer, and bureau payload behavior without truncating the number"
+    "native_requirement": "preserve creation and bureau payload behavior without truncating the number; managed signing rejects unsupported SOD data-group numbers"
   },
   "unicode_data_group_digit_observation": {
     "python_unicode_version": "15.0.0",
@@ -132,7 +125,7 @@
     "native_route_count": 0,
     "declared_gateway_route_count": 9,
     "signed_webhook_path": "/v1/passport/webhooks/personalization",
-    "required_before_switch": "the default-off tenant-keyed gateway selector and nine declared routes, including raw-body signed webhook ingress, are implemented; qualify the packaged image, live Flow, remote signer and bureau (including batch), live signed webhook delivery, and exact route/error parity before selecting the native owner",
+    "required_before_switch": "the default-off tenant-keyed gateway selector and nine declared routes, including raw-body signed webhook ingress, are implemented; qualify the packaged image, live Flow, managed KMS signer and bureau (including batch), live signed webhook delivery, and exact route/error parity before selecting the native owner",
     "shared_issuance_api_key": "must not be used as a passport tenant credential"
   },
   "webhook_missing_signature_observation": {

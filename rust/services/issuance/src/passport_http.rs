@@ -476,13 +476,10 @@ impl PassportHttpService {
             )
             .await
             .map_err(PassportHttpError::Signer)?;
-        let sod_verified = signed.verify_data_groups(&data_groups).is_ok();
-        if matches!(self.signer.as_ref(), Some(PassportSigner::Managed(_))) && !sod_verified {
-            return Err(PassportHttpError::Signer(
-                SignerError::InvalidManagedMaterial,
-            ));
-        }
-        Ok((artifact, signed, sod_verified))
+        signed
+            .verify_data_groups(&data_groups)
+            .map_err(PassportHttpError::Signer)?;
+        Ok((artifact, signed, true))
     }
 
     async fn validate_cached_signed_material(
@@ -494,23 +491,22 @@ impl PassportHttpService {
         let groups = artifact
             .numbered_data_groups()
             .map_err(|_| PassportHttpError::InvalidArtifact)?;
-        if let Some(PassportSigner::Managed(managed)) = self.signer.as_ref() {
-            managed
-                .validate_existing(
-                    &job.country_code,
-                    &job.organization_id,
-                    job.issuer_did
-                        .as_deref()
-                        .ok_or(PassportHttpError::Signer(SignerError::MissingIssuerDid))?,
-                    &groups,
-                    signed,
-                )
-                .await
-                .map_err(PassportHttpError::Signer)?;
-            Ok(true)
-        } else {
-            Ok(signed.verify_data_groups(&groups).is_ok())
-        }
+        let Some(PassportSigner::Managed(managed)) = self.signer.as_ref() else {
+            return Err(PassportHttpError::Signer(SignerError::NotConfigured));
+        };
+        managed
+            .validate_existing(
+                &job.country_code,
+                &job.organization_id,
+                job.issuer_did
+                    .as_deref()
+                    .ok_or(PassportHttpError::Signer(SignerError::MissingIssuerDid))?,
+                &groups,
+                signed,
+            )
+            .await
+            .map_err(PassportHttpError::Signer)?;
+        Ok(true)
     }
 }
 
@@ -657,7 +653,7 @@ impl IntoResponse for PassportHttpError {
                 "Internal Server Error".to_owned()
             }
             Self::Signer(error) if status == StatusCode::INTERNAL_SERVER_ERROR => match error {
-                SignerError::IncompleteMaterial => error.to_string(),
+                SignerError::InvalidSodEncoding => error.to_string(),
                 _ => "ICAO document signer failed".to_owned(),
             },
             Self::Bureau(error) if status == StatusCode::INTERNAL_SERVER_ERROR => match error {
@@ -2269,7 +2265,7 @@ async fn reconcile_beta_submission(
 
 fn signed_sod_sha256(signed: &SignedMaterial) -> Result<String, PassportHttpError> {
     let sod = decode_python_validated_base64(&signed.sod_der_base64)
-        .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
+        .map_err(|_| PassportHttpError::Signer(SignerError::InvalidSodEncoding))?;
     Ok(hex::encode(Sha256::digest(sod)))
 }
 

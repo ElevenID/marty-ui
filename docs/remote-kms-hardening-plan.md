@@ -15152,3 +15152,22 @@ Before landing, replace the remaining Postgres passport test's synthetic
 external signer with managed KMS signing, remove the obsolete signer type and
 contract fragment, prove managed passport end-to-end behavior, and then run
 the full grouped validation and live OpenBao origin-denial checks.
+
+The external passport signer implementation and its dedicated HTTP tests are
+now removed from Issuance source. The PostgreSQL passport contract test has
+been adapted to managed issuer resolution, CSCA trust, scoped grant minting,
+public DSC signature vectors, verified SOD material and the KMS artifact
+client. Native signing rejects an invalid SOD; cached material requires a
+configured managed signer and active-profile validation. The synthetic grant
+mint route in this test proves application binding, not OpenBao policy or
+non-exportability. The test passed after the cached-material edit against a
+dedicated disposable PostgreSQL 16 database. Live OpenBao proof remains a
+gate.
+
+Final local checks for this removal: 572 Issuance library tests passed (eight
+ignored), the PostgreSQL contract test passed against its dedicated disposable
+database, 147 affected Python contract/Compose cases passed (two skipped),
+and warnings-denied all-target Clippy and Rust formatting passed. The
+disposable PostgreSQL container was removed. This local fixture still cannot
+prove live OpenBao grant policy, KMS key non-exportability, hosted packaging,
+or release cutover.
