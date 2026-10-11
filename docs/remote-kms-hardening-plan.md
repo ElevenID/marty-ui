@@ -15520,3 +15520,10 @@ services. It is now part of the disposable `--rust-adapter` probe. The full
 OpenBao/Redis/PostgreSQL probe passed again after this addition. Hold this
 local test-only correction for grouping with any findings from the running
 exact-head CI before the next push.
+
+The bootstrap reconciliation's POSIX-specific tests also ran in a disposable
+Linux container against the actual merged helper: 19 of 19 passed, including
+private atomic replacement for all scoped runtime and grant tokens, inherited
+bootstrap-token handoff, and symlink rejection. This supplements the Windows
+44-pass suite, whose three POSIX cases were skipped. It is helper-behavior
+evidence, not an installed bundle or production OpenBao qualification.
