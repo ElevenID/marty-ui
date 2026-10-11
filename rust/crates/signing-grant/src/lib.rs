@@ -10,6 +10,7 @@ use thiserror::Error;
 
 pub mod replay;
 pub mod transit;
+pub mod verifier;
 
 const DOMAIN: &[u8] = b"marty:issuer-signing-grant:v1\n";
 const MAX_LIFETIME_SECONDS: i64 = 60;
@@ -18,7 +19,7 @@ const ISSUED_LIFETIME_SECONDS: i64 = 30;
 const MAX_HEADER_BYTES: usize = 8192;
 pub const HEADER_NAME: &str = "x-marty-signing-grant";
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SigningOrigin {
     GatewayService,

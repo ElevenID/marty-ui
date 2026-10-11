@@ -14376,3 +14376,15 @@ the test-only Transit token; that container was stopped. This is a fixture
 repair, not live provider cryptographic acceptance. The prior exact-head run
 is still active on other jobs; keep the local corrections batched until it
 is terminal.
+
+K6 centralized Signing Keys verifier, local UI follow-up: the shared Rust
+crate now selects the Transit verifier by trusted route origin, reads its
+separate verify-only token file, authenticates and binds the bounded grant
+header, then atomically consumes the one-use grant in Redis before returning
+authorization. Malformed/mismatched/replayed grants are denied; OpenBao,
+token-file or Redis failures are unavailable and stop signing. A fresh
+disposable OpenBao 2 dev instance provisioned by the canonical bootstrap,
+and a marked disposable Redis DB 13, passed the opt-in concurrent authorization
+test: exactly one use succeeded, and a later replay was denied. Both
+containers were stopped. This verifier is still not wired into production
+routes, so issuer signing is not yet tenant-authorized end to end.
