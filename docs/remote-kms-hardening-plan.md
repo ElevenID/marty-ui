@@ -16043,3 +16043,15 @@ Issuance all-targets warnings-denied Clippy passed. On pushed head
 `ec63b4de4`, Rust contracts subsequently passed; Canvas remains the only
 running job in CI run `38167183578` at this checkpoint. The local correction
 stays in the grouped batch.
+
+Before the next grouped push, the accumulated local head `f1b5d515f` passed
+the complete `probe_signing_keys_openbao_policy.py --rust-adapter` run again
+against fresh disposable OpenBao, Redis and PostgreSQL instances. The probe
+covered six managed signing prefixes, seven origin-bound grant keys, provider
+HMAC isolation, the Rust managed-key adapter, ES256/ES384/ES512 CSR custody,
+holder service/database/OpenBao lifecycle, credential durability, Redis
+pairing tickets, tenant routes and managed-profile routes. All three probe
+containers were removed. This is source-built local functional evidence,
+not exact release-artifact qualification. The previous `ec63b4de4` hosted
+Canvas job remains in progress; the two failed standalone-Rust jobs have the
+validated lockfile correction in this local batch.
