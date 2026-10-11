@@ -1072,8 +1072,10 @@ jobs:
           cosign sign --yes "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST"
 
   prepare-selfhost-image-lock:
-    # Produces a short-lived preparation artifact, never a release asset or
-    # transaction gate. Full installed-bundle qualification remains separate.
+    # Produces a short-lived ZIP/lock preparation artifact, never a release
+    # asset or transaction gate. The next protected gate must anonymously
+    # install this exact extracted ZIP with disposable external state and prove
+    # migrations, readiness, login, and an issuer/credential journey.
     if: inputs.prepare_selfhost_lock == true
     needs: [resolve-transaction, validate-stack, build-services, qualify-release, build-selfhost-lock-roles]
     runs-on: ubuntu-latest
@@ -1181,10 +1183,46 @@ jobs:
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Package and record the unqualified exact-lock ZIP
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --manifest-path rust/Cargo.toml \
+            -p marty-selfhost-bundle --bin package-selfhost-bundle
+          rust/target/debug/package-selfhost-bundle \
+            --repo-root . --output-dir "$RUNNER_TEMP/selfhost-prepared" \
+            --archive "$RUNNER_TEMP/selfhost-prepared" \
+            --image-lock prepared-selfhost-images.json
+          python scripts/record_selfhost_bundle_preparation.py \
+            --archive "$RUNNER_TEMP/selfhost-prepared.zip" \
+            --image-lock prepared-selfhost-images.json \
+            --transaction validated-transaction.json \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" \
+            --output prepared-selfhost-bundle.json
+          mkdir "$RUNNER_TEMP/selfhost-fresh-install"
+          unzip -q "$RUNNER_TEMP/selfhost-prepared.zip" \
+            -d "$RUNNER_TEMP/selfhost-fresh-install"
+          (
+            cd "$RUNNER_TEMP/selfhost-fresh-install/selfhost-prepared"
+            docker compose --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --no-interpolate --format json \
+              > "$RUNNER_TEMP/selfhost-extracted-compose.json"
+          )
+          jq -e '.services | type == "object" and length > 0' \
+            "$RUNNER_TEMP/selfhost-extracted-compose.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-prepared.zip" prepared-selfhost-bundle.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
-          path: prepared-selfhost-images.json
+          path: |
+            prepared-selfhost-images.json
+            prepared-selfhost-bundle.json
+            prepared-selfhost-bundle.zip
           if-no-files-found: error
           retention-days: 30
 
