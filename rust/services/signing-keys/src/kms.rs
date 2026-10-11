@@ -1693,6 +1693,7 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
         .json(&body),
     )
     .await?;
+    require_gcp_response_name(&response, key_reference, true)?;
     let signature = response
         .get("signature")
         .and_then(Value::as_str)
@@ -1720,6 +1721,7 @@ async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
         .timeout(HTTP_TIMEOUT),
     )
     .await?;
+    require_gcp_response_name(&response, key_reference, false)?;
     let pem = response.get("pem").and_then(Value::as_str).ok_or_else(|| {
         KmsError::InvalidResponse(
             "GCP Cloud KMS public key response did not include pem".to_string(),
@@ -1739,6 +1741,20 @@ async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
         "protection_level": response.get("protectionLevel").cloned().unwrap_or(Value::Null),
         "public_jwk": public_jwk,
     }))
+}
+
+fn require_gcp_response_name(
+    response: &Value,
+    key_reference: &str,
+    required: bool,
+) -> Result<(), KmsError> {
+    let name = response.get("name").and_then(Value::as_str);
+    if name == Some(key_reference) || (!required && name.is_none()) {
+        return Ok(());
+    }
+    Err(KmsError::InvalidResponse(
+        "GCP Cloud KMS response key version did not match the pinned key.".to_string(),
+    ))
 }
 
 async fn verify_gcp(config: &Value) -> CapabilityResult {
@@ -2789,6 +2805,21 @@ mod tests {
             "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/../2",
         ] {
             assert!(gcp_key_version_reference(&json!({"key_reference": invalid})).is_err());
+        }
+    }
+
+    #[test]
+    fn gcp_signing_response_must_name_the_requested_key_version() {
+        let reference = "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1";
+        assert!(require_gcp_response_name(&json!({"name": reference}), reference, true).is_ok());
+        for response in [
+            json!({}),
+            json!({"name": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/2"}),
+        ] {
+            assert!(matches!(
+                require_gcp_response_name(&response, reference, true),
+                Err(KmsError::InvalidResponse(_))
+            ));
         }
     }
 

@@ -14096,6 +14096,12 @@ reference directly, bypassing that shared parser. It now rejects such a probe
 before network I/O. The reachable-provider fixture reports the same pinned
 version it was asked to probe; provider and service-validation golden suites
 pass locally (six tests total), as do file Rustfmt and diff hygiene.
+The [GCP AsymmetricSign response contract](https://docs.cloud.google.com/kms/docs/reference/rest/v1/projects.locations.keyRings.cryptoKeys.cryptoKeyVersions/asymmetricSign)
+directs clients to check the returned `name` against the intended
+CryptoKeyVersion. The adapter now requires this exact match; the public-key
+adapter checks its versioned `name` when present (the field is documented as
+beta in the [GetPublicKey response](https://docs.cloud.google.com/kms/docs/reference/rest/v1/projects.locations.keyRings.cryptoKeys.cryptoKeyVersions/getPublicKey)).
+Focused mismatch/missing-name and all five provider golden tests pass locally.
 
 UI #1192 head `5ba6851d0eb431305c75419b32b207cbadf96df2` [CI
 38111105084](https://github.com/ElevenID/marty-ui/actions/runs/38111105084)

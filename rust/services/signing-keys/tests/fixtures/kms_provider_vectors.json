@@ -174,7 +174,7 @@
           "digest": { "sha256": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU=" }
         }
       },
-      "provider_response": { "signature": "MAYCAQECAQI=" },
+      "provider_response": { "name": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "signature": "MAYCAQECAQI=" },
       "expected_response": {
         "signature_b64": "MAYCAQECAQI",
         "signature_encoding": "der",
@@ -197,7 +197,7 @@
         "headers": { "authorization": "Bearer gcp-token" },
         "json": { "data": "cGF5bG9hZA==" }
       },
-      "provider_response": { "signature": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg==" },
+      "provider_response": { "name": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/2", "signature": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg==" },
       "expected_response": {
         "signature_b64": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg",
         "signature_encoding": "raw"
