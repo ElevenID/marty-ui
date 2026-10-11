@@ -39,6 +39,44 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path):
         return check(archive, lock, transaction, receipt, model, checkout)
 
     assert run()["qualification"] == "unqualified"
+    installed = tmp_path / "installed"
+    state = tmp_path / "state"
+    secrets = tmp_path / "secrets"
+    for directory in (installed, state, secrets):
+        directory.mkdir()
+    asset = installed / "asset.txt"
+    asset.write_text("downloaded asset")
+
+    def confined(model_value):
+        model.write_text(json.dumps(model_value))
+        return check(archive, lock, transaction, receipt, model, checkout,
+                     install_root=installed, state_root=state, secret_root=secrets)
+
+    service = {"image": image, "volumes": [
+        {"type": "bind", "source": str(asset), "read_only": True},
+        {"type": "bind", "source": str(state / "postgres")},
+    ]}
+    assert confined({"services": {"app": service},
+                     "secrets": {"operator": {"file": str(secrets / "token")}}})[
+                         "qualification"] == "unqualified"
+    for source in (tmp_path / "foreign", secrets / "token"):
+        service["volumes"][0]["source"] = str(source)
+        with pytest.raises(ValueError, match="outside the isolated installation"):
+            confined({"services": {"app": service}})
+    service["volumes"][0]["source"] = str(asset)
+    service["volumes"][0]["read_only"] = False
+    with pytest.raises(ValueError, match="missing or writable bundle mount"):
+        confined({"services": {"app": service}})
+    service["volumes"][0]["read_only"] = True
+    with pytest.raises(ValueError, match="outside the isolated installation"):
+        confined({"services": {"app": service},
+                  "secrets": {"operator": {"file": str(tmp_path / "foreign")}}})
+    with pytest.raises(ValueError, match="outside the isolated installation"):
+        confined({"services": {"app": service},
+                  "secrets": {"operator": {"file": str(asset)}}})
+    with pytest.raises(ValueError, match="roots overlap"):
+        check(archive, lock, transaction, receipt, model, checkout,
+              install_root=installed, state_root=installed / "state", secret_root=secrets)
     with pytest.raises(ValueError, match="another source or run"):
         check(archive, lock, transaction, receipt, model, checkout, "c" * 40, "123")
     with pytest.raises(ValueError, match="another source or run"):

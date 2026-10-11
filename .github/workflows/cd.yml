@@ -1285,6 +1285,10 @@ jobs:
             --verify-archive-only
           mkdir "$RUNNER_TEMP/selfhost-consumer"
           unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-consumer"
+          # Render with fresh per-run roots, never operator or source-checkout state.
+          mkdir "$RUNNER_TEMP/selfhost-consumer-state" "$RUNNER_TEMP/selfhost-consumer-secrets"
+          export SELFHOST_STATE_DIR="$RUNNER_TEMP/selfhost-consumer-state"
+          export SELFHOST_SECRET_DIR="$RUNNER_TEMP/selfhost-consumer-secrets"
           (
             cd "$RUNNER_TEMP/selfhost-consumer/selfhost-prepared"
             docker compose --profile '*' --env-file .env.selfhost.production.example \
@@ -1301,6 +1305,9 @@ jobs:
             --expected-run-id "$GITHUB_RUN_ID" \
             --compose-model "$RUNNER_TEMP/selfhost-consumer-compose.json" \
             --source-checkout "$GITHUB_WORKSPACE" \
+            --install-root "$RUNNER_TEMP/selfhost-consumer/selfhost-prepared" \
+            --state-root "$SELFHOST_STATE_DIR" \
+            --secret-root "$SELFHOST_SECRET_DIR" \
             --output "$RUNNER_TEMP/selfhost-consumer-preflight.json"
       - name: Require anonymous exact-digest pulls from the downloaded lock
         shell: bash
