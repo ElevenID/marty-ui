@@ -15253,3 +15253,14 @@ four Issuance origins. This is deliberately a no-sign health/packaging smoke;
 the live OpenBao signing route is separately qualified. The script passes
 `bash -n`. The plugin-image lane's coordinated restore step remained active
 at this checkpoint; retain its result before republishing the grouped head.
+
+Run `38136657989` is now terminal. The pinned Go OpenBao plugin image,
+packaged storage and Raft probes, and coordinated Rust/PostgreSQL/Raft restore
+all passed; this lane took about 23 minutes. Release contracts, feature probe,
+Rust lint/packaging, Organization Quality, and CodeQL also passed. The failed
+Canvas, Rust contracts, and service-image lanes each have the local correction
+above; dependent CI Gate therefore failed. The next grouped head also enables
+the already-used optional read-only Rust compiler cache and mold linker in the
+long OpenBao recovery lane, with direct rustc fallback if the cache is down.
+No live-custody or required gate was removed. Requalify every required check
+on the new exact head.
