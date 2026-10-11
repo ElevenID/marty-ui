@@ -10,3 +10,5 @@ rust/services/flow/migrations/*.sql text eol=lf
 scripts/sql/passport-beta-batch-acl-finalize.sql text eol=lf
 scripts/sql/passport-beta-db-maintenance-start.sql text eol=lf
 scripts/sql/passport-beta-db-enable-app-login.sql text eol=lf
+scripts/sql/passport-beta-rust-owner-transition.sql text eol=lf
+scripts/sql/passport-beta-rust-owner-verify.sql text eol=lf

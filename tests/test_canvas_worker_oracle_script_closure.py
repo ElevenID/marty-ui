@@ -379,6 +379,125 @@ def published_image_oracle_invocation(source: str) -> dict[str, str]:
     }
 
 
+def published_image_oracle_child_invocation(
+    harness_source: str, script_source: str
+) -> dict[str, object]:
+    """Witness the mounted oracle's separate full-import child process."""
+    mounted = published_image_oracle_mounts(harness_source)[0]
+    invoked = published_image_oracle_invocation(harness_source)
+    assert mounted["target"] == invoked["script_target"]
+    assert mounted["source"] == "scripts/run_canvas_provider_configuration_oracle.py"
+    tree = ast.parse(script_source, filename=mounted["source"])
+    runs = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == invoked["callable"]
+    ]
+    assert len(runs) == 1, "Review published-image oracle callable"
+    assert [argument.arg for argument in runs[0].args.args] == ["source"]
+    assert len(runs[0].args.defaults) == 1
+    assert ast.unparse(runs[0].args.defaults[0]) == "None"
+    assert ast.unparse(runs[0].body[0]) == "published_image = source is None"
+    assert (
+        sum(
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id == "published_image"
+            for node in ast.walk(runs[0])
+        )
+        == 1
+    ), "Review published-image branch assignment"
+    published = [
+        node
+        for node in runs[0].body
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "published_image"
+    ]
+    assert len(published) == 1, "Review published-image child-process branch"
+    branch = published[0]
+    assert len(branch.body) == 3 and ast.unparse(branch.body[0]) == "imports = []"
+    loop = branch.body[1]
+    assert isinstance(loop, ast.For)
+    assert ast.unparse(loop.target) == "case"
+    assert ast.unparse(loop.iter) == "fixture['timeouts']"
+    assert len(loop.body) == 2
+    child = loop.body[0]
+    assert isinstance(child, ast.Assign) and ast.unparse(child.targets[0]) == "child"
+    call = child.value
+    assert isinstance(call, ast.Call) and ast.unparse(call.func) == "subprocess.run"
+    assert len(call.args) == 1
+    assert ast.unparse(call.args[0]) == (
+        "[sys.executable, __file__, '--observe-import']"
+    ), "Child must re-execute the mounted script"
+    options = {option.arg: ast.unparse(option.value) for option in call.keywords}
+    assert options == {
+        "input": "json.dumps(case)",
+        "text": "True",
+        "capture_output": "True",
+        "check": "True",
+        "timeout": "30",
+    }, "Review child input, capture, failure, and deadline semantics"
+    assert ast.unparse(loop.body[1]) == "imports.append(json.loads(child.stdout))"
+    assert isinstance(branch.body[2], ast.Assert)
+    assert ast.unparse(branch.body[2].test) == "imports == timeouts"
+
+    mains = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "__name__ == '__main__'"
+    ]
+    assert len(mains) == 1, "Review published-image child dispatch owner"
+    dispatch = [
+        node
+        for node in mains[0].body
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "arguments.observe_import"
+    ]
+    assert len(dispatch) == 1 and len(dispatch[0].body) == 2
+    assert ast.unparse(dispatch[0].body[0]) == (
+        "print(json.dumps(observe_import(json.load(sys.stdin)), sort_keys=True))"
+    ), "Child must parse its own stdin and observe the full import"
+    assert ast.unparse(dispatch[0].body[1]) == "raise SystemExit(0)"
+    flags = [
+        node
+        for node in mains[0].body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and ast.unparse(node.value.func) == "parser.add_argument"
+        and node.value.args
+        and ast.unparse(node.value.args[0]) == "'--observe-import'"
+    ]
+    assert len(flags) == 1
+    assert ast.unparse(flags[0]) == (
+        "parser.add_argument('--observe-import', action='store_true')"
+    )
+    parses = [
+        node
+        for node in mains[0].body
+        if isinstance(node, ast.Assign) and ast.unparse(node.targets[0]) == "arguments"
+    ]
+    assert len(parses) == 1 and ast.unparse(parses[0]) == (
+        "arguments = parser.parse_args()"
+    ), "Child dispatch must use the parsed flag"
+    assert (
+        mains[0].body.index(flags[0])
+        < mains[0].body.index(parses[0])
+        < mains[0].body.index(dispatch[0])
+    ), "Child flag must be registered, parsed, then dispatched"
+    return {
+        "mounted_source": mounted["source"],
+        "mounted_target": mounted["target"],
+        "callable_default": "source=None",
+        "published_guard": "published_image = source is None",
+        "child_command": ast.unparse(call.args[0]),
+        "child_input": options["input"],
+        "child_stdout": ast.unparse(loop.body[1]),
+        "timeout_seconds": 30,
+        "child_flag_parse": ast.unparse(parses[0]),
+        "dispatch": ast.unparse(dispatch[0].body[0]),
+    }
+
+
 def test_historical_capture_input_graph_is_reviewed():
     producers = json.loads(PRODUCERS.read_text(encoding="utf-8"))
     runners = {
@@ -411,8 +530,9 @@ def test_historical_capture_input_graph_is_reviewed():
         "harness_extra_scenarios",
         "published_image_oracle_mounts",
         "published_image_oracle_invocation",
+        "published_image_oracle_child_invocation",
     }
-    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v7"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-script-imports/v8"
     assert inventory["purpose"] == (
         "Inventory only. This is not complete capture-input closure or permission "
         "to reuse historical qualification."
@@ -501,6 +621,12 @@ def test_historical_capture_input_graph_is_reviewed():
     assert inventory["published_image_oracle_invocation"] == (
         published_image_oracle_invocation(harness_source)
     ), "Published-image oracle invocation changed; review its inputs"
+    script_source = (
+        ROOT / "scripts/run_canvas_provider_configuration_oracle.py"
+    ).read_text(encoding="utf-8")
+    assert inventory["published_image_oracle_child_invocation"] == (
+        published_image_oracle_child_invocation(harness_source, script_source)
+    ), "Published-image child process changed; review its inputs"
 
 
 @pytest.mark.parametrize(
@@ -782,3 +908,68 @@ def test_published_image_oracle_invocation_rejects_unreviewed_changes():
     changed = source.replace("            self.checked(&inspect(id)?, id)?;\n", "", 1)
     with pytest.raises(AssertionError, match="cleanup identity check"):
         published_image_oracle_invocation(changed)
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        ("def run(source=None):", "def run(source='local'):"),
+        ("published_image = source is None", "published_image = False"),
+        (
+            '[sys.executable, __file__, "--observe-import"]',
+            '[sys.executable, "other.py", "--observe-import"]',
+        ),
+        (
+            '[sys.executable, __file__, "--observe-import"]',
+            '[sys.executable, __file__, "--other"]',
+        ),
+        ("input=json.dumps(case)", "input=json.dumps({})"),
+        (
+            "capture_output=True,\n                check=True",
+            "capture_output=False,\n                check=True",
+        ),
+        (
+            "check=True,\n                timeout=30",
+            "check=False,\n                timeout=30",
+        ),
+        ("timeout=30", "timeout=31"),
+        ("imports.append(json.loads(child.stdout))", "imports.append({})"),
+        ("json.load(sys.stdin)", "json.loads('{}')"),
+        ("arguments = parser.parse_args()", "arguments = None"),
+        ("raise SystemExit(0)", "raise SystemExit(1)"),
+        ('for case in fixture["timeouts"]:', "for case in []:"),
+    ],
+)
+def test_published_image_oracle_child_invocation_rejects_unreviewed_changes(
+    before, after
+):
+    harness_source = HARNESS.read_text(encoding="utf-8")
+    source = (SCRIPTS / "run_canvas_provider_configuration_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    assert source.count(before) == 1
+    published_image_oracle_child_invocation(harness_source, source)
+    with pytest.raises(AssertionError):
+        published_image_oracle_child_invocation(
+            harness_source, source.replace(before, after, 1)
+        )
+
+
+def test_published_image_oracle_child_invocation_rejects_late_flag_registration():
+    harness_source = HARNESS.read_text(encoding="utf-8")
+    source = (SCRIPTS / "run_canvas_provider_configuration_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    before = (
+        'parser.add_argument("--observe-import", action="store_true")\n'
+        "    arguments = parser.parse_args()"
+    )
+    after = (
+        "arguments = parser.parse_args()\n"
+        '    parser.add_argument("--observe-import", action="store_true")'
+    )
+    assert source.count(before) == 1
+    with pytest.raises(AssertionError, match="registered, parsed, then dispatched"):
+        published_image_oracle_child_invocation(
+            harness_source, source.replace(before, after, 1)
+        )

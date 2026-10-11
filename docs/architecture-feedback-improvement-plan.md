@@ -3297,7 +3297,7 @@ claim changes; hosted exact-head qualification remains pending.
   30m59s respectively; these differing heads and runners are not a causal
   before/after speed measurement.
 
-The next A6 maintenance candidate consolidates the three existing exact
+A6 [#1249](https://github.com/ElevenID/marty-ui/pull/1249) consolidated the three existing exact
 worker, Flow and self-host test-source selectors into the checked-out Python
 ownership verifier while preserving their proof CLIs for CodeQL. A cheap
 directory-prefix rejection avoids launching that proof for unrelated changes;
@@ -3306,8 +3306,20 @@ its 30-second bound. With the guard, the isolated case passed in 2.16s and
 the three targeted policy modules passed 208 tests in 83.08s. The classifier
 body is 17,045 bytes, below GitHub's 21,000-byte limit. This creates workflow
 headroom and avoids unnecessary local proof launches; it does not add a new
-skip or establish a hosted runtime saving. Independent re-review and hosted
-qualification remain before merge.
+skip or establish a hosted runtime saving. Independent re-review and full
+protected merge-group qualification passed; #1249 merged as `1fe6860b4`.
+
+A5 child-process invocation follow-up (2026-10-11, local candidate): the v7
+inventory stopped at the mounted provider oracle's outer `runpy` call. The v8
+candidate witnesses its no-argument `run(source=None)` path, the guarded
+`sys.executable, __file__, --observe-import` subprocess, case input, checked
+capture/deadline, stdout comparison, and stdin-driven child dispatch. This
+ties the child to the same mounted script without changing the oracle or its
+qualification tier. Source mutations of these edges fail the bounded guard;
+it is not a complete image/package provenance proof or a speed claim. The
+27-test focused module, Ruff, formatting, and diff checks pass. Independent
+review found and verified corrections to flag parsing and dispatch order;
+hosted exact-head qualification remains pending.
 
 ## Design references
 

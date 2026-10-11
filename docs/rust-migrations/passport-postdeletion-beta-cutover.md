@@ -27,9 +27,11 @@ check and is never a deployment target.
    the pending markers until recovery completes and writes its receipt.
    The v1.1.240 fence recovery completed, but its first readiness workflow run
    wrote an artifact into the protected checkout before checking source
-   cleanliness. After the reviewed workflow fix and signed v1.1.241 release,
+   cleanliness. The signed v1.1.241 release passed qualification, but the
+   read-only fence rebind exposed `psql` status lines before its JSON result.
+   After the reviewed quiet-output fix and signed v1.1.242 release,
    run `scripts/rebind-passport-beta-fence.ps1` on clean protected main with
-   the v1.1.241 manifest, approved beta baseline, signed v1.1.240 manifest,
+   the v1.1.242 manifest, approved beta baseline, signed v1.1.240 manifest,
    saved preinstallation target, v1.1.240 fence receipt, and a fresh private
    receipt path. It checks unchanged SQL and the live fence, repeats the
    rollback-only direct write probes, and atomically replaces only the host

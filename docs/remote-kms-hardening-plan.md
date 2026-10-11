@@ -13895,3 +13895,19 @@ Rust Service Images. The grouped local corrections above address the observed
 compile, reviewed-pin, historical-timing and published-preparer failures.
 CI Gate failed because those leaves failed. Preserve this run as immutable
 failed evidence; qualify the next published head from scratch.
+
+Main advanced to `319a518eb` after the grouped UI push. Its Canvas
+published-image child-invocation witness merged cleanly. The one source
+conflict was a newly edited 902-line beta passport SQL-fence test that this
+branch had removed with the retired SQL bundle; restoring it would fail
+collection because the deliberately retired `build_sql` no longer exists.
+The new upstream regression case for `beta_psql` multi-statement output was
+preserved in a small active disposable-PostgreSQL test instead, while the
+obsolete bundle test stays removed. The new test passed against the pinned
+local PostgreSQL image. The combined Canvas closure/tier/stack/retired-operator
+suite passed 131 tests with one skip; the beta fence/host/recovery/stack
+suite passed 102 tests. Ruff and diff hygiene pass. The main merge does not
+alter the frozen Canvas corpora or the native roster process owner.
+The published head `f2f69f25b` is merge-conflicting with current main and
+has no exact-head checks; merge current main, complete local qualification,
+then push one conflict-resolution head for hosted CI.

@@ -1,5 +1,5 @@
 {
-  "schema": "marty.canvas-worker-oracle-script-imports/v7",
+  "schema": "marty.canvas-worker-oracle-script-imports/v8",
   "purpose": "Inventory only. This is not complete capture-input closure or permission to reuse historical qualification.",
   "entrypoint_roots": [
     "canvas_worker_dispatch_hooks.py",
@@ -156,6 +156,18 @@
     "command": "import json,runpy; print(json.dumps(runpy.run_path('/verification/scripts/run_canvas_provider_configuration_oracle.py')['run'](), sort_keys=True))",
     "script_target": "/verification/scripts/run_canvas_provider_configuration_oracle.py",
     "callable": "run"
+  },
+  "published_image_oracle_child_invocation": {
+    "mounted_source": "scripts/run_canvas_provider_configuration_oracle.py",
+    "mounted_target": "/verification/scripts/run_canvas_provider_configuration_oracle.py",
+    "callable_default": "source=None",
+    "published_guard": "published_image = source is None",
+    "child_command": "[sys.executable, __file__, '--observe-import']",
+    "child_input": "json.dumps(case)",
+    "child_stdout": "imports.append(json.loads(child.stdout))",
+    "timeout_seconds": 30,
+    "child_flag_parse": "arguments = parser.parse_args()",
+    "dispatch": "print(json.dumps(observe_import(json.load(sys.stdin)), sort_keys=True))"
   },
   "harness_path_syntax": {
     "scope": "Static path literals and root.join syntax inside start_probe_with_scope only; caller-supplied values and other mounts remain outside this bounded inventory. This is not complete host-mount closure.",

@@ -364,7 +364,7 @@ def beta_postgres_container(runner: Callable[[list[str]], str]) -> str:
 
 def beta_psql(sql: str, runner: Callable[[list[str]], str], container_id: str) -> str:
     return runner(["docker", "exec", container_id, "psql", "-U", "postgres", "-d", "marty",
-                   "-At", "-v", "ON_ERROR_STOP=1", "-c", sql])
+                   "-qAt", "-v", "ON_ERROR_STOP=1", "-c", sql])
 
 
 def material_receipt(
