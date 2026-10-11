@@ -498,7 +498,7 @@ impl SigningIdentityProvider for HttpSigningProvider {
                 route: "/internal/compat/issuer-dids/sign",
                 service_id: None,
                 issuer_did: Some(&request.issuer_did),
-                key_reference: None,
+                key_reference: Some(&request.signing_key_reference),
                 key_purpose: &request.key_purpose,
                 algorithm: &request.algorithm,
                 payload: &payload,
@@ -517,7 +517,8 @@ impl SigningIdentityProvider for HttpSigningProvider {
             "credential_format": request.credential_format,
             "key_purpose": request.key_purpose,
             "payload_b64": request.payload_b64url,
-            "algorithm": request.algorithm
+            "algorithm": request.algorithm,
+            "key_reference": request.signing_key_reference,
         });
         let response: Value = self
             .issuer_signing
@@ -879,6 +880,7 @@ mod tests {
             "organization_id": body["organization_id"],
             "issuer_did": body["issuer_did"],
             "verification_method_id": format!("{}#key-1", body["issuer_did"].as_str().unwrap()),
+            "signing_key_reference": "managed-key-1",
             "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"},
             "key_purpose": body["key_purpose"],
             "credential_format": body["credential_format"],
@@ -1139,6 +1141,7 @@ mod tests {
             organization_id: "org-1".into(),
             issuer_did: "did:web:issuer.example".into(),
             verification_method_id: "did:web:issuer.example#key-1".into(),
+            signing_key_reference: "managed-key-1".into(),
             key_purpose: "oid4vp_request_signing".into(),
             credential_format: "oauth-authz-req+jwt".into(),
             algorithm: "ES256".into(),
@@ -1167,6 +1170,7 @@ mod tests {
         assert_eq!(grant.claims.operation_id, "instance-1");
         assert_eq!(grant.claims.organization_id, "org-1");
         assert_eq!(grant.claims.route, "/internal/compat/issuer-dids/sign");
+        assert_eq!(grant.claims.key_reference.as_deref(), Some("managed-key-1"));
         assert_eq!(
             grant.claims.payload_sha256_b64,
             marty_signing_grant::payload_digest(b"payload")
@@ -1179,6 +1183,7 @@ mod tests {
                 "key_purpose": "oid4vp_request_signing",
                 "credential_format": "oauth-authz-req+jwt",
                 "algorithm": "ES256",
+                "key_reference": "managed-key-1",
                 "payload_b64": "cGF5bG9hZA",
             })
         );

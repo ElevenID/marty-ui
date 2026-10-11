@@ -700,6 +700,7 @@ async fn sign_payload(
         organization_id: identity.organization_id.clone(),
         issuer_did: identity.issuer_did.clone(),
         verification_method_id: identity.verification_method_id.clone(),
+        signing_key_reference: identity.signing_key_reference.clone(),
         key_purpose: REQUEST_PURPOSE.into(),
         credential_format: REQUEST_FORMAT.into(),
         algorithm: REQUEST_ALGORITHM.into(),

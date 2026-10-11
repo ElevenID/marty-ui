@@ -2456,6 +2456,7 @@ async fn generate_public_issuer_csr(
             credential_format: input.credential_format,
             key_purpose: input.key_purpose,
             algorithm,
+            key_reference: None,
             payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
             payload_hex: None,
         })
@@ -2667,6 +2668,7 @@ async fn issue_managed_csca_self_signed(
         credential_format: "ICAO_EMRTD".into(),
         key_purpose: "csca".into(),
         algorithm: "ES256".into(),
+        key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(payload)),
         payload_hex: None,
     };
@@ -3231,6 +3233,7 @@ async fn issue_claimed_dsc_certificate(
             credential_format: input.credential_format.clone(),
             key_purpose: "x509_doc_signer".into(),
             algorithm: "ES256".into(),
+            key_reference: None,
             payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
             payload_hex: None,
         })
@@ -3346,6 +3349,7 @@ async fn issue_signed_dsc_certificate(
             credential_format: input.credential_format.clone(),
             key_purpose: "csca".into(),
             algorithm: "ES256".into(),
+            key_reference: None,
             payload_b64: Some(URL_SAFE_NO_PAD.encode(prepared.signing_bytes())),
             payload_hex: None,
         })

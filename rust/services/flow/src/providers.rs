@@ -187,6 +187,7 @@ pub struct SigningIdentity {
     pub organization_id: String,
     pub issuer_did: String,
     pub verification_method_id: String,
+    pub signing_key_reference: String,
     pub public_jwk: BTreeMap<String, Value>,
     pub key_purpose: String,
     #[serde(default)]
@@ -211,6 +212,7 @@ impl SigningIdentity {
             && self
                 .verification_method_id
                 .starts_with(&format!("{issuer_did}#"))
+            && !self.signing_key_reference.trim().is_empty()
             && self.key_purpose == key_purpose
             && self.credential_format == credential_format
             && algorithm.is_none_or(|algorithm| self.algorithm == algorithm)
@@ -235,6 +237,7 @@ pub struct SigningRequest {
     pub organization_id: String,
     pub issuer_did: String,
     pub verification_method_id: String,
+    pub signing_key_reference: String,
     pub key_purpose: String,
     pub credential_format: String,
     pub algorithm: String,

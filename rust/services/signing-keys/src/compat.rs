@@ -88,6 +88,8 @@ pub struct IssuerDidSignRequest {
     pub key_purpose: String,
     pub algorithm: String,
     #[serde(default)]
+    pub key_reference: Option<String>,
+    #[serde(default)]
     pub payload_b64: Option<String>,
     #[serde(default)]
     pub payload_hex: Option<String>,
@@ -507,6 +509,15 @@ impl SigningCompatibilityService {
             required(&Value::Object(profile.clone()), "signing_service_id")?.to_owned();
         let key_reference =
             required(&Value::Object(profile.clone()), "signing_key_reference")?.to_owned();
+        if request
+            .key_reference
+            .as_deref()
+            .is_some_and(|requested| requested != key_reference)
+        {
+            return Err(CompatibilityError::Conflict(
+                "Issuer signing key changed after identity resolution.".into(),
+            ));
+        }
         let profile_purpose = required(&Value::Object(profile.clone()), "key_purpose")?.to_owned();
         let profile_algorithm = profile
             .get("algorithm")
@@ -1341,6 +1352,7 @@ pub async fn resolve_issuer_identity(
             "organization_id": request.organization_id,
             "issuer_did": request.issuer_did,
             "verification_method_id": method_id,
+            "signing_key_reference": key_reference,
             "public_jwk": public_jwk,
             "verification_method": method,
             "did_document": did_document,

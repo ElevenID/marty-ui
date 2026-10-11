@@ -14552,3 +14552,19 @@ remote KMS signing call. Extend the same producer/receiver contract to the
 Gateway and the four distinct Issuance signing call paths, with their actual
 operation authority. Review and qualify token provisioning and rotation in
 each deployment model.
+
+Exact Flow key binding, local grouped follow-up: the Signing Keys issuer
+resolver now projects the selected remote `signing_key_reference` beside the
+public verification method. Flow requires that reference in its validated
+signing identity, carries it into `SigningRequest`, and binds it in the OpenBao
+grant and signing request body. The Signing Keys compatibility signer rejects
+a supplied reference if the selected issuer profile changed after resolution.
+This closes the key-selection gap during a Flow request-object sign without
+exporting key material. The shared language-neutral issuer identity vector
+was updated. Flow's 44 library and eight request-object tests, Signing Keys'
+ten compatibility tests, both crates' all-target warnings-denied Clippy and
+`git diff --check` pass locally with one Cargo job. The broad all-test build
+initially exhausted local memory with parallel Rust compilers; targeted
+single-job checks completed. This is still producer/resolver binding; the
+Signing Keys grant verifier and replay gate remain mandatory before the
+remote KMS call and before this can be called KMS-only enforcement.
