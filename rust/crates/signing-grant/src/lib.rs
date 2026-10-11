@@ -30,6 +30,7 @@ pub enum SigningOrigin {
     FlowWalletRequest,
     IssuanceCredential,
     IssuanceCanvas,
+    IssuanceReadiness,
     IssuancePassport,
 }
 
@@ -41,6 +42,7 @@ impl SigningOrigin {
             Self::FlowWalletRequest => "marty-sign-grant-flow-wallet-v1",
             Self::IssuanceCredential => "marty-sign-grant-issuance-credential-v1",
             Self::IssuanceCanvas => "marty-sign-grant-issuance-canvas-v1",
+            Self::IssuanceReadiness => "marty-sign-grant-issuance-readiness-v1",
             Self::IssuancePassport => "marty-sign-grant-issuance-passport-v1",
         }
     }
@@ -90,6 +92,14 @@ impl SigningOrigin {
                 issuer_did_route_shape(claims)
                     && claims.key_purpose == "lti_tool_signing"
                     && claims.algorithm == "RS256"
+            }
+            Self::IssuanceReadiness => {
+                issuer_did_route_shape(claims)
+                    && claims.key_purpose == "vc_jwt_issuer"
+                    && matches!(
+                        claims.algorithm.as_str(),
+                        "ES256" | "ES384" | "RS256" | "EdDSA"
+                    )
             }
             Self::IssuancePassport => {
                 issuer_did_route_shape(claims)
@@ -379,6 +389,7 @@ mod tests {
             SigningOrigin::FlowWalletRequest,
             SigningOrigin::IssuanceCredential,
             SigningOrigin::IssuanceCanvas,
+            SigningOrigin::IssuanceReadiness,
             SigningOrigin::IssuancePassport,
         ];
         let keys: HashSet<_> = origins
@@ -517,6 +528,7 @@ mod tests {
             SigningOrigin::FlowWalletRequest,
             SigningOrigin::IssuanceCredential,
             SigningOrigin::IssuanceCanvas,
+            SigningOrigin::IssuanceReadiness,
             SigningOrigin::IssuancePassport,
         ] {
             let mut claims = sample_claims();
@@ -531,6 +543,9 @@ mod tests {
                 SigningOrigin::IssuanceCanvas => {
                     claims.key_purpose = "lti_tool_signing".into();
                     claims.algorithm = "RS256".into();
+                }
+                SigningOrigin::IssuanceReadiness => {
+                    claims.key_purpose = "vc_jwt_issuer".into();
                 }
                 SigningOrigin::IssuancePassport => {
                     claims.key_purpose = "x509_doc_signer".into();
@@ -625,11 +640,12 @@ mod tests {
     }
 
     #[test]
-    fn issuance_tokens_cannot_cross_credential_canvas_or_passport_purposes() {
+    fn issuance_tokens_cannot_cross_credential_canvas_readiness_or_passport_purposes() {
         for (origin, allowed_purpose, algorithm) in [
             (SigningOrigin::IssuanceCredential, "vc_jwt_issuer", "ES256"),
             (SigningOrigin::IssuanceCredential, "mdoc_dsc", "ES256"),
             (SigningOrigin::IssuanceCanvas, "lti_tool_signing", "RS256"),
+            (SigningOrigin::IssuanceReadiness, "vc_jwt_issuer", "ES256"),
             (SigningOrigin::IssuancePassport, "x509_doc_signer", "ES256"),
         ] {
             let mut claims = sample_claims();
@@ -680,7 +696,10 @@ mod tests {
                     Err(GrantError::Malformed)
                 );
             }
-            if origin == SigningOrigin::IssuancePassport {
+            if matches!(
+                origin,
+                SigningOrigin::IssuancePassport | SigningOrigin::IssuanceReadiness
+            ) {
                 for supported in ["ES256", "ES384", "RS256", "EdDSA"] {
                     let mut supported_claims = claims.clone();
                     supported_claims.algorithm = supported.into();

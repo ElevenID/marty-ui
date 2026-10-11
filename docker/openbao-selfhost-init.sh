@@ -153,7 +153,7 @@ ensure_grant_token() {
     write_secret_file "${grant_token_file}" "${grant_token}" 0444
 }
 
-for grant_origin in gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-passport; do
+for grant_origin in gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-readiness issuance-passport; do
     grant_file_origin="$(printf '%s' "${grant_origin}" | tr '-' '_')"
     ensure_grant_token "sign-grant-mint-${grant_origin}" "${BAO_GRANT_TOKEN_DIR}/sign_grant_mint_${grant_file_origin}_token"
 done

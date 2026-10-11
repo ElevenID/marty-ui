@@ -15010,3 +15010,14 @@ external signer outside the managed issuer-profile grant route. With no
 public deployments or compatibility requirement, remove this selector if it
 cannot satisfy the KMS-only custody and authorization contract, while keeping
 supported managed SOD signing and verification intact.
+
+Local readiness-origin groundwork: `IssuanceReadiness` now has its own
+OpenBao Transit HMAC key and verify allowlist entry. Its grant shape permits
+only the issuer-DID signing route, a resolved key reference,
+`vc_jwt_issuer`, and the four algorithms accepted by the Canvas readiness
+template parser. Docker and self-host OpenBao initialization and scoped token
+bootstrap include this eighth grant token. The signing-grant suite passes
+17 tests (three live-only ignored), warnings-denied all-target Clippy passes,
+and all three edited shell scripts pass syntax checks. This is not an active
+producer: Issuance's readiness signer, deployment mounts, and closed-model
+fixtures still need the binding work before it can sign under this origin.

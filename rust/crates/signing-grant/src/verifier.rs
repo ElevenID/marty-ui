@@ -11,12 +11,13 @@ use crate::{
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
 
-const ORIGINS: [SigningOrigin; 6] = [
+const ORIGINS: [SigningOrigin; 7] = [
     SigningOrigin::GatewayService,
     SigningOrigin::GatewayIssuerDid,
     SigningOrigin::FlowWalletRequest,
     SigningOrigin::IssuanceCredential,
     SigningOrigin::IssuanceCanvas,
+    SigningOrigin::IssuanceReadiness,
     SigningOrigin::IssuancePassport,
 ];
 

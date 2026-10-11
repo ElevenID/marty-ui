@@ -142,7 +142,7 @@ if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-bureau
 fi
 # Signing authorization is separate from signing custody. Each producer gets
 # one HMAC key and a mint-only policy; Signing Keys receives verify-only access.
-grant_origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-passport'
+grant_origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-readiness issuance-passport'
 for grant_origin in ${grant_origins}; do
     grant_key="marty-sign-grant-${grant_origin}-v1"
     bao write -address="${BAO_ADDR}" "transit/keys/${grant_key}" \
