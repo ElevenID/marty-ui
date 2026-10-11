@@ -14194,3 +14194,10 @@ raw JOSE bytes; all five provider golden tests pass. The UI correction is held
 locally until the current published-head run is terminal, preserving one
 grouped follow-up and its exact failed/passed evidence. A real Azure HSM
 signature and certificate chain are still required for K6 acceptance.
+Core self-review then found `normalize_signature` previously accepted any
+correct-width raw ECDSA bytes, including zero scalars. Local follow-up
+`6acba9d` validates all three raw curves with their verifier-only signature
+parsers before returning JOSE bytes. Its feature-enabled Core library and
+verification-only tests plus warnings-denied Clippy pass. Hold this Core
+follow-up until head `aa69c9ca` has terminal hosted evidence, then repin the
+UI branch to the new Core head and rerun its provider and service suites.
