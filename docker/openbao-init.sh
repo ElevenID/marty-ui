@@ -140,6 +140,29 @@ if [ "$(bao read -address="${BAO_ADDR}" -field=type transit/keys/passport-bureau
     echo "Passport callback Transit key must exist as a non-exportable HMAC key" >&2
     exit 1
 fi
+# Signing authorization is separate from signing custody. Each producer gets
+# one HMAC key and a mint-only policy; Signing Keys receives verify-only access.
+grant_origins='gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-passport'
+for grant_origin in ${grant_origins}; do
+    grant_key="marty-sign-grant-${grant_origin}-v1"
+    bao write -address="${BAO_ADDR}" "transit/keys/${grant_key}" \
+        type=hmac key_size=32 exportable=false allow_plaintext_backup=false 2>/dev/null || \
+        echo "  ${grant_key} already exists"
+    if [ "$(bao read -address="${BAO_ADDR}" -field=type "transit/keys/${grant_key}" 2>/dev/null)" != "hmac" ] || \
+       [ "$(bao read -address="${BAO_ADDR}" -field=exportable "transit/keys/${grant_key}" 2>/dev/null)" != "false" ] || \
+       [ "$(bao read -address="${BAO_ADDR}" -field=allow_plaintext_backup "transit/keys/${grant_key}" 2>/dev/null)" != "false" ]; then
+        echo "Signing grant Transit key ${grant_key} must be non-exportable HMAC without plaintext backup" >&2
+        exit 1
+    fi
+    bao policy write -address="${BAO_ADDR}" "sign-grant-mint-${grant_origin}" - <<EOF
+path "transit/hmac/${grant_key}/sha2-256" {
+  capabilities = ["update"]
+}
+EOF
+done
+for grant_origin in ${grant_origins}; do
+    printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "${grant_origin}"
+done | bao policy write -address="${BAO_ADDR}" sign-grant-verify -
 bao write -address="${BAO_ADDR}" -f transit/keys/notification-webhook-envelope-marty-aes256 \
     type=aes256-gcm96 exportable=false 2>/dev/null || echo "  notification-webhook-envelope-marty-aes256 already exists"
 

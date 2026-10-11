@@ -14323,3 +14323,14 @@ The local follow-up updates that guard and only the six Core source records in
 the probe lock. Both production and standalone `cargo metadata --locked`
 checks, including the Core boundary script, pass locally. Hold this correction
 with the origin-policy follow-up until the current run is terminal.
+
+K6 OpenBao policy groundwork, local UI follow-up: canonical OpenBao bootstrap
+now provisions six distinct, non-exportable HMAC keys with plaintext backup
+disabled. It writes one exact `/sha2-256` mint-only policy per signing origin
+and one verify-only policy listing only those six exact paths. A fresh
+disposable OpenBao 2 dev instance ran the full bootstrap, and scoped tokens
+proved Gateway mint and Signing Keys verify, while a Flow mint token could
+not mint Gateway grants, the verifier could not mint, the minter could not
+verify, and the minter could not read the key. The instance was stopped.
+This does not yet provision or mount those tokens in supported deployments,
+or enforce grants on production signing routes.
