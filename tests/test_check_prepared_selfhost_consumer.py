@@ -1,17 +1,19 @@
 import hashlib
 import json
+import os
 import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from check_prepared_selfhost_consumer import check
+from check_prepared_selfhost_consumer import check, verify_extracted_bundle
 from record_selfhost_bundle_preparation import record
 
 
-def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path):
+def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path, monkeypatch):
     image = "example.org/app@sha256:" + "a" * 64
     lock = tmp_path / "lock.json"
     lock.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
@@ -19,6 +21,7 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path):
     transaction = tmp_path / "transaction.json"
     transaction.write_text("{}")
     files = {".marty-selfhost-images.json": lock.read_bytes(),
+             "asset.txt": b"downloaded asset",
              "docker-compose.yml": f"services:\n  app:\n    image: {image}\n".encode()}
     inventory = {"schema": "marty.selfhost-bundle-files/v1", "directories": [""],
                  "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}
@@ -39,13 +42,46 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path):
         return check(archive, lock, transaction, receipt, model, checkout)
 
     assert run()["qualification"] == "unqualified"
-    installed = tmp_path / "installed"
+    installed = tmp_path / "bundle"
     state = tmp_path / "state"
     secrets = tmp_path / "secrets"
-    for directory in (installed, state, secrets):
+    with zipfile.ZipFile(archive) as bundle:
+        bundle.extractall(tmp_path)
+    for directory in (state, secrets):
         directory.mkdir()
     asset = installed / "asset.txt"
-    asset.write_text("downloaded asset")
+
+    # Simulate an enormous changed file without allocating or reading it.
+    original_lstat = Path.lstat
+    original_open = Path.open
+    with monkeypatch.context() as patcher:
+        def huge_asset(path):
+            metadata = original_lstat(path)
+            if path == asset:
+                return SimpleNamespace(st_mode=metadata.st_mode, st_size=1 << 40)
+            return metadata
+
+        def no_asset_read(path, *args, **kwargs):
+            if path == asset:
+                raise AssertionError("oversized extracted file was opened")
+            return original_open(path, *args, **kwargs)
+
+        patcher.setattr(Path, "lstat", huge_asset)
+        patcher.setattr(Path, "open", no_asset_read)
+        with pytest.raises(ValueError, match="installed ZIP tree differs"):
+            verify_extracted_bundle(archive, installed)
+    extra = installed / "extra.txt"
+    extra.write_text("not shipped")
+    with monkeypatch.context() as patcher:
+        def no_extra_read(path, *args, **kwargs):
+            if path == extra:
+                raise AssertionError("unlisted extracted file was opened")
+            return original_open(path, *args, **kwargs)
+
+        patcher.setattr(Path, "open", no_extra_read)
+        with pytest.raises(ValueError, match="installed ZIP tree differs"):
+            verify_extracted_bundle(archive, installed)
+    extra.unlink()
 
     def confined(model_value):
         model.write_text(json.dumps(model_value))
@@ -59,6 +95,25 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path):
     assert confined({"services": {"app": service},
                      "secrets": {"operator": {"file": str(secrets / "token")}}})[
                          "qualification"] == "unqualified"
+    asset.write_text("altered asset")
+    with pytest.raises(ValueError, match="installed ZIP tree differs"):
+        confined({"services": {"app": service}})
+    asset.write_bytes(files["asset.txt"])
+    if os.name != "nt":
+        asset.unlink()
+        asset.symlink_to(tmp_path / "foreign")
+        with pytest.raises(ValueError, match="symlink or special file"):
+            confined({"services": {"app": service}})
+        asset.unlink()
+        asset.write_bytes(files["asset.txt"])
+    extra.write_text("not shipped")
+    with pytest.raises(ValueError, match="installed ZIP tree differs"):
+        confined({"services": {"app": service}})
+    extra.unlink()
+    asset.unlink()
+    with pytest.raises(ValueError, match="installed ZIP tree differs"):
+        confined({"services": {"app": service}})
+    asset.write_bytes(files["asset.txt"])
     for source in (tmp_path / "foreign", secrets / "token"):
         service["volumes"][0]["source"] = str(source)
         with pytest.raises(ValueError, match="outside the isolated installation"):

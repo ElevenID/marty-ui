@@ -54,6 +54,10 @@ secret root, while config files may reside there or under the extracted ZIP.
 Bundled source binds must exist and be read-only. This is an isolation boundary
 for a future installed-runtime test, not a running-stack or business-journey
 qualification; no secret values are generated or uploaded by this preflight.
+The consumer also compares the complete extracted bundle tree against the
+validated ZIP, rejecting changed, missing, extra, symlink, or special entries
+before accepting its rendered Compose model. Disposable state and secret roots are
+separate from the bundle and are not mistaken for shipped files.
 
 ## Initial sequence and evidence still needed
 
