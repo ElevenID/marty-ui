@@ -13,6 +13,7 @@ from check_selfhost_locked_image_platform import probe  # noqa: E402
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 OTHER = "quay.io/openbao/openbao@sha256:" + "b" * 64
+DOCKER_HUB_POSTGRES = "docker.io/library/postgres@sha256:" + "c" * 64
 
 
 def lock(tmp_path: Path, services: dict[str, str] | None = None) -> Path:
@@ -73,3 +74,28 @@ def test_rejects_pull_failure_and_mutable_reference(tmp_path: Path,
     monkeypatch.setattr(subprocess, "run", fail)
     with pytest.raises(ValueError, match="cannot anonymously pull"):
         probe(lock(tmp_path, {"gateway": IMAGE}))
+
+
+@pytest.mark.parametrize("ref,reported,accepted", [
+    (DOCKER_HUB_POSTGRES, "postgres@sha256:" + "c" * 64, True),
+    (DOCKER_HUB_POSTGRES, "redis@sha256:" + "c" * 64, False),
+    (DOCKER_HUB_POSTGRES, "postgres@sha256:" + "d" * 64, False),
+    ("docker.io/acme/postgres@sha256:" + "c" * 64,
+     "postgres@sha256:" + "c" * 64, False),
+    ("quay.io/acme/postgres@sha256:" + "c" * 64,
+     "postgres@sha256:" + "c" * 64, False),
+])
+def test_docker_hub_library_alias_preserves_repository_and_digest(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        ref: str, reported: str, accepted: bool) -> None:
+    def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        output = "" if argv[1] == "pull" else json.dumps({
+            "Os": "linux", "Architecture": "amd64", "RepoDigests": [reported]})
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    if accepted:
+        assert probe(lock(tmp_path, {"database": ref}))["images"] == {ref: "linux/amd64"}
+    else:
+        with pytest.raises(ValueError, match="not associated with locked digest"):
+            probe(lock(tmp_path, {"database": ref}))

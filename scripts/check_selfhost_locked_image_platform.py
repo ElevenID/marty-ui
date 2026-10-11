@@ -9,6 +9,18 @@ from pathlib import Path
 from build_selfhost_image_lock import EXACT_IMAGE
 
 
+def accepted_repo_digests(ref: str) -> set[str]:
+    """Allow only Docker's official-library shorthand for a full Docker Hub ref."""
+    accepted = {ref}
+    repository, separator, digest = ref.partition("@")
+    prefix = "docker.io/library/"
+    if separator and repository.startswith(prefix):
+        image = repository[len(prefix):]
+        if image and "/" not in image:
+            accepted.add(f"{image}@{digest}")
+    return accepted
+
+
 def probe(lock_path: Path) -> dict:
     lock = json.loads(lock_path.read_text(encoding="utf-8"))
     if not isinstance(lock, dict) or lock.get("schema") != "marty.selfhost-image-lock/v1":
@@ -35,7 +47,9 @@ def probe(lock_path: Path) -> dict:
                 or entries.get("Architecture") != "amd64"):
             raise ValueError(f"locked image is not Linux/amd64: {ref}")
         digests = entries.get("RepoDigests")
-        if not isinstance(digests, list) or ref not in digests:
+        accepted = accepted_repo_digests(ref)
+        if not isinstance(digests, list) or not any(
+                isinstance(digest, str) and digest in accepted for digest in digests):
             raise ValueError(f"inspected image is not associated with locked digest: {ref}")
         platforms[ref] = "linux/amd64"
     return {"schema": "marty.selfhost-image-platform-preflight/v1",
