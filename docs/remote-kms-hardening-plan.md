@@ -14980,3 +14980,6 @@ an incomplete packager operation; its root cause is not exposed by the
 sanitized child diagnostic, so the earlier Rust closed-model fixture repair
 is a candidate fix, not yet proof. The next grouped hosted run must recheck
 both, rather than reporting Canvas acceptance as passed.
+The Flow published-schema acceptance test target compiles locally with the
+updated cleanup roster. Its exact-owned PostgreSQL/Compose behavior remains
+unverified locally on Windows and must pass in the Linux hosted lane.
