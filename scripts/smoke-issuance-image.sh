@@ -99,6 +99,9 @@ for attempt in {1..60}; do
   sleep 0.5
 done
 
+# Startup/health here performs no signing. Unreachable grant authority and
+# absent token files keep any unexpected sign attempt fail-closed; live OpenBao
+# signing is qualified separately by the managed-route probes.
 docker run --detach \
   --name "$service" \
   --network "$network" \
@@ -109,6 +112,11 @@ docker run --detach \
   --env SIGNING_KEYS_INTERNAL_API_KEY="$secret_api_key" \
   --env SIGNING_KEYS_ISSUER_SIGN_KEY=ci-only-dedicated-issuer-sign-key-32-chars \
   --env SIGNING_KEYS_INTEGRATION_SECRET_KEY="$envelope_api_key" \
+  --env BAO_ADDR=http://127.0.0.1:1 \
+  --env ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-credential-grant \
+  --env ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-canvas-grant \
+  --env ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-readiness-grant \
+  --env ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-passport-grant \
   --env SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys \
   --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8017/internal \
   --env INTEGRATION_SECRET_KMS_CA_FILE=/verification/tls/ca.crt \

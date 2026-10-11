@@ -15244,3 +15244,12 @@ hosted run. The Rust contracts lane also found one expected HTTP signing body
 missing the newly mandatory `key_reference`; its focused test now passes.
 The OpenBao plugin-image and Rust service-image jobs were still active at
 this checkpoint. Do not treat this head as a pass.
+
+The Rust service-image lane then built its images but failed the Issuance
+startup smoke with `MissingEndpoint`: that smoke did not supply the new
+mandatory grant-minter configuration. Its local correction supplies an
+unreachable loopback OpenBao address and absent absolute token paths for all
+four Issuance origins. This is deliberately a no-sign health/packaging smoke;
+the live OpenBao signing route is separately qualified. The script passes
+`bash -n`. The plugin-image lane's coordinated restore step remained active
+at this checkpoint; retain its result before republishing the grouped head.
