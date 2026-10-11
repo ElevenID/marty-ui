@@ -22,7 +22,7 @@ use thiserror::Error;
 use crate::{
     canvas_binding_domain::CanvasProgramBindingRecord,
     canvas_lti_experience::portable_canvas_pilot_enabled,
-    canvas_lti_tool_signing::CanvasLtiToolJwtSigner,
+    canvas_lti_tool_signing::{CanvasLtiSigningKind, CanvasLtiToolJwtSigner},
     canvas_management_domain::CanvasPlatformRecord,
     canvas_management_service::CanvasReadinessInputProvider,
     canvas_readiness::{
@@ -103,6 +103,7 @@ pub(crate) trait CanvasReadinessDidSigner: Send + Sync {
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
         signing_key_reference: &str,
+        operation_id: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError>;
 }
@@ -136,10 +137,12 @@ impl CanvasReadinessDidSigner for HttpDidSigner {
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
         signing_key_reference: &str,
+        operation_id: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError> {
         self.sign_did(SignRequest {
             organization_id: organization_id.to_owned(),
+            operation_id: operation_id.to_owned(),
             issuer_did: configuration.issuer_did.clone(),
             credential_format: configuration.credential_format.to_owned(),
             key_purpose: configuration.key_purpose.to_owned(),
@@ -213,7 +216,15 @@ impl LiveCanvasReadinessChallengeProvider {
             "iat": evaluated_at.timestamp(),
             "jti": URL_SAFE_NO_PAD.encode(nonce),
         });
-        let token = self.lti_signer.sign_jwt(&payload).await.ok()?;
+        let token = self
+            .lti_signer
+            .sign_jwt(
+                &payload,
+                CanvasLtiSigningKind::Readiness,
+                payload.get("jti")?.as_str()?,
+            )
+            .await
+            .ok()?;
         let segments = token.split('.').collect::<Vec<_>>();
         let [encoded_header, encoded_payload, _] = segments.as_slice() else {
             return None;
@@ -274,6 +285,7 @@ impl LiveCanvasReadinessChallengeProvider {
         challenge.extend_from_slice(organization_id.as_bytes());
         challenge.push(0);
         challenge.extend_from_slice(&nonce);
+        let operation_id = URL_SAFE_NO_PAD.encode(nonce);
         let signature = self
             .did_signer
             .sign_challenge(
@@ -281,6 +293,7 @@ impl LiveCanvasReadinessChallengeProvider {
                 &configuration,
                 verification_method_id,
                 signing_key_reference,
+                &operation_id,
                 &challenge,
             )
             .await
@@ -975,7 +988,12 @@ mod tests {
 
     #[async_trait]
     impl CanvasLtiToolJwtSigner for TestLtiSigner {
-        async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+        async fn sign_jwt(
+            &self,
+            payload: &Value,
+            _kind: CanvasLtiSigningKind,
+            _source_id: &str,
+        ) -> Result<String, CanvasLtiToolSigningError> {
             let header = json!({"alg": "RS256", "typ": "JWT", "kid": self.rsa.key_id});
             let signing_input = format!(
                 "{}.{}",
@@ -1027,6 +1045,7 @@ mod tests {
             _configuration: &CanvasReadinessIssuerConfiguration,
             _verification_method_id: &str,
             _signing_key_reference: &str,
+            _operation_id: &str,
             challenge: &[u8],
         ) -> Result<String, CanvasReadinessDependencyError> {
             self.calls.fetch_add(1, Ordering::SeqCst);

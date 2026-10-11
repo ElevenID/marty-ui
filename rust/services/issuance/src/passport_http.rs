@@ -473,6 +473,7 @@ impl PassportHttpService {
                 &job.country_code,
                 &job.organization_id,
                 job.issuer_did.as_deref(),
+                &job.id,
                 &data_groups,
             )
             .await

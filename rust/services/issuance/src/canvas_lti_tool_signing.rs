@@ -17,6 +17,31 @@ const KEY_PURPOSE: &str = "lti_tool_signing";
 const ALGORITHM: &str = "RS256";
 const PRIVATE_RSA_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanvasLtiSigningKind {
+    DeepLink,
+    Readiness,
+    OAuthClientAssertion,
+}
+
+impl CanvasLtiSigningKind {
+    fn operation_id(self, source_id: &str) -> Result<String, CanvasLtiToolSigningError> {
+        let prefix = match self {
+            Self::DeepLink => "deep-link",
+            Self::Readiness => "readiness",
+            Self::OAuthClientAssertion => "oauth-assertion",
+        };
+        if source_id.is_empty() || source_id.chars().any(char::is_control) {
+            return Err(CanvasLtiToolSigningError::InvalidSigningOperation);
+        }
+        let operation_id = format!("{prefix}:{source_id}");
+        if operation_id.len() > 128 {
+            return Err(CanvasLtiToolSigningError::InvalidSigningOperation);
+        }
+        Ok(operation_id)
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CanvasLtiToolSigningError {
     #[error("Production Canvas LTI signing requires SIGNING_KEYS_INTERNAL_URL/API key and CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID/ISSUER_DID")]
@@ -39,11 +64,18 @@ pub enum CanvasLtiToolSigningError {
     MissingSignature,
     #[error("Canvas LTI DID-mediated signer returned invalid signature encoding")]
     InvalidSignatureEncoding,
+    #[error("Canvas LTI signing operation is invalid")]
+    InvalidSigningOperation,
 }
 
 #[async_trait]
 pub trait CanvasLtiToolJwtSigner: Send + Sync {
-    async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError>;
+    async fn sign_jwt(
+        &self,
+        payload: &Value,
+        kind: CanvasLtiSigningKind,
+        source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError>;
     async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError>;
 }
 
@@ -64,6 +96,7 @@ pub trait CanvasLtiToolSignatureProvider: Send + Sync {
         issuer_did: &str,
         verification_method_id: &str,
         signing_key_reference: &str,
+        operation_id: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError>;
 }
@@ -157,7 +190,13 @@ impl IssuerDidCanvasLtiToolJwtSigner {
 
 #[async_trait]
 impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
-    async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+    async fn sign_jwt(
+        &self,
+        payload: &Value,
+        kind: CanvasLtiSigningKind,
+        source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError> {
+        let operation_id = kind.operation_id(source_id)?;
         let (organization_id, issuer_did) = self.configuration()?;
         let (verification_method_id, _, resolution) = self.resolved_identity().await?;
         let signing_key_reference = resolved_signing_key_reference(&resolution)
@@ -179,6 +218,7 @@ impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
                 issuer_did,
                 &verification_method_id,
                 signing_key_reference,
+                &operation_id,
                 signing_input.as_bytes(),
             )
             .await?;
@@ -398,11 +438,13 @@ impl CanvasLtiToolSignatureProvider for HttpCanvasLtiToolSignatureProvider {
         issuer_did: &str,
         verification_method_id: &str,
         signing_key_reference: &str,
+        operation_id: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError> {
         self.signer
             .sign_did(SignRequest {
                 organization_id: organization_id.to_owned(),
+                operation_id: operation_id.to_owned(),
                 issuer_did: issuer_did.to_owned(),
                 credential_format: CREDENTIAL_FORMAT.to_owned(),
                 key_purpose: KEY_PURPOSE.to_owned(),

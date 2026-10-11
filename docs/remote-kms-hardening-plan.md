@@ -15089,3 +15089,15 @@ child diagnostic is intentionally sealed and does not prove that inference.
 The Flow and Canvas worker targets returned exit 0; the timeout replay
 panics visible in the worker log are caught comparison probes, not target
 failures. Verify both self-host targets on the next grouped hosted head.
+
+Local Issuance operation binding now carries an explicit operation ID into
+the common `SignRequest`: the reserved credential ID for credentials, the
+persisted job ID for passports, and the generated challenge nonce for Canvas
+readiness. Canvas LTI distinguishes deep-link, readiness and OAuth client
+assertion operations, each using its own source identifier and a bounded
+kind prefix. The shared HTTP signer rejects missing or oversized operation
+IDs before any request. Focused Canvas LTI (7), Deep Linking (10), and
+managed passport (3) tests pass. This is grant preparation only: Issuance
+still needs fixed-origin OpenBao minters, scoped token mounts, exact payload
+binding and grant headers at its shared signing boundary. The hosted
+self-host failures above still need a grouped-head rerun.

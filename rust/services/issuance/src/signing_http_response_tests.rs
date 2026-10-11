@@ -361,6 +361,7 @@ async fn fifteen_portable_frozen_lossless_diagnostics_cross_real_http() {
 fn sign_request() -> SignRequest {
     SignRequest {
         organization_id: "org-a".into(),
+        operation_id: "synthetic-operation".into(),
         issuer_did: "did:web:issuer.example".into(),
         credential_format: "jwt_vc_json".into(),
         key_purpose: "vc_jwt_issuer".into(),

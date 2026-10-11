@@ -83,6 +83,7 @@ impl HttpCredentialBuilder {
             .signer
             .sign(SignRequest {
                 organization_id: request.organization_id.clone(),
+                operation_id: request.credential_id.clone(),
                 issuer_did: request.issuer.issuer_did.clone(),
                 credential_format: request.remote_credential_format.clone(),
                 key_purpose: key_purpose(&request.remote_credential_format).to_owned(),
@@ -350,6 +351,7 @@ const REDACTED_SIGNING_VALUE: &str = "[REDACTED]";
 #[derive(Clone)]
 pub(crate) struct SignRequest {
     pub(crate) organization_id: String,
+    pub(crate) operation_id: String,
     pub(crate) issuer_did: String,
     pub(crate) credential_format: String,
     pub(crate) key_purpose: String,
@@ -364,6 +366,7 @@ impl fmt::Debug for SignRequest {
         formatter
             .debug_struct("SignRequest")
             .field("organization_id", &self.organization_id)
+            .field("operation_id", &self.operation_id)
             .field("issuer_did", &self.issuer_did)
             .field("credential_format", &self.credential_format)
             .field("key_purpose", &self.key_purpose)
@@ -467,6 +470,9 @@ struct SignResponseBody {
 #[async_trait]
 impl DidSigner for HttpDidSigner {
     async fn sign(&self, request: SignRequest) -> Result<SignResponse, CredentialIssuanceError> {
+        if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
+            return Err(signing_error("DID signer requires a bounded operation ID"));
+        }
         if request.signing_key_reference.trim().is_empty() {
             return Err(signing_error("DID signer requires a resolved remote key"));
         }
@@ -1121,6 +1127,7 @@ mod tests {
         let signature_secret = "private-signature";
         let request = SignRequest {
             organization_id: "org-safe-id".to_owned(),
+            operation_id: "synthetic-operation".to_owned(),
             issuer_did: "did:web:issuer.example".to_owned(),
             credential_format: "lti_tool_jwt".to_owned(),
             key_purpose: "lti_tool_signing".to_owned(),
@@ -1416,6 +1423,7 @@ mod tests {
         let response = signer
             .sign(SignRequest {
                 organization_id: "org-a".to_owned(),
+                operation_id: "synthetic-operation".to_owned(),
                 issuer_did: "did:web:issuer.example".to_owned(),
                 credential_format: "dc+sd-jwt".to_owned(),
                 key_purpose: "vc_jwt_issuer".to_owned(),
@@ -1448,6 +1456,7 @@ mod tests {
         let missing_key = signer
             .sign(SignRequest {
                 organization_id: "org-a".to_owned(),
+                operation_id: "synthetic-operation".to_owned(),
                 issuer_did: "did:web:issuer.example".to_owned(),
                 credential_format: "dc+sd-jwt".to_owned(),
                 key_purpose: "vc_jwt_issuer".to_owned(),
@@ -1481,6 +1490,7 @@ mod tests {
         let error = signer
             .sign(SignRequest {
                 organization_id: "org-a".to_owned(),
+                operation_id: "synthetic-operation".to_owned(),
                 issuer_did: "did:web:issuer.example".to_owned(),
                 credential_format: "dc+sd-jwt".to_owned(),
                 key_purpose: "vc_jwt_issuer".to_owned(),

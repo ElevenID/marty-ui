@@ -115,21 +115,12 @@ impl PassportSigner {
         }
     }
 
-    pub async fn sign(
-        &self,
-        country_code: &str,
-        organization: &str,
-        data_groups: &BTreeMap<BigUint, String>,
-    ) -> Result<SignedMaterial, SignerError> {
-        self.sign_for_identity(country_code, organization, None, data_groups)
-            .await
-    }
-
     pub async fn sign_for_identity(
         &self,
         country_code: &str,
         organization: &str,
         issuer_did: Option<&str>,
+        operation_id: &str,
         data_groups: &BTreeMap<BigUint, String>,
     ) -> Result<SignedMaterial, SignerError> {
         match self {
@@ -140,6 +131,7 @@ impl PassportSigner {
                         country_code,
                         organization,
                         issuer_did.ok_or(SignerError::MissingIssuerDid)?,
+                        operation_id,
                         data_groups,
                     )
                     .await
@@ -251,6 +243,7 @@ impl ManagedProfileSigner {
         country_code: &str,
         organization_id: &str,
         issuer_did: &str,
+        operation_id: &str,
         data_groups: &BTreeMap<BigUint, String>,
     ) -> Result<SignedMaterial, SignerError> {
         let context = self
@@ -271,6 +264,7 @@ impl ManagedProfileSigner {
             .signer
             .sign_did(SignRequest {
                 organization_id: organization_id.into(),
+                operation_id: operation_id.into(),
                 issuer_did: issuer_did.into(),
                 credential_format: "ICAO_EMRTD".into(),
                 key_purpose: "x509_doc_signer".into(),
@@ -795,7 +789,13 @@ mod tests {
             (BigUint::from(2u8), "Ag==".into()),
         ]);
         let signed = signer
-            .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+            .sign(
+                "USA",
+                "org-1",
+                "did:web:issuer.example:orgs:org-1",
+                "passport-job-1",
+                &groups,
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -864,7 +864,13 @@ mod tests {
         state.rotated.store(true, Ordering::SeqCst);
         assert!(matches!(
             signer
-                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .sign(
+                    "USA",
+                    "org-1",
+                    "did:web:issuer.example:orgs:org-1",
+                    "passport-job-1",
+                    &groups
+                )
                 .await,
             Err(SignerError::InvalidManagedMaterial)
         ));
@@ -884,7 +890,13 @@ mod tests {
             Err(SignerError::InvalidManagedMaterial)
         ));
         let refreshed = signer
-            .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+            .sign(
+                "USA",
+                "org-1",
+                "did:web:issuer.example:orgs:org-1",
+                "passport-job-1",
+                &groups,
+            )
             .await
             .unwrap();
         signer
@@ -913,7 +925,13 @@ mod tests {
         ));
         assert!(matches!(
             signer
-                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .sign(
+                    "USA",
+                    "org-1",
+                    "did:web:issuer.example:orgs:org-1",
+                    "passport-job-1",
+                    &groups
+                )
                 .await,
             Err(SignerError::UntrustedDsc)
         ));
@@ -949,7 +967,13 @@ mod tests {
         let groups = BTreeMap::from([(BigUint::from(1u8), "AQ==".into())]);
         assert!(matches!(
             signer
-                .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                .sign(
+                    "USA",
+                    "org-1",
+                    "did:web:issuer.example:orgs:org-1",
+                    "passport-job-1",
+                    &groups
+                )
                 .await,
             Err(SignerError::InvalidManagedMaterial)
         ));
@@ -1003,7 +1027,13 @@ mod tests {
             let groups = BTreeMap::from([(BigUint::from(1u8), "AQ==".into())]);
             assert!(matches!(
                 signer
-                    .sign("USA", "org-1", "did:web:issuer.example:orgs:org-1", &groups)
+                    .sign(
+                        "USA",
+                        "org-1",
+                        "did:web:issuer.example:orgs:org-1",
+                        "passport-job-1",
+                        &groups
+                    )
                     .await,
                 Err(SignerError::InvalidManagedMaterial)
             ));

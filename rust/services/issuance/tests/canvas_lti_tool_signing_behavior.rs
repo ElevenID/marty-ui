@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use axum::{body::Body, http::Request};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_issuance_service::canvas_lti_tool_signing::{
-    CanvasLtiToolIdentityResolver, CanvasLtiToolJwtSigner, CanvasLtiToolSignatureProvider,
-    CanvasLtiToolSigningError, IssuerDidCanvasLtiToolJwtSigner,
+    CanvasLtiSigningKind, CanvasLtiToolIdentityResolver, CanvasLtiToolJwtSigner,
+    CanvasLtiToolSignatureProvider, CanvasLtiToolSigningError, IssuerDidCanvasLtiToolJwtSigner,
 };
 use marty_issuance_service::{
     http::router_with_canvas_lti_tool_signer, transport::TransportPolicy, IssuanceRuntime,
@@ -36,7 +36,7 @@ impl CanvasLtiToolIdentityResolver for Resolver {
     }
 }
 
-type SignatureRequest = (String, String, String, String, Vec<u8>);
+type SignatureRequest = (String, String, String, String, String, Vec<u8>);
 
 #[derive(Default)]
 struct Signatures {
@@ -52,6 +52,7 @@ impl CanvasLtiToolSignatureProvider for Signatures {
         issuer_did: &str,
         verification_method_id: &str,
         signing_key_reference: &str,
+        operation_id: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError> {
         self.requests.lock().unwrap().push((
@@ -59,6 +60,7 @@ impl CanvasLtiToolSignatureProvider for Signatures {
             issuer_did.to_owned(),
             verification_method_id.to_owned(),
             signing_key_reference.to_owned(),
+            operation_id.to_owned(),
             payload.to_vec(),
         ));
         Ok(self
@@ -126,10 +128,14 @@ async fn signer_uses_only_the_organization_did_and_exact_rs256_method() {
     });
     let signatures = Arc::new(Signatures::default());
     let token = signer(resolver.clone(), signatures.clone())
-        .sign_jwt(&json!({
-            "title": "Crème brûlée",
-            "aud": "https://canvas.example.edu",
-        }))
+        .sign_jwt(
+            &json!({
+                "title": "Crème brûlée",
+                "aud": "https://canvas.example.edu",
+            }),
+            CanvasLtiSigningKind::DeepLink,
+            "synthetic-session:nonce",
+        )
         .await
         .unwrap();
 
@@ -154,8 +160,9 @@ async fn signer_uses_only_the_organization_did_and_exact_rs256_method() {
     assert_eq!(&requests[0].1, issuer_did);
     assert_eq!(&requests[0].2, &kid);
     assert_eq!(&requests[0].3, "transit/keys/canvas-tool-1");
+    assert_eq!(&requests[0].4, "deep-link:synthetic-session:nonce");
     assert_eq!(
-        requests[0].4,
+        requests[0].5,
         format!("{}.{}", parts[0], parts[1]).as_bytes()
     );
 }
@@ -203,17 +210,40 @@ async fn signer_fails_closed_for_configuration_and_resolver_key_drift() {
             resolver.clone(),
             signatures.clone(),
         );
-        assert_eq!(incomplete.sign_jwt(&json!({})).await.unwrap_err(), expected);
+        assert_eq!(
+            incomplete
+                .sign_jwt(
+                    &json!({}),
+                    CanvasLtiSigningKind::DeepLink,
+                    "synthetic-session:nonce"
+                )
+                .await
+                .unwrap_err(),
+            expected
+        );
         assert_eq!(incomplete.public_jwks().await.unwrap_err(), expected);
         assert!(resolver.requests.lock().unwrap().is_empty());
         assert!(signatures.requests.lock().unwrap().is_empty());
     }
 
+    assert_eq!(
+        signer(resolver.clone(), signatures.clone())
+            .sign_jwt(&json!({}), CanvasLtiSigningKind::DeepLink, "")
+            .await
+            .unwrap_err(),
+        CanvasLtiToolSigningError::InvalidSigningOperation
+    );
+    assert!(resolver.requests.lock().unwrap().is_empty());
+
     let issuer_did = "did:web:issuer.example:canvas";
     *resolver.response.lock().unwrap() = identity(issuer_did, "did:web:other.example#key-1");
     assert_eq!(
         signer(resolver.clone(), signatures.clone())
-            .sign_jwt(&json!({}))
+            .sign_jwt(
+                &json!({}),
+                CanvasLtiSigningKind::DeepLink,
+                "synthetic-session:nonce"
+            )
             .await
             .unwrap_err(),
         CanvasLtiToolSigningError::InvalidVerificationMethod
@@ -246,7 +276,11 @@ async fn signer_rejects_incomplete_rsa_keys_and_malformed_signature_encoding() {
     });
     assert_eq!(
         signer(resolver.clone(), signatures)
-            .sign_jwt(&json!({}))
+            .sign_jwt(
+                &json!({}),
+                CanvasLtiSigningKind::DeepLink,
+                "synthetic-session:nonce"
+            )
             .await
             .unwrap_err(),
         CanvasLtiToolSigningError::InvalidSignatureEncoding
