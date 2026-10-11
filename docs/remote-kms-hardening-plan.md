@@ -14747,3 +14747,9 @@ the actual KMS-only public sign contract and handler reject an empty payload
 with 422, while the test expected 400. The assertion now matches that exact
 contract. Keep the correction local with the broader authorization batch until
 the remaining hosted lanes finish.
+
+The current `5db9a4b7f` hosted release-contract lane has now completed
+successfully. Contracts failed at the Gateway executable fixture described
+above; the OpenBao image, Rust service image and Canvas lanes remain
+in progress at this observation. Preserve that failed CI run as evidence and
+wait for its terminal result before the next grouped push.
