@@ -14426,3 +14426,13 @@ authenticated organization and dedicated service-sign credential still do.
 That exact Gateway test and warnings-denied library Clippy pass. A trusted
 Gateway producer still must mint and insert the header after its authorization
 decision; this change alone does not enforce signing grants.
+
+Internal issuer-DID relay, local UI follow-up: Gateway now accepts a bounded,
+syntactically valid signing-grant envelope only on its dedicated authenticated
+internal issuer-DID signing route and forwards it to Signing Keys as a trusted
+upstream header. It continues to override the caller's organization with the
+authenticated query scope. The exact relay regression covers malformed-header
+rejection, header propagation, and organization override; warnings-denied
+Gateway Clippy passes. This is transport plumbing only: Flow and Issuance must
+mint appropriately scoped grants, and Signing Keys must authenticate, consume,
+and recheck them at every relevant signing kernel entry before K6 is complete.

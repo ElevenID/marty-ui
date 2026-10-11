@@ -3488,11 +3488,21 @@ async fn forward_signing_compatibility_json(
     path: &str,
     body: Value,
 ) -> Response {
-    match signing_service_request(
+    forward_signing_compatibility_json_with_grant(state, path, body, None).await
+}
+
+async fn forward_signing_compatibility_json_with_grant(
+    state: &Arc<GatewayRuntimeState>,
+    path: &str,
+    body: Value,
+    grant_header: Option<&str>,
+) -> Response {
+    match signing_service_request_with_grant(
         state,
         HttpMethod::Post,
         path,
         Some(serde_json::to_vec(&body).expect("compatibility request serializes")),
+        grant_header,
     )
     .await
     {
@@ -3507,6 +3517,18 @@ async fn forward_signing_body(
     path: &str,
     request: Request,
 ) -> Response {
+    let grant_header = match request.headers().get(marty_signing_grant::HEADER_NAME) {
+        Some(value) => {
+            let Ok(value) = value.to_str() else {
+                return detail_response(422, "Signing grant header is malformed.");
+            };
+            if marty_signing_grant::GrantEnvelope::from_header_value(value).is_err() {
+                return detail_response(422, "Signing grant header is malformed.");
+            }
+            Some(value.to_owned())
+        }
+        None => None,
+    };
     let body = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
         Ok(body) => body,
         Err(_) => return detail_response(413, "Request body too large"),
@@ -3516,7 +3538,7 @@ async fn forward_signing_body(
         _ => return detail_response(422, "Request body must be a JSON object."),
     };
     body["organization_id"] = Value::String(organization_id.into());
-    forward_signing_compatibility_json(state, path, body).await
+    forward_signing_compatibility_json_with_grant(state, path, body, grant_header.as_deref()).await
 }
 
 async fn forward_profile_write(
@@ -3761,6 +3783,16 @@ async fn signing_service_request(
     path: &str,
     body: Option<Vec<u8>>,
 ) -> Result<GatewayResponse, Response> {
+    signing_service_request_with_grant(state, method, path, body, None).await
+}
+
+async fn signing_service_request_with_grant(
+    state: &Arc<GatewayRuntimeState>,
+    method: HttpMethod,
+    path: &str,
+    body: Option<Vec<u8>>,
+    grant_header: Option<&str>,
+) -> Result<GatewayResponse, Response> {
     let mut request =
         GatewayRequest::new(method, format!("/__gateway/signing-keys{path}"), now_ms());
     request
@@ -3780,8 +3812,12 @@ async fn signing_service_request(
     } else {
         &state.signing_service_api_key
     };
+    let mut headers = BTreeMap::from([("x-api-key".into(), api_key.clone())]);
+    if let Some(grant_header) = grant_header {
+        headers.insert(marty_signing_grant::HEADER_NAME.into(), grant_header.into());
+    }
     let overrides = ProxyOverrides {
-        headers: BTreeMap::from([("x-api-key".into(), api_key.clone())]),
+        headers,
         ..ProxyOverrides::default()
     };
     state
@@ -9833,6 +9869,66 @@ mod tests {
         .expect("DID sign JSON");
         assert!(body.get("service_id").is_none());
         assert_eq!(body["issuer_did"], "did:web:issuer.example");
+    }
+
+    #[tokio::test]
+    async fn internal_issuer_sign_relays_only_a_bounded_grant_header() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        let router = gateway_router(runtime_state_with_upstream(
+            Arc::new(NoOwner),
+            recorder.clone(),
+        ));
+        let grant = marty_signing_grant::GrantEnvelope {
+            claims: marty_signing_grant::GrantClaims {
+                version: 1,
+                origin: marty_signing_grant::SigningOrigin::FlowWalletRequest,
+                operation_id: "instance-1".into(),
+                organization_id: "org-1".into(),
+                route: "/internal/compat/issuer-dids/sign".into(),
+                service_id: None,
+                issuer_did: Some("did:web:issuer.example".into()),
+                key_reference: None,
+                key_purpose: "vc_jwt_issuer".into(),
+                algorithm: "ES256".into(),
+                payload_sha256_b64: marty_signing_grant::payload_digest(b"payload"),
+                issued_at: 1_700_000_000,
+                expires_at: 1_700_000_030,
+                nonce: "0123456789abcdef0123456789abcdef".into(),
+            },
+            hmac: "vault:v1:synthetic".into(),
+        };
+        let header = grant.to_header_value().unwrap();
+        let request = |header: &str| {
+            Request::builder()
+                .method("POST")
+                .uri("/internal/signing-keys/issuer-dids/sign?organization_id=org-1")
+                .header("x-api-key", "dedicated-issuer-sign-key-000001")
+                .header("content-type", "application/json")
+                .header(marty_signing_grant::HEADER_NAME, header)
+                .body(Body::from(r#"{"organization_id":"attacker","issuer_did":"did:web:issuer.example","credential_format":"dc+sd-jwt","key_purpose":"vc_jwt_issuer","algorithm":"ES256","payload_b64":"cGF5bG9hZA"}"#))
+                .unwrap()
+        };
+        let denied = router
+            .clone()
+            .oneshot(request("not-base64!"))
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(recorder.0.lock().unwrap().is_empty());
+        let accepted = router.oneshot(request(&header)).await.unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        let calls = recorder.0.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1.path, "/internal/compat/issuer-dids/sign");
+        assert_eq!(
+            calls[0].1.header(marty_signing_grant::HEADER_NAME),
+            Some(header.as_str())
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(calls[0].1.body.as_deref().unwrap()).unwrap()
+                ["organization_id"],
+            "org-1"
+        );
     }
 
     #[tokio::test]
