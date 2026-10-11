@@ -31,14 +31,16 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         directories = set()
         roots = set()
         extracted = Path(scratch)
+        total_size = 0
         for member in bundle.infolist():
             path = PurePosixPath(member.filename)
             if (path.is_absolute() or "\\" in member.filename or ":" in member.filename
                     or any(part in (".", "..", "") for part in member.filename.rstrip("/").split("/"))):
                 raise ValueError("unsafe ZIP member")
             roots.add(path.parts[0])
-            if stat.S_IFMT(member.external_attr >> 16) == stat.S_IFLNK:
-                raise ValueError("symlink ZIP member")
+            kind = stat.S_IFMT(member.external_attr >> 16)
+            if kind not in ((0, stat.S_IFDIR) if member.is_dir() else (0, stat.S_IFREG)):
+                raise ValueError("special ZIP member")
             target = extracted.joinpath(*path.parts)
             if member.is_dir():
                 if member.filename in directories:
@@ -48,6 +50,9 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
                 continue
             if member.filename in files:
                 raise ValueError("duplicate ZIP member")
+            total_size += member.file_size
+            if member.file_size > 64 * 1024 * 1024 or total_size > 256 * 1024 * 1024:
+                raise ValueError("ZIP member or bundle exceeds extraction limit")
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(bundle.read(member))
             files[member.filename] = target.read_bytes()

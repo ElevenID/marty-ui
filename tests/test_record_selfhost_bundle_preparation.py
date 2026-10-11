@@ -1,5 +1,6 @@
 import hashlib
 import json
+import stat
 import sys
 import tempfile
 import unittest
@@ -79,6 +80,15 @@ class BundlePreparationTest(unittest.TestCase):
         with zipfile.ZipFile(self.archive, "a") as bundle:
             bundle.writestr("bundle/extra/", b"")
         with self.assertRaisesRegex(ValueError, "directories differ"):
+            self.check()
+
+    def test_rejects_special_file_member(self):
+        member = zipfile.ZipInfo("bundle/fifo")
+        member.create_system = 3
+        member.external_attr = (stat.S_IFIFO | 0o644) << 16
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr(member, b"")
+        with self.assertRaisesRegex(ValueError, "special ZIP member"):
             self.check()
 
     def test_rejects_path_traversal(self):

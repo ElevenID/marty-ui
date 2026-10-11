@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       prepare_selfhost_lock:
-        description: Build digest-only self-host roles and stage an unqualified image lock
+        description: Build digest-only self-host roles and stage an unqualified ZIP, lock, and receipt
         required: false
         default: false
         type: boolean
