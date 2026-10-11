@@ -16370,3 +16370,19 @@ attempt hit its existing console encoding on a checkmark after DB access; the
 UTF-8 rerun passed and both disposable containers were removed. The runner
 now reports connectivity rather than claiming migrations ran in verify-only
 mode. This local source-built check does not prove the final image contents.
+
+Further pre-push local qualification: the full source-built
+`probe_signing_keys_openbao_policy.py --rust-adapter` passed against fresh
+disposable OpenBao, PostgreSQL and Redis instances. It exercised the six
+non-exportable managed signing prefixes, isolated provider HMAC, seven scoped
+grant keys, the Rust managed-key adapter, ES256/384/512 CSR custody, holder
+service/database/OpenBao lifecycle, durable credentials, Redis pairing,
+tenant routes and managed profiles. The probe removed all three containers.
+Self-review also found that removing `marty-common` from required release
+components did not prohibit an extra manifest component from restoring its
+private-key-bearing wheel. Both official beta preparation and release-evidence
+promotion now reject a retired `marty-common` component, repository or wheel
+URI, including underscore wheel names. The targeted and adjacent release
+suites passed 131 cases; Ruff and diff hygiene passed. This is source and
+local-runtime evidence; exact-head CI and release-artifact qualification are
+still open.

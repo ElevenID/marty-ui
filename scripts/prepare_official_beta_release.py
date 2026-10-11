@@ -145,10 +145,18 @@ def _validated_components(
             f"Official stack component is duplicated: {name}",
         )
         _require(
+            name.lower().replace("_", "-") != "marty-common",
+            "Official stack contains the retired marty-common component",
+        )
+        _require(
             isinstance(repository, str),
             f"Official stack component repository is invalid: {name}",
         )
         key = _repository_key(repository)
+        _require(
+            key.replace("_", "-") != "marty-common",
+            "Official stack contains the retired marty-common repository",
+        )
         _require(
             isinstance(commit, str) and COMMIT.fullmatch(commit) is not None,
             f"Official stack component commit is invalid: {name}",
@@ -177,6 +185,10 @@ def _validated_components(
             _require(
                 isinstance(artifact.get("uri"), str) and artifact["uri"],
                 f"Official stack artifact URI is invalid: {name}",
+            )
+            _require(
+                "marty-common" not in artifact["uri"].lower().replace("_", "-"),
+                "Official stack contains a retired marty-common artifact",
             )
         components_by_name[name] = component
 

@@ -117,6 +117,15 @@ def validate_stack_manifest(
         _require(bool(name), "Every stack component must have a name")
         _require(name not in by_name, f"Duplicate stack component: {name}")
         _require(
+            name.lower().replace("_", "-") != "marty-common"
+            and str(component.get("repository") or "")
+            .rsplit("/", 1)[-1]
+            .lower()
+            .replace("_", "-")
+            != "marty-common",
+            "Stack manifest contains the retired marty-common component",
+        )
+        _require(
             GIT_SHA_RE.fullmatch(str(component.get("commit") or "")) is not None,
             f"Stack component {name} commit must be a full lowercase SHA",
         )
@@ -134,6 +143,11 @@ def validate_stack_manifest(
                 IMAGE_DIGEST_RE.fullmatch(str(artifact.get("digest") or ""))
                 is not None,
                 f"Stack component {name} artifact digest is invalid",
+            )
+            _require(
+                "marty-common"
+                not in str(artifact.get("uri") or "").lower().replace("_", "-"),
+                "Stack manifest contains a retired marty-common artifact",
             )
         by_name[name] = component
 

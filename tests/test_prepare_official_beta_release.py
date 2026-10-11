@@ -157,6 +157,32 @@ def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("disguise", ["name", "repository", "artifact"])
+def test_official_release_rejects_retired_private_key_wheel(
+    tmp_path: Path, disguise: str
+) -> None:
+    manifest = _manifest()
+    component = _component(
+        "extra-package",
+        "ElevenID/extra-package",
+        [_artifact("python", "https://example.test/extra-package.whl")],
+    )
+    if disguise == "name":
+        component["name"] = "marty-common"
+    elif disguise == "repository":
+        component["repository"] = "ElevenID/marty-common"
+    else:
+        component["artifacts"][0]["uri"] = "https://example.test/marty_common-0.2.16.whl"
+    manifest["components"].append(component)
+    path, checksums = _write_release(tmp_path, manifest)
+
+    with pytest.raises(OfficialReleaseError, match="retired marty-common"):
+        prepare_release(
+            path, checksums, recorder_revision=RECORDER_SHA,
+            expected_ui_revision=UI_SHA,
+        )
+
+
 def test_rust_only_signed_source_uses_services_image_without_python_issuance(
     tmp_path: Path,
 ) -> None:

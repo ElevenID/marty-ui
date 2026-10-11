@@ -437,6 +437,27 @@ def test_promotion_rejects_retired_credentials_image(tmp_path: Path) -> None:
         promote(args)
 
 
+@pytest.mark.parametrize("disguise", ["name", "repository", "artifact"])
+def test_promotion_rejects_retired_private_key_wheel(
+    tmp_path: Path, disguise: str
+) -> None:
+    args = _promotion_args(tmp_path)
+    manifest = json.loads(args.stack_manifest.read_text(encoding="utf-8"))
+    component = _component("extra-package", "ElevenID/extra-package", "6" * 40)
+    if disguise == "name":
+        component["name"] = "marty-common"
+    elif disguise == "repository":
+        component["repository"] = "ElevenID/marty-common"
+    else:
+        component["artifacts"][0]["uri"] = "https://example.test/marty_common-0.2.16.whl"
+    manifest["components"].append(component)
+    _write_json(args.stack_manifest, manifest)
+    args.stack_manifest_sha256 = hashlib.sha256(args.stack_manifest.read_bytes()).hexdigest()
+
+    with pytest.raises(EvidenceError, match="retired marty-common"):
+        promote(args)
+
+
 def test_promotion_rejects_truncated_image_digest(tmp_path: Path) -> None:
     args = _promotion_args(tmp_path)
     manifest = json.loads(args.stack_manifest.read_text(encoding="utf-8"))
