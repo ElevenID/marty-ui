@@ -3319,7 +3319,26 @@ qualification tier. Source mutations of these edges fail the bounded guard;
 it is not a complete image/package provenance proof or a speed claim. The
 27-test focused module, Ruff, formatting, and diff checks pass. Independent
 review found and verified corrections to flag parsing and dispatch order;
-hosted exact-head qualification remains pending.
+exact-head PR and protected merge-group qualification passed, and
+[#1250](https://github.com/ElevenID/marty-ui/pull/1250) merged as `0e34e6b83`.
+The first protected queue attempt failed two unchanged Canvas/Flow database
+tests while the exact-head PR run passed them. An unchanged second protected
+queue attempt passed the same database-contract step and all required checks;
+the precise first-attempt failure mechanism remains unproven without retained
+Flow stderr.
+
+A6 Canvas port-handoff reliability follow-up (2026-10-11, local candidate):
+the published-contract runner starts the Flow target only after the Canvas
+composition target finishes, while worker and self-host targets still overlap
+composition. This avoids racing Flow's reserved-then-released loopback ports
+against composition peers; it preserves all four target executions, failure
+status, timing/log replay, and cancellation cleanup. Local focused sequencing,
+failure and signal tests pass, including TERM before and after Flow starts;
+shell syntax, Ruff, and diff checks pass. A worktree-derived local
+PostgreSQL/Redis stack is healthy on separate loopback ports. Independent
+review found no P1-P3 issue. Hosted exact-head and protected queue checks
+remain pending, so neither the proposed cause nor a runtime speedup is claimed
+as proven.
 
 ## Design references
 

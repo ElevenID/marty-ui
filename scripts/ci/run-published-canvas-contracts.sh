@@ -601,11 +601,12 @@ composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &
 composition_relay_pid=$!
-flow_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &
-flow_pid=$!
-relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &
-flow_relay_pid=$!
+# Flow's executable reserves loopback ports before starting its real process.
+# Do not race that handoff against the composition target's loopback peers:
+# a stolen port can make Flow exit while its readiness probes hit the peer.
+# Worker and selfhost still overlap composition; Flow runs after composition.
+flow_pid=
+flow_relay_pid=
 worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
@@ -629,7 +630,7 @@ drain_target_relays() {
   # Relays observe only the exact Rust child PIDs; they never own cancellation
   # or gate status. Drain before deleting the complete raw diagnostic logs.
   wait "$composition_relay_pid" || true
-  wait "$flow_relay_pid" || true
+  if [[ -n "$flow_relay_pid" ]]; then wait "$flow_relay_pid" || true; fi
   wait "$worker_relay_pid" || true
   wait "$selfhost_relay_pid" || true
 }
@@ -646,16 +647,22 @@ report_target_logs() {
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$selfhost_log"
 }
 stop_targets() {
-  local composition_stopped=0 flow_stopped=0 worker_stopped=0 selfhost_stopped=0
+  local composition_stopped=0 flow_stopped=not-started worker_stopped=0 selfhost_stopped=0
   trap - INT TERM
-  kill "$composition_pid" "$flow_pid" "$worker_pid" "$selfhost_pid" 2>/dev/null || true
+  kill "$composition_pid" "$worker_pid" "$selfhost_pid" 2>/dev/null || true
+  if [[ -n "$flow_pid" ]]; then kill "$flow_pid" 2>/dev/null || true; fi
   wait "$composition_pid" 2>/dev/null || composition_stopped=$?
-  wait "$flow_pid" 2>/dev/null || flow_stopped=$?
+  if [[ -n "$flow_pid" ]]; then
+    flow_stopped=0
+    wait "$flow_pid" 2>/dev/null || flow_stopped=$?
+  fi
   wait "$worker_pid" 2>/dev/null || worker_stopped=$?
   wait "$selfhost_pid" 2>/dev/null || selfhost_stopped=$?
   drain_target_relays
   report_target_timing composition "$composition_started" "$composition_stopped" "$composition_end"
-  report_target_timing flow "$flow_started" "$flow_stopped" "$flow_end"
+  if [[ -n "$flow_pid" ]]; then
+    report_target_timing flow "$flow_started" "$flow_stopped" "$flow_end"
+  fi
   report_target_timing worker "$worker_started" "$worker_stopped" "$worker_end"
   report_target_timing selfhost "$selfhost_started" "$selfhost_stopped" "$selfhost_end"
   report_target_logs "$composition_stopped" "$worker_stopped" "$selfhost_stopped" "$flow_stopped"
@@ -668,6 +675,13 @@ flow_status=0
 worker_status=0
 selfhost_status=0
 wait "$composition_pid" || composition_status=$?
+# Preserve every Flow case even if composition failed; only their loopback
+# startup windows, not their test obligations, are serialized.
+flow_started=$(python3 -c 'import time; print(time.monotonic_ns())')
+"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &
+flow_pid=$!
+relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &
+flow_relay_pid=$!
 wait "$flow_pid" || flow_status=$?
 wait "$worker_pid" || worker_status=$?
 wait "$selfhost_pid" || selfhost_status=$?
