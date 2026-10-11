@@ -88,6 +88,30 @@ SCENARIO_NAMES = REST_SCENARIOS | frozenset(
         ).read_text(encoding="utf-8")
     )["cases"]
 )
+JSON_DEPTH_ROUTE_DEPTHS = (
+    1,
+    126,
+    127,
+    128,
+    129,
+    254,
+    255,
+    256,
+    257,
+    980,
+    995,
+    1000,
+    1001,
+    1490,
+    1500,
+    1600,
+)
+JSON_DEPTH_ROUTE_CASE_NAMES = frozenset(
+    f"json_depth_route.json_depth_{shape}_{depth}_{status}"
+    for shape in ("array", "object")
+    for depth in JSON_DEPTH_ROUTE_DEPTHS
+    for status in (200, 403)
+)
 JSON_CONSUMER_SCENARIOS = json.loads(
     (
         Path(__file__).resolve().parents[2]
@@ -184,7 +208,7 @@ TIMING_NAMES = {
         }
     ),
     "fixture_seed": FIXTURE_NAMES | frozenset({"status_native_seed"}),
-    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES,
+    "scenario": SCENARIO_NAMES | REPOSITORY_MATRIX_NAMES | JSON_DEPTH_ROUTE_CASE_NAMES,
     "oracle_case": JSON_CONSUMER_CASE_NAMES,
     "oracle_phase": frozenset(
         {
@@ -435,7 +459,10 @@ def run_groups(commands: dict[str, list[str]], directory: Path) -> dict[str, int
                     for line in process.stdout:
                         log.write(line)
                         if not line.startswith(
-                            (TIMING_PREFIX.encode("ascii"), TARGET_TIMING_PREFIX.encode("ascii"))
+                            (
+                                TIMING_PREFIX.encode("ascii"),
+                                TARGET_TIMING_PREFIX.encode("ascii"),
+                            )
                         ):
                             continue
                         try:

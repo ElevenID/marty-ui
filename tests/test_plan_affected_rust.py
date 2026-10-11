@@ -304,6 +304,54 @@ class AffectedRustPlannerTests(unittest.TestCase):
             (ROOT / verification["request_evidence"]).read_text(encoding="utf-8"),
         )
 
+    def test_beta_passport_gateway_callback_is_an_observed_conditional_operation(
+        self,
+    ) -> None:
+        """Inventory a conditional operation without narrowing selection."""
+        metadata = planner.cargo_metadata()
+        result = planner.plan(["rust/services/gateway/src/runtime.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-gateway"
+            and edge["package"] == "marty-issuance-service"
+            and edge.get("conditional") == "beta passport Gateway callback profile only"
+        ]
+        self.assertEqual(len(edges), 1)
+        witness = edges[0]
+        for marker, evidence in (
+            ("binding", "config_evidence"),
+            ("selection_marker", "config_evidence"),
+            ("handoff_marker", "handoff_evidence"),
+            ("signature_marker", "handoff_evidence"),
+            ("route_marker", "route_evidence"),
+            ("forwarding_test_marker", "forwarding_test_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    witness[marker],
+                    (ROOT / witness[evidence]).read_text(encoding="utf-8"),
+                )
+        compose = yaml.safe_load(
+            (ROOT / witness["profile_evidence"]).read_text(encoding="utf-8")
+        )
+        environment = compose["services"][witness["profile_service"]]["environment"]
+        self.assertEqual(environment["ENVIRONMENT"], "beta")
+        self.assertEqual(environment["PASSPORT_BETA_BUREAU_ENABLED"], "true")
+        self.assertEqual(
+            environment["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED"], "true"
+        )
+        self.assertEqual(
+            environment["PASSPORT_BUREAU_CALLBACK_URL"],
+            witness["profile_callback_url"],
+        )
+        gateway = compose["services"][witness["profile_gateway_service"]][
+            "environment"
+        ]
+        self.assertEqual(gateway["PASSPORT_NATIVE_GATEWAY_ENABLED"], "true")
+        self.assertEqual(gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"], "false")
+
     def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])

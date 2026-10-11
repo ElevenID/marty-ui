@@ -3527,6 +3527,35 @@ remain mandatory. Local focused tests passed (57 cases, 12.48s), as did 146
 workflow-policy cases and independent review. This is not yet hosted timing
 or a measured CI speedup.
 
+A0 passport callback inventory (2026-10-11): the beta bureau's selected
+`PASSPORT_BUREAU_CALLBACK_URL` can target Gateway's signed personalization
+webhook. The shared handoff posts the exact signed body; Gateway forwards it to
+the selected legacy or native Issuance owner without treating it as one of the
+eight tenant-key public routes. The beta Compose profile explicitly selects
+this path. The shadow planner now records this conditional operation beside
+its existing Gateway/Issuance observations, with source, profile, and runtime
+test witnesses. It is not a new package relationship or proof that the HTTP
+runtime graph is complete. Service changes still select all Rust packages;
+required PR, protected merge, and release checks remain unchanged.
+
+A4 JSON-depth route-matrix audit (2026-10-11):
+`status_runtime_matches_json_depth_full_credential_routes` runs 64 frozen
+shape/depth/status provider cases through three primary credential actions,
+for 192 route requests plus 32 refusal-after-success follow-up requests, while
+`status_provider_matches_json_depth_reference` already checks all 64 provider
+decisions at the component level. The full route still proves durable
+credential/delivery rows, publication and mirror calls, events, and the
+refusal-after-success path; the pinned historical diagnostic is a separate
+oracle obligation. Measure the individual route case durations and inventory
+their obligations before trialing a fail-closed, stratified routine DB subset.
+Retain all 64 route cases for manual/official qualification until exact-case
+parity and protected CI evidence justify any routine reduction. This is a
+candidate, not a measured speedup or a coverage change.
+The follow-up candidate emits sanitized elapsed time for each of those 64
+real-route cases into the existing allowlisted DB timing artifact, without
+changing the case matrix or any gate. Hosted timings and a safe routine
+subset remain unproven.
+
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
 Rust lanes executed. Canvas also has SHA-sensitive self-host steps. Therefore
