@@ -14313,3 +14313,13 @@ before contacting OpenBao. The arbitrary key-name constructor is private to
 the grant crate for isolated tests. This makes the intended separate
 mint-policy boundary explicit in Rust; the corresponding OpenBao keys,
 policies, service token mounts and sign-route checks are still required.
+
+The grouped UI head `9c91af91f` started [exact-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38117216842). Its early
+Rust feature probe and Rust lint jobs failed because their independent
+KMS-only Core revision guard and standalone probe lock still pinned the older
+`7f276a4` source while both production Rust roots pin reviewed `6acba9d`.
+The local follow-up updates that guard and only the six Core source records in
+the probe lock. Both production and standalone `cargo metadata --locked`
+checks, including the Core boundary script, pass locally. Hold this correction
+with the origin-policy follow-up until the current run is terminal.
