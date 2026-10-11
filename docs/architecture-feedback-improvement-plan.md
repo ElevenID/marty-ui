@@ -3513,6 +3513,17 @@ remain mandatory. Local focused tests passed (57 cases, 12.48s), as did 146
 workflow-policy cases and independent review. This is not yet hosted timing
 or a measured CI speedup.
 
+A0 passport callback inventory (2026-10-11): the beta bureau's selected
+`PASSPORT_BUREAU_CALLBACK_URL` can target Gateway's signed personalization
+webhook. The shared handoff posts the exact signed body; Gateway forwards it to
+the selected legacy or native Issuance owner without treating it as one of the
+eight tenant-key public routes. The beta Compose profile explicitly selects
+this path. The shadow planner now records this conditional operation beside
+its existing Gateway/Issuance observations, with source, profile, and runtime
+test witnesses. It is not a new package relationship or proof that the HTTP
+runtime graph is complete. Service changes still select all Rust packages;
+required PR, protected merge, and release checks remain unchanged.
+
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
 Rust lanes executed. Canvas also has SHA-sensitive self-host steps. Therefore
