@@ -1840,6 +1840,19 @@ Next: finish the release artifact/installer closure and clean-install proof
 (PKG02/PKG08), then select a single independent verification boundary
 (PKG03/PKG06) with its test ledger.
 
+October 11 split-pipeline checkpoint: routine worker, Flow, and self-host
+acceptance have separate owners and fail-closed PR selectors, while protected
+merge/release checks remain complete. The manually dispatched verification
+candidate build and consumer workflows passed on September 1, but explicitly
+produce short-lived nonpublishing evidence, not a supported independent
+verification distribution. The latest successful Stack release
+([run 38108653408](https://github.com/ElevenID/marty-ui/actions/runs/38108653408))
+still used the three-role UI/services/migrations transaction; its optional
+`build-selfhost-lock-roles` and `prepare-selfhost-image-lock` jobs were skipped.
+The nightly claim/intake workflows have no hosted runs yet, so no qualified
+nightly artifact or happy-path release gate is established. CICD02-04 and the
+PKG01 product boundary decision remain open; these are not CI feedback savings.
+
 PKG02 source check and the
 [v1.1.231 release transaction](https://github.com/ElevenID/marty-ui/releases/download/v1.1.231/release-transaction.json)
 confirm a concrete mismatch: `.github/workflows/cd.yml` declares release images under
@@ -3361,6 +3374,27 @@ passed with every required lane, including Canvas. [#1253](https://github.com/El
 merged as `55dfb953f` at 2026-10-11 04:10:58 UTC. The sequencing and retained
 coverage are proven; the original intermittent failure mechanism and a runtime
 speedup are not claimed as proven.
+
+A6 public-builder linker pilot [UI #1254](https://github.com/ElevenID/marty-ui/pull/1254)
+(2026-10-11): the exact-head PR's public self-host image step passed in
+16m03s (04:07:13–04:23:16 UTC), compared with 6m56s on #1253's different
+head/runner. The new linker flag changes Cargo cache keys, so this first run
+cannot measure steady-state speed. Its unchanged host-side packager-loader
+compile remained in progress for more than 30 minutes, versus 12 seconds on
+#1253; the changed Dockerfile does not directly set that host compilation's
+flags. GitHub accepted normal and force cancellation; the runner later became
+terminal as cancelled, and GitHub returned 404 for that job's partial log.
+Auto-merge was paused pending evidence. Only the cancelled Canvas job was
+rerun on the same exact head (attempt 2); required coverage remained unchanged.
+On attempt 2 the reusable-test compile completed in 10m04s, the public image
+build in 15m08s, the unchanged host-side image-loader preparation in 10s,
+and the database suites in 10m23s. All required exact-head PR checks passed.
+The first attempt's loader stall did not reproduce on this same-head rerun;
+its cause remains unknown. Sanitized public-builder counters showed 123
+dependency-cook and 15 release-binary cache misses, compared with zero
+release-binary misses on #1253's warm protected build. Different cache states
+do not establish a linker speedup. #1254 is in the protected merge queue;
+combined-head checks and main cache warming remain pending.
 
 ## Design references
 
