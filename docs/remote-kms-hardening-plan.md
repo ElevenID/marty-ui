@@ -1229,7 +1229,7 @@ assembled Core matrix is still due.
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 head `46d5a63` pins reviewed Core `6acba9d` and has 19 successful exact-head checks with no failures. Protected review, released-artifact qualification and native UI cutover remain. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 head `0fbfe3864` includes scoped grant enforcement, private-material/schema guards, all six Gateway cases and holder credential rotation through public managed-signing routes. The full local disposable OpenBao/Redis/PostgreSQL probe passed after merging main #1268. [Exact-head CI 38157856593](https://github.com/ElevenID/marty-ui/actions/runs/38157856593) is active; real cloud, physical device, assembled artifact and final full review remain. |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355 is green and requires protected review; Credentials #313 and UI #1192 are draft. UI head `0fbfe3864` is mergeable against main #1268 and undergoing [exact-head CI 38157856593](https://github.com/ElevenID/marty-ui/actions/runs/38157856593). Exact release artifacts, real cloud providers, physical-device proof, KMS-only cutover and recovery remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. A fresh PostgreSQL 16 source audit applied 22 SQL migrations plus seven embedded Rust schema constants from Revocation, Deployment Profile and Compliance Profile: 93 tables and 1,198 columns with zero private-key catalog matches. Full inventories are in `artifacts/kms-native-fresh-schema-audit-20261011.json` and `artifacts/kms-native-combined-schema-audit-20261011.json`. Rust migration-function seed writes, historical Python metadata, exact signed-image execution, self-host cutover and release proof remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. UI uses a shared private-material policy across named JSON stores. A fresh PostgreSQL 16 source audit applied 22 SQL migrations plus seven embedded Rust schema constants: 93 tables and 1,198 columns with zero private-key catalog matches. The Revocation migration-only Rust binary separately passed its fresh-database/seed test and private-key catalog/content scan. Receipts are in `artifacts/kms-native-*-schema-audit-20261011.json` and `artifacts/kms-revocation-runtime-schema-audit-20261011.json`. Other Rust migration-function seeds, historical Python metadata, exact signed-image execution, self-host cutover and release proof remain. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
@@ -15699,3 +15699,18 @@ receipt remains intact. Deployment Profile also has an ordinary application
 handling is not qualified by this private-key catalog check. This extraction
 did not invoke Rust migration functions or their seeds, historical Python
 metadata, runtime writes or a release image. Those K10 gates remain open.
+
+K10 Revocation runtime follow-up: the existing ignored
+`marty-revocation-profile --test contracts` migration case ran exactly once
+against a fresh named disposable PostgreSQL 16 database on loopback. It
+launched the source-built migration-only Rust binary, reapplied/upgraded the
+schema and seeded the default profile. The resulting catalog held seven
+tables and 60 columns, with zero private-key-named entries; the shared
+JSON/text content scan passed after the Rust seed. The normalized catalog
+digest was `ece46207d3d856ebabba1302e629e136427122daa7c89c1a5da193d13ba07121`.
+The receipt is `artifacts/kms-revocation-runtime-schema-audit-20261011.json`.
+An initial invocation selected zero tests because its module-qualified name
+was omitted; that empty result was rejected and is not counted as evidence.
+The disposable database was removed. This still does not qualify the signed
+release artifact or the other services' migration functions and runtime
+writes.
