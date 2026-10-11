@@ -15395,3 +15395,17 @@ local rendered-base test reached its fixture's `docker compose config` call,
 which failed on the Windows path representation before the service started;
 that Linux-rendered profile remains for the hosted Canvas lane. All local
 disposable OpenBao and PostgreSQL containers were cleaned up.
+
+Run `38144557664` is terminal. Its Canvas lane passed the isolated database
+contracts, native timeout/TLS parity and the 129-pass composition target,
+including base-rendered and Kubernetes native renewal plus direct packaged
+anoncrypt/authcrypt delivery;
+the packaged image, OpenBao plugin/Raft recovery, Rust lint, feature probe,
+UI and browser gates, CodeQL and other security lanes passed. Its only
+substantive failures were the Rust Kubernetes contract assertion and eight
+Python native Kubernetes inventory cases described above; CI Gate failed as
+their dependent aggregate. The local grouped correction comprises
+`8c24c8c4a`, `63cc6cd12`, and this evidence update. The two affected local
+suites pass (14 runnable Rust Kubernetes cases plus 34 Python cases), and
+the direct packaged KMS-backed renewal test passes locally with grant binding
+assertions. The exact-head hosted run on the correction is still required.
