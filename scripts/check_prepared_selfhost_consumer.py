@@ -6,11 +6,44 @@ installed-runtime qualification or permission to publish the ZIP.
 """
 
 import argparse
+import hashlib
 import json
+import stat
+import zipfile
 from pathlib import Path
 
 from produce_selfhost_product_descriptor import produce
 from record_selfhost_bundle_preparation import record
+
+
+def verify_extracted_bundle(archive: Path, install_root: Path) -> None:
+    """Bind the rendered installation tree to the already-validated ZIP bytes."""
+    if install_root.is_symlink() or not install_root.is_dir():
+        raise ValueError("installed ZIP root is missing or not a directory")
+    with zipfile.ZipFile(archive) as bundle:
+        members = bundle.infolist()
+        bundle_root = members[0].filename.split("/", 1)[0]
+        if install_root.name != bundle_root:
+            raise ValueError("installed ZIP root name differs from archive")
+        expected = {
+            member.filename[len(bundle_root) + 1:].rstrip("/"): (
+                "directory" if member.is_dir() else hashlib.sha256(bundle.read(member)).hexdigest()
+            )
+            for member in members
+            if member.filename.rstrip("/") != bundle_root
+        }
+    actual = {}
+    for path in install_root.rglob("*"):
+        mode = path.lstat().st_mode
+        relative = path.relative_to(install_root).as_posix()
+        if stat.S_ISDIR(mode):
+            actual[relative] = "directory"
+        elif stat.S_ISREG(mode):
+            actual[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            raise ValueError("installed ZIP contains a symlink or special file")
+    if actual != expected:
+        raise ValueError("installed ZIP tree differs from archive")
 
 
 def verify_receipt(archive: Path, lock: Path, transaction: Path, receipt_path: Path,
@@ -54,6 +87,8 @@ def check(archive: Path, lock: Path, transaction: Path, receipt_path: Path,
         raise ValueError("install, state and secret roots must be supplied together")
     confined = all(root is not None for root in roots)
     if confined:
+        if install_root.is_symlink():
+            raise ValueError("installed ZIP root is a symlink")
         installed, state, secrets = (root.resolve() for root in roots)
         for label, root in (("install", installed), ("state", state), ("secret", secrets)):
             if root == checkout or checkout in root.parents or root in checkout.parents:
@@ -65,6 +100,7 @@ def check(archive: Path, lock: Path, transaction: Path, receipt_path: Path,
             raise ValueError("install, state and secret roots overlap")
         if not installed.is_dir():
             raise ValueError("installed ZIP root is missing")
+        verify_extracted_bundle(archive, installed)
 
     def within(path: Path, root: Path) -> bool:
         return path == root or root in path.parents
