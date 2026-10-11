@@ -14009,3 +14009,10 @@ ES256 response with a non-exportable test key, verify it against the returned
 public key, and correct provider-specific encoding and golden vectors as
 needed. Also exercise ES384/ES512 if advertised. Do not treat the current
 mock DER vector as cloud interoperability evidence.
+The certificate and CSR handlers in `signing-keys/src/http.rs` currently
+require `signature_encoding == "der"` in three paths. If Azure returns
+RFC 7518 R||S, a provider-label correction alone would reject those flows;
+the fix must convert the validated signature to DER at the certificate/CSR
+boundary while retaining JOSE form for credential signing. Cover both
+consumers with provider-real acceptance before changing the advertised
+capability.
