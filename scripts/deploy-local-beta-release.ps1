@@ -1214,14 +1214,6 @@ if (-not $OfficialStackRelease) {
     Invoke-Checked -FilePath docker -Arguments @(
         "build", "--file", (Join-Path $script:RepoRoot "services\Dockerfile.migrations"),
         "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId",
-        "--build-arg", "MARTY_COMMON_VERSION=$($martyCommon.Version)", "--build-arg", "MARTY_COMMON_URI=$($martyCommon.Uri)",
-        "--build-arg", "MARTY_COMMON_DIGEST=$($martyCommon.Digest)",
-        "--build-arg", "MARTY_RS_VERSION=$($martyRs.Version)", "--build-arg", "MARTY_RS_URI=$($martyRs.Uri)",
-        "--build-arg", "MARTY_RS_DIGEST=$($martyRs.Digest)",
-        "--build-arg", "MARTY_VERIFICATION_VERSION=$($martyVerification.Version)", "--build-arg", "MARTY_VERIFICATION_URI=$($martyVerification.Uri)",
-        "--build-arg", "MARTY_VERIFICATION_DIGEST=$($martyVerification.Digest)",
-        "--build-arg", "MARTY_ISO18013_VERSION=$($martyIso18013.Version)", "--build-arg", "MARTY_ISO18013_URI=$($martyIso18013.Uri)",
-        "--build-arg", "MARTY_ISO18013_DIGEST=$($martyIso18013.Digest)",
         "--tag", $migrationImage, "--label", "org.opencontainers.image.version=$releaseVersion",
         "--label", "org.opencontainers.image.revision=$sourceId", $script:RepoRoot
     )
@@ -1318,9 +1310,9 @@ try {
         "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
         "--env", "MARTY_ORG_ID=$PilotOrganizationId"
     )
-    $rehearsalArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
+    $rehearsalArguments += @($migrationImage, "/usr/local/bin/marty-migration-bootstrap")
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
-    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "python", "/app/services/run_all_migrations.py", "--verify-only")
+    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
     $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
     $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
@@ -1485,7 +1477,7 @@ try {
             "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
             "--env", "MARTY_ORG_ID=$PilotOrganizationId"
         )
-        $migrationArguments += @($migrationImage, "python", "/app/services/run_all_migrations.py")
+        $migrationArguments += @($migrationImage, "/usr/local/bin/marty-migration-bootstrap")
         $liveMutationStarted = $true
         Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
         $liveIssuanceUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"

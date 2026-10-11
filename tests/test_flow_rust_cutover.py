@@ -26,7 +26,7 @@ def test_only_the_native_flow_runtime_remains() -> None:
 
 def test_rust_owns_flow_schema_and_postgresql_behavior() -> None:
     contract = json.loads(text("contracts/flow-rust-cutover-behavior.json"))
-    migration_runner = text("services/run_all_migrations.py")
+    migration_runner = text("rust/services/signing-keys/src/bootstrap_engine.rs")
     workflow = text(".github/workflows/ci.yml")
 
     assert (ROOT / contract["migration_owner"]).is_dir()

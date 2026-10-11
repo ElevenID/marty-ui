@@ -465,46 +465,24 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
     assert "HTTP/1.0" not in infrastructure
 
 
-def test_local_build_requires_digest_pinned_bootstrap_artifacts(
+def test_local_build_needs_no_python_wheel_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in stack.LOCAL_BUILD_ARGS:
+    for name in ("MARTY_RS_URI", "MARTY_COMMON_URI"):
         monkeypatch.delenv(name, raising=False)
-    with pytest.raises(ValueError, match="MARTY_RS_URI"):
-        stack.local_build_arguments()
-
-    for name in stack.LOCAL_BUILD_ARGS:
-        monkeypatch.setenv(name, f"value-for-{name}")
-
-    assert stack.local_build_arguments() == [
-        "--build-arg",
-        "MARTY_RS_URI=value-for-MARTY_RS_URI",
-        "--build-arg",
-        "MARTY_RS_DIGEST=value-for-MARTY_RS_DIGEST",
-        "--build-arg",
-        "MARTY_VERIFICATION_URI=value-for-MARTY_VERIFICATION_URI",
-        "--build-arg",
-        "MARTY_VERIFICATION_DIGEST=value-for-MARTY_VERIFICATION_DIGEST",
-        "--build-arg",
-        "MARTY_ISO18013_URI=value-for-MARTY_ISO18013_URI",
-        "--build-arg",
-        "MARTY_ISO18013_DIGEST=value-for-MARTY_ISO18013_DIGEST",
-        "--build-arg",
-        "MARTY_COMMON_URI=value-for-MARTY_COMMON_URI",
-        "--build-arg",
-        "MARTY_COMMON_DIGEST=value-for-MARTY_COMMON_DIGEST",
-    ]
+    assert stack.local_build_arguments() == []
 
 
-def test_only_python_migrations_receive_verified_python_artifacts() -> None:
-    """Rust services must not inherit Python artifact inputs or runtime residue."""
+def test_rust_migrations_have_no_python_artifact_inputs() -> None:
+    """Rust services and migrations have no Python wheel build inputs."""
     compose = (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
-    assert "x-marty-migration-build-artifacts: &marty_migration_build_artifacts" in compose
+    assert "x-marty-migration-build-artifacts" not in compose
     migration = re.search(
         r"(?ms)^  db-migrate:\n(.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)", compose
     )
     assert migration is not None
-    assert "<<: *marty_migration_build_artifacts" in migration.group(1)
+    assert "dockerfile: services/Dockerfile.migrations" in migration.group(1)
+    assert "MARTY_RS_URI" not in migration.group(1)
 
     for service in (
         "revocation-profile-migrate",

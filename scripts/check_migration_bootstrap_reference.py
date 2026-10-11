@@ -15,16 +15,11 @@ from pathlib import Path
 import subprocess
 import sys
 
-try:
-    from .capture_migration_bootstrap_reference import OUTPUT, capture
-except ImportError:
-    from capture_migration_bootstrap_reference import OUTPUT, capture
+OUTPUT = Path(__file__).resolve().parents[1] / "contracts/migration-bootstrap-python-reference.json"
 
 
 def check(candidate: list[str], contract_path: Path = OUTPUT) -> list[str]:
     reference = json.loads(contract_path.read_text(encoding="utf-8"))
-    if reference != capture():
-        raise ValueError("Python reference differs from committed corpus")
     failures: list[str] = []
     # A candidate must receive only simulated case inputs. In particular,
     # never inherit ambient database, Redis, or OpenBao credentials/URLs.
@@ -65,7 +60,8 @@ def main() -> int:
     failures = check(candidate)
     for failure in failures:
         print(failure, file=sys.stderr)
-    print(f"{len(capture()['cases']) - len(failures)} cases matched")
+    count = len(json.loads(OUTPUT.read_text(encoding="utf-8"))["cases"])
+    print(f"{count - len(failures)} cases matched")
     return 1 if failures else 0
 
 

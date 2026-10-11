@@ -20,7 +20,7 @@ import sys
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from services.passport_disposable_identity import managed_key_reference
+from scripts.passport_disposable_identity import managed_key_reference
 
 if __package__:
     from .passport_supported_provisioning_producer import (

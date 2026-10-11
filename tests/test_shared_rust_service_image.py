@@ -321,7 +321,7 @@ def test_deleted_python_service_directories_do_not_return() -> None:
             assert not list(service_dir.rglob("*.py"))
 
 
-def test_registry_builder_separates_rust_services_from_python_migrations() -> None:
+def test_registry_builder_has_no_python_wheel_inputs_for_rust_migrations() -> None:
     script = (ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
     service_args = script.split('"services/Dockerfile"', maxsplit=1)[1].split(
         "done < <(catalog_services app)", maxsplit=1
@@ -342,4 +342,4 @@ def test_registry_builder_separates_rust_services_from_python_migrations() -> No
         "MARTY_COMMON_URI",
         "MARTY_COMMON_DIGEST",
     ):
-        assert marker in migration_args
+        assert marker not in migration_args

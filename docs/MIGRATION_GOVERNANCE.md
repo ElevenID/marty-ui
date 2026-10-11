@@ -196,7 +196,7 @@ For migration-related work, test the right path:
 
 - Stable Marty IDs are architectural glue across services today; do not change them casually.
 - Some historical migrations include beta URLs. New work should avoid baking environment-specific hostnames into persistent data when a template or derived runtime URL is more appropriate.
-- `run_all_migrations.py` currently also performs KMS/DID bootstrap. Treat that as orchestration/bootstrap behavior, not as a reason to overload every Alembic revision with runtime concerns.
+- The shared Rust migration bootstrap performs KMS/DID setup before the notification migration. Keep that orchestration separate from service schema revisions.
 
 ## Go-forward rule of thumb
 

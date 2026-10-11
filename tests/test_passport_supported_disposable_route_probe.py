@@ -10,7 +10,7 @@ from urllib.error import HTTPError
 import pytest
 
 from scripts import passport_supported_disposable_route_probe as probe
-from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+from scripts.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 
 NOW = datetime(2026, 9, 28, 17, tzinfo=timezone.utc)

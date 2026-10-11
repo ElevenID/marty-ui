@@ -51,8 +51,8 @@ def test_only_the_native_presentation_policy_runtime_remains() -> None:
     assert behavior["python_runtime_fallback"] is False
 
 
-def test_python_migration_runner_does_not_import_deleted_presentation_policy() -> None:
-    migration_runner = text("services/run_all_migrations.py")
+def test_rust_migration_bootstrap_does_not_import_deleted_presentation_policy() -> None:
+    migration_runner = text("rust/services/signing-keys/src/bootstrap_engine.rs")
 
     assert '"name": "presentation_policy"' not in migration_runner
     assert '"module": "presentation_policy.infrastructure.models"' not in migration_runner

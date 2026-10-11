@@ -195,7 +195,7 @@ def test_beta_runner_reconciles_ephemeral_openbao_before_live_migrations() -> No
 
     step = 'Write-Step "Reconcile beta OpenBao state from release configuration"'
     command = '-Arguments @("run", "--rm", "--no-deps", "openbao-init")'
-    migration = '"python", "/app/services/run_all_migrations.py"'
+    migration = '"/usr/local/bin/marty-migration-bootstrap"'
 
     assert step in script
     assert command in script
@@ -834,7 +834,7 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"REDIS_URL=redis://redis:6379"' not in script
     assert script.count("-RedisPassword $redisPassword") == 2
-    assert script.count('"/app/services/run_all_migrations.py"') == 3
+    assert script.count('"/usr/local/bin/marty-migration-bootstrap"') == 3
     assert '"/app/run_all_migrations.py"' not in script
     assert script.count('"issuance-migrations"') == 4
     assert "issuance-migration-rehearsal.log" in script

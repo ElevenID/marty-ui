@@ -1,21 +1,21 @@
 # Shared migration bootstrap behavior freeze
 
-This is a source-only reference for replacing the remaining shared Python
-`db-migrate` job with Rust. It does not qualify or deploy a Rust replacement.
-The published Python owner is `services/run_all_migrations.py`; the exact Git
+This is the historical behavior reference for the former Python `db-migrate`
+job. The active owner on this branch is the shared Rust bootstrap engine.
+The former Python owner was `services/run_all_migrations.py`; its exact Git
 blob is recorded in `contracts/migration-bootstrap-python-reference.json`.
-Current protected main has `SERVICES = []`: service Alembic migrations are
-already owned by their Rust jobs. The shared job still creates schemas,
+At the freeze, Python had `SERVICES = []`: service Alembic migrations were
+already owned by their Rust jobs. The shared job creates schemas,
 prepares OpenBao keys, and publishes managed identity state.
 
 ## Inputs and order
 
 `scripts/run-migrations-with-secrets.sh` loads file secrets and requires a
 database password and a non-placeholder organization administrator email. It
-runs Python, then executes `marty-notification --migrate` only after Python
+runs Rust, then executes `marty-notification --migrate` only after Rust
 returns success. Compose `db-migrate` uses this image in beta and self-host
 production; the Kubernetes job is `k8s/oracle/06-db-migrate.yaml`. The local
-beta runner also invokes Python explicitly for apply and a copied-database
+beta runner invokes Rust explicitly for apply and a copied-database
 `--verify-only` pass.
 
 The Python job requires `DATABASE_URL` and removes `+asyncpg` to use a
@@ -67,9 +67,9 @@ verification, but changing this behavior must be explicit and tested.
 
 ## Corpus and Rust replay
 
-Run `py -3.12 scripts/capture_migration_bootstrap_reference.py --check` and
+Run `py -3.12 scripts/check_migration_bootstrap_reference.py -- <Rust binary> --reference-json` and
 `py -3.12 -m pytest tests/test_migration_bootstrap_reference.py -q`.
-The producer uses in-memory PostgreSQL, OpenBao, and Redis adapters. No live
+The removed Python producer used in-memory PostgreSQL, OpenBao, and Redis adapters. No live
 endpoint or secret is contacted. Its 18 JSON cases cover clean and repeated
 apply, preservation of customer profiles and bindings, legacy DID backfill,
 valid precreated disposable keys and an invalid tuple, token precedence,
@@ -87,13 +87,11 @@ are removed from the candidate environment. The candidate emits
 `{exit_codes,effects,state,error_tags}` JSON. Its adapters must be simulated;
 the contract supplies only `.test` URLs. Compare exact effects and final
 state, then separately test real Rust image composition and one-shot startup.
-The JSON result is a behavior fixture, not a claim of Rust parity. The corpus
-checks the shell's `set -e`, password/admin guards, and ordering by its exact
-tracked Git blob and source assertions; it does not execute the shell.
+The JSON result is a historical behavior fixture. Current tests assert the
+shell's `set -e`, password/admin guards, and Rust-before-notification order.
 
-The current tests mostly exercise individual Python seed helpers and Compose
-dependencies. They do not prove full effect order or partial-write recovery;
-the corpus records those gaps without introducing a network dependency.
+The frozen corpus records full effect order and partial-write recovery
+without introducing a network dependency.
 `services/common/*.py` adapters are excluded from the Rust service build and
 have no repo-local runtime importers outside themselves; their tests remain
 reference cases until a separate consumer and contract deletion review.

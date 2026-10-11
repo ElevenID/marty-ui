@@ -22,7 +22,7 @@ import tempfile
 from typing import Callable
 import uuid
 
-from services.passport_disposable_identity import ORGANIZATION_ID
+from scripts.passport_disposable_identity import ORGANIZATION_ID
 
 if __package__:
     from .check_passport_supported_compose_ownership import (

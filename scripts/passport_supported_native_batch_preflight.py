@@ -11,7 +11,7 @@ import tempfile
 from typing import Any, Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from services.passport_disposable_identity import ORGANIZATION_ID
+from scripts.passport_disposable_identity import ORGANIZATION_ID
 
 if __package__:
     from .check_passport_supported_compose_ownership import (
