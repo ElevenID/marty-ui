@@ -413,6 +413,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 "BAO_ADDR": endpoint.removesuffix("/v1"),
                 "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
                 "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
+                "MARTY_TEST_OPENBAO_TOKEN": root_token,
                 "MARTY_TEST_GRANT_MINT_TOKEN": grant_mint_tokens["gateway-service"],
                 "MARTY_TEST_GRANT_VERIFY_TOKEN": grant_verify_token,
                 "MARTY_TEST_REDIS_URL": f"redis://127.0.0.1:{redis_port}/13",
@@ -433,6 +434,22 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     grant_mint_tokens["gateway-service"], "[mint]",
                 )
                 raise RuntimeError(f"Rust live grant verifier failed:\n{detail[-2000:]}")
+            result = subprocess.run(
+                ["cargo", "+1.95.0", "test", "-p", "marty-signing-keys",
+                 "--test", "service_certificate_live_kms", "--locked", "--offline",
+                 "-j1", "registered_service_csr_is_signed_by_kms_through_public_rust_route",
+                 "--", "--ignored", "--nocapture"],
+                cwd=ROOT / "rust", env=environment, capture_output=True,
+                text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[managed]")
+                detail = detail.replace(grant_verify_token, "[verify]")
+                detail = detail.replace(
+                    grant_mint_tokens["gateway-service"], "[mint]",
+                )
+                raise RuntimeError(f"Rust live Signing Keys route failed:\n{detail[-2000:]}")
         if rust_adapter:
             require_docker(
                 "run",
@@ -788,7 +805,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 "Rust managed-key adapter, ES256/ES384/ES512 CSR custody, holder service/DB/OpenBao lifecycle, credential durability, Redis pairing tickets, tenant routes, and managed-profile routes passed"
             )
         if grant_verifier:
-            print("Rust signing-grant verifier consumed exactly one live OpenBao grant in disposable Redis")
+            print("Rust grant verifier consumed one live OpenBao grant; Signing Keys public service CSR route passed with scoped grants and disposable Redis")
     finally:
         if postgres_started:
             docker("rm", "-f", postgres_name, timeout=30)

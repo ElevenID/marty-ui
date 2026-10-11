@@ -15189,3 +15189,13 @@ authorization of the same grant yielded exactly one success; replay and
 altered payload were denied. The command passed and its OpenBao/Redis
 containers were removed. Signing Keys HTTP route acceptance remains a
 separate gate because this exercises the shared verifier directly.
+
+The focused mode also passed the ignored Signing Keys public service CSR
+route test against the same disposable OpenBao/Redis pair. The test uses the
+disposable root token for Transit setup and the service key, while grant mint
+and verification use distinct scoped tokens; its replayed grant is denied at
+the HTTP route. An initial run with the managed token failed at the test's
+Transit mount inspection (403), before the route; the final run separated
+setup authority and passed. This is route-level grant and live KMS evidence,
+not proof that the production service token has root privileges or that the
+packaged release wiring is correct. Disposable containers were removed.
