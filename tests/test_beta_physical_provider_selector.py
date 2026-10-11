@@ -29,6 +29,11 @@ SIGNING = "ordinary-signing-secret-00000001"
 
 
 def model(tmp_path: Path) -> dict:
+    def grant_volumes(*names: str) -> list[dict]:
+        return [{"type": "volume", "source": f"openbao_{name}_grant",
+                 "target": f"/bao/{name.replace('_', '-')}-grant",
+                 "read_only": True, "volume": {}} for name in names]
+
     secret_root = tmp_path / "elevenid-beta-passport-physical"
     secret_root.mkdir()
     secret_names = (
@@ -49,13 +54,18 @@ def model(tmp_path: Path) -> dict:
         path.write_text("beta-physical-secret-" + str(index) * 40, encoding="utf-8")
         secrets[name] = {"file": str(path)}
     return {"name": "elevenid-beta", "secrets": secrets,
+            "volumes": {f"openbao_{name}_grant": {
+                "name": f"elevenid-beta_openbao_{name}_grant"} for name in (
+                "gateway", "flow", "verify", "issuance_credential",
+                "issuance_canvas", "issuance_readiness", "issuance_passport")},
             "networks": {
                 "marty-network": {"name": "elevenid-beta-network", "ipam": {}},
                 "passport-provider-signing": {
                     "name": "elevenid-beta_passport-provider-signing", "internal": True,
                     "ipam": {}},
             }, "services": {
-        "gateway": {"networks": {"marty-network": {}}, "environment": {
+        "gateway": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("gateway"), "environment": {
             "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
             "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "true",
@@ -65,7 +75,8 @@ def model(tmp_path: Path) -> dict:
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
         }},
-        "flow": {"networks": {"marty-network": {}}, "secrets": [
+        "flow": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("flow"), "secrets": [
             "flow_workload_client_cert", "flow_workload_client_key",
             "flow_workload_server_cert", "flow_workload_server_key",
             "workload_identity_ca_cert"], "environment": {
@@ -74,7 +85,10 @@ def model(tmp_path: Path) -> dict:
             "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
             "GRPC_SERVICE_TOKEN": GRPC,
         }},
-        "issuance-native": {"networks": {"marty-network": {}}, "environment": {
+        "issuance-native": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("issuance_credential", "issuance_canvas",
+                                     "issuance_readiness", "issuance_passport"),
+            "environment": {
             "PASSPORT_NATIVE_HTTP_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
@@ -92,7 +106,8 @@ def model(tmp_path: Path) -> dict:
             "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
         }, "secrets": ["passport_physical_provider_api_key",
                         "dev_integration_secret_ca"]},
-        "signing-keys": {"networks": {"marty-network": {}}, "environment": {
+        "signing-keys": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("verify"), "environment": {
             "ENVIRONMENT": "beta",
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
@@ -204,6 +219,17 @@ def test_physical_mode_is_separate_and_default_off(tmp_path: Path) -> None:
                        match="governed approval"):
         VALIDATOR["validate_model"](candidate, passport_enabled=True,
                                     files=PROFILES, physical_provider=True)
+
+
+@pytest.mark.parametrize("service", ["gateway", "flow", "issuance-native", "signing-keys"])
+def test_physical_mode_requires_its_scoped_grant_mounts(
+    tmp_path: Path, service: str,
+) -> None:
+    candidate = model(tmp_path)
+    candidate["services"][service]["volumes"] = []
+    with pytest.raises(VALIDATOR["PassportConfigurationError"],
+                       match="escaped isolation"):
+        validate(candidate)
 
 
 def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:

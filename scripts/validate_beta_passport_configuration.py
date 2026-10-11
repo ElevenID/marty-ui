@@ -498,7 +498,7 @@ def validate_physical_model(model, files, provider_registry=None):
         allowed_volumes = [{"type": "volume", "source": source,
                             "target": target, "read_only": True, "volume": {}}
                            for source, target in grant_volumes.get(name, [])]
-        physical_require(service.get("volumes", []) in ([], allowed_volumes),
+        physical_require(service.get("volumes", []) == allowed_volumes,
                          "Beta physical provider service escaped isolation")
         physical_require(not any(service.get(field) for field in (
             "configs", "privileged", "network_mode", "container_name", "volumes_from",

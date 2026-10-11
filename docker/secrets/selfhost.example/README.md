@@ -21,6 +21,7 @@ Required files:
 - `issuance_api_key`
 - `signing_keys_service_sign_gateway_key` (Gateway and Signing Keys only; distinct random value, at least 32 characters)
 - `signing_keys_issuer_sign_key` (Gateway, Signing Keys, Flow, Issuance, and Canvas sync worker; distinct random value, at least 32 characters)
+- `signing_keys_integration_secret_key` (distinct transport credential for native Issuance and Signing Keys)
 - `grpc_service_token`
 - `device_registration_gateway_key` (distinct random value, at least 32 characters)
 - `device_registration_signing_keys_key` (a different random value, at least 32 characters)
@@ -53,6 +54,14 @@ Required files:
 - `didcomm_issuance_openbao_token`
 - `notification_openbao_token`
 - `haip_kms_token`
+- `sign_grant_verify_token`
+- `sign_grant_mint_flow_wallet_token`
+- `sign_grant_mint_gateway_service_token`
+- `sign_grant_mint_gateway_issuer_did_token`
+- `sign_grant_mint_issuance_credential_token`
+- `sign_grant_mint_issuance_canvas_token`
+- `sign_grant_mint_issuance_readiness_token`
+- `sign_grant_mint_issuance_passport_token`
 - `cloudflare_tunnel_token`
 
 `flow_webhook_secret` authenticates verification-completion callbacks between the flow and auth services. Generate a random value of at least 32 bytes and use the same secret for both services.
@@ -60,6 +69,13 @@ Required files:
 `openbao_service_token` should contain the scoped `credential-service` token for your operator-managed external Vault/OpenBao instance. The helper script `scripts/bootstrap-selfhost-vault.sh` can create it from a bootstrap token without keeping the bootstrap credential in the stack.
 
 `signing_keys_openbao_token` is a distinct token with `credential-service` and `signing-keys-managed` policies, issued without the default policy. Only signing-keys receives managed key create/rotate access. The bootstrap scripts mint it; an external OpenBao operator must supply an equivalent scoped token.
+
+The `sign_grant_mint_*` files hold separate OpenBao HMAC mint tokens for each
+workload and signing origin. `sign_grant_verify_token` is verify-only and
+belongs to Signing Keys. Run `scripts/bootstrap-selfhost-vault.sh` with
+`SELFHOST_SECRET_DIR` set to the operator secret directory, or provision
+equivalent scoped tokens in an external OpenBao instance. Do not reuse one
+origin's token for a different signing origin.
 
 The Signing Keys TLS certificate must chain to `workload_identity_ca_cert` and
 contain the `signing-keys` DNS name. Its key terminates the private
