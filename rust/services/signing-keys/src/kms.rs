@@ -306,20 +306,31 @@ pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
         Provider::Azure => sign_azure(&request.service_config, &payload).await?,
         Provider::Gcp => sign_gcp(&request.service_config, &payload).await?,
     };
-    let transcoded_signature_b64 = match algorithm {
-        "ES256" | "ES384" | "ES512" => {
-            marty_crypto::ecdsa::normalize_signature(&signature, algorithm)
-                .ok()
-                .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
-        }
-        _ => None,
-    };
+    let transcoded_signature_b64 = normalize_provider_signature(&signature, algorithm)?;
 
     Ok(SignResponse {
         signature_b64: URL_SAFE_NO_PAD.encode(signature),
         signature_encoding: provider.signature_encoding(algorithm),
         transcoded_signature_b64,
     })
+}
+
+fn normalize_provider_signature(
+    signature: &[u8],
+    algorithm: &str,
+) -> Result<Option<String>, KmsError> {
+    match algorithm {
+        "ES256" | "ES384" | "ES512" => {
+            marty_crypto::ecdsa::normalize_signature(signature, algorithm)
+                .map(|bytes| Some(URL_SAFE_NO_PAD.encode(bytes)))
+                .map_err(|_| {
+                    KmsError::InvalidResponse(
+                        "Remote signer returned an invalid ECDSA signature.".into(),
+                    )
+                })
+        }
+        _ => Ok(None),
+    }
 }
 
 pub async fn public_key(request: ProviderRequest) -> Result<Value, KmsError> {
@@ -3378,6 +3389,24 @@ mod tests {
     #[test]
     fn invalid_payload_base64_fails_closed() {
         assert!(decode_urlsafe("***", "payload_b64").is_err());
+    }
+
+    #[test]
+    fn invalid_remote_ecdsa_signature_fails_closed() {
+        for algorithm in ["ES256", "ES384", "ES512"] {
+            assert!(matches!(
+                normalize_provider_signature(&[0, 1, 2], algorithm),
+                Err(KmsError::InvalidResponse(_))
+            ));
+        }
+        let valid_der = [0x30, 0x06, 0x02, 0x01, 0x01, 0x02, 0x01, 0x02];
+        assert!(normalize_provider_signature(&valid_der, "ES256")
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            normalize_provider_signature(&[0, 1, 2], "RS256").unwrap(),
+            None
+        );
     }
 
     #[test]

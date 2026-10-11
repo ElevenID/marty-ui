@@ -13953,3 +13953,44 @@ merge on it; it does not qualify the held local resource-oracle retirement.
 Main still resolves to `319a518eb59f0e12d871b671d8cf7d2fa4ce25bd`, so
 the next source push can be a single fast-forward UI PR update without a
 second main merge.
+
+The local resource-oracle retirement was published as UI #1192 head
+`2f05a43c6d6e9c59f217d4eb948ecd5787193826` after the preceding head's
+full success. Main remained at `319a518eb59f0e12d871b671d8cf7d2fa4ce25bd`
+and GitHub reported the new head mergeable. Its exact-head [CI
+38108751093](https://github.com/ElevenID/marty-ui/actions/runs/38108751093)
+and [Rust CodeQL
+38108751117](https://github.com/ElevenID/marty-ui/actions/runs/38108751117)
+started, and the PR description now states the revised 17/131 Canvas tier,
+the preceding green head, and the remaining release/security gates. This
+new head is not hosted qualification until its checks finish. Keep this
+run-ID note in the next grouped source batch; do not push documentation
+alone and trigger another full CI run.
+
+2026-10-10 K6 provider-signature self-review, local UI batch: the common
+Rust KMS `sign` path previously discarded ECDSA DER-to-JOSE normalization
+errors with `.ok()`, returning an `ok` provider signature without
+`transcoded_signature_b64`. The adapter now returns a sanitized
+`InvalidResponse` for malformed ES256/ES384/ES512 output; RSA/EdDSA behavior
+is unchanged. A focused malformed-response test passed, as did all five
+language-neutral provider golden-vector tests and the complete Signing Keys
+library suite (176 passed, nine ignored). Rustfmt, Clippy with warnings
+denied, and diff hygiene pass. This is a fail-closed response correction, not evidence of
+real AWS/Azure/GCP custody or of the still-missing tenant/operation-bound
+issuer-sign authorization. Batch it locally while the new exact-head CI is
+running; do not cancel that run for a small follow-up.
+
+K6 sibling-route authority audit: the public
+`POST /v1/signing-keys/services/{service_id}/sign` route is guarded by a
+dedicated Gateway-only static credential. Gateway inserts it only after
+`signing-key:create` authorization and replaces caller-supplied tenant query
+scope. Direct Signing Keys access with that credential still accepts a
+caller-selected tenant and registered service/key reference; the backend
+checks binding within the stated tenant but receives no independently
+verifiable proof of that tenant authorization or exact originating operation.
+The issuer-DID grant design must cover this public service-sign route too,
+including direct-backend wrong-tenant and replay tests. A Gateway credential
+is transport authentication, not tenant authority. Preserve the authorized
+Gateway path and the existing purpose/algorithm/reference checks while
+closing this sibling route; do not infer its safety from removal of the old
+internal service-sign alias.
