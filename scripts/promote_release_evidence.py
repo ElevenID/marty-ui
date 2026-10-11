@@ -13,6 +13,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+try:
+    from .kms_core_release import has_hardened_core_wheels
+except ImportError:  # direct script or file-based loader
+    try:
+        from scripts.kms_core_release import has_hardened_core_wheels
+    except ModuleNotFoundError:
+        from kms_core_release import has_hardened_core_wheels
+
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -155,6 +163,10 @@ def validate_stack_manifest(
     _require(
         not missing,
         f"Stack manifest is missing required components: {', '.join(sorted(missing))}",
+    )
+    _require(
+        has_hardened_core_wheels(components),
+        "Stack manifest lacks reviewed KMS-only Core wheel artifacts",
     )
     _require(
         "marty-credentials-issuance" not in by_name

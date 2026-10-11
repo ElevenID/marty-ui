@@ -8,6 +8,13 @@ from types import SimpleNamespace
 
 import pytest
 
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIREMENTS_PATH = ROOT / "deploy-config/catalog/wallet-conformance-requirements.json"
@@ -25,7 +32,7 @@ UI_RELEASE_SHA = "a" * 40
 BETA_SOURCE_ID = "b" * 40
 MARTY_PROTOCOL_SHA = "c" * 40
 EVIDENCE_TOOLING_SHA = "d" * 40
-MARTY_CORE_SHA = "3" * 40
+MARTY_CORE_SHA = CORE_REVISION
 RELEASE_VERSION = "mip-0.5.0-beta-test"
 BETA_RUN_ID = "123456"
 STACK_RELEASE_RUN_ID = "123455"
@@ -158,6 +165,13 @@ def _stack_manifest() -> dict:
             "release",
         ),
     ]
+    for component in components:
+        prefix = CORE_WHEEL_PREFIXES.get(component["name"])
+        if prefix:
+            component["version"] = CORE_VERSION
+            component["artifacts"][0]["uri"] = (
+                f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl"
+            )
     ui = _component("marty-ui", "ElevenID/marty-ui", UI_RELEASE_SHA, "oci")
     ui["version"] = RELEASE_VERSION
     ui["artifacts"] = [
@@ -455,6 +469,28 @@ def test_promotion_rejects_retired_private_key_wheel(
     args.stack_manifest_sha256 = hashlib.sha256(args.stack_manifest.read_bytes()).hexdigest()
 
     with pytest.raises(EvidenceError, match="retired marty-common"):
+        promote(args)
+
+
+@pytest.mark.parametrize("field", ["commit", "version", "uri"])
+def test_promotion_rejects_old_core_wheel(tmp_path: Path, field: str) -> None:
+    args = _promotion_args(tmp_path)
+    manifest = json.loads(args.stack_manifest.read_text(encoding="utf-8"))
+    core = next(
+        component for component in manifest["components"]
+        if component["name"] == "marty-verification-python"
+    )
+    if field == "uri":
+        core["artifacts"][0]["uri"] = (
+            "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/"
+            "marty_verification_py-0.1.61-cp311.whl"
+        )
+    else:
+        core[field] = "a" * 40 if field == "commit" else "0.1.61"
+    _write_json(args.stack_manifest, manifest)
+    args.stack_manifest_sha256 = hashlib.sha256(args.stack_manifest.read_bytes()).hexdigest()
+
+    with pytest.raises(EvidenceError, match="KMS-only Core wheel"):
         promote(args)
 
 

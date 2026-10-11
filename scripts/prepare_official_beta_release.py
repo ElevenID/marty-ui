@@ -10,6 +10,14 @@ import re
 from pathlib import Path
 from typing import Any
 
+try:
+    from .kms_core_release import has_hardened_core_wheels
+except ImportError:  # direct script or file-based loader
+    try:
+        from scripts.kms_core_release import has_hardened_core_wheels
+    except ModuleNotFoundError:
+        from kms_core_release import has_hardened_core_wheels
+
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}$")
 COMMIT = re.compile(r"[0-9a-f]{40}$")
@@ -197,6 +205,10 @@ def _validated_components(
     _require(
         not missing,
         f"Official stack manifest is missing components: {', '.join(missing)}",
+    )
+    _require(
+        has_hardened_core_wheels(components),
+        "Official stack must pin reviewed KMS-only Core wheel artifacts",
     )
     if rust_only:
         _require(

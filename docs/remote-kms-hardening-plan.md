@@ -16483,3 +16483,13 @@ contracts passed 65 cases locally; CI YAML parsed and diff hygiene passed.
 This is a CI dependency correction, not a reason to restore `marty-common`.
 The failed job remains linked from [run 38182806875](https://github.com/ElevenID/marty-ui/actions/runs/38182806875);
 batch the fix with the release hold before the next hosted run.
+The official beta manifest and release-evidence promotion paths do not read
+the local stack lock, so `release_state: hold` alone could not stop an older
+signed manifest from carrying pre-hardening Core wheels. A shared local
+release policy now requires all three Core Python components to claim reviewed
+Core `6acba9d9`, version `0.2.0`, and corresponding version-bound Core release
+wheel URIs before either path proceeds. Negative cases with an old commit,
+version or URI fail in both boundaries; the adjacent release suites passed
+116 cases, Ruff passed, and both direct-script CLIs load. This checks
+manifest provenance metadata only. The wheel bytes, signatures and installed
+exports still require exact artifact qualification after Core release.

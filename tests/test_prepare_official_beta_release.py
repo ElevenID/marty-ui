@@ -7,6 +7,12 @@ from pathlib import Path
 
 import pytest
 
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 from scripts.prepare_official_beta_release import (
     OfficialReleaseError,
     _validated_components,
@@ -46,10 +52,6 @@ def _component(
 
 
 def _manifest() -> dict:
-    wheel = _artifact(
-        "python",
-        "https://github.com/ElevenID/component/releases/download/v1/component.whl",
-    )
     package = _artifact(
         "npm",
         "https://github.com/ElevenID/component/releases/download/v1/component.tgz",
@@ -62,9 +64,16 @@ def _manifest() -> dict:
             _component("marty-api-core", "ElevenID/marty-cli", [package]),
             _component("marty-cli", "ElevenID/marty-cli", [package]),
             _component("marty-blog", "ElevenID/marty-blog", [package]),
-            _component("marty-core-python", "ElevenID/marty-core", [wheel]),
-            _component("marty-verification-python", "ElevenID/marty-core", [wheel]),
-            _component("marty-iso18013-python", "ElevenID/marty-core", [wheel]),
+            *[
+                _component(
+                    name,
+                    "ElevenID/marty-core",
+                    [_artifact("python", f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl")],
+                    CORE_REVISION,
+                    CORE_VERSION,
+                )
+                for name, prefix in CORE_WHEEL_PREFIXES.items()
+            ],
             _component(
                 "marty-credentials-issuance",
                 "ElevenID/marty-credentials",
@@ -177,6 +186,35 @@ def test_official_release_rejects_retired_private_key_wheel(
     path, checksums = _write_release(tmp_path, manifest)
 
     with pytest.raises(OfficialReleaseError, match="retired marty-common"):
+        prepare_release(
+            path, checksums, recorder_revision=RECORDER_SHA,
+            expected_ui_revision=UI_SHA,
+        )
+
+
+@pytest.mark.parametrize("field", ["commit", "version", "uri"])
+def test_official_release_rejects_old_core_wheel(
+    tmp_path: Path, field: str
+) -> None:
+    manifest = _manifest()
+    core = next(
+        component for component in manifest["components"]
+        if component["name"] == "marty-core-python"
+    )
+    if field == "uri":
+        core["artifacts"][0]["uri"] = (
+            "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/"
+            "marty_rs-0.1.61-cp311.whl"
+        )
+    elif field == "commit":
+        for component in manifest["components"]:
+            if component["repository"] == "ElevenID/marty-core":
+                component["commit"] = "a" * 40
+    else:
+        core["version"] = "0.1.61"
+    path, checksums = _write_release(tmp_path, manifest)
+
+    with pytest.raises(OfficialReleaseError, match="KMS-only Core wheel"):
         prepare_release(
             path, checksums, recorder_revision=RECORDER_SHA,
             expected_ui_revision=UI_SHA,
