@@ -15856,3 +15856,14 @@ Transit key and update of its exact encrypt/decrypt paths; it stored one
 backend. This is scoped-policy functional evidence, not an exact release image
 or installed-stack qualification. This tracker-only result stays local until
 the pushed head's CI finishes.
+
+K10 native Issuance migration-function proof: installed the source Organization
+and Credential Template baseline SQL into a fourth fresh PostgreSQL 16
+database, seeded one synthetic Marty organization and active credential
+template, then ran the source-built `marty-issuance-service migrate` and
+`verify-owned-schema` commands. Both passed. The dedicated
+`verify_fresh_kms_issuance_schema.py` check found no historical Alembic state
+or private-key storage; the resulting `issuance_service` schema had 31 tables
+and 463 columns and seeded one application template. This exercises the
+native migration and seed path rather than only reading SQL source. Exact
+image/install qualification and runtime writes remain separate gates.
