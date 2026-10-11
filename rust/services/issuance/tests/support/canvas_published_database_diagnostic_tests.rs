@@ -2,6 +2,7 @@
 mod diagnostic_tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeSet;
 
     fn installed_revisions(postgres: &str) -> String {
         docker(&[
@@ -17,6 +18,24 @@ mod diagnostic_tests {
             DATABASE,
             "-c",
             "SELECT string_agg(version_num, ',' ORDER BY version_num) FROM issuance_service.alembic_version",
+        ])
+        .unwrap()
+    }
+
+    fn marker_absence(postgres: &str) -> String {
+        docker(&[
+            "exec",
+            postgres,
+            "psql",
+            "-X",
+            "-A",
+            "-t",
+            "-U",
+            "oracle",
+            "-d",
+            DATABASE,
+            "-c",
+            "SELECT to_regclass('public.marty_pilot_marker') IS NULL",
         ])
         .unwrap()
     }
@@ -85,29 +104,98 @@ mod diagnostic_tests {
             "CREATE TABLE public.marty_pilot_marker (id integer)",
         ])
         .unwrap();
-        let marker_absent = |postgres| {
+        assert_eq!(marker_absence(&second_id), "t");
+        first.close_verified().unwrap();
+        second.close_verified().unwrap();
+        let third = PublishedDatabase::start().await.unwrap();
+        assert_eq!(marker_absence(third.postgres.as_deref().unwrap()), "t");
+        third.close_verified().unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "opt-in pinned Docker pilot; run this exact test alone with MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=1"]
+    async fn concurrent_published_base_keeps_eight_cases_isolated() {
+        assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
+        ))
+        .unwrap();
+        let expected = fixture["migration_revisions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|revision| revision.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(",");
+        let mut all_ids = BTreeSet::new();
+        let mut all_scopes = BTreeSet::new();
+
+        for batch in 0..2 {
+            let mut starts = tokio::task::JoinSet::new();
+            for _ in 0..4 {
+                starts.spawn(PublishedDatabase::start());
+            }
+            let deadline = Instant::now() + Duration::from_secs(180);
+            let mut owned = Vec::with_capacity(4);
+            while owned.len() < 4 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let next = tokio::time::timeout(remaining, starts.join_next())
+                    .await
+                    .expect("four concurrent published databases exceeded 180 seconds")
+                    .expect("missing published database task")
+                    .expect("published database task panicked")
+                    .expect("published database creation failed");
+                owned.push(next);
+            }
+            assert!(PUBLISHED_BASE.get().is_some());
+            assert!(starts.is_empty());
+            for case in &owned {
+                let id = case.postgres.as_deref().unwrap();
+                assert!(all_ids.insert(id.to_owned()), "database container reused");
+                assert!(
+                    all_scopes.insert(case.scope.clone()),
+                    "ownership scope reused"
+                );
+                assert_eq!(installed_revisions(id), expected);
+                assert_eq!(
+                    marker_absence(id),
+                    "t",
+                    "previous case leaked into fresh database"
+                );
+            }
+
+            let marked = owned[batch].postgres.as_deref().unwrap();
             docker(&[
                 "exec",
-                postgres,
+                marked,
                 "psql",
                 "-X",
-                "-A",
-                "-t",
+                "-v",
+                "ON_ERROR_STOP=1",
                 "-U",
                 "oracle",
                 "-d",
                 DATABASE,
                 "-c",
-                "SELECT to_regclass('public.marty_pilot_marker') IS NULL",
+                "CREATE TABLE public.marty_pilot_marker (id integer)",
             ])
-            .unwrap()
-        };
-        assert_eq!(marker_absent(&second_id), "t");
-        first.close_verified().unwrap();
-        second.close_verified().unwrap();
-        let third = PublishedDatabase::start().await.unwrap();
-        assert_eq!(marker_absent(third.postgres.as_deref().unwrap()), "t");
-        third.close_verified().unwrap();
+            .unwrap();
+            for (index, case) in owned.iter().enumerate() {
+                assert_eq!(
+                    marker_absence(case.postgres.as_deref().unwrap()),
+                    if index == batch { "f" } else { "t" },
+                    "write crossed a live case boundary"
+                );
+            }
+
+            for case in owned {
+                let scope = Uuid::parse_str(&case.scope).unwrap();
+                case.close_verified().unwrap();
+                assert!(scope_ids(scope, &docker).unwrap().is_empty());
+            }
+        }
+        assert_eq!(all_ids.len(), 8);
+        assert_eq!(all_scopes.len(), 8);
     }
 
     #[tokio::test]

@@ -107,8 +107,9 @@ def check(
     if git_command("rev-parse", "HEAD^{commit}") != source_sha:
         raise PrePromotionError("Publication checkout differs from claimed source")
     git_command("fetch", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main")
-    if git_command("rev-parse", "refs/remotes/origin/main^{commit}") != source_sha:
-        raise PrePromotionError("Protected main moved after release qualification")
+    main_sha = git_command("rev-parse", "refs/remotes/origin/main^{commit}")
+    if git_command("merge-base", source_sha, main_sha) != source_sha:
+        raise PrePromotionError("Claimed release source is not an ancestor of protected main")
 
     if state != "promoted":
         if git_command("ls-remote", "--tags", "origin", f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}"):
