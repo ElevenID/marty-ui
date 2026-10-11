@@ -13832,3 +13832,12 @@ has its distinct HTTPS scenario/timing owner. All 73 tests across the four
 affected suites pass locally. This does not requalify the frozen historical
 reference or the published release image; the next exact-head hosted run
 must pass.
+
+The same exact-head Rust Service Tests (canvas) job failed both timeout and
+lease-expiry preflights at published schema preparer line 100 before worker
+startup: the mounted `schema_preparer_source_sha256` no longer matched the
+edited preparer. That failure is addressed by the reviewed consumer-range
+pin in the local correction above; no timeout/lease behavior regression was
+observed in this run because neither case got past fixture setup. The exact
+head's Rust CodeQL run 38104474303 completed successfully. Remaining hosted
+jobs were still active at this checkpoint.
