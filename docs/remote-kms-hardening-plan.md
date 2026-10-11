@@ -16200,3 +16200,11 @@ jobs remain live.
 The accumulated local read/finalization batch also passed the complete
 Issuance library suite with incremental compilation disabled: 583 passed,
 zero failed, eight opt-in cases ignored.
+
+Main advanced through `148c07e13` and `da70b2f22` while exact-head UI CI
+remained live. The local KMS branch merged both: the first adjusts protected
+release promotion ancestry; the second adds an opt-in eight-database Canvas
+published-base isolation diagnostic to the hosted worker. The affected local
+Python suites passed 24 tests. Preserve the new opt-in runtime case for the
+next grouped hosted run; no extra push was started while `44e94b746` remains
+under test.
