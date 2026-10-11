@@ -15283,3 +15283,19 @@ overlapping full CI run.
 The broader local Canvas worker, self-host credential, production deployment,
 and self-host runtime suites then passed 138 tests with the same preflight
 change; the current hosted PR head remains unchanged while its CI runs.
+
+On hosted run `38138126662`, the Rust feature regression probe, Rust
+lint/packaging, release contracts, and the OpenBao DIDComm plugin plus
+coordinated PostgreSQL/Raft recovery passed. The Canvas lane advanced beyond
+its previously failing published-worker preflight and public self-host image
+build; its database contract suites were still active at this checkpoint.
+Two new fixture failures were confirmed: the Issuance executable contracts
+started without `BAO_ADDR` and fixed-origin grant token file settings, and the
+packaged Canvas worker image idle test also lacked its Canvas grant settings.
+The shared Rust process fixture now supplies a dead loopback OpenBao endpoint
+and a nonexistent absolute token path for all four Issuance origins; the image
+fixture uses the same fail-closed pattern for its Canvas origin. These fixtures
+authorize no signing. The Rust fixture compiled with toolchain 1.95 and passed
+targeted rustfmt; the Python image-fixture suite passed 12 tests. This batch,
+including the local distinct-token preflight, remains unpushed until the
+active hosted run concludes.

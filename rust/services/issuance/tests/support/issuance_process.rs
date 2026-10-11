@@ -48,6 +48,13 @@ pub(super) fn issuance_binary() -> PathBuf {
 /// Retain the existing health/gRPC smoke tests' ambient-environment behavior.
 pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
     let mut command = Command::new(issuance_binary());
+    // These process-smoke probes do not authorize signing. Give startup a
+    // syntactically valid grant configuration whose token file cannot exist;
+    // an unexpected signing attempt must still fail closed.
+    let absent_grant_file = std::env::temp_dir().join(format!(
+        "marty-issuance-smoke-no-grant-{}/token",
+        uuid::Uuid::new_v4()
+    ));
     for (name, _) in std::env::vars().filter(|(name, _)| {
         name.starts_with("MARTY_ISSUANCE__")
             || matches!(
@@ -105,6 +112,23 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
         .env(
             "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
             remote_integration_secret::INTEGRATION_SECRET_KEY,
+        )
+        .env("BAO_ADDR", "http://127.0.0.1:1")
+        .env(
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
+        )
+        .env(
+            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
+        )
+        .env(
+            "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
+        )
+        .env(
+            "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
         )
         .env("MARTY_RELEASE_VERSION", "9.8.7")
         .env("MARTY_UI_SHA", "smoke-revision")
