@@ -14969,3 +14969,14 @@ the pinned DIDComm plugin image qualification. The remaining Canvas lane was
 still active when observed; do not promote the run to green while the three
 known packaging lanes remain failed on that published head. Their fixes are
 in the local grouped follow-up.
+
+Hosted run 38126745463 is terminal failure. Its Canvas lane passed the
+public self-host image build and disposable Canvas DIDComm KMS backend, then
+failed two rendered Flow tests because the exact-owned cleanup roster omitted
+the newly rendered `sign_grant_mint_flow_wallet_token` file (`DirectoryNotEmpty`
+at `flow_rendered_selection.rs:60`). The roster now includes that specific
+file. The same Canvas lane also failed the self-host public image loader with
+an incomplete packager operation; its root cause is not exposed by the
+sanitized child diagnostic, so the earlier Rust closed-model fixture repair
+is a candidate fix, not yet proof. The next grouped hosted run must recheck
+both, rather than reporting Canvas acceptance as passed.

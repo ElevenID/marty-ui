@@ -24,6 +24,7 @@ const FILES: &[&str] = &[
     "grpc_service_token",
     "issuance_api_key",
     "signing_keys_issuer_sign_key",
+    "sign_grant_mint_flow_wallet_token",
     "marty_db_password",
     "flow_webhook_secret",
     "flow_application_event_hmac_key",
