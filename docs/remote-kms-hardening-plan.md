@@ -14961,3 +14961,11 @@ The passport grant origin now permits exactly those algorithms with the
 before HMAC. This preserves the supported managed SOD formats while limiting
 the scoped passport token. The focused grant suite and warnings-denied
 all-target Clippy pass locally after this change.
+
+Hosted UI run 38126745463 completed its `Test OpenBao DIDComm plugin image`
+lane successfully on published head `f111111e9`. That lane includes the
+coordinated PostgreSQL and OpenBao Raft integration-secret recovery check and
+the pinned DIDComm plugin image qualification. The remaining Canvas lane was
+still active when observed; do not promote the run to green while the three
+known packaging lanes remain failed on that published head. Their fixes are
+in the local grouped follow-up.
