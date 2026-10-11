@@ -89,7 +89,7 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 14
+    assert len(entries) == len({v["name"] for v in entries}) == 15
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
@@ -108,6 +108,10 @@ def signing_inventory(values):
         "SIGNING_KEYS_REDIS_URL": {
             "name": "SIGNING_KEYS_REDIS_URL",
             "value": "redis://redis:6379/2",
+        },
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": {
+            "name": "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            "value": "/run/secrets/signing-grant-verify/token",
         },
     }
     for name in (
@@ -144,15 +148,31 @@ def signing_inventory(values):
     assert actual == expected
     assert selected["image"] == "${MARTY_SERVICES_IMAGE}"
     assert selected["envFrom"] == []
-    assert selected["volumeMounts"] == [{
-        "name": "integration-secret-tls",
-        "mountPath": "/run/secrets/integration-secret-tls",
-        "readOnly": True,
-    }]
-    assert value["spec"]["template"]["spec"]["volumes"] == [{
-        "name": "integration-secret-tls",
-        "secret": {"secretName": "signing-keys-integration-secret-server-tls"},
-    }]
+    assert selected["volumeMounts"] == [
+        {
+            "name": "integration-secret-tls",
+            "mountPath": "/run/secrets/integration-secret-tls",
+            "readOnly": True,
+        },
+        {
+            "name": "signing-grant-verify",
+            "mountPath": "/run/secrets/signing-grant-verify",
+            "readOnly": True,
+        },
+    ]
+    assert value["spec"]["template"]["spec"]["volumes"] == [
+        {
+            "name": "integration-secret-tls",
+            "secret": {"secretName": "signing-keys-integration-secret-server-tls"},
+        },
+        {
+            "name": "signing-grant-verify",
+            "secret": {
+                "secretName": "marty-secrets",
+                "items": [{"key": "SIGNING_KEYS_GRANT_VERIFY_TOKEN", "path": "token"}],
+            },
+        },
+    ]
     assert len(value["spec"]["template"]["spec"]["containers"]) == 1
     assert value["spec"]["selector"]["matchLabels"] == {"app": "signing-keys"}
     service = next(v for v in values if v["kind"] == "Service")

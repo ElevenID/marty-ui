@@ -478,11 +478,25 @@ def validate_physical_model(model, files, provider_registry=None):
         actual = service.get("networks")
         physical_require(isinstance(actual, dict) and set(actual) == expected,
                          "Beta physical provider service network membership is invalid")
-    for service in (services["gateway"], services["flow"],
-                    services["issuance-native"], services["signing-keys"],
-                    signer_service, ingress_service):
+    grant_volumes = {
+        "gateway": ("openbao_gateway_grant", "/bao/gateway-grant"),
+        "flow": ("openbao_flow_grant", "/bao/flow-grant"),
+        "signing-keys": ("openbao_verify_grant", "/bao/verify-grant"),
+    }
+    for name, service in (("gateway", services["gateway"]),
+                          ("flow", services["flow"]),
+                          ("issuance-native", services["issuance-native"]),
+                          ("signing-keys", services["signing-keys"]),
+                          ("callback-signer", signer_service),
+                          ("provider-ingress", ingress_service)):
+        expected_grant = grant_volumes.get(name)
+        allowed_volumes = ([{"type": "volume", "source": expected_grant[0],
+                            "target": expected_grant[1], "read_only": True,
+                            "volume": {}}] if expected_grant else [])
+        physical_require(service.get("volumes", []) in ([], allowed_volumes),
+                         "Beta physical provider service escaped isolation")
         physical_require(not any(service.get(field) for field in (
-            "volumes", "configs", "privileged", "network_mode", "container_name", "volumes_from",
+            "configs", "privileged", "network_mode", "container_name", "volumes_from",
             "devices", "extra_hosts", "pid", "ipc", "cgroup_parent")),
             "Beta physical provider service escaped isolation")
         labels = service.get("labels", {})

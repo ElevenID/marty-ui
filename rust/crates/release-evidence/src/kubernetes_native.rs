@@ -595,11 +595,11 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
     } else {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true}]),
+                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true},{"name":"signing-grant-verify","mountPath":"/run/secrets/signing-grant-verify","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}}]),
+                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}},{"name":"signing-grant-verify","secret":{"secretName":"marty-secrets","items":[{"key":"SIGNING_KEYS_GRANT_VERIFY_TOKEN","path":"token"}]}}]),
         )?;
     }
     Ok(())
@@ -630,6 +630,10 @@ fn signing_template(resources: &[Value]) -> Result<()> {
         (
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
             "/run/secrets/integration-secret-tls/tls.key",
+        ),
+        (
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            "/run/secrets/signing-grant-verify/token",
         ),
     ] {
         expected.insert(name, json!({"name":name,"value":value}));

@@ -14647,6 +14647,29 @@ services; Gateway has no general OpenBao token. The full local
 `test_selfhost_native_owner_compose.py` gate now passes for default, empty,
 and custom interpolation plus required-input rejection. Wait for the rest of
 the current hosted run before sending this grouped correction.
+The same `578683999` run's Canvas lane then failed in its resolved Kubernetes
+runtime proof. The release-evidence Rust composer intentionally checks the
+Signing Keys deployment against an exact approved environment and mount set;
+its approval had not been updated for the new verify-only token file. The
+local correction extends that closed set with exactly one read-only
+`signing-grant-verify` Secret volume and its file path. The release-evidence
+whole-model and signing-dependency tests pass locally. Fourteen of fifteen
+Windows release-evidence integration tests pass; the one actual-CLI test
+cannot start `envsubst` on Windows, while the hosted Linux Canvas test remains
+the authoritative rerun for that path. No unrelated permission or mount was
+added to the approved model.
+The hosted Release Contract lane also exposed closed consumer fixtures: the
+new Signing Keys verifier mount increased the expected Kubernetes environment
+and mount set; deployment-secret tests did not provision the required scoped
+tokens; and the beta physical-provider isolation validator rejected the three
+new read-only grant volumes as arbitrary mounts. Local corrections approve
+only those exact mounts, add the Kubernetes tokens to the shared secret
+catalog, and preserve the validator's rejection of all other volumes. The
+focused Kubernetes Python suites passed 55 tests, and the beta physical
+provider suite passed 47 tests. A few Release Contract failures refer to
+product descriptor tests present on newer `main`, not in the branch checkout;
+merge that base to reproduce and resolve their exact transaction gate before
+the next grouped push.
 
 Final-sign inventory for the next authorization batch: `compat::sign_with_service`
 reaches `kms::sign` and is used by both public service-sign and DID-mediated
