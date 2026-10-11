@@ -17,7 +17,7 @@ use crate::{
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
     credential::{CredentialTransaction, CredentialTransactionStatus},
-    credential_postgres::transaction_row,
+    credential_postgres::{transaction_contains_private_material, transaction_row},
 };
 
 const LOAD_APPLICATION: &str = "SELECT jsonb_build_object(
@@ -542,7 +542,8 @@ async fn refresh_pending_canvas_transaction(
     prepared: &CredentialTransaction,
     reviewed_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), CanvasApplicationApprovalError> {
-    if prepared.status != CredentialTransactionStatus::Pending
+    if transaction_contains_private_material(prepared)
+        || prepared.status != CredentialTransactionStatus::Pending
         || prepared
             .issuer_profile_id
             .as_deref()
@@ -923,7 +924,8 @@ pub(crate) async fn insert_transaction(
     database: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     transaction: &CredentialTransaction,
 ) -> Result<(), CanvasAwardCandidateApprovalError> {
-    if transaction.status != CredentialTransactionStatus::Pending
+    if transaction_contains_private_material(transaction)
+        || transaction.status != CredentialTransactionStatus::Pending
         || transaction
             .issuer_profile_id
             .as_deref()

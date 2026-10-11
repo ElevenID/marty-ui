@@ -191,6 +191,14 @@ const RESERVE_INITIATION: &str = concat!(
     transaction_columns!()
 );
 
+pub(crate) fn transaction_contains_private_material(transaction: &CredentialTransaction) -> bool {
+    marty_key_material_policy::contains_private_key_map(&transaction.claims)
+        || transaction
+            .wallet_configs
+            .iter()
+            .any(marty_key_material_policy::contains_private_key)
+}
+
 /// Insert the canonical issuance-transaction shape through either a pool or an
 /// existing database transaction. Application approval uses the latter so the
 /// application lifecycle transition and transaction reservation commit as one
@@ -202,6 +210,9 @@ pub(crate) async fn insert_issuance_transaction<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if transaction_contains_private_material(transaction) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
     let validity_days = i32::try_from(transaction.validity_days)
         .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
     let renewal_window_days = i32::try_from(transaction.renewal_window_days)
@@ -309,6 +320,9 @@ pub(crate) async fn refresh_pending_application_offer<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if transaction_contains_private_material(prepared) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
     let Some(application_id) = current.application_id.as_deref() else {
         return Ok(None);
     };

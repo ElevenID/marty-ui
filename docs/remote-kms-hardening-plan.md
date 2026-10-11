@@ -15968,3 +15968,20 @@ private-JWK insert and update rejection with unchanged stored state. The
 container was removed. This local correction is held for the next grouped
 push after current exact-head CI; remaining neutral JSON producers still
 need K10 review.
+
+K10 issuance transaction custody follow-up: `issuance_transactions.claims`
+and `wallet_configs` were still written by a shared Rust reservation helper
+and separate Canvas approval insert/refresh paths without a final private-
+material check. One shared Rust predicate now rejects private JWK/PEM-shaped
+content in all four paths while retaining public key metadata and remote
+references. A fresh PostgreSQL 16 credential contract passed with direct
+private claims and wallet-configuration reservation attempts leaving no
+idempotency row; the normal concurrent reservation/recovery contract also
+passed. A separate fresh PostgreSQL 16 Canvas candidate/approval contract
+passed after its insert and refresh guards were added. Both disposable
+containers were removed. The full Issuance library suite passed 581 tests
+with 8 ignored and warnings-denied Clippy passed. This correction remains
+local with the Internal Application guard for the next grouped push. The
+current `ec63b4de4` hosted head has no failed jobs at this checkpoint;
+OpenBao plugin image, service images and browser lifecycle lanes are still
+running.

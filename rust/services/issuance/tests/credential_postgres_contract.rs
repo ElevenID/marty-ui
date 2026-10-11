@@ -2444,6 +2444,43 @@ async fn assert_initiation_idempotency_race(repository: &PostgresCredentialRepos
         created_at: now,
         expires_at: now + Duration::days(7),
     };
+    for (key, claims, wallet_configs) in [
+        (
+            "c".repeat(64),
+            serde_json::from_value(
+                json!({"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}}),
+            )
+            .unwrap(),
+            transaction.wallet_configs.clone(),
+        ),
+        (
+            "d".repeat(64),
+            transaction.claims.clone(),
+            vec![json!({"private_key_pem": "synthetic"})],
+        ),
+    ] {
+        let mut private = transaction.clone();
+        private.id = Uuid::new_v4().to_string();
+        private.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
+        private.idempotency_key_hash = Some(key.clone());
+        private.claims = claims;
+        private.wallet_configs = wallet_configs;
+        assert!(matches!(
+            repository.reserve_idempotently(&private).await,
+            Err(InitiationRepositoryError::Unavailable)
+        ));
+        assert!(repository
+            .recover_idempotently(
+                &private.organization_id,
+                &IdempotencyBinding {
+                    key_hash: key,
+                    request_hash: request_hash.clone(),
+                },
+            )
+            .await
+            .unwrap()
+            .is_none());
+    }
     let mut retry = transaction.clone();
     retry.id = Uuid::new_v4().to_string();
     retry.pre_authorized_code = format!("pre-auth-{}", Uuid::new_v4());
