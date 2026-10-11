@@ -14222,3 +14222,7 @@ fixture now returns valid DER; that exact ignored case passed locally against
 a fresh marked disposable loopback Redis DB 13 and test-only Transit token.
 The container was stopped. Exact-head Rust CodeQL passed. Hold this correction
 with the Azure/Core follow-up until the remaining UI jobs are terminal.
+The same provider-boundary self-review also found that EdDSA accepted any
+nonempty byte sequence. The local Rust signing adapter now requires Ed25519's
+fixed 64-byte signature length before exposing it as a successful remote
+signature. Its focused negative test and all five provider golden cases pass.

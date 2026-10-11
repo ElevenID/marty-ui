@@ -342,6 +342,9 @@ fn normalize_provider_signature(
                     )
                 })
         }
+        "EdDSA" if signature.len() != 64 => Err(KmsError::InvalidResponse(
+            "Remote signer returned an invalid Ed25519 signature length.".into(),
+        )),
         _ => Ok(None),
     }
 }
@@ -3631,7 +3634,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_remote_ecdsa_signature_fails_closed() {
+    fn invalid_remote_signature_shapes_fail_closed() {
         for algorithm in ["ES256", "ES384", "ES512"] {
             assert!(matches!(
                 normalize_provider_signature(&[0, 1, 2], algorithm),
@@ -3644,6 +3647,14 @@ mod tests {
             .is_some());
         assert_eq!(
             normalize_provider_signature(&[0, 1, 2], "RS256").unwrap(),
+            None
+        );
+        assert!(matches!(
+            normalize_provider_signature(&[1; 63], "EdDSA"),
+            Err(KmsError::InvalidResponse(_))
+        ));
+        assert_eq!(
+            normalize_provider_signature(&[1; 64], "EdDSA").unwrap(),
             None
         );
         for algorithm in ["ES256", "RS256", "EdDSA"] {
