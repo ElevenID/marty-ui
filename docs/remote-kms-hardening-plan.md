@@ -15757,3 +15757,14 @@ correction, all six affected DIDComm/CI-gate cases passed and the complete
 merged CI-workflow test file passed 147 tests. Ruff, YAML parsing
 and diff checks passed. Main remains merged locally pending the previous
 head's Canvas result and one grouped push.
+
+The previous exact-head run `38157856593` is terminal: 19 jobs succeeded,
+including Canvas, the OpenBao plugin image, Rust service images, security,
+lint and browser lanes. Release Contracts failed only its stale Gateway
+command-count assertion, and Rust Service Tests (contracts) failed the
+Gateway VDS-NC envelope save under a nonexistent scoped ACL. CI Gate failed
+because those required lanes failed. The held batch contains both corrections,
+the local raw-CI OpenBao/Redis reproduction, complete merged CI-workflow test
+pass (147 tests), profile runtime database receipts and main #1269 merge.
+This is the grouped UI #1192 push candidate; it still requires a new
+exact-head hosted gate and release-artifact qualification.
