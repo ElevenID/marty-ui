@@ -10,6 +10,8 @@ use reqwest::{redirect::Policy, Client, Url};
 use serde_json::{json, Value};
 use thiserror::Error;
 
+use crate::SigningOrigin;
+
 const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RESPONSE_BYTES: usize = 8192;
 
@@ -27,14 +29,29 @@ pub enum TransitGrantError {
 pub struct TransitGrantClient {
     endpoint: Url,
     key_name: String,
+    origin: SigningOrigin,
     http: Client,
 }
 
 impl TransitGrantClient {
+    /// Each signing origin has its own non-exportable Transit key and mint
+    /// policy. A caller cannot choose a different origin's key name.
+    pub fn for_origin(endpoint: &str, origin: SigningOrigin) -> Result<Self, TransitGrantError> {
+        Self::for_managed_openbao(endpoint, origin.transit_key_name(), origin)
+    }
+
+    pub fn origin(&self) -> SigningOrigin {
+        self.origin
+    }
+
     /// `endpoint` must be the exact mounted `BAO_ADDR` root origin. Internal
     /// deployments may use their operator-configured HTTP service endpoint;
     /// external Transit callers must use a separate HTTPS-only adapter.
-    pub fn for_managed_openbao(endpoint: &str, key_name: &str) -> Result<Self, TransitGrantError> {
+    fn for_managed_openbao(
+        endpoint: &str,
+        key_name: &str,
+        origin: SigningOrigin,
+    ) -> Result<Self, TransitGrantError> {
         let mounted = std::env::var("BAO_ADDR").map_err(|_| TransitGrantError::InvalidConfig)?;
         if mounted.trim_end_matches('/') != endpoint.trim_end_matches('/') {
             return Err(TransitGrantError::InvalidConfig);
@@ -63,6 +80,7 @@ impl TransitGrantClient {
         Ok(Self {
             endpoint: url,
             key_name: key_name.to_owned(),
+            origin,
             http,
         })
     }
@@ -230,12 +248,24 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let previous = std::env::var_os("BAO_ADDR");
         std::env::set_var("BAO_ADDR", &endpoint);
-        let client = TransitGrantClient::for_managed_openbao(&endpoint, "grant-gateway").unwrap();
-        assert!(
-            TransitGrantClient::for_managed_openbao("https://other.example", "grant-gateway")
-                .is_err()
-        );
-        assert!(TransitGrantClient::for_managed_openbao(&endpoint, "../escape").is_err());
+        let client = TransitGrantClient::for_managed_openbao(
+            &endpoint,
+            "grant-gateway",
+            SigningOrigin::GatewayService,
+        )
+        .unwrap();
+        assert!(TransitGrantClient::for_managed_openbao(
+            "https://other.example",
+            "grant-gateway",
+            SigningOrigin::GatewayService,
+        )
+        .is_err());
+        assert!(TransitGrantClient::for_managed_openbao(
+            &endpoint,
+            "../escape",
+            SigningOrigin::GatewayService,
+        )
+        .is_err());
         let minted = client
             .mint("test-mint-token", b"bound.claim")
             .await
@@ -294,8 +324,12 @@ mod tests {
         assert_ne!(mint, verify);
         assert_ne!(mint, root);
         assert_ne!(verify, root);
-        let client = TransitGrantClient::for_managed_openbao(&endpoint, "marty-grant-test")
-            .expect("mounted OpenBao client");
+        let client = TransitGrantClient::for_managed_openbao(
+            &endpoint,
+            "marty-grant-test",
+            SigningOrigin::GatewayService,
+        )
+        .expect("mounted OpenBao client");
         let input = format!("marty-grant-live:{nonce}");
         let hmac = client
             .mint(&mint, input.as_bytes())

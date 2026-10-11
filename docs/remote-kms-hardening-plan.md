@@ -14305,3 +14305,11 @@ internally, so a route cannot accidentally extend an expired grant by passing
 a stale timestamp. The internal fixed-time test path remains private. The
 grant suite, warnings-denied Clippy and disposable concurrent Redis test
 pass after this change.
+
+K6 origin-policy self-review, local UI follow-up: the production Transit
+client now selects one fixed, distinct HMAC key name for each of the six
+signing origins, and bound verification rejects a client for another origin
+before contacting OpenBao. The arbitrary key-name constructor is private to
+the grant crate for isolated tests. This makes the intended separate
+mint-policy boundary explicit in Rust; the corresponding OpenBao keys,
+policies, service token mounts and sign-route checks are still required.

@@ -26,6 +26,19 @@ pub enum SigningOrigin {
     IssuancePassport,
 }
 
+impl SigningOrigin {
+    pub const fn transit_key_name(self) -> &'static str {
+        match self {
+            Self::GatewayService => "marty-sign-grant-gateway-service-v1",
+            Self::GatewayIssuerDid => "marty-sign-grant-gateway-issuer-did-v1",
+            Self::FlowWalletRequest => "marty-sign-grant-flow-wallet-v1",
+            Self::IssuanceCredential => "marty-sign-grant-issuance-credential-v1",
+            Self::IssuanceCanvas => "marty-sign-grant-issuance-canvas-v1",
+            Self::IssuancePassport => "marty-sign-grant-issuance-passport-v1",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrantClaims {
@@ -94,6 +107,9 @@ pub async fn verify_bound(
     binding: &GrantBinding<'_>,
     hmac: &str,
 ) -> Result<VerifiedGrant, GrantError> {
+    if client.origin() != claims.origin {
+        return Err(GrantError::BindingMismatch);
+    }
     let input = bound_input(claims, binding, chrono::Utc::now().timestamp())?;
     let valid = client
         .verify(verify_token, &input, hmac)
@@ -183,6 +199,26 @@ fn bounded(value: &str, max_bytes: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::collections::HashSet;
+
+    #[test]
+    fn every_signing_origin_has_a_distinct_transit_key() {
+        let origins = [
+            SigningOrigin::GatewayService,
+            SigningOrigin::GatewayIssuerDid,
+            SigningOrigin::FlowWalletRequest,
+            SigningOrigin::IssuanceCredential,
+            SigningOrigin::IssuanceCanvas,
+            SigningOrigin::IssuancePassport,
+        ];
+        let keys: HashSet<_> = origins
+            .map(SigningOrigin::transit_key_name)
+            .into_iter()
+            .collect();
+        assert_eq!(keys.len(), origins.len());
+        assert!(keys.iter().all(|key| key.starts_with("marty-sign-grant-")));
+    }
 
     fn sample_claims() -> GrantClaims {
         GrantClaims {
