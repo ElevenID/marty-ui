@@ -15527,3 +15527,7 @@ private atomic replacement for all scoped runtime and grant tokens, inherited
 bootstrap-token handoff, and symlink rejection. This supplements the Windows
 44-pass suite, whose three POSIX cases were skipped. It is helper-behavior
 evidence, not an installed bundle or production OpenBao qualification.
+
+The registered-key route fixture now additionally reads its raw Redis registry
+row and asserts the scoped OpenBao token is absent. The complete disposable
+OpenBao/Redis/PostgreSQL adapter probe passed after this assertion was added.

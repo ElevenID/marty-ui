@@ -757,6 +757,12 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         )
         .await
         .unwrap();
+    let mut stored_connection = registry.connection();
+    let stored_registry: String = stored_connection
+        .get(storage_key(&organization_id))
+        .await
+        .unwrap();
+    assert!(!stored_registry.contains(&bao_token));
     let documents = DocumentStore::from_connection(registry.connection());
     let profiles = ProfileStore::from_connection(registry.connection());
     let fixture: Value =
