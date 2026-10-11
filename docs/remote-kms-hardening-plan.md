@@ -14344,3 +14344,9 @@ Gateway mint and Signing Keys verify succeeded, while Flow-to-Gateway mint,
 verify-token mint, mint-token verify and mint-token key-read attempts failed.
 The disposable container and volumes were removed. Runtime mounts/config,
 producer authorization and sign-route enforcement remain open.
+
+The external self-host OpenBao bootstrap now emits the same seven scoped
+grant-token files beside its existing service credentials. Its shell syntax
+and diff hygiene pass locally; unlike the Raft bootstrap, this external
+bootstrap path has not yet had a live end-to-end run. Neither supported
+runtime mounts nor grant enforcement is complete.

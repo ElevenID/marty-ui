@@ -73,12 +73,14 @@ docker run --rm \
     -e DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="/work-didcomm/${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
     -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
+    -e GRANT_TOKEN_OUTPUT_DIR=/work-grants \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
     -v "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}:/work-signing" \
     -v "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}:/work-didcomm" \
     -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
     -v "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}:/work-callback" \
+    -v "${SELFHOST_SECRET_DIR}:/work-grants" \
     quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf \
     /bin/sh -ec '
 json_field() {
@@ -89,6 +91,27 @@ export VAULT_ADDR="$BAO_ADDR"
 export VAULT_TOKEN="$BAO_TOKEN"
 
 /bin/sh /scripts/openbao-init.sh
+
+write_grant_token() {
+    grant_policy="$1"
+    grant_file="$2"
+    grant_json="$(bao token create -address="$BAO_ADDR" -policy="$grant_policy" -no-default-policy -orphan -format=json)"
+    grant_token="$(json_field "$grant_json" client_token)"
+    if [ -z "$grant_token" ]; then
+        echo "Failed to mint $grant_policy token." >&2
+        exit 1
+    fi
+    if [ -e "$grant_file" ]; then
+        chmod u+w "$grant_file" 2>/dev/null || true
+    fi
+    printf "%s" "$grant_token" > "$grant_file"
+    chmod 0600 "$grant_file"
+}
+for grant_origin in gateway-service gateway-issuer-did flow-wallet issuance-credential issuance-canvas issuance-passport; do
+    grant_file_origin="$(printf "%s" "$grant_origin" | tr "-" "_")"
+    write_grant_token "sign-grant-mint-$grant_origin" "$GRANT_TOKEN_OUTPUT_DIR/sign_grant_mint_${grant_file_origin}_token"
+done
+write_grant_token sign-grant-verify "$GRANT_TOKEN_OUTPUT_DIR/sign_grant_verify_token"
 
 token_json="$(bao token create -address="$BAO_ADDR" -policy=credential-service -orphan -format=json)"
 service_token="$(json_field "$token_json" client_token)"
@@ -162,3 +185,4 @@ echo "Wrote scoped DIDComm Issuance token to ${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FIL
 echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the notification_openbao_token secret in the self-host stack."
 echo "Wrote scoped passport callback HMAC token to ${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}"
+echo "Wrote seven scoped signing-grant tokens to ${SELFHOST_SECRET_DIR}"
