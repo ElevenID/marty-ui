@@ -79,6 +79,7 @@ def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -
         "github.event_name == 'workflow_dispatch' && "
         "inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas'"
     )
+    assert diagnostic["timeout-minutes"] == 20
     assert not diagnostic.get("continue-on-error", False)
     assert diagnostic["env"] == {
         SWITCH: "1",
@@ -88,6 +89,7 @@ def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -
     for test_name in (
         "eight_fixed_published_databases_keep_migration_heads",
         "immutable_published_base_keeps_revision_parity_and_case_isolation",
+        "concurrent_published_base_keeps_eight_cases_isolated",
         "failed_published_base_restore_removes_only_its_owned_container",
     ):
         assert f"canvas_published_database::diagnostic_tests::{test_name}" in diagnostic["run"]

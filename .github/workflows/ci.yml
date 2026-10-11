@@ -1883,6 +1883,7 @@ jobs:
           fi
       - name: Verify opted-in Canvas migrated-base parity and isolation
         if: github.event_name == 'workflow_dispatch' && inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas'
+        timeout-minutes: 20
         working-directory: rust
         shell: bash
         env:
@@ -1900,6 +1901,7 @@ jobs:
           for test_name in \
             canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads \
             canvas_published_database::diagnostic_tests::immutable_published_base_keeps_revision_parity_and_case_isolation \
+            canvas_published_database::diagnostic_tests::concurrent_published_base_keeps_eight_cases_isolated \
             canvas_published_database::diagnostic_tests::failed_published_base_restore_removes_only_its_owned_container; do
             python3 ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" "$test_name"
           done
