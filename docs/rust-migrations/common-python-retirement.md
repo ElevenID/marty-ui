@@ -3,10 +3,11 @@
 This cleanup is based on protected UI main `da70b2f22b5942b826cf0680f03f8f8559d5f1b8`.
 The nine `services/common` runtime modules had no imports outside that directory
 and its Python tests. The public service Docker context already excludes the
-whole directory through `services/Dockerfile.dockerignore`. The migration
-entrypoint imports `passport_disposable_identity`, not `common`; its image copied
-the unused directory as source but did not execute it. Removing these files
-does not select a new service implementation.
+whole directory through `services/Dockerfile.dockerignore`. At that source
+revision, the migration image copied the unused directory but did not execute
+it. The combined cutover now uses the shared Rust bootstrap binary and no
+longer copies `services/` into the migration image. Removing these files does
+not select a new service implementation.
 
 | Retired Python | Retained behavior owner or evidence |
 | --- | --- |
@@ -24,11 +25,12 @@ ownership metadata now rejects reintroducing any `services/common/*.py` or
 that protocol-version file. Historical migration plans may still mention
 their former paths as point-in-time evidence.
 
-Python remaining in the local `services/` tree is `run_all_migrations.py`
-and its tests, `passport_disposable_identity.py` (used by migration and
-disposable passport scripts), `conftest.py`, and `__init__.py`. The production
-`db-migrate` job still runs Python from `services/Dockerfile.migrations`; its
-replacement belongs to the separate bootstrap work. Current main's `issuance`,
-`issuance-migrations`, and `canvas-sync-worker` Compose services use native
-Rust binaries. Earlier frozen release bundles must be inventoried by their
-own exact source revision; this main-tree statement does not reclassify them.
+Python remaining in the local `services/` tree is `conftest.py`,
+`test_production_entrypoints.py`, and `__init__.py`; these are test/package
+files and are absent from the migration image. The disposable identity helper
+now lives in `scripts/` for demo/test tooling. The `db-migrate` image runs
+the shared Rust bootstrap before the Rust notification migration on this
+combined branch. At base revision `da70b2f`, the `issuance`,
+`issuance-migrations`, and `canvas-sync-worker` Compose services already used
+native Rust binaries. Earlier frozen release bundles must be inventoried by
+their own exact source revision; this branch statement does not reclassify them.
