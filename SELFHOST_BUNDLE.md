@@ -144,10 +144,13 @@ docker compose --env-file .env.selfhost.production.local \
 ```
 
 Compose should report the worker as disabled. This is a configuration preview,
-not a qualified no-Canvas product: issuance still carries Canvas secret,
-migration, and code dependencies. Do not use the overlay for an existing Canvas
-installation. Production use and a default switch require a pre-up migration
-check, no-Canvas startup/business evidence, and a rehearsed upgrade/rollback.
+not a qualified no-Canvas product: the overlay removes the Canvas shared secret
+from the two issuance services and forces Canvas features off, but issuance
+still carries Canvas code and migration dependencies. Do not use the overlay
+for an existing Canvas installation, or combine it with `--profile canvas` to
+enable Canvas; use the default bundle for that installation. Production use and
+a default switch require a pre-up migration check, no-Canvas startup/business
+evidence, and a rehearsed upgrade/rollback.
 
 ## Notes
 
