@@ -99,9 +99,8 @@ of the new reference and the existing startup replay. The 53 affected Python
 contracts, strict all-target Clippy, Rustfmt, Ruff and Bash syntax checks passed.
 Fresh hosted checks are still required for this reference checkpoint.
 
-`worker_rest_reference_matches_published_process` regenerates the complete
-reference in the mandatory configured image/schema suite. The native
-`worker_rest_matches_frozen_published_process` gate now launches a child replay
+The REST reference remains a frozen historical corpus. The
+`worker_rest_matches_frozen_published_process` gate launches a child replay
 with the same frozen HTTPS bodies. Its Rust test launches the actual worker
 binary through the shared process owner, using native encrypted OAuth persistence
 and a separate fresh published-schema database. The Python parent checks every
@@ -113,9 +112,15 @@ The native HTTPS/process-signal gate requires Linux, matching the existing
 child-scoped trust harness. Windows compilation is not an execution pass for
 this gate. Its helper test returns without the parent fixture environment during
 normal test enumeration; the mandatory parent launches that exact helper with
-the real fixture. Both test names are checked by the configured CI runner.
+the real fixture. The native test name and child helper are checked by the
+configured CI runner.
 Keep the original reference immutable when diagnosing native differences and
 preserve stronger native safety/event behavior where explicitly established.
+
+The K8 hardening follow-up retires the live Python REST regeneration test and
+attaches fresh full-main evidence to the successful native HTTPS replay. The
+historical JSON remains the frozen comparison input. This follow-up still needs
+hosted exact-head qualification before it can replace earlier evidence.
 
 The certificate helper's existing AGS/NRPS HTTPS gate remains mandatory on Linux.
 A direct Windows invocation failed at its trusted-child read with both the

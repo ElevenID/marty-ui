@@ -105,7 +105,10 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
 
     direct = inventory["direct_runner_corpora"]
     retired = set(inventory["retired_from_preparer"])
-    assert retired == {"run_canvas_worker_startup_oracle.py"}
+    assert retired == {
+        "run_canvas_worker_rest_oracle.py",
+        "run_canvas_worker_startup_oracle.py",
+    }
     shared = inventory["shared_runner_corpora"]
     metadata = inventory["external_fixture_corpora"]
     listed = (

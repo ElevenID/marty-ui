@@ -1,6 +1,6 @@
 {
   "schema": "marty.canvas-worker-tier-obligations/v1",
-  "scope": "The 33 historical-reference cases, four preflight-capable native cases, and 20 nested native-validation cases; this is not an inventory of either complete Canvas target.",
+  "scope": "The 32 remaining historical-reference cases, native REST replay, four preflight-capable native cases, and 20 nested native-validation cases; this is not an inventory of either complete Canvas target.",
   "package": "marty-canvas-worker-acceptance",
   "target": "canvas_published_worker_contract",
   "test_source": "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs",
@@ -23,7 +23,6 @@
     {"test": "worker_provider_generation_reference_matches_published_process", "assertion": "Published provider-generation report equals its frozen corpus."},
     {"test": "worker_oauth_revocation_secrets_reference_matches_published_process", "assertion": "Published OAuth secret-handling report equals its frozen corpus."},
     {"test": "worker_oauth_revocation_counters_reference_matches_published_cycle", "assertion": "Published OAuth cycle counters equal the frozen corpus."},
-    {"test": "worker_rest_reference_matches_published_process", "assertion": "Published REST worker report equals its frozen corpus."},
     {"test": "worker_facts_reference_matches_published_process", "assertion": "Published evidence-fact report equals its frozen corpus."},
     {"test": "worker_reclaimers_retry_reference_matches_published_process", "assertion": "Published retrying-reclaimer report equals its frozen corpus."},
     {"test": "worker_reclaimers_reference_matches_published_process", "assertion": "Published reclaimer report equals its frozen corpus."},
@@ -46,6 +45,7 @@
     {"test": "worker_resources_unavailable_reference_matches_published_process", "assertion": "Published unavailable-resource report equals its frozen corpus."},
     {"test": "worker_retry_reference_matches_published_process", "assertion": "Published retry report equals its frozen corpus."}
   ],
+  "native_rest": {"test": "worker_rest_matches_frozen_published_process", "assertion": "Native REST worker process and database effects equal four frozen observations.", "inputs": ["contracts/canvas-worker-rest-oracle.json", "contracts/canvas-worker-rest-scenarios.json", "contracts/canvas-worker-rest-current-inputs.json"]},
   "preflights": [
     {"test": "worker_mixed_roster_matches_frozen_published_process", "mode": "mixed-roster-preflight", "routine": "tier-excluded native matrix; not run as a routine preflight", "assertion": "Owned native mixed-roster matrix matches the frozen published behavior.", "inputs": ["contracts/canvas-worker-mixed-roster-oracle.json", "contracts/canvas-worker-mixed-roster-scenarios.json"]},
     {"test": "worker_body_timeout_matches_frozen_published_process", "mode": "body-timeout-preflight", "routine": "tier-excluded native matrix; not run as a routine preflight", "assertion": "Owned native partial-body timeout matrix matches frozen published behavior.", "inputs": ["contracts/canvas-worker-body-timeout-oracle.json", "contracts/canvas-worker-body-timeout-scenarios.json"]},

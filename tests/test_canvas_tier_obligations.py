@@ -58,7 +58,7 @@ def test_ci_inventory_has_no_rust_runtime_consumer() -> None:
 
 def test_worker_package_migration_accounts_for_all_original_case_ids() -> None:
     names = set(MIGRATION["case_ids"])
-    assert len(names) == 147
+    assert len(names) == 146
     assert discovered() <= names
     validate_package_migration(MIGRATION, names)
 
@@ -67,7 +67,7 @@ def test_worker_package_migration_rejects_same_count_substitution() -> None:
     names = set(MIGRATION["case_ids"])
     names.remove("worker_repository_root_is_independent_of_cargo_package_depth")
     names.add("worker_same_count_substitute")
-    assert len(names) == 147
+    assert len(names) == 146
     with pytest.raises(ValueError, match="missing a compiled case"):
         validate_package_migration(MIGRATION, names)
 
@@ -75,12 +75,12 @@ def test_worker_package_migration_rejects_same_count_substitution() -> None:
 def discovered() -> set[str]:
     return {
         entry["test"] for entry in INVENTORY["historical"] + INVENTORY["preflights"]
-    }
+    } | {INVENTORY["native_rest"]["test"]}
 
 
 def test_exact_current_inventory_is_source_and_fixture_backed() -> None:
     validate(INVENTORY, discovered())
-    assert len(INVENTORY["historical"]) == 33
+    assert len(INVENTORY["historical"]) == 32
     assert len(INVENTORY["preflights"]) == 4
     assert (
         "worker_oauth_revocation_counters_reference_matches_published_cycle"
@@ -177,7 +177,7 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
         *sorted(selected_serial),
     )
     if mode == "full-after-preflights" and qualification == "0":
-        assert len(omitted - {serial, deadline}) == 37
+        assert len(omitted - {serial, deadline}) == 36
     if mode == "full-after-preflights" and qualification == "1":
         assert len(omitted - {serial, deadline}) == 6
 
@@ -216,7 +216,7 @@ def test_same_count_wrong_selected_case_fails_closed() -> None:
     omitted = {serial, extra}
     omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
     omitted |= {entry["test"] for entry in INVENTORY["historical"][1:]}
-    assert len(omitted - {serial}) == 37
+    assert len(omitted - {serial}) == 36
     with pytest.raises(ValueError, match="selection drift"):
         validate_selection(
             INVENTORY,

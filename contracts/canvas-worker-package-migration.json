@@ -143,7 +143,6 @@
     "worker_resources_unavailable_reference_matches_published_process",
     "worker_rest_matches_frozen_published_process",
     "worker_rest_native_child",
-    "worker_rest_reference_matches_published_process",
     "worker_retry_after_matches_frozen_published_process",
     "worker_retry_after_reference_matches_published_process",
     "worker_retry_matches_frozen_published_process",

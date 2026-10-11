@@ -399,7 +399,6 @@ def prepare():
             ),
             ("MARTY_CANVAS_WORKER_RETRY_ORACLE", "worker_retry", "worker_retry"),
             ("MARTY_CANVAS_WORKER_FACTS_ORACLE", "worker_facts", "worker_facts"),
-            ("MARTY_CANVAS_WORKER_REST_ORACLE", "worker_rest", "worker_rest"),
             ("MARTY_CANVAS_JSON_DEPTH_ORACLE", "json_depth", "json_depth"),
             ("MARTY_CANVAS_JSON_CONSUMER_ORACLE", "json_consumer", "json_consumer"),
             ("MARTY_CANVAS_UTF7_CONSUMER_ORACLE", "utf7_consumer", "utf7_consumer"),

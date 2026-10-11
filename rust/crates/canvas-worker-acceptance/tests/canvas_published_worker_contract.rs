@@ -1283,7 +1283,19 @@ async fn worker_provider_child(scenario: &str) {
 
 #[test]
 fn worker_rest_matches_frozen_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1")
+        || !cfg!(target_os = "linux")
+    {
+        return;
+    }
+    let worker_binary = canvas_worker_process_signals::worker_executable();
+    let worker_binary_before = canvas_startup_attestation::file_sha(&worker_binary);
     assert_worker_https("rest");
+    canvas_rest_requalification::emit_after_rest_pass(
+        &canvas_published_database::repository_root(),
+        &worker_binary,
+        &worker_binary_before,
+    );
 }
 
 #[test]
@@ -1385,27 +1397,6 @@ async fn worker_rest_native_child() {
 
 #[path = "support/canvas_rest_requalification.rs"]
 mod canvas_rest_requalification;
-
-#[tokio::test]
-async fn worker_rest_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_rest()
-        .await
-        .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-rest-oracle.json"
-    ))
-    .unwrap();
-    let observed = owned.oracle.clone().unwrap();
-    assert_eq!(observed, expected);
-    owned.close().unwrap();
-    canvas_rest_requalification::emit_after_rest_pass(
-        &canvas_published_database::repository_root(),
-        &observed,
-    );
-}
 
 #[tokio::test]
 async fn worker_facts_reference_matches_published_process() {

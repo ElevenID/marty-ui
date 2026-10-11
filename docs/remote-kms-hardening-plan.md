@@ -13553,3 +13553,32 @@ the sidecar, producer inventory and CI test-name guards together. Do not
 delete the frozen expected observations or weaken the four durable native
 checks. Other Python oracles still import the REST/startup helper modules,
 so their shared helper removal is a later coordinated step.
+
+2026-10-10 K8 REST retirement batch (committed; hosted qualification pending):
+the four-stage native HTTPS replay now owns the full-main REST attestation. The
+attestation binds the frozen REST corpus, ten reviewed native runtime inputs,
+the pinned images/schema fixture, compiled test and worker bytes, exact main
+run/attempt, and successful database/process cleanup. The separate Python
+REST regeneration test, preparer selector, and capture CLI route were removed;
+the producer and tier inventories, CI name guards, and dependent input pins
+were updated together. The historical corpus remains frozen for comparison.
+This K8 increment remains unqualified until hosted exact-head CI and full
+self-review complete. Other Python oracle helpers still import the raw-key
+REST/startup modules, so no claim of complete raw-key fixture retirement follows.
+
+The prior published UI head `8f2ef205` has successful CodeQL run
+[38096048618](https://github.com/ElevenID/marty-ui/actions/runs/38096048618).
+Its PR CI [38096048823](https://github.com/ElevenID/marty-ui/actions/runs/38096048823)
+found two release-contract assertion failures: a stale count for Canvas
+published probe constructors and a stale Issuance Signing Keys URL expectation.
+The current worktree batch updates the count after the REST selector removal
+and checks the Issuance direct Signing Keys route while retaining Verification's
+Gateway route. This is local correction evidence, not a green hosted result.
+Local verification for the grouped batch: 184 Python contract tests passed with
+406 subtests and one skip; 144 CI-workflow tests passed with one known Windows
+Git Bash timeout test excluded; three Rust REST attestation unit tests,
+`cargo +1.95.0 clippy` on the Canvas worker acceptance target, the Issuance
+capture-example compile check, Rustfmt, Ruff and Bash syntax passed. A broader
+preflight run found three obsolete REST roster/selector expectations; each was
+corrected and its exact failing test passed on rerun. Windows does not execute
+the native REST HTTPS worker gate, so Linux hosted Canvas remains mandatory.

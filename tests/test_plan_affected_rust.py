@@ -240,7 +240,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 ]
                 self.assertEqual(
                     environment["SIGNING_KEYS_INTERNAL_URL"],
-                    "http://gateway:8000/internal/signing-keys",
+                    (
+                        "http://signing-keys:8017/internal"
+                        if edge["deployment_service"] == "issuance"
+                        else "http://gateway:8000/internal/signing-keys"
+                    ),
                 )
                 self.assertIn(
                     edge["deployment_marker"],

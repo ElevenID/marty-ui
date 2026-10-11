@@ -65,7 +65,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "worker_provider_signals",
     "worker_reclaimers",
     "worker_reclaimers_retry",
-    "worker_rest",
     "worker_retry",
 ];
 
@@ -899,19 +898,6 @@ impl PublishedDatabase {
             )),
             Some("canvas-issued-review-scenarios.json"),
             true,
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_rest() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_rest",
-                "worker-rest",
-                "worker_rest",
-                "MARTY_CANVAS_WORKER_REST_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
         )
         .await
     }

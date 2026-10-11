@@ -59,7 +59,6 @@ async fn main() -> Result<(), String> {
         "utf7-consumer" => PublishedDatabase::start_with_utf7_consumer().await?,
         "json-consumer" => PublishedDatabase::start_with_json_consumer().await?,
         "json-depth" => PublishedDatabase::start_with_json_depth().await?,
-        "worker-rest" => PublishedDatabase::start_with_worker_rest().await?,
         "worker-facts" => PublishedDatabase::start_with_worker_facts().await?,
         "worker-retry" => PublishedDatabase::start_with_worker_retry().await?,
         "worker-provider-sigint" => PublishedDatabase::start_with_worker_provider_signal("SIGINT").await?,

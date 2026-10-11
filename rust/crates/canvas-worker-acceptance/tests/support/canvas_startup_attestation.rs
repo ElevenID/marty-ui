@@ -29,14 +29,14 @@ pub(super) fn main_run_from(env: impl Fn(&str) -> Option<String>) -> Option<Valu
         return None;
     }
     let required = |name| {
-        env(name).unwrap_or_else(|| panic!("Missing startup attestation run identity: {name}"))
+        env(name).unwrap_or_else(|| panic!("Missing Canvas attestation run identity: {name}"))
     };
     let event = required("GITHUB_EVENT_NAME");
     assert!(matches!(event.as_str(), "schedule" | "workflow_dispatch"));
     let repository = required("GITHUB_REPOSITORY");
     assert_eq!(repository, "ElevenID/marty-ui");
     let sha = required("GITHUB_SHA");
-    assert!(valid_sha(&sha, 40), "Invalid startup attestation main SHA");
+    assert!(valid_sha(&sha, 40), "Invalid Canvas attestation main SHA");
     let run_id = required("GITHUB_RUN_ID");
     let attempt = required("GITHUB_RUN_ATTEMPT");
     assert!(run_id.parse::<u64>().is_ok_and(|number| number > 0));
@@ -62,13 +62,13 @@ fn git_rev_parse(root: &Path, args: &[&str]) -> String {
         .arg("rev-parse")
         .args(args)
         .output()
-        .expect("Startup attestation cannot invoke Git for checkout identity");
+        .expect("Canvas attestation cannot invoke Git for checkout identity");
     assert!(
         output.status.success(),
-        "Startup attestation cannot verify Git checkout identity"
+        "Canvas attestation cannot verify Git checkout identity"
     );
     String::from_utf8(output.stdout)
-        .expect("Startup attestation Git checkout identity is not UTF-8")
+        .expect("Canvas attestation Git checkout identity is not UTF-8")
         .trim()
         .to_owned()
 }
@@ -78,25 +78,25 @@ fn verify_checkout_identity(root: &Path, run: &Value) {
     assert_eq!(
         Path::new(&checkout_root)
             .canonicalize()
-            .expect("Startup attestation Git root is unavailable"),
+            .expect("Canvas attestation Git root is unavailable"),
         root.canonicalize()
-            .expect("Startup attestation repository root is unavailable"),
-        "Startup attestation input root is not the checked-out repository root"
+            .expect("Canvas attestation repository root is unavailable"),
+        "Canvas attestation input root is not the checked-out repository root"
     );
     let head = git_rev_parse(root, &["--verify", "HEAD"]);
     assert!(
         valid_sha(&head, 40),
-        "Invalid startup attestation checkout SHA"
+        "Invalid Canvas attestation checkout SHA"
     );
     assert_eq!(
         run["sha"].as_str(),
         Some(head.as_str()),
-        "Startup attestation GITHUB_SHA does not match checked-out HEAD"
+        "Canvas attestation GITHUB_SHA does not match checked-out HEAD"
     );
 }
 
 pub(super) fn normalized_sha(path: &Path) -> String {
-    let source = fs::read_to_string(path).expect("Startup capture input is missing or not UTF-8");
+    let source = fs::read_to_string(path).expect("Canvas input is missing or not UTF-8");
     format!(
         "{:x}",
         Sha256::digest(source.replace("\r\n", "\n").replace('\r', "\n").as_bytes())
@@ -104,13 +104,13 @@ pub(super) fn normalized_sha(path: &Path) -> String {
 }
 
 pub(super) fn file_sha(path: &Path) -> String {
-    let mut source = File::open(path).expect("Startup attestation executable is unavailable");
+    let mut source = File::open(path).expect("Canvas attestation executable is unavailable");
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let count = source
             .read(&mut buffer)
-            .expect("Startup attestation executable read failed");
+            .expect("Canvas attestation executable read failed");
         if count == 0 {
             break;
         }
@@ -119,20 +119,14 @@ pub(super) fn file_sha(path: &Path) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn verified_worker_binary_sha(path: &Path, before: &str, resolved: &Path) -> String {
+pub(super) fn verified_worker_binary_sha(path: &Path, before: &str, resolved: &Path) -> String {
     assert!(
         path == resolved,
-        "Startup replay worker binary identity changed"
+        "Native replay worker binary identity changed"
     );
-    assert!(
-        valid_sha(before, 64),
-        "Invalid startup worker binary digest"
-    );
+    assert!(valid_sha(before, 64), "Invalid native worker binary digest");
     let after = file_sha(path);
-    assert!(
-        after == before,
-        "Startup replay worker binary bytes changed"
-    );
+    assert!(after == before, "Native replay worker binary bytes changed");
     after
 }
 
@@ -262,11 +256,11 @@ fn persist_evidence(output: &Path, evidence: &Value) {
         .write(true)
         .create_new(true)
         .open(output)
-        .expect("Refusing to overwrite startup attestation");
-    serde_json::to_writer_pretty(&mut file, evidence).expect("Startup attestation write failed");
+        .expect("Refusing to overwrite Canvas attestation");
+    serde_json::to_writer_pretty(&mut file, evidence).expect("Canvas attestation write failed");
     file.write_all(b"\n")
-        .expect("Startup attestation write failed");
-    file.sync_all().expect("Startup attestation sync failed");
+        .expect("Canvas attestation write failed");
+    file.sync_all().expect("Canvas attestation sync failed");
 }
 
 #[cfg(test)]

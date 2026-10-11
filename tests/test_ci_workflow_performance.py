@@ -1793,12 +1793,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "contracts/canvas-worker-tier-obligations.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
-            "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
-            "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",
+            "contracts/canvas-worker-tier-obligations.json",
+            "scripts/ci/check_canvas_tier_obligations.py",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
@@ -3303,9 +3303,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert "grep -Fx 'status_provider_matches_json_depth_reference: test'" in published
     assert (
-        "grep -Fx 'worker_rest_reference_matches_published_process: test'" in published
+        "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
     )
-    assert "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
     assert "grep -Fx 'worker_rest_native_child: test'" in published
     assert "grep -Fx 'worker_retry_matches_frozen_published_process: test'" in published
     assert (

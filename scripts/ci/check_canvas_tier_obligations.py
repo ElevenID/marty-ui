@@ -62,7 +62,7 @@ def validate_package_migration(migration: dict, listed: set[str], root: Path = R
     case_ids = migration.get("case_ids")
     require(
         isinstance(case_ids, list)
-        and len(case_ids) == 147
+        and len(case_ids) == 146
         and all(isinstance(name, str) and name for name in case_ids)
         and case_ids == sorted(set(case_ids)),
         "Canvas package migration identity list drift",
@@ -107,9 +107,10 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
 
     historical = inventory["historical"]
     preflights = inventory["preflights"]
-    names = [entry["test"] for entry in historical + preflights]
+    native_rest = inventory["native_rest"]
+    names = [entry["test"] for entry in historical + preflights] + [native_rest["test"]]
     require(
-        len(historical) == 33 and len(preflights) == 4,
+        len(historical) == 32 and len(preflights) == 4,
         "Canvas tier inventory count changed",
     )
     require(len(names) == len(set(names)), "Duplicate Canvas obligation")
@@ -120,6 +121,20 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
     require(
         expected_historical == actual_historical,
         "Historical Canvas discovery/inventory mismatch",
+    )
+    require(
+        native_rest["test"] == "worker_rest_matches_frozen_published_process"
+        and native_rest["test"] in listed
+        and f"fn {native_rest['test']}(" in text
+        and native_rest.get("assertion", "").strip()
+        and native_rest["inputs"]
+        == [
+            "contracts/canvas-worker-rest-oracle.json",
+            "contracts/canvas-worker-rest-scenarios.json",
+            "contracts/canvas-worker-rest-current-inputs.json",
+        ]
+        and all((root / name).is_file() for name in native_rest["inputs"]),
+        "Native REST replay obligation drift",
     )
     require(
         {entry["test"] for entry in preflights} <= listed,
@@ -312,7 +327,7 @@ def main() -> int:
         validate(inventory, listed)
         validate_package_migration(migration, listed)
         print(
-            "Canvas tier inventory: 33 historical references and 4 native cases discovered; "
+            "Canvas tier inventory: 32 historical references, native REST replay, and 4 native preflights discovered; "
             "147 package-migrated cases retained"
         )
     else:
