@@ -243,6 +243,29 @@ def assert_models(approved, actual):
         else:
             assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in environment
             assert envelope not in mounts
+    grant_roles = {
+        "gateway": (
+            "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_gateway_service_token",
+        ),
+        "flow": ("FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_flow_wallet_token"),
+        "signing-keys": ("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "sign_grant_verify_token"),
+    }
+    for owner, (setting, secret) in grant_roles.items():
+        assert actual["secrets"][secret]["file"].endswith(f"/{secret}")
+        for name, service in actual["services"].items():
+            environment = service.get("environment", {})
+            mounts = [item["source"] for item in service.get("secrets", [])]
+            if name == owner:
+                assert environment[setting] == f"/run/secrets/{secret}"
+                assert mounts.count(secret) == 1
+            else:
+                assert setting not in environment
+                assert secret not in mounts
+    assert "BAO_TOKEN_FILE" not in actual["services"]["gateway"]["environment"]
+    assert "openbao_service_token" not in [
+        item["source"] for item in actual["services"]["gateway"]["secrets"]
+    ]
     tls_url = "https://signing-keys:8018/internal"
     ca_path = "/run/secrets/workload_identity_ca_cert"
     for name in ("issuance", "issuance-native", "canvas-sync-worker"):
@@ -345,7 +368,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "5d72ff9654f8c07960449de43dd6818aa2bf8273ca6834ba75ec27ffe0e9d01e"
+        == "af3f02937c814e9f89bd68e70228486153f6339678548d72073f8ae14e9c412a"
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])

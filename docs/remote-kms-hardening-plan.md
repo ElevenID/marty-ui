@@ -14637,6 +14637,16 @@ general/root token environment entry and self-hosted secret mount have been
 removed locally. Parsed Compose now confirms Gateway has no general OpenBao
 token while retaining its scoped mint token. Keep this with the next grouped
 push after the currently running UI CI reaches a terminal result.
+The published `578683999` UI CI run exposed an unreviewed self-host Compose
+model change in Rust Service Images. The approved whole-model snapshot lagged
+the Flow mint token, Signing Keys verify token, and new Gateway mint token
+mounts. The local follow-up refreshed only those reviewed Compose differences
+and the snapshot digest, and added independent role-isolation assertions:
+each token is present exactly once in its owner and absent from all other
+services; Gateway has no general OpenBao token. The full local
+`test_selfhost_native_owner_compose.py` gate now passes for default, empty,
+and custom interpolation plus required-input rejection. Wait for the rest of
+the current hosted run before sending this grouped correction.
 
 Final-sign inventory for the next authorization batch: `compat::sign_with_service`
 reaches `kms::sign` and is used by both public service-sign and DID-mediated
