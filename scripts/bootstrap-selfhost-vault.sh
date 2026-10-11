@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+umask 077
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "${SCRIPT_DIR}/.." && pwd)
@@ -55,12 +56,41 @@ PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR=$(dirname "${PASSPORT_CALLBACK_TOKEN_OUTPUT_F
 PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME=$(basename "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 
 mkdir -p "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
+for output_dir in "${SERVICE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"; do
+    if [ -L "${output_dir}" ] || [ ! -d "${output_dir}" ]; then
+        echo "Scoped token output directory must be a real directory." >&2
+        exit 1
+    fi
+    if [ "$(uname -s)" = "Linux" ]; then
+        chmod 0700 "${output_dir}"
+    fi
+done
 
 echo "Configuring external Vault/OpenBao at ${BAO_ADDR}..."
+# Pass the token through Docker's inherited environment, not the process argv.
+export BAO_TOKEN
+if [ -n "${SELFHOST_BOOTSTRAP_CONTAINER_NAME:-}" ]; then
+    case "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" in
+        marty-selfhost-bootstrap-*-helper) ;;
+        *) echo "Invalid disposable bootstrap container name." >&2; exit 1 ;;
+    esac
+    case "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" in
+        *[!a-z0-9-]*) echo "Invalid disposable bootstrap container name." >&2; exit 1 ;;
+    esac
+    set -- --name "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" \
+        --label "marty.selfhost.bootstrap-handoff=${SELFHOST_BOOTSTRAP_CONTAINER_NAME}"
+else
+    set --
+fi
+# The shipped Linux install uses an external, caller-owned private secret dir.
+# The image's default UID cannot write it; the CLI itself needs no image-owned state.
+if [ "$(uname -s)" = "Linux" ]; then
+    set -- "$@" --user "$(id -u):$(id -g)"
+fi
 
-docker run --rm \
+docker run --rm "$@" \
     -e BAO_ADDR="${BAO_ADDR}" \
-    -e BAO_TOKEN="${BAO_TOKEN}" \
+    -e BAO_TOKEN \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
     -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
@@ -70,6 +100,24 @@ docker run --rm \
     -v "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}:/work-callback" \
     quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf \
     /bin/sh -ec '
+umask 077
+private_tmp=""
+trap "rm -f -- \"\$private_tmp\"" EXIT HUP INT TERM
+write_private_token() {
+    output_file="$1"
+    token_value="$2"
+    output_dir="${output_file%/*}"
+    if [ -L "$output_dir" ] || [ ! -d "$output_dir" ] ||
+       [ -L "$output_file" ] || { [ -e "$output_file" ] && [ ! -f "$output_file" ]; }; then
+        echo "Scoped token output path is unsafe." >&2
+        exit 1
+    fi
+    private_tmp="$(mktemp "$output_dir/.openbao-token.XXXXXX")"
+    chmod 0600 "$private_tmp"
+    printf "%s" "$token_value" > "$private_tmp"
+    mv -f "$private_tmp" "$output_file"
+    private_tmp=""
+}
 json_field() {
     printf "%s" "$1" | tr -d "\n" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p"
 }
@@ -87,11 +135,7 @@ if [ -z "$service_token" ]; then
     exit 1
 fi
 
-if [ -e "$SERVICE_TOKEN_OUTPUT_FILE" ]; then
-    chmod u+w "$SERVICE_TOKEN_OUTPUT_FILE" 2>/dev/null || true
-fi
-printf "%s" "$service_token" > "$SERVICE_TOKEN_OUTPUT_FILE"
-chmod 0600 "$SERVICE_TOKEN_OUTPUT_FILE"
+write_private_token "$SERVICE_TOKEN_OUTPUT_FILE" "$service_token"
 
 notification_token_json="$(bao token create -address="$BAO_ADDR" -policy=notification-webhook-service -orphan -format=json)"
 notification_token="$(json_field "$notification_token_json" client_token)"
@@ -101,11 +145,7 @@ if [ -z "$notification_token" ]; then
     exit 1
 fi
 
-if [ -e "$NOTIFICATION_TOKEN_OUTPUT_FILE" ]; then
-    chmod u+w "$NOTIFICATION_TOKEN_OUTPUT_FILE" 2>/dev/null || true
-fi
-printf "%s" "$notification_token" > "$NOTIFICATION_TOKEN_OUTPUT_FILE"
-chmod 0600 "$NOTIFICATION_TOKEN_OUTPUT_FILE"
+write_private_token "$NOTIFICATION_TOKEN_OUTPUT_FILE" "$notification_token"
 
 callback_token_json="$(bao token create -address="$BAO_ADDR" -policy=passport-callback-hmac-service -orphan -format=json)"
 callback_token="$(json_field "$callback_token_json" client_token)"
@@ -113,11 +153,7 @@ if [ -z "$callback_token" ]; then
     echo "Failed to mint passport callback HMAC token." >&2
     exit 1
 fi
-if [ -e "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE" ]; then
-    chmod u+w "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE" 2>/dev/null || true
-fi
-printf "%s" "$callback_token" > "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE"
-chmod 0600 "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE"
+write_private_token "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE" "$callback_token"
 '
 
 echo "Wrote scoped credential-service token to ${SERVICE_TOKEN_OUTPUT_FILE}"

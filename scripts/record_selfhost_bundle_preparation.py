@@ -16,6 +16,14 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def file_digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, run_id: str) -> dict:
     if len(source_sha) != 40 or any(c not in "0123456789abcdef" for c in source_sha):
         raise ValueError("source SHA must be a full lowercase Git commit")
@@ -54,8 +62,18 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
             if member.file_size > 64 * 1024 * 1024 or total_size > 256 * 1024 * 1024:
                 raise ValueError("ZIP member or bundle exceeds extraction limit")
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(bundle.read(member))
-            files[member.filename] = target.read_bytes()
+            copied = 0
+            with bundle.open(member) as source, target.open("wb") as output:
+                for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                    copied += len(chunk)
+                    if copied > member.file_size:
+                        raise ValueError("ZIP member size changed while extracting")
+                    output.write(chunk)
+            if copied != member.file_size:
+                raise ValueError("ZIP member size changed while extracting")
+            # Hash the installed bytes, not just the source stream: the owned
+            # inventory must describe what was actually written to disk.
+            files[member.filename] = file_digest(target)
         if len(roots) != 1:
             raise ValueError("ZIP must have one bundle root")
         root = next(iter(roots))
@@ -70,7 +88,7 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         if directories != expected_directories:
             raise ValueError("ZIP directories differ from owned bundle")
         expected = {f"{root}/{name}": value for name, value in marker["files"].items()}
-        actual = {name: digest(data) for name, data in files.items()
+        actual = {name: file_hash for name, file_hash in files.items()
                   if name != f"{root}/.marty-selfhost-bundle.json"}
         if actual != expected:
             raise ValueError("ZIP inventory differs from owned bundle")
@@ -85,7 +103,7 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         "source_sha": source_sha,
         "run_id": run_id,
         "release": lock["release"],
-        "archive_sha256": digest(archive.read_bytes()),
+        "archive_sha256": file_digest(archive),
         "image_lock_sha256": digest(lock_bytes),
         "transaction_sha256": digest(transaction_bytes),
         "images": images,

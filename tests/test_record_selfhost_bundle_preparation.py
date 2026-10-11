@@ -6,8 +6,10 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import record_selfhost_bundle_preparation as preparation
 from record_selfhost_bundle_preparation import record
 
 
@@ -51,6 +53,34 @@ class BundlePreparationTest(unittest.TestCase):
         self.assertEqual(receipt["images"], {"app": self.image})
         self.assertEqual(receipt["archive_sha256"], hashlib.sha256(self.archive.read_bytes()).hexdigest())
         self.assertEqual(receipt["image_lock_sha256"], hashlib.sha256(self.lock.read_bytes()).hexdigest())
+
+    def test_streams_bundle_without_reading_the_archive_whole(self):
+        self.contents["fixture.bin"] = b"streamed bundle fixture" * 100_000
+        self.write_archive()
+        read_bytes = Path.read_bytes
+
+        def reject_archive_read(path):
+            if path == self.archive:
+                raise AssertionError("archive was read into memory")
+            return read_bytes(path)
+
+        with patch.object(Path, "read_bytes", reject_archive_read):
+            receipt = self.check()
+
+        self.assertEqual(receipt["archive_sha256"], hashlib.sha256(self.archive.read_bytes()).hexdigest())
+        self.assertEqual(receipt["images"], {"app": self.image})
+
+    def test_inventory_checks_written_file_bytes(self):
+        file_digest = preparation.file_digest
+
+        def altered_written_file(path):
+            if path.name == "README.md":
+                return "0" * 64
+            return file_digest(path)
+
+        with patch.object(preparation, "file_digest", altered_written_file):
+            with self.assertRaisesRegex(ValueError, "inventory differs"):
+                self.check()
 
     def test_rejects_embedded_lock_mismatch(self):
         self.contents[".marty-selfhost-images.json"] = b"{}"
