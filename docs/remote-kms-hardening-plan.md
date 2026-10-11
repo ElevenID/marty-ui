@@ -15580,3 +15580,12 @@ hosted contracts fixture runs the same case with its non-root disposable
 Transit test token while retaining root only for the marker read. The broader
 test token's ACL is CI-only; the local probe supplies the reviewed managed
 token. Canvas in run `38152537463` was still active at this checkpoint.
+
+Before the grouped push, a fresh disposable-stack probe found one intermittent
+failure in the PostgreSQL holder lifecycle: after a successful credential
+rotation and profile lookup, the rotated bearer was once rejected by the
+holder signer before its KMS call. Two complete reruns passed, including the
+same rotation, managed signing, certificate and Gateway cases. Keep this as a
+reliability finding for exact-head CI; the observed denial was fail-closed,
+and the root cause is not established. No authorization bypass was added to
+make the fixture pass.
