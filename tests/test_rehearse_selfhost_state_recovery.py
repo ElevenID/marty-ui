@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from rehearse_selfhost_state_recovery import probe_check, read_model, rehearse  # noqa: E402
+from rehearse_selfhost_state_recovery import probe_check, read_model, rehearse, stop_owned  # noqa: E402
 
 
 def model(state_root: Path, postgres_image: str = "postgres:15-alpine") -> dict:
@@ -60,6 +61,31 @@ def test_corrupted_applicant_restore_is_detected(tmp_path: Path, monkeypatch: py
     monkeypatch.setattr("rehearse_selfhost_state_recovery.run", lambda *args, **kwargs: "expected")
     with pytest.raises(RuntimeError, match="probe mismatch"):
         probe_check("pg", "redis", applicant, "expected")
+
+
+def test_cold_stop_is_graceful_and_docker_api_errors_propagate(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def docker(*args: str, **kwargs: object) -> str:
+        calls.append(args)
+        if args[1] == "ps":
+            return "container-id"
+        if args[1] == "inspect":
+            return "true"
+        return ""
+
+    monkeypatch.setattr("rehearse_selfhost_state_recovery.run", docker)
+    stop_owned("owned", graceful=True)
+    assert ("docker", "stop", "--time", "30", "owned") in calls
+    assert ("docker", "rm", "owned") in calls
+    assert not any(args[:3] == ("docker", "rm", "-f") for args in calls)
+
+    def unavailable(*args: str, **kwargs: object) -> str:
+        raise subprocess.CalledProcessError(1, args)
+
+    monkeypatch.setattr("rehearse_selfhost_state_recovery.run", unavailable)
+    with pytest.raises(subprocess.CalledProcessError):
+        stop_owned("owned")
 
 
 @pytest.mark.skipif(os.environ.get("MARTY_RUN_DOCKER_RECOVERY_TEST") != "1" or not shutil.which("docker"),

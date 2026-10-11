@@ -61,14 +61,18 @@ def start(name: str, image: str, state: Path, kind: str, password: str) -> None:
     raise RuntimeError(f"{kind} did not become ready")
 
 
-def stop_owned(name: str) -> None:
-    try:
-        label = run("docker", "inspect", "--format", "{{index .Config.Labels \"marty.recovery-rehearsal\"}}", name)
-    except subprocess.CalledProcessError:
+def stop_owned(name: str, *, graceful: bool = False) -> None:
+    # `docker ps` returns an empty list only for absence. API errors propagate.
+    if not run("docker", "ps", "-aq", "--filter", f"name=^/{name}$"):
         return
+    label = run("docker", "inspect", "--format", "{{index .Config.Labels \"marty.recovery-rehearsal\"}}", name)
     if label != "true":
         raise RuntimeError(f"refusing to remove unowned container {name}")
-    run("docker", "rm", "-f", name)
+    if graceful:
+        run("docker", "stop", "--time", "30", name)
+        run("docker", "rm", name)
+    else:
+        run("docker", "rm", "-f", name)
 
 
 def probe_write(pg: str, redis: str, applicant: Path, marker: str) -> None:
@@ -107,7 +111,7 @@ def rehearse(source_model: dict, target_model: dict, source_digest: str, target_
             start(names[kind], source_model["services"][kind]["image"], source / kind, kind, marker)
         probe_write(names["postgres"], names["redis"], source / "applicant", marker)
         for name in names.values():
-            stop_owned(name)
+            stop_owned(name, graceful=True)
         for kind in ("postgres", "redis", "applicant"):
             shutil.copytree(source / kind, backup / kind)
             shutil.copytree(backup / kind, restored / kind)
@@ -128,8 +132,15 @@ def rehearse(source_model: dict, target_model: dict, source_digest: str, target_
             "excluded": ["OpenBao state/export", "operator secrets and environment", "application business journey"],
         }
     finally:
+        cleanup_error = None
         for name in names.values():
-            stop_owned(name)
+            try:
+                stop_owned(name)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired, RuntimeError) as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def main() -> None:
@@ -142,6 +153,8 @@ def main() -> None:
     parser.add_argument("--target-version", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    if args.output.exists():
+        raise ValueError("output report already exists")
     if args.source_version == args.target_version:
         raise ValueError("source and target versions must differ for an upgrade rehearsal")
     source, source_digest = read_model(args.source_model, args.source_state_root)
