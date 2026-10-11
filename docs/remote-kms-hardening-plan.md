@@ -15548,3 +15548,12 @@ full `--rust-adapter` OpenBao/Redis/PostgreSQL probe passed with both Gateway
 cases added; targeted Rust compile/format, Ruff and diff checks pass. Hold
 this correction with the earlier local registered-service coverage until the
 running Canvas and DIDComm plugin jobs finish, then push one grouped batch.
+
+The hosted contracts workflow's subsequent CSR cases were also reviewed:
+their fixture had used the root token for both signer and disposable marker.
+The updated guard separates those roles, so the two CSR invocations now use
+the already minted non-root test Transit token for service operations and the
+root token only for the disposable marker. The local policy probe uses the
+stricter production-style scoped token and passed. The hosted test token's
+Transit-wide ACL remains a CI-only fixture and is not evidence for production
+policy qualification.
