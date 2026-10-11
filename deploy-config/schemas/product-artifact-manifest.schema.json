@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://elevenidllc.com/schemas/product-artifact-manifest.schema.json",
+  "title": "Marty product artifact manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "product", "support_state", "capabilities", "platform", "artifact", "source", "license", "sbom", "provenance", "compatibility", "dependencies", "extensions", "installation", "qualification"],
+  "properties": {
+    "schema": {"const": "marty.product-artifact/v1"},
+    "product": {"enum": ["embedded-verification", "headless-edge-verification", "kiosk-verification", "network-verification", "issuance", "organizational-platform", "holder-application"]},
+    "support_state": {"enum": ["experimental", "preview", "supported", "deprecated"]},
+    "capabilities": {"$ref": "#/$defs/names"},
+    "platform": {
+      "type": "object", "additionalProperties": false, "required": ["os", "architecture"],
+      "properties": {"os": {"type": "string", "minLength": 1}, "architecture": {"type": "string", "minLength": 1}}
+    },
+    "artifact": {"$ref": "#/$defs/artifact"},
+    "source": {
+      "type": "object", "additionalProperties": false, "required": ["repository", "commit"],
+      "properties": {"repository": {"$ref": "#/$defs/https"}, "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+    },
+    "license": {
+      "type": "object", "additionalProperties": false, "required": ["expression", "notice"],
+      "properties": {"expression": {"type": "string", "minLength": 1}, "notice": {"$ref": "#/$defs/artifact"}}
+    },
+    "sbom": {"$ref": "#/$defs/artifact"},
+    "provenance": {"$ref": "#/$defs/artifact"},
+    "compatibility": {
+      "type": "object", "additionalProperties": false, "required": ["schemas", "protocols"],
+      "properties": {"schemas": {"$ref": "#/$defs/names"}, "protocols": {"$ref": "#/$defs/names"}}
+    },
+    "dependencies": {
+      "type": "array", "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "scope", "source"],
+        "properties": {
+          "name": {"$ref": "#/$defs/name"},
+          "scope": {"enum": ["runtime", "build", "optional-extension"]},
+          "source": {"$ref": "#/$defs/https"}
+        }
+      }
+    },
+    "extensions": {"$ref": "#/$defs/names"},
+    "installation": {
+      "type": "object", "additionalProperties": false, "required": ["channel", "guide"],
+      "properties": {"channel": {"$ref": "#/$defs/https"}, "guide": {"$ref": "#/$defs/https"}}
+    },
+    "qualification": {
+      "type": "object", "additionalProperties": false, "required": ["state", "evidence"],
+      "properties": {
+        "state": {"enum": ["unqualified", "qualified"]},
+        "evidence": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/https"}}
+      }
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"support_state": {"enum": ["supported", "deprecated"]}}, "required": ["support_state"]},
+     "then": {"properties": {"qualification": {"properties": {"state": {"const": "qualified"}, "evidence": {"minItems": 1}}}}}},
+    {"if": {"properties": {"qualification": {"properties": {"state": {"const": "unqualified"}}, "required": ["state"]}}, "required": ["qualification"]},
+     "then": {"properties": {"support_state": {"enum": ["experimental", "preview"]}}}}
+  ],
+  "$defs": {
+    "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$"},
+    "names": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/name"}},
+    "https": {"type": "string", "pattern": "^https://[^/]+/.+"},
+    "artifact": {
+      "type": "object", "additionalProperties": false, "required": ["uri", "digest"],
+      "properties": {
+        "uri": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  }
+}
