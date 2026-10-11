@@ -15826,3 +15826,20 @@ zero table or column names matching private/secret key material. Source search
 found no Python ORM key-material model on that branch. This checks the two
 retained SQL entry points; JSON payload data flows and exact released runtime
 images still need separate qualification.
+
+The prior UI head `5d25ac629` finished [exact-head run
+38161151027](https://github.com/ElevenID/marty-ui/actions/runs/38161151027):
+the Canvas, OpenBao plugin image, release contracts, service images and other
+independent jobs passed. Rust service contracts failed on the four passport
+reconciliation cases diagnosed and repaired locally above; CI Gate failed as
+their dependent aggregate. This is retained failed-head evidence, not a release
+pass. The grouped correction includes the two main merges and will start one
+new exact-head run.
+
+K10 Device Registration source-built runtime check: on a separate fresh
+PostgreSQL 16 instance, its `postgres_custody` integration test passed the
+native migration, catalog exclusions and representative registration write;
+the JSON preferences guard rejected a synthetic PEM private key. The resulting
+`device_registration_service` catalog had 7 tables and 60 columns, with zero
+private/secret/JWK/PEM-shaped table or column names. This is a local migration
+and write result, not exact released-image qualification.
