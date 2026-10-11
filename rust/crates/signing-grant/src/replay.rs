@@ -29,11 +29,42 @@ pub struct ConsumedGrant {
     claims: GrantClaims,
 }
 
+/// The operation actually submitted to a remote signing provider. The origin
+/// and operation ID come from the consumed grant, never from this input.
+pub struct FinalSignBinding<'a> {
+    pub organization_id: &'a str,
+    pub route: &'a str,
+    pub service_id: Option<&'a str>,
+    pub issuer_did: Option<&'a str>,
+    pub key_reference: Option<&'a str>,
+    pub key_purpose: &'a str,
+    pub algorithm: &'a str,
+    pub payload: &'a [u8],
+}
+
 impl ConsumedGrant {
     /// Recheck the exact operation at the point of KMS use, including expiry.
     /// Consuming the proof prevents a caller from using one grant for two signs.
     pub fn authorizes(self, binding: &GrantBinding<'_>) -> bool {
         bound_input(&self.claims, binding, chrono::Utc::now().timestamp()).is_ok()
+    }
+
+    /// Consume the proof at the provider boundary after key and algorithm
+    /// resolution, so a route-level check cannot authorize changed bytes.
+    pub fn authorizes_final(self, actual: &FinalSignBinding<'_>) -> bool {
+        let binding = GrantBinding {
+            origin: self.claims.origin,
+            operation_id: &self.claims.operation_id,
+            organization_id: actual.organization_id,
+            route: actual.route,
+            service_id: actual.service_id,
+            issuer_did: actual.issuer_did,
+            key_reference: actual.key_reference,
+            key_purpose: actual.key_purpose,
+            algorithm: actual.algorithm,
+            payload: actual.payload,
+        };
+        bound_input(&self.claims, &binding, chrono::Utc::now().timestamp()).is_ok()
     }
 }
 
@@ -82,6 +113,112 @@ impl RedisGrantReplayStore {
 mod tests {
     use super::*;
     use crate::{payload_digest, SigningOrigin};
+
+    #[test]
+    fn final_sign_rechecks_resolved_key_and_actual_bytes() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = GrantClaims {
+            version: 1,
+            origin: SigningOrigin::GatewayService,
+            operation_id: "operation-1".into(),
+            organization_id: "tenant-1".into(),
+            route: "/v1/signing-keys/services/managed-openbao-transit/sign".into(),
+            service_id: Some("managed-openbao-transit".into()),
+            issuer_did: None,
+            key_reference: Some("tenant-key-1".into()),
+            key_purpose: "vc_jwt_issuer".into(),
+            algorithm: "ES256".into(),
+            payload_sha256_b64: payload_digest(b"exact payload"),
+            issued_at: now,
+            expires_at: now + 30,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
+        };
+        let actual = FinalSignBinding {
+            organization_id: "tenant-1",
+            route: "/v1/signing-keys/services/managed-openbao-transit/sign",
+            service_id: Some("managed-openbao-transit"),
+            issuer_did: None,
+            key_reference: Some("tenant-key-1"),
+            key_purpose: "vc_jwt_issuer",
+            algorithm: "ES256",
+            payload: b"exact payload",
+        };
+        assert!(ConsumedGrant {
+            claims: claims.clone()
+        }
+        .authorizes_final(&actual));
+        for changed in [
+            FinalSignBinding {
+                key_reference: Some("tenant-key-2"),
+                ..actual
+            },
+            FinalSignBinding {
+                payload: b"different payload",
+                ..actual
+            },
+            FinalSignBinding {
+                organization_id: "tenant-2",
+                ..actual
+            },
+            FinalSignBinding {
+                algorithm: "ES384",
+                ..actual
+            },
+        ] {
+            assert!(!ConsumedGrant {
+                claims: claims.clone()
+            }
+            .authorizes_final(&changed));
+        }
+    }
+
+    #[test]
+    fn final_issuer_sign_rejects_a_different_did_or_purpose() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = GrantClaims {
+            version: 1,
+            origin: SigningOrigin::FlowWalletRequest,
+            operation_id: "wallet-request-1".into(),
+            organization_id: "tenant-1".into(),
+            route: "/internal/compat/issuer-dids/sign".into(),
+            service_id: None,
+            issuer_did: Some("did:web:issuer.example".into()),
+            key_reference: Some("issuer-key-1".into()),
+            key_purpose: "oid4vp_request_signing".into(),
+            algorithm: "ES256".into(),
+            payload_sha256_b64: payload_digest(b"request object"),
+            issued_at: now,
+            expires_at: now + 30,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
+        };
+        let actual = FinalSignBinding {
+            organization_id: "tenant-1",
+            route: "/internal/compat/issuer-dids/sign",
+            service_id: None,
+            issuer_did: Some("did:web:issuer.example"),
+            key_reference: Some("issuer-key-1"),
+            key_purpose: "oid4vp_request_signing",
+            algorithm: "ES256",
+            payload: b"request object",
+        };
+        assert!(ConsumedGrant {
+            claims: claims.clone()
+        }
+        .authorizes_final(&actual));
+        assert!(!ConsumedGrant {
+            claims: claims.clone()
+        }
+        .authorizes_final(&FinalSignBinding {
+            issuer_did: Some("did:web:other.example"),
+            ..actual
+        }));
+        assert!(
+            !ConsumedGrant { claims }.authorizes_final(&FinalSignBinding {
+                key_purpose: "vc_jwt_issuer",
+                ..actual
+            })
+        );
+    }
 
     #[tokio::test]
     #[ignore = "requires marked disposable loopback Redis DB 13 or higher"]

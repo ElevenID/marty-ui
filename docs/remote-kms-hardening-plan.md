@@ -14700,3 +14700,14 @@ disposable Signing Keys process without the new grant verifier token file.
 The grouped correction now reads the scoped verifier token from the disposable
 OpenBao runtime volume and passes it to both pre- and post-restore process
 starts. The full live probe requires the hosted Linux/Docker rerun.
+
+Local final-sign work has begun in the shared Rust signing-grant crate. A
+`ConsumedGrant` can now be consumed against a `FinalSignBinding` built from the
+resolved tenant, route, service or issuer DID, key reference, purpose,
+algorithm, and actual signing bytes. The proof supplies its own authenticated
+origin and operation ID, so callers cannot substitute those values at this
+last check. Focused service and DID mutation tests pass, as does warnings-denied
+all-target Clippy. This is not yet wired into Signing Keys' final KMS call;
+the certificate/CSR ceremony authority and direct CSR path remain open. Keep
+the work local for the next cohesive authorization batch rather than triggering
+another hosted run for a preparatory API alone.
