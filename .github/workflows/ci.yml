@@ -2859,7 +2859,7 @@ jobs:
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
           # Actual database execution remains in the isolated Rust/Docker gate.
-          uv pip install --system pytest pyyaml jsonschema cryptography playwright sqlalchemy "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
+          uv pip install --system pytest pytest-asyncio pyyaml jsonschema cryptography playwright sqlalchemy httpx protobuf "$marty_rs_wheel" "$verification_wheel" "$iso18013_wheel"
       - name: Verify released mdoc binding evidence contract
         shell: bash
         run: |

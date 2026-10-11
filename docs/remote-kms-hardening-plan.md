@@ -16474,3 +16474,12 @@ stack tag, release transaction, nightly and contract suites passed 133 cases
 with two pre-existing skips. This is a release stop, not artifact
 qualification or a substitute for publishing and verifying the hardened
 Core wheels. Keep it in the next broad UI batch after current exact-head CI.
+On new pushed UI head `e757a8acc`, Release Contract Tests failed during
+collection because the job still relied on the removed `marty-common` wheel
+to install `httpx` and `protobuf` transitively. The local correction declares
+those two test dependencies directly and adds the already-required
+`pytest-asyncio` plugin. The four affected test modules plus stack release
+contracts passed 65 cases locally; CI YAML parsed and diff hygiene passed.
+This is a CI dependency correction, not a reason to restore `marty-common`.
+The failed job remains linked from [run 38182806875](https://github.com/ElevenID/marty-ui/actions/runs/38182806875);
+batch the fix with the release hold before the next hosted run.
