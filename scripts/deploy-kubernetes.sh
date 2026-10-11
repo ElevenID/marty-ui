@@ -393,6 +393,18 @@ cmd_setup_secrets() {
   require_resolved_secret GATEWAY_SIGN_GRANT_MINT_TOKEN "$gateway_sign_grant_mint_token"
   signing_keys_grant_verify_token="$(resolve_secret_input SIGNING_KEYS_GRANT_VERIFY_TOKEN)"
   require_resolved_secret SIGNING_KEYS_GRANT_VERIFY_TOKEN "$signing_keys_grant_verify_token"
+  if [[ "$flow_sign_grant_mint_token" == "$gateway_sign_grant_mint_token" ||
+        "$flow_sign_grant_mint_token" == "$signing_keys_grant_verify_token" ||
+        "$gateway_sign_grant_mint_token" == "$signing_keys_grant_verify_token" ]]; then
+    error "Signing grant mint and verify tokens must be distinct for each role."
+  fi
+  for broad_token in "$openbao_service_token" "$signing_keys_openbao_token" "$didcomm_issuance_openbao_token"; do
+    if [[ -n "$broad_token" && ( "$flow_sign_grant_mint_token" == "$broad_token" ||
+        "$gateway_sign_grant_mint_token" == "$broad_token" ||
+        "$signing_keys_grant_verify_token" == "$broad_token" ) ]]; then
+      error "Signing grant tokens must differ from general OpenBao credentials."
+    fi
+  done
   notification_openbao_token="$(resolve_secret_input NOTIFICATION_OPENBAO_TOKEN)"
   cloudflare_tunnel_token="$(resolve_secret_input CLOUDFLARE_TUNNEL_TOKEN)"
 

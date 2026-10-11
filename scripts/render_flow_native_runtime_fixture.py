@@ -30,6 +30,7 @@ SECRET_VALUES = {
     "marty_db_password": "synthetic-flow-database-password",
     "flow_webhook_secret": "synthetic-flow-rendered-webhook-secret",
     "flow_application_event_hmac_key": "synthetic-flow-rendered-event-hmac-key",
+    "sign_grant_mint_flow_wallet_token": "synthetic-flow-grant-mint-capability",
 }
 TLS_FILES = {
     "GRPC_WORKLOAD_TLS_CLIENT_CERT": "flow_workload_client_cert",
@@ -70,6 +71,17 @@ def mapped_environment(service, spec):
     for key, value in original.items():
         if key.endswith("_FILE") or key in TLS_FILES:
             if not value and key == "PASSPORT_TENANT_API_KEYS_FILE":
+                continue
+            if key == "FLOW_SIGN_GRANT_MINT_TOKEN_FILE":
+                if value == "/bao/flow-grant/token":
+                    assert service.get("volumes") == [{
+                        "type": "volume", "source": "openbao_flow_grant",
+                        "target": "/bao/flow-grant", "read_only": True, "volume": {},
+                    }]
+                else:
+                    assert value == "/run/secrets/sign_grant_mint_flow_wallet_token"
+                    assert "sign_grant_mint_flow_wallet_token" in declared
+                environment[key] = (Path(spec["directory"]) / "sign_grant_mint_flow_wallet_token").as_posix()
                 continue
             name = Path(value).name
             assert value == f"/run/secrets/{name}" and name in declared

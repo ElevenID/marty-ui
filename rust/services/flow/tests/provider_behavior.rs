@@ -162,6 +162,7 @@ fn signing_identity_is_bound_to_the_exact_public_capability_tuple() {
             "verification_method_id" => {
                 invalid.verification_method_id = "did:web:other.example#key".into()
             }
+            "signing_key_reference" => invalid.signing_key_reference.clear(),
             "key_purpose" => invalid.key_purpose = "vc_jwt_issuer".into(),
             "credential_format" => invalid.credential_format = "jwt_vc_json".into(),
             "algorithm" => invalid.algorithm = "ES384".into(),

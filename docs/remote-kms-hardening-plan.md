@@ -14683,3 +14683,20 @@ entry, with separately typed ceremony authority for the authenticated
 certificate/CSR operations. Recheck resolved key reference and actual signing
 bytes there; never let a shared static API key or a JSON tenant field mint that
 authority. Preserve holder proof through its separately qualified path.
+
+The branch has since merged the current `main` to test the exact review head.
+The merged release transaction requires three gate roles, so the self-host
+product descriptor now checks the shared `REQUIRED_GATE_ROLES` set rather than
+an obsolete count of two. The rendered Flow fixture now supplies its scoped
+grant-mint file for development and self-hosted Compose. The shared Flow
+provider vector includes the required explicit signing key reference and a
+mutation that rejects its absence. Kubernetes setup rejects any reuse among
+the three grant mint/verify roles or reuse of a general OpenBao service token.
+The combined focused deployment, descriptor, Flow fixture and secret tests
+pass locally (206 tests); the Flow provider contract passes all eight Rust
+tests, and `bash -n` and `git diff --check` pass. The OpenBao image CI job then
+failed because its coordinated Raft/PostgreSQL restore probe started a
+disposable Signing Keys process without the new grant verifier token file.
+The grouped correction now reads the scoped verifier token from the disposable
+OpenBao runtime volume and passes it to both pre- and post-restore process
+starts. The full live probe requires the hosted Linux/Docker rerun.

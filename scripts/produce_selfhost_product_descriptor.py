@@ -41,7 +41,8 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
         raise ValueError("transaction source differs from preparation receipt")
     if claim["state"] not in {"qualified", "promoting", "promoted", "published"}:
         raise ValueError("transaction lacks stack qualification gate evidence")
-    if claim["repository"] != "ElevenID/marty-ui" or len(claim["gates"]) != 2:
+    if (claim["repository"] != "ElevenID/marty-ui"
+            or set(claim["gates"]) != set(release_transaction.REQUIRED_GATE_ROLES)):
         raise ValueError("transaction repository or stack gates changed")
     lock = _json(image_lock)
     if lock.get("release") != f"marty-ui@{claim['version']}":

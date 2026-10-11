@@ -114,6 +114,12 @@ def harness(tmp_path):
     env["SIGNING_KEYS_ISSUER_SIGN_KEY"] = (
         "synthetic-distinct-issuer-sign-key-at-least-thirty-two-bytes"
     )
+    for role in (
+        "FLOW_SIGN_GRANT_MINT_TOKEN",
+        "GATEWAY_SIGN_GRANT_MINT_TOKEN",
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN",
+    ):
+        env[role] = f"synthetic-distinct-{role.lower()}-credential"
     env.pop("TOKEN_HMAC_KEY")
     prelude = r"""
 set -euo pipefail
@@ -206,6 +212,25 @@ def applications(calls):
         for call in calls
         if call[:4] == ["create", "secret", "generic", "marty-secrets"]
     ]
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "GATEWAY_SIGN_GRANT_MINT_TOKEN"),
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_OPENBAO_TOKEN"),
+        ("SIGNING_KEYS_GRANT_VERIFY_TOKEN", "DIDCOMM_ISSUANCE_OPENBAO_TOKEN"),
+    ],
+)
+def test_signing_grant_roles_reject_shared_openbao_credentials(harness, first, second):
+    shared = f"synthetic-shared-{first.lower()}-credential"
+    result, calls = harness({"TOKEN_HMAC_KEY": TOKEN, first: shared, second: shared})
+    assert result.returncode != 0
+    assert "must be distinct" in result.stderr or "must differ" in result.stderr
+    assert not applications(calls)
 
 
 @pytest.mark.parametrize("source", ["environment", "file", "empty-env-with-file"])

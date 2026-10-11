@@ -311,6 +311,7 @@ def start_signing(
     bao_url: str,
     token: str,
     haip_token_file: Path,
+    grant_verify_token_file: Path,
     redis_port: int,
     key: str,
     tls_directory: Path,
@@ -336,6 +337,7 @@ def start_signing(
             "BAO_ADDR": bao_url,
             "BAO_TOKEN": token,
             "HAIP_KMS_TOKEN_FILE": str(haip_token_file),
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": str(grant_verify_token_file),
         }
     )
     with log_path.open("wb") as log:
@@ -687,6 +689,10 @@ def run() -> None:
             haip_token_file.write_text(
                 read_volume_file(runtime, "haip-kms.token"), encoding="utf-8"
             )
+            grant_verify_token_file = temp / "sign_grant_verify_token"
+            grant_verify_token_file.write_text(
+                read_volume_file(runtime, "sign_grant_verify_token"), encoding="utf-8"
+            )
             live_issuance_signing_phase(bao_url, token)
             live_didcomm_phase(bao_url, root)
             init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
@@ -736,6 +742,7 @@ def run() -> None:
                 bao_url,
                 token,
                 haip_token_file,
+                grant_verify_token_file,
                 redis_port,
                 api_key,
                 temp / "signing-tls",
@@ -921,6 +928,7 @@ def run() -> None:
                 restored_bao_url,
                 token,
                 haip_token_file,
+                grant_verify_token_file,
                 redis_port,
                 api_key,
                 temp / "signing-tls",
