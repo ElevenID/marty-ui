@@ -14484,3 +14484,12 @@ is persisted; a later reissue uses a loaded record. Flow grant minting must
 therefore rely on the already authorized and validated operation context,
 not claim that every signed request has a preexisting database row. The grant
 header, token mount and Signing Keys enforcement remain to be wired.
+
+Shared grant minter, local follow-up: `GrantMinter` fixes one origin-specific
+Transit key at construction and reads its dedicated token file for each mint,
+so token rotation does not require process restart. Mint and verifier use one
+bounded token-file reader that rejects missing, oversized, multiline and
+non-printable credentials without disclosing them. Grant crate tests (seven
+passed, three guarded live tests ignored), warnings-denied Clippy and Rustfmt
+pass. Production producer configuration, token mounts and end-to-end kernel
+enforcement remain open.

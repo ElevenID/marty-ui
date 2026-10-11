@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::{
     replay::{ConsumedGrant, RedisGrantReplayStore, ReplayError},
+    token_file::read_token_file,
     transit::{TransitGrantClient, TransitGrantError},
     verify_envelope, GrantBinding, GrantEnvelope, GrantError, SigningOrigin,
 };
@@ -69,17 +70,12 @@ impl GrantVerifier {
             .clients
             .get(&binding.origin)
             .ok_or(GrantAuthorizationError::Denied)?;
-        let token = tokio::fs::read_to_string(&self.verify_token_file)
+        let token = read_token_file(&self.verify_token_file)
             .await
             .map_err(|_| GrantAuthorizationError::Unavailable)?;
-        let verified = verify_envelope(
-            client,
-            token.trim_end_matches(['\r', '\n']),
-            &envelope,
-            binding,
-        )
-        .await
-        .map_err(map_grant_error)?;
+        let verified = verify_envelope(client, &token, &envelope, binding)
+            .await
+            .map_err(map_grant_error)?;
         self.replay
             .consume(&verified)
             .await
