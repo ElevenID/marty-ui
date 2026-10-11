@@ -14629,3 +14629,24 @@ open before the KMS-only goal can be declared complete.
 The Gateway library suite passed 163 tests with one pre-existing live test
 ignored; its all-target warnings-denied Clippy, focused grant-path tests,
 deployment YAML and shell parsing, and scoped token-mount checks passed.
+
+Post-publication least-privilege review found that Gateway still received an
+unneeded general OpenBao token in development and self-hosted Compose. Gateway
+code uses only `BAO_ADDR` and its dedicated grant-mint token file, so the
+general/root token environment entry and self-hosted secret mount have been
+removed locally. Parsed Compose now confirms Gateway has no general OpenBao
+token while retaining its scoped mint token. Keep this with the next grouped
+push after the currently running UI CI reaches a terminal result.
+
+Final-sign inventory for the next authorization batch: `compat::sign_with_service`
+reaches `kms::sign` and is used by both public service-sign and DID-mediated
+paths; the two HTTP routes currently consume grants *before* calling it, but
+the compatibility kernel takes no consumed proof. Five certificate/CSR paths
+inside Signing Keys call `sign_with_issuer_did` directly after their own route
+authorization; public service CSR calls `kms::sign` directly. Managed holder
+proof signing has separate wallet-owned authority and must remain functional.
+Introduce a move-only, exact-request issuer authorization at the final sign
+entry, with separately typed ceremony authority for the authenticated
+certificate/CSR operations. Recheck resolved key reference and actual signing
+bytes there; never let a shared static API key or a JSON tenant field mint that
+authority. Preserve holder proof through its separately qualified path.
