@@ -245,6 +245,9 @@ impl CanvasAwardCandidateRepository for PostgresCanvasAwardCandidateRepository {
         application: &CanvasLtiBootstrapApplication,
         plan: &CanvasAwardCandidateMaterializationPlan,
     ) -> Result<(), CanvasAwardCandidateRepositoryError> {
+        if marty_key_material_policy::contains_private_key_map(&plan.application_canvas_patch) {
+            return Err(CanvasAwardCandidateRepositoryError::Unavailable);
+        }
         let mut database = self.pool.begin().await.map_err(repository_error)?;
         let candidate = sqlx::query(
             "UPDATE issuance_service.canvas_award_candidates

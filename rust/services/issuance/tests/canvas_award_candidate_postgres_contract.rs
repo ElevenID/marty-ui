@@ -273,6 +273,39 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         )
         .await
         .unwrap());
+    let integration_context_before = sqlx::query_scalar::<_, Value>(
+        "SELECT integration_context FROM issuance_service.applications WHERE id = 'application-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut private_plan = plan.clone();
+    private_plan.application_canvas_patch.insert(
+        "signing_key".to_owned(),
+        json!({"kty": "OKP", "crv": "Ed25519", "d": "private-seed"}),
+    );
+    assert_eq!(
+        repository.link_candidate(&application, &private_plan).await,
+        Err(CanvasAwardCandidateRepositoryError::Unavailable)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Value>(
+            "SELECT integration_context FROM issuance_service.applications WHERE id = 'application-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        integration_context_before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT application_id FROM issuance_service.canvas_award_candidates WHERE id = 'candidate-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        None
+    );
     repository
         .link_candidate(&application, &plan)
         .await

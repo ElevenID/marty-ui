@@ -16065,3 +16065,11 @@ including a private JWK rejection with zero evidence facts or issuance events;
 Issuance all-targets warnings-denied Clippy passed. The disposable container
 was removed. The grouped batch remains local while the prior hosted Canvas
 job completes.
+
+K10 candidate-link follow-up: the Canvas award candidate repository also
+merged a plan's JSON patch into the application's integration context. It now
+rejects private material in that patch before beginning the link transaction.
+The fresh PostgreSQL 16 candidate contract passed a private JWK attempt with
+the candidate and application unchanged, then passed the normal link and
+revision flow. Issuance all-targets warnings-denied Clippy passed, and the
+disposable database was removed. This remains in the same grouped local batch.
