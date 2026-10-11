@@ -16289,3 +16289,11 @@ Keep the correction
 with the migration audit for one follow-up push after the current Canvas,
 contracts and OpenBao jobs finish. The failed job logs remain linked from
 [CI run 38176281794](https://github.com/ElevenID/marty-ui/actions/runs/38176281794).
+
+The same exact-head run has now passed Rust Service Tests (contracts), Rust
+Service Tests (canvas), and Test OpenBao DIDComm plugin image, including the
+Canvas full database suites and coordinated PostgreSQL/Raft recovery. The
+only failed jobs are the two standalone lockfile consumers above. The
+aggregate CI Gate is still queued, but every substantive job has completed;
+preserve the failed head as immutable evidence and publish the locally tested
+lockfile plus K10 audit in one grouped follow-up push.
