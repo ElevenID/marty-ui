@@ -230,6 +230,8 @@ impl SigningIdentity {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SigningRequest {
+    /// The validated Flow instance authorizing this request-object sign.
+    pub operation_id: String,
     pub organization_id: String,
     pub issuer_did: String,
     pub verification_method_id: String,

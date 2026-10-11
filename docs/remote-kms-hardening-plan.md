@@ -14474,3 +14474,13 @@ Locked offline metadata and the graph guard passed; local Rust tests passed
 25 library, three isomdl digest and two doc cases, and all-target warnings-
 denied Clippy passed. The previous `d562739` head had green hosted checks;
 the new exact-head checks and release artifact qualification are pending.
+
+Flow signing-origin review, local follow-up: the request-object builder now
+passes its validated Flow instance ID into `SigningRequest` as the operation
+identifier that a future Flow Transit grant must bind. The request-object
+behavior suite confirms both OID4VP and SIOP signs use the exact instance ID.
+Initial request-object signing happens during preparation before the instance
+is persisted; a later reissue uses a loaded record. Flow grant minting must
+therefore rely on the already authorized and validated operation context,
+not claim that every signed request has a preexisting database row. The grant
+header, token mount and Signing Keys enforcement remain to be wired.

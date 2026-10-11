@@ -423,6 +423,7 @@ pub async fn build_profiled_request_object(
     }
     let compact_jwt = sign_payload(
         identity_provider.as_ref(),
+        &instance.id,
         &identity,
         &payload,
         request_x5c.as_deref(),
@@ -672,6 +673,7 @@ fn validate_existing_client_identity(
 
 async fn sign_payload(
     provider: &dyn crate::SigningIdentityProvider,
+    operation_id: &str,
     identity: &SigningIdentity,
     payload: &Value,
     x5c: Option<&[String]>,
@@ -694,6 +696,7 @@ async fn sign_payload(
         .encode(serde_json::to_vec(payload).map_err(|_| FlowRequestObjectError::Serialization)?);
     let signing_input = format!("{protected}.{payload}");
     let request = SigningRequest {
+        operation_id: operation_id.to_owned(),
         organization_id: identity.organization_id.clone(),
         issuer_did: identity.issuer_did.clone(),
         verification_method_id: identity.verification_method_id.clone(),

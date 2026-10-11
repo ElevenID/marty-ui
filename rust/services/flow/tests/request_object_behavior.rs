@@ -346,7 +346,11 @@ async fn language_neutral_contract_builds_oid4vp_and_siop_request_objects() {
         siop_payload["redirect_uri"],
         "https://verifier.example/v1/flows/siop/submit"
     );
-    assert_eq!(signing.requests.lock().unwrap().len(), 2);
+    let signed = signing.requests.lock().unwrap();
+    assert_eq!(signed.len(), 2);
+    assert!(signed
+        .iter()
+        .all(|request| request.operation_id == "instance-1"));
 }
 
 #[test]

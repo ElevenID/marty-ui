@@ -1022,6 +1022,7 @@ mod tests {
 
         let result = provider
             .sign(&SigningRequest {
+                operation_id: "instance-1".into(),
                 organization_id: "org-1".into(),
                 issuer_did: "did:web:issuer.example".into(),
                 verification_method_id: "did:web:issuer.example#key-1".into(),
