@@ -15595,3 +15595,12 @@ plugin, release contracts, Rust images and lint. Rust service contracts failed
 at the old Gateway mock signing expectation already corrected locally; the
 dependent CI Gate failed. This is the complete prior-head result for the next
 grouped UI push.
+
+UI #1192 was pushed at `d5d26d8b8`; exact-head CI run `38155603867`
+started. Local holder lifecycle self-review found that credential rotation was
+only tested through the internal signer after replacement. The live disposable
+OpenBao/PostgreSQL/Redis test now also signs through the public device HTTP
+route with the rotated bearer, verifies the returned Ed25519 signature, checks
+`Cache-Control: no-store`, and requires 403 after deactivation. The complete
+`--rust-adapter` probe passed with this case, and warnings-denied Clippy for
+the test passed. Hold this addition for grouping with exact-head CI findings.

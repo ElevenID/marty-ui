@@ -488,6 +488,25 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         )
         .await
         .expect("rotated bearer signs through KMS");
+    let rotated_signature = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&replacement)
+        .json(&json!({"purpose":"holder_binding","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
+        .await
+        .expect("rotated bearer signing HTTP response");
+    assert!(rotated_signature.status().is_success());
+    assert_eq!(rotated_signature.headers()["cache-control"], "no-store");
+    let rotated_signature: HolderSignature = rotated_signature.json().await.unwrap();
+    assert_eq!(rotated_signature.signature_encoding, "raw");
+    let signature = Signature::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(rotated_signature.signature_b64)
+            .unwrap(),
+    )
+    .unwrap();
+    verifying.verify_strict(payload, &signature).unwrap();
 
     devices
         .deactivate(&registration.id)
@@ -508,6 +527,18 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
         )
         .await
         .is_err());
+    let deactivated_signature = http
+        .post(format!("{device_origin}/v1/devices/holder-signatures"))
+        .header("x-service-token", gateway_key)
+        .bearer_auth(&replacement)
+        .json(&json!({"purpose":"holder_binding","payload_b64":URL_SAFE_NO_PAD.encode(payload)}))
+        .send()
+        .await
+        .expect("deactivated bearer signing HTTP response");
+    assert_eq!(
+        deactivated_signature.status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
     let cleanup = HolderKeyCleanup::new(keys.clone(), client);
     assert_eq!(cleanup.run_once().await.expect("remote cleanup"), (2, 0));
     let read = read_managed_openbao(ProviderRequest {
