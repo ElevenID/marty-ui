@@ -72,16 +72,15 @@ impl SigningOrigin {
                     && claims.algorithm == "ES256"
             }
             Self::GatewayIssuerDid => {
-                issuer_did_route_shape(claims)
-                    || (claims.route == "/v1/signing-keys/issuer-identities/certificate-csr"
-                        && claims.service_id.is_none()
-                        && claims.key_reference.is_none()
-                        && claims
-                            .issuer_did
-                            .as_deref()
-                            .is_some_and(|did| did.starts_with("did:"))
-                        && matches!(claims.key_purpose.as_str(), "csca" | "x509_doc_signer")
-                        && matches!(claims.algorithm.as_str(), "ES256" | "ES384" | "ES512"))
+                claims.route == "/v1/signing-keys/issuer-identities/certificate-csr"
+                    && claims.service_id.is_none()
+                    && claims.key_reference.is_none()
+                    && claims
+                        .issuer_did
+                        .as_deref()
+                        .is_some_and(|did| did.starts_with("did:"))
+                    && matches!(claims.key_purpose.as_str(), "csca" | "x509_doc_signer")
+                    && matches!(claims.algorithm.as_str(), "ES256" | "ES384" | "ES512")
             }
             Self::IssuanceCredential => {
                 issuer_did_route_shape(claims)
@@ -510,7 +509,6 @@ mod tests {
     #[test]
     fn origin_keys_cannot_authorize_a_different_signing_route() {
         for origin in [
-            SigningOrigin::GatewayIssuerDid,
             SigningOrigin::FlowWalletRequest,
             SigningOrigin::IssuanceCredential,
             SigningOrigin::IssuanceCanvas,
@@ -532,8 +530,9 @@ mod tests {
                 SigningOrigin::IssuancePassport => {
                     claims.key_purpose = "x509_doc_signer".into();
                 }
-                SigningOrigin::GatewayIssuerDid | SigningOrigin::IssuanceCredential => {}
+                SigningOrigin::IssuanceCredential => {}
                 SigningOrigin::GatewayService => unreachable!("not an issuer-DID origin"),
+                SigningOrigin::GatewayIssuerDid => unreachable!("CSR-only origin"),
             }
             let binding = GrantBinding {
                 origin,
@@ -573,6 +572,32 @@ mod tests {
         claims.service_id = Some("different-service".into());
         assert_eq!(
             bound_input(&claims, &binding(b"exact.payload"), 1_700_000_001),
+            Err(GrantError::Malformed)
+        );
+    }
+
+    #[test]
+    fn gateway_issuer_csr_token_cannot_authorize_ordinary_issuer_signing() {
+        let mut claims = sample_claims();
+        claims.origin = SigningOrigin::GatewayIssuerDid;
+        claims.route = "/internal/compat/issuer-dids/sign".into();
+        claims.service_id = None;
+        claims.issuer_did = Some("did:web:issuer.example".into());
+        claims.key_purpose = "x509_doc_signer".into();
+        let binding = GrantBinding {
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id: &claims.operation_id,
+            organization_id: &claims.organization_id,
+            route: &claims.route,
+            service_id: None,
+            issuer_did: claims.issuer_did.as_deref(),
+            key_reference: claims.key_reference.as_deref(),
+            key_purpose: &claims.key_purpose,
+            algorithm: &claims.algorithm,
+            payload: b"exact.payload",
+        };
+        assert_eq!(
+            bound_input(&claims, &binding, 1_700_000_001),
             Err(GrantError::Malformed)
         );
     }

@@ -14916,3 +14916,11 @@ cross-purpose regression, all signing-grant unit tests (16 pass, three
 explicitly live-only ignored) and warnings-denied all-target Clippy pass
 locally. This narrows existing claims; producer minting and operation-record
 authority remain to implement before K6 is complete.
+
+The same review found that the Gateway issuer CSR token was also accepted
+for ordinary issuer-DID signing by the shared origin shape, although the
+Gateway only mints this origin for certificate CSR ceremonies. Its capability
+is now CSR-only; an explicit regression denies ordinary signing with this
+token. The revised signing-grant suite passes 17 tests (three live-only
+ignored), with warnings-denied all-target Clippy clean. The public issuer-DID
+relay still accepts separate Issuance and Flow grants as designed.
