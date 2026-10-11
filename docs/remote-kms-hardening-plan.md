@@ -14350,3 +14350,13 @@ grant-token files beside its existing service credentials. Its shell syntax
 and diff hygiene pass locally; unlike the Raft bootstrap, this external
 bootstrap path has not yet had a live end-to-end run. Neither supported
 runtime mounts nor grant enforcement is complete.
+
+K6 shared grant wire contract, local UI follow-up: the Rust crate now mints a
+single `GrantEnvelope` with canonical claims and a random 122-bit UUID-v4
+one-use ID, a 30-second expiry from the process clock, and an OpenBao HMAC.
+It rejects a producer client configured for another origin, and exposes a
+matching envelope verifier. The synthetic Transit HTTP test exercises mint,
+verify and altered-payload rejection; the crate suite and warnings-denied
+Clippy pass. Production services still need authoritative operation binding,
+scoped token mounts and fail-closed route use before this grants any signing
+authority.

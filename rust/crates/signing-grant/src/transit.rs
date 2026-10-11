@@ -191,6 +191,7 @@ fn validate_hmac(hmac: &str) -> Result<(), TransitGrantError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{mint_bound, verify_envelope, GrantBinding, GrantError};
     use axum::{
         extract::Json,
         http::{HeaderMap, StatusCode},
@@ -218,9 +219,14 @@ mod tests {
                 post(move |headers: HeaderMap, Json(body): Json<Value>| {
                     let hmac = hmac.clone();
                     async move {
+                        let input = body["input"]
+                            .as_str()
+                            .and_then(|value| STANDARD.decode(value).ok());
                         if headers.get("X-Vault-Token").and_then(|v| v.to_str().ok())
                             != Some("test-mint-token")
-                            || body["input"] != STANDARD.encode(b"bound.claim")
+                            || !input.as_deref().is_some_and(|value| {
+                                value == b"bound.claim" || value.starts_with(crate::DOMAIN)
+                            })
                         {
                             return (StatusCode::FORBIDDEN, Json(json!({}))).into_response();
                         }
@@ -238,7 +244,7 @@ mod tests {
                     }
                     (
                         StatusCode::OK,
-                        Json(json!({"data": {"valid": body["input"] == STANDARD.encode(b"bound.claim")}})),
+                        Json(json!({"data": {"valid": body["input"] == STANDARD.encode(b"bound.claim") || body["input"].as_str().and_then(|value| STANDARD.decode(value).ok()).is_some_and(|value| value.starts_with(crate::DOMAIN))}})),
                     )
                         .into_response()
                 }),
@@ -283,6 +289,40 @@ mod tests {
             client.mint("wrong-token", b"bound.claim").await,
             Err(TransitGrantError::Unavailable)
         );
+        let binding = GrantBinding {
+            origin: SigningOrigin::GatewayService,
+            operation_id: "authorized-request-1",
+            organization_id: "org-1",
+            route: "/v1/signing-keys/services/service-1/sign",
+            service_id: Some("service-1"),
+            issuer_did: None,
+            key_reference: None,
+            key_purpose: "vc_jwt_issuer",
+            algorithm: "ES256",
+            payload: b"exact.payload",
+        };
+        let envelope = mint_bound(&client, "test-mint-token", &binding)
+            .await
+            .unwrap();
+        assert_eq!(envelope.claims.origin, SigningOrigin::GatewayService);
+        assert_eq!(
+            envelope.claims.payload_sha256_b64,
+            crate::payload_digest(binding.payload)
+        );
+        assert_eq!(envelope.claims.nonce.len(), 32);
+        assert!(
+            verify_envelope(&client, "test-verify-token", &envelope, &binding)
+                .await
+                .is_ok()
+        );
+        let altered = GrantBinding {
+            payload: b"altered.payload",
+            ..binding
+        };
+        assert!(matches!(
+            verify_envelope(&client, "test-verify-token", &envelope, &altered).await,
+            Err(GrantError::BindingMismatch)
+        ));
         server.abort();
         if let Some(previous) = previous {
             std::env::set_var("BAO_ADDR", previous);

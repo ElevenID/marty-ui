@@ -14,6 +14,7 @@ pub mod transit;
 const DOMAIN: &[u8] = b"marty:issuer-signing-grant:v1\n";
 const MAX_LIFETIME_SECONDS: i64 = 60;
 const MAX_FUTURE_SKEW_SECONDS: i64 = 5;
+const ISSUED_LIFETIME_SECONDS: i64 = 30;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -58,6 +59,13 @@ pub struct GrantClaims {
     pub nonce: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantEnvelope {
+    pub claims: GrantClaims,
+    pub hmac: String,
+}
+
 /// Values derived from the authorized operation and exact request received by
 /// Signing Keys. A caller's query string is not an authority source.
 pub struct GrantBinding<'a> {
@@ -85,6 +93,8 @@ pub enum GrantError {
     InvalidHmac,
     #[error("signing grant verifier is unavailable")]
     VerifierUnavailable,
+    #[error("signing grant minter is unavailable")]
+    MinterUnavailable,
 }
 
 /// A bound grant authenticated by OpenBao. Only this crate can construct it;
@@ -98,6 +108,60 @@ impl VerifiedGrant {
     pub fn expires_at(&self) -> i64 {
         self.expires_at
     }
+}
+
+/// Mint a grant only after the calling service has independently authorized
+/// `binding` against its own operation record. The HMAC key stays in OpenBao.
+pub async fn mint_bound(
+    client: &transit::TransitGrantClient,
+    mint_token: &str,
+    binding: &GrantBinding<'_>,
+) -> Result<GrantEnvelope, GrantError> {
+    if client.origin() != binding.origin {
+        return Err(GrantError::BindingMismatch);
+    }
+    let now = chrono::Utc::now().timestamp();
+    let expires_at = now
+        .checked_add(ISSUED_LIFETIME_SECONDS)
+        .ok_or(GrantError::Expired)?;
+    let claims = GrantClaims {
+        version: 1,
+        origin: binding.origin,
+        operation_id: binding.operation_id.to_owned(),
+        organization_id: binding.organization_id.to_owned(),
+        route: binding.route.to_owned(),
+        service_id: binding.service_id.map(str::to_owned),
+        issuer_did: binding.issuer_did.map(str::to_owned),
+        key_reference: binding.key_reference.map(str::to_owned),
+        key_purpose: binding.key_purpose.to_owned(),
+        algorithm: binding.algorithm.to_owned(),
+        payload_sha256_b64: payload_digest(binding.payload),
+        issued_at: now,
+        expires_at,
+        nonce: uuid::Uuid::new_v4().simple().to_string(),
+    };
+    let input = bound_input(&claims, binding, now)?;
+    let hmac = client
+        .mint(mint_token, &input)
+        .await
+        .map_err(|_| GrantError::MinterUnavailable)?;
+    Ok(GrantEnvelope { claims, hmac })
+}
+
+pub async fn verify_envelope(
+    client: &transit::TransitGrantClient,
+    verify_token: &str,
+    envelope: &GrantEnvelope,
+    binding: &GrantBinding<'_>,
+) -> Result<VerifiedGrant, GrantError> {
+    verify_bound(
+        client,
+        verify_token,
+        &envelope.claims,
+        binding,
+        &envelope.hmac,
+    )
+    .await
 }
 
 pub async fn verify_bound(
