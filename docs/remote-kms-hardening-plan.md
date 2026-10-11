@@ -15566,3 +15566,17 @@ this additional case. In hosted run `38152537463`, the OpenBao DIDComm plugin
 job also passed; only Canvas remained active when this checkpoint was
 recorded. The Rust contracts failure remains the single known substantive
 failure and the grouped local correction is still held.
+
+The Gateway managed DSC ceremony was then added to the local probe. Its old
+fixture duplicated the disposable OpenBao marker check and omitted the
+GatewayIssuerDid minter, Signing Keys verifier and dedicated issuer CSR API
+credential; the hardened CSR route correctly denied it. The fixture now
+reuses the common root-owned disposable marker guard, mints an origin-bound
+CSR grant with a scoped non-root token, verifies it with a distinct token,
+and retains the distinct issuer, DSC and CSCA route credentials. The full
+OpenBao/Redis/PostgreSQL `--rust-adapter` probe passed after this correction,
+including the CSCA/DSC issuance and certificate-signature assertions. The
+hosted contracts fixture runs the same case with its non-root disposable
+Transit test token while retaining root only for the marker read. The broader
+test token's ACL is CI-only; the local probe supplies the reviewed managed
+token. Canvas in run `38152537463` was still active at this checkpoint.

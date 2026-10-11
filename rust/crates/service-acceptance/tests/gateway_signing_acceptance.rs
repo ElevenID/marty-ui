@@ -33,10 +33,7 @@ use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
     flow_envelope::OpenBaoEnvelopeProvider,
-    http::{
-        router_with_all_keys, router_with_dependencies_and_ceremony_keys,
-        router_with_dependencies_and_sign_key as signing_router,
-    },
+    http::{router_with_all_keys, router_with_dependencies_and_sign_key as signing_router},
     profiles::ProfileStore as SigningProfileStore,
     registry::RegistryStore as SigningRegistryStore,
 };
@@ -318,8 +315,10 @@ fn gateway_with_signing_http_dsc(
     dsc_key: Option<&str>,
     csca_key: Option<&str>,
     disposable_org: Option<(&str, bool, bool)>,
+    issuer_csr_grant_minter: Option<marty_signing_grant::minter::GrantMinter>,
 ) -> Router {
     let mut state = signing_gateway_state(signing_url);
+    Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter = issuer_csr_grant_minter;
     if let Some(dsc_key) = dsc_key {
         let state = Arc::get_mut(&mut state).unwrap();
         state.dsc_issue_gateway_key = Some(dsc_key.to_owned());
@@ -1385,8 +1384,14 @@ async fn disposable_gateway_json(
 #[tokio::test]
 #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key() {
+    use std::io::Write;
+
     use der::{Decode, DecodePem};
     use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
+    use marty_signing_grant::{
+        minter::GrantMinter, replay::RedisGrantReplayStore, verifier::GrantVerifier, SigningOrigin,
+    };
+    use marty_signing_keys::http::router_with_all_keys_and_grants;
     use x509_cert::{request::CertReq, Certificate};
 
     const DSC_KEY: &str = "disposable-gateway-dsc-issue-key-32-characters";
@@ -1396,45 +1401,18 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
     const CSCA_ROUTE: &str = "/v1/signing-keys/issuer-identities/csca-self-signed-certificate";
 
     let redis_url = disposable_signing_redis_url().await;
-    let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
-    let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
-    assert!(
-        parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
-        "DSC test requires a loopback disposable OpenBao instance"
-    );
-    let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
-    assert!(
-        std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
-        "disposable OpenBao token binding does not match"
-    );
-    let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
-        .expect("pre-provisioned disposable OpenBao sentinel value");
-    assert!(
-        bao_nonce.len() >= 16,
-        "disposable OpenBao sentinel is too short"
-    );
-    let marker = reqwest::Client::new()
-        .get(
-            parsed_bao
-                .join("/v1/secret/data/marty-test-disposable-guard")
-                .unwrap(),
-        )
-        .header("X-Vault-Token", &token)
-        .send()
-        .await
-        .expect("disposable OpenBao sentinel read");
-    assert!(
-        marker.status().is_success(),
-        "disposable OpenBao sentinel is absent"
-    );
-    let marker: Value = marker
-        .json()
-        .await
-        .expect("disposable OpenBao sentinel JSON");
-    assert!(
-        marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
-        "disposable OpenBao sentinel does not match"
-    );
+    let (endpoint, token) = disposable_signing_openbao().await;
+    let mint_token = std::env::var("MARTY_TEST_GRANT_ISSUER_MINT_TOKEN")
+        .expect("scoped GatewayIssuerDid mint token for disposable OpenBao");
+    let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN")
+        .expect("scoped grant verify token for disposable OpenBao");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, token);
+    assert_ne!(verify_token, token);
+    let mut mint_file = tempfile::NamedTempFile::new().unwrap();
+    mint_file.write_all(mint_token.as_bytes()).unwrap();
+    let mut verify_file = tempfile::NamedTempFile::new().unwrap();
+    verify_file.write_all(verify_token.as_bytes()).unwrap();
 
     let registry = SigningRegistryStore::connect(&redis_url)
         .await
@@ -1443,8 +1421,17 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
     let profiles = SigningProfileStore::from_connection(registry.connection());
     let documents = SigningDocumentStore::from_connection(registry.connection());
     let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
-    let signing = router_with_dependencies_and_ceremony_keys(
+    let verifier = GrantVerifier::for_managed_openbao(
+        &endpoint,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(registry.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         INTERNAL_KEY.into(),
+        None,
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
         Some(DSC_KEY.into()),
         Some(CSCA_KEY.into()),
         true,
@@ -1454,10 +1441,17 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
         Some(profiles.clone()),
         None,
         Some("issuer.example".into()),
+        Some(verifier),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let signing_url = format!("http://{}", listener.local_addr().unwrap());
     let signing_server = tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::GatewayIssuerDid,
+        mint_file.path().to_path_buf(),
+    )
+    .unwrap();
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let organization_id = format!("test-gateway-dsc-{suffix}");
     let gateway = gateway_with_signing_http_dsc(
@@ -1465,18 +1459,21 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
         Some(DSC_KEY),
         Some(CSCA_KEY),
         Some((&organization_id, true, true)),
+        Some(minter.clone()),
     );
     let limited_gateway = gateway_with_signing_http_dsc(
         signing_url.clone(),
         Some(DSC_KEY),
         Some(CSCA_KEY),
         Some((&organization_id, false, false)),
+        Some(minter.clone()),
     );
     let dsc_only_gateway = gateway_with_signing_http_dsc(
         signing_url.clone(),
         Some(DSC_KEY),
         Some(CSCA_KEY),
         Some((&organization_id, true, false)),
+        Some(minter),
     );
     let issuer_did = format!("did:web:issuer.example:orgs:gateway-dsc-{suffix}");
     let identity = |purpose: &str| {
@@ -1511,7 +1508,11 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "CSCA CSR creation failed");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "CSCA CSR creation failed: {csca_csr}"
+    );
     let csca_profile = profiles.list(&organization_id).await.unwrap()["profiles"]
         .as_array()
         .unwrap()

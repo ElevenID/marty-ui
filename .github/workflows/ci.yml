@@ -1886,7 +1886,8 @@ jobs:
             -- --ignored --exact
             test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
             cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance -- --list | grep -Fx "$test_name: test"
-            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
+            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
           chain_test='managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys'
           cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
             -- --list | grep -Fx "$chain_test: test"
