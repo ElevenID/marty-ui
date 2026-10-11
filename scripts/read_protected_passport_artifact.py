@@ -17,6 +17,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from .check_passport_beta_fence_authority import published_release_ref
+    from .probe_passport_beta_host import HostProbeError
+except ImportError:
+    from check_passport_beta_fence_authority import published_release_ref
+    from probe_passport_beta_host import HostProbeError
+
 
 REPOSITORY = "ElevenID/marty-ui"
 WORKFLOWS = {
@@ -123,7 +130,9 @@ def read_artifact(
             and metadata.get("id") == run_id
             and metadata.get("event") == "workflow_dispatch"
             and metadata.get("path") == f".github/workflows/{workflow}"
-            and metadata.get("head_branch") == "main"
+            and isinstance(metadata.get("head_branch"), str)
+            and re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+",
+                             metadata["head_branch"]) is not None
             and isinstance(metadata.get("head_sha"), str)
             and SHA.fullmatch(metadata["head_sha"]) is not None
             and metadata.get("run_attempt") == 1
@@ -131,7 +140,12 @@ def read_artifact(
             and metadata.get("conclusion") == "success"
             and isinstance(metadata.get("head_repository"), dict)
             and metadata["head_repository"].get("full_name") == REPOSITORY,
-            "Passport artifact did not come from a successful protected main run")
+            "Passport artifact did not come from a successful release-tag run")
+    try:
+        published_release_ref(f"refs/tags/{metadata['head_branch']}",
+                              metadata["head_sha"], execute)
+    except HostProbeError as exc:
+        raise ProtectedArtifactError("Passport artifact release tag changed") from exc
     started = _utc(metadata.get("run_started_at"))
     completed = _utc(metadata.get("updated_at"))
     require(started <= completed, "Protected GitHub run times are inverted")

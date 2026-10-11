@@ -50,21 +50,46 @@ def fake_gh(receipt_path, snapshot_path, report_path, *, workflow=producer.WORKF
 
     def execute(args):
         calls.append(args)
+        if args[-2:] == ["show", f"{SOURCE}:release/stack-lock.json"]:
+            return json.dumps({"schema": "marty.stack-lock/v1",
+                               "release": "marty-ui@1.1.244",
+                               "release_state": "eligible"})
         if args[:2] == ["gh", "api"]:
             if args[2].endswith("/pulls/305"):
                 return json.dumps({
                     "state": "closed", "merged": True,
                     "head": {"sha": DELETION},
                 })
+            if args[2].endswith("/git/tags/" + "d" * 40):
+                return json.dumps({
+                    "tag": "v1.1.244", "object": {"type": "commit", "sha": SOURCE},
+                    "message": (f"Release-Transaction: {'e' * 64}\n"
+                                f"Claim-Run: 123\nSource-SHA: {SOURCE}\n"),
+                })
+            if args[2].endswith("/actions/runs/123"):
+                return json.dumps({
+                    "id": 123, "path": ".github/workflows/prepare-stack-tag.yml",
+                    "event": "workflow_dispatch", "head_branch": "main",
+                    "head_sha": SOURCE, "status": "completed",
+                    "conclusion": "success",
+                })
+            if args[2].endswith("/releases/tags/v1.1.244"):
+                return json.dumps({"tag_name": "v1.1.244", "draft": False,
+                                   "prerelease": False,
+                                   "published_at": "2026-10-11T16:00:00Z"})
             return json.dumps({
                 "id": RUN, "status": "completed", "conclusion": "success",
                 "event": "workflow_dispatch", "path": workflow,
-                "head_branch": "main", "head_sha": SOURCE,
+                "head_branch": "v1.1.244", "head_sha": SOURCE,
+                "run_attempt": 1,
                 "repository": {"full_name": verifier.REPOSITORY},
                 "head_repository": {"full_name": verifier.REPOSITORY},
                 "created_at": "2026-09-29T00:00:03Z",
                 "updated_at": "2026-09-29T00:00:05Z",
             })
+        if args[:2] == ["git", "ls-remote"]:
+            return (f"{'d' * 40}\trefs/tags/v1.1.244\n"
+                    f"{SOURCE}\trefs/tags/v1.1.244^{{}}\n")
         if args[:3] == ["gh", "run", "download"]:
             name = args[args.index("--name") + 1]
             target = Path(args[args.index("--dir") + 1]) / f"{name}.json"
@@ -100,7 +125,7 @@ def test_wrong_workflow_or_tampered_artifact_fails_closed(tmp_path):
     installation, snapshot, _, receipt_path, snapshot_path, report_path = fixture(tmp_path)
     wrong, _ = fake_gh(receipt_path, snapshot_path, report_path,
                        workflow=".github/workflows/passport-python-deletion-cutover.yml")
-    with pytest.raises(producer.HostProbeError, match="protected main"):
+    with pytest.raises(producer.HostProbeError, match="release tag"):
         verify(installation, snapshot, receipt_path, snapshot_path, report_path, wrong)
     tampered, _ = fake_gh(receipt_path, snapshot_path, report_path,
                           corrupt=report_path.stem)

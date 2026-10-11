@@ -180,6 +180,6 @@ baselines, and an HTTP 200 from the public production site. Run at least three s
 no gap over 13 hours. `verify_passport_beta_soak_window.py` checks that window
 and emits `window_observed` with `provenance_pending=true`. The final compositor
 must call `verify_protected_passport_soak.py`, which downloads each artifact
-from its successful protected main run, checks the run time and exact JSON
+    from its successful signed release-tag run, checks the run time and exact JSON
 hash, and emits `protected_window_verified`. A local copy of sample JSON or
 an unauthenticated `window_observed` report is insufficient.

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -299,8 +300,20 @@ def protected_source(
 ) -> str:
     head = runner(["git", "-C", str(ROOT), "rev-parse", "HEAD"])
     require(SHA.fullmatch(head) is not None, "Local Marty UI commit is invalid")
-    require(runner(["git", "-C", str(ROOT), "branch", "--show-current"]) == "main",
-            "Fence operation requires protected main")
+    local_branch = runner(["git", "-C", str(ROOT), "branch", "--show-current"])
+    if local_branch != "main":
+        ref = os.environ.get("GITHUB_REF", "")
+        require(local_branch == "" and re.fullmatch(
+            r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+", ref) is not None,
+            "Fence operation requires protected main or a release tag")
+        local_object = runner(["git", "-C", str(ROOT), "rev-parse", ref])
+        require(SHA.fullmatch(local_object) is not None
+                and runner(["git", "-C", str(ROOT), "cat-file", "-t", ref]) == "tag"
+                and runner(["git", "-C", str(ROOT), "rev-parse", f"{ref}^{{commit}}"])
+                    == head,
+                "Detached checkout is not the annotated release tag")
+        require(published_release_ref(ref, head, runner) == local_object,
+                "Published release tag differs from the detached checkout")
     require(not runner(["git", "-C", str(ROOT), "status", "--porcelain=v1",
                         "--untracked-files=normal"]),
             "Fence operation requires a clean protected source")
@@ -322,6 +335,86 @@ def protected_source(
             and comparison["merge_base_commit"].get("sha") == head,
             "Local release source is not an ancestor of protected main")
     return head
+
+
+def published_release_ref(
+    ref: str, source_commit: str,
+    runner: Callable[[list[str]], str] = run,
+) -> str:
+    """Bind a post-release run to the published annotated Marty UI tag."""
+    require(re.fullmatch(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+", ref) is not None
+            and SHA.fullmatch(source_commit) is not None,
+            "Post-release tag or source is invalid")
+    remote_tags = runner([
+        "git", "ls-remote", "https://github.com/ElevenID/marty-ui.git",
+        ref, f"{ref}^{{}}",
+    ])
+    records = remote_tags.splitlines()
+    require(len(records) == 2, "Published annotated release tag is unavailable")
+    parsed = {name: object_sha for line in records if "\t" in line
+              for object_sha, name in [line.split("\t", 1)]}
+    tag_object = parsed.get(ref)
+    require(len(parsed) == 2 and SHA.fullmatch(str(tag_object)) is not None
+            and tag_object != source_commit
+            and parsed.get(f"{ref}^{{}}") == source_commit,
+            "Published annotated release tag differs from source")
+    try:
+        lock = json.loads(runner([
+            "git", "-C", str(ROOT), "show",
+            f"{source_commit}:release/stack-lock.json",
+        ]))
+    except ValueError as exc:
+        raise HostProbeError("Release source stack lock is unreadable") from exc
+    require(isinstance(lock, dict)
+            and lock.get("schema") == "marty.stack-lock/v1"
+            and lock.get("release") == f"marty-ui@{ref.removeprefix('refs/tags/v')}"
+            and lock.get("release_state") == "eligible",
+            "Published tag differs from the source stack lock")
+    tag = json.loads(runner([
+        "gh", "api", f"repos/ElevenID/marty-ui/git/tags/{tag_object}",
+    ]))
+    require(isinstance(tag, dict) and tag.get("tag") == ref.removeprefix("refs/tags/")
+            and isinstance(tag.get("object"), dict)
+            and tag["object"].get("type") == "commit"
+            and tag["object"].get("sha") == source_commit
+            and isinstance(tag.get("message"), str),
+            "Published tag object differs from release source")
+    markers: dict[str, str] = {}
+    for line in tag["message"].splitlines():
+        for key in ("Release-Transaction", "Claim-Run", "Source-SHA"):
+            if line.startswith(f"{key}: "):
+                require(key not in markers, "Duplicate release claim marker")
+                markers[key] = line.removeprefix(f"{key}: ")
+    require(SHA256.fullmatch(markers.get("Release-Transaction", "")) is not None
+            and re.fullmatch(r"[1-9][0-9]*", markers.get("Claim-Run", ""))
+                is not None
+            and markers.get("Source-SHA") == source_commit,
+            "Published tag lacks valid release claim markers")
+    claim = json.loads(runner([
+        "gh", "api", "repos/ElevenID/marty-ui/actions/runs/"
+        + markers["Claim-Run"],
+    ]))
+    require(isinstance(claim, dict)
+            and claim.get("id") == int(markers["Claim-Run"])
+            and claim.get("path") == ".github/workflows/prepare-stack-tag.yml"
+            and claim.get("event") == "workflow_dispatch"
+            and claim.get("head_branch") == "main"
+            and claim.get("head_sha") == source_commit
+            and claim.get("status") == "completed"
+            and claim.get("conclusion") == "success",
+            "Published tag release claim did not succeed")
+    release = json.loads(runner([
+        "gh", "api", "repos/ElevenID/marty-ui/releases/tags/"
+        + ref.removeprefix("refs/tags/"),
+    ]))
+    require(isinstance(release, dict)
+            and release.get("tag_name") == ref.removeprefix("refs/tags/")
+            and release.get("draft") is False
+            and release.get("prerelease") is False
+            and isinstance(release.get("published_at"), str)
+            and bool(release["published_at"]),
+            "Published release is unavailable")
+    return tag_object
 
 
 def protected_file(relative: str, runner: Callable[[list[str]], str]) -> None:
