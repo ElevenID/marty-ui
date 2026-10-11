@@ -14102,6 +14102,11 @@ CryptoKeyVersion. The adapter now requires this exact match; the public-key
 adapter checks its versioned `name` when present (the field is documented as
 beta in the [GetPublicKey response](https://docs.cloud.google.com/kms/docs/reference/rest/v1/projects.locations.keyRings.cryptoKeys.cryptoKeyVersions/getPublicKey)).
 Focused mismatch/missing-name and all five provider golden tests pass locally.
+After the Azure/GCP response-binding batch, the complete Signing Keys library
+selection passes 181 tests with nine opt-in cases ignored; registry (four),
+service-validation (one) and provider (five) golden suites pass. Clippy with
+warnings denied and changed-file Rustfmt pass. These local checks do not
+substitute for exact-head hosted CI or real cloud-provider acceptance.
 
 UI #1192 head `5ba6851d0eb431305c75419b32b207cbadf96df2` [CI
 38111105084](https://github.com/ElevenID/marty-ui/actions/runs/38111105084)
