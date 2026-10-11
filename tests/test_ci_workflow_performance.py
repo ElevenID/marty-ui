@@ -3543,7 +3543,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         )
         == 1
     )
-    assert 'kill "$composition_pid" "$flow_pid" "$worker_pid" "$selfhost_pid"' in published
+    assert 'kill "$composition_pid" "$worker_pid" "$selfhost_pid"' in published
+    assert 'if [[ -n "$flow_pid" ]]; then kill "$flow_pid"' in published
     assert 'tail --pid="$pid"' in published
     assert (
         'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &'
@@ -3555,6 +3556,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
     assert 'wait "$flow_pid" || flow_status=$?' in published
+    assert published.index('wait "$composition_pid" || composition_status=$?') < published.index(
+        '"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+    )
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (
         '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'

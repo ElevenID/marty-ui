@@ -264,6 +264,14 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
+    flow_full = '"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+    assert script.splitlines().count(flow_full) == 1
+    assert script.index('wait "$composition_pid" || composition_status=$?') < script.index(
+        flow_full
+    )
+    assert script.index(flow_full) < script.index('wait "$flow_pid" || flow_status=$?')
+    assert 'if [[ -n "$flow_pid" ]]; then kill "$flow_pid"' in script
+    assert 'if [[ -n "$flow_relay_pid" ]]; then wait "$flow_relay_pid"' in script
     assert script.count("if (( expected_skipped_config_tests == 0 )); then") == 1
     assert (
         script.count(
@@ -614,25 +622,40 @@ else
       esac
       fi
     fi
-    if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
-      touch "started-$name"
-      for (( attempt=0; attempt<200; attempt++ )); do
-        [[ -f started-contract && -f started-worker-contract && -f started-flow-contract && -f started-selfhost-contract ]] && break
-        sleep 0.05
-      done
-      [[ -f started-contract && -f started-worker-contract && -f started-flow-contract && -f started-selfhost-contract ]] || exit 25
-      if [[ "$TEST_FAILURE" == signal ]]; then
-        trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
-        touch "armed-$name"
-        if [[ "$name" == contract ]]; then
-          for (( attempt=0; attempt<200; attempt++ )); do
-            [[ -f armed-contract && -f armed-worker-contract && -f armed-flow-contract && -f armed-selfhost-contract ]] && break
-            sleep 0.05
-          done
-          [[ -f armed-contract && -f armed-worker-contract && -f armed-flow-contract && -f armed-selfhost-contract ]] || exit 25
+    if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal || "$TEST_FAILURE" == signal-after-flow ]]; then
+      if [[ "$name" == flow-contract ]]; then
+        [[ -f finished-contract ]] || exit 25
+        if [[ "$TEST_FAILURE" == signal-after-flow ]]; then
+          trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
+          sleep 1
           kill -TERM "$TEST_PARENT_PID"
+          while :; do sleep 0.05; done
         fi
-        while :; do sleep 0.05; done
+      else
+        touch "started-$name"
+        for (( attempt=0; attempt<200; attempt++ )); do
+          [[ -f started-contract && -f started-worker-contract && -f started-selfhost-contract ]] && break
+          sleep 0.05
+        done
+        [[ -f started-contract && -f started-worker-contract && -f started-selfhost-contract ]] || exit 25
+        if [[ "$TEST_FAILURE" == signal ]]; then
+          trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
+          touch "armed-$name"
+          if [[ "$name" == contract ]]; then
+            for (( attempt=0; attempt<200; attempt++ )); do
+              [[ -f armed-contract && -f armed-worker-contract && -f armed-selfhost-contract ]] && break
+              sleep 0.05
+            done
+            [[ -f armed-contract && -f armed-worker-contract && -f armed-selfhost-contract ]] || exit 25
+            kill -TERM "$TEST_PARENT_PID"
+          fi
+          while :; do sleep 0.05; done
+        fi
+        if [[ "$TEST_FAILURE" == signal-after-flow && "$name" != contract ]]; then
+          trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
+          while :; do sleep 0.05; done
+        fi
+        touch "finished-$name"
       fi
     fi
   fi
@@ -865,6 +888,17 @@ def test_flow_target_failure_fails_complete_canvas_gate(shell_case):
     assert any(call[:2] == ["child", "flow-contract"] for call in calls)
     assert '"phase":"canvas_target","name":"flow"' in result.stdout
     assert '"status":"failed"' in result.stdout
+
+
+def test_composition_failure_still_executes_flow_owner(shell_case):
+    result, calls = shell_case(["full"], failure="contract-full")
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "flow-contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert "Canvas composition target exit: 24" in result.stdout
+    assert "Flow target exit: 0" in result.stdout
 
 
 @pytest.mark.parametrize("timeout_marker", ["missing", "duplicate"])
@@ -1435,7 +1469,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert not any(call[0] == "docker" for call in calls)
 
 
-def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
+def test_flow_starts_after_composition_and_other_targets_overlap(shell_case, tmp_path):
     result, calls = shell_case(failure="barrier")
     assert result.returncode == 0, result.stderr
     full = [call for call in calls if "--test-threads=4" in call]
@@ -1445,6 +1479,7 @@ def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
         "flow-contract",
         "selfhost-contract",
     }
+    assert (tmp_path / "finished-contract").exists()
     assert "Canvas composition target exit: 0" in result.stdout
     assert "Canvas worker target exit: 0" in result.stdout
     assert "Flow target exit: 0" in result.stdout
@@ -1473,8 +1508,32 @@ def test_failed_serial_json_probe_stops_before_parallel_targets(shell_case):
     assert not any("--test-threads=4" in call for call in calls)
 
 
-def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
+def test_signal_before_flow_start_reports_owned_target_logs(shell_case, tmp_path):
     result, calls = shell_case(failure="signal")
+    assert result.returncode == 143
+    assert {call[1] for call in calls if "--test-threads=4" in call} == {
+        "contract",
+        "worker-contract",
+        "selfhost-contract",
+    }
+    assert "Canvas composition target exit:" in result.stdout
+    assert "Canvas worker target exit:" in result.stdout
+    assert "Flow target exit: not-started" in result.stdout
+    assert "Selfhost target exit:" in result.stdout
+    assert "full target contract" in result.stdout
+    assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" not in result.stdout
+    assert "full target selfhost-contract" in result.stdout
+    assert {call[1] for call in calls if call[0] == "stopped"} == {
+        "contract",
+        "worker-contract",
+        "selfhost-contract",
+    }
+    assert not list(tmp_path.glob("canvas-targets.*"))
+
+
+def test_signal_after_flow_start_stops_owned_targets(shell_case, tmp_path):
+    result, calls = shell_case(failure="signal-after-flow")
     assert result.returncode == 143
     assert {call[1] for call in calls if "--test-threads=4" in call} == {
         "contract",
@@ -1482,16 +1541,9 @@ def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
         "flow-contract",
         "selfhost-contract",
     }
-    assert "Canvas composition target exit:" in result.stdout
-    assert "Canvas worker target exit:" in result.stdout
+    assert "Flow target exit: not-started" not in result.stdout
     assert "Flow target exit:" in result.stdout
-    assert "Selfhost target exit:" in result.stdout
-    assert "full target contract" in result.stdout
-    assert "full target worker-contract" in result.stdout
-    assert "full target flow-contract" in result.stdout
-    assert "full target selfhost-contract" in result.stdout
     assert {call[1] for call in calls if call[0] == "stopped"} == {
-        "contract",
         "worker-contract",
         "flow-contract",
         "selfhost-contract",

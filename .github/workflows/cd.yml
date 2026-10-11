@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       prepare_selfhost_lock:
-        description: Build digest-only self-host roles and stage an unqualified image lock
+        description: Build digest-only self-host roles and stage an unqualified ZIP, lock, and receipt
         required: false
         default: false
         type: boolean
@@ -1139,8 +1139,10 @@ jobs:
           cosign sign --yes "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST"
 
   prepare-selfhost-image-lock:
-    # Produces a short-lived preparation artifact, never a release asset or
-    # transaction gate. Full installed-bundle qualification remains separate.
+    # Produces a short-lived ZIP/lock preparation artifact, never a release
+    # asset or transaction gate. The next protected gate must anonymously
+    # install this exact extracted ZIP with disposable external state and prove
+    # migrations, readiness, login, and an issuer/credential journey.
     if: inputs.prepare_selfhost_lock == true
     needs: [resolve-transaction, validate-stack, build-services, qualify-release, build-selfhost-lock-roles]
     runs-on: ubuntu-latest
@@ -1157,8 +1159,8 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - name: Install the exact offline source parser
-        run: python -m pip install PyYAML==6.0.3
+      - name: Install the exact offline source parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: stack-release-qualified-${{ github.run_id }}
@@ -1248,12 +1250,135 @@ jobs:
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Package and record the unqualified exact-lock ZIP
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --manifest-path rust/Cargo.toml \
+            -p marty-selfhost-bundle --bin package-selfhost-bundle
+          rust/target/debug/package-selfhost-bundle \
+            --repo-root . --output-dir "$RUNNER_TEMP/selfhost-prepared" \
+            --archive "$RUNNER_TEMP/selfhost-prepared" \
+            --image-lock prepared-selfhost-images.json
+          python scripts/record_selfhost_bundle_preparation.py \
+            --archive "$RUNNER_TEMP/selfhost-prepared.zip" \
+            --image-lock prepared-selfhost-images.json \
+            --transaction validated-transaction.json \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" \
+            --output prepared-selfhost-bundle.json
+          python scripts/produce_selfhost_product_descriptor.py \
+            --archive "$RUNNER_TEMP/selfhost-prepared.zip" \
+            --image-lock prepared-selfhost-images.json \
+            --transaction validated-transaction.json \
+            --receipt prepared-selfhost-bundle.json \
+            --output prepared-selfhost-product-descriptor.json
+          mkdir "$RUNNER_TEMP/selfhost-fresh-install"
+          unzip -q "$RUNNER_TEMP/selfhost-prepared.zip" \
+            -d "$RUNNER_TEMP/selfhost-fresh-install"
+          (
+            cd "$RUNNER_TEMP/selfhost-fresh-install/selfhost-prepared"
+            docker compose --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --no-interpolate --format json \
+              > "$RUNNER_TEMP/selfhost-extracted-compose.json"
+          )
+          jq -e '.services | type == "object" and length > 0' \
+            "$RUNNER_TEMP/selfhost-extracted-compose.json" >/dev/null
+          cp "$RUNNER_TEMP/selfhost-prepared.zip" prepared-selfhost-bundle.zip
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
-          path: prepared-selfhost-images.json
+          path: |
+            prepared-selfhost-images.json
+            prepared-selfhost-bundle.json
+            prepared-selfhost-bundle.zip
+            prepared-selfhost-product-descriptor.json
           if-no-files-found: error
           retention-days: 30
+
+  preflight-selfhost-prepared-consumer:
+    # A separate artifact consumer, not a release or installed-runtime gate.
+    if: inputs.prepare_selfhost_lock == true
+    needs: [prepare-selfhost-image-lock]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Install the exact offline source parsers
+        run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
+          path: prepared
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-qualified-${{ github.run_id }}
+          path: transaction
+      - name: Verify downloaded exact ZIP and extracted Compose model
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse 'HEAD^{commit}')" = "$GITHUB_SHA"
+          python scripts/release_transaction.py validate \
+            --input transaction/release-transaction.json \
+            --repository "$GITHUB_REPOSITORY" --source-sha "$GITHUB_SHA" \
+            --stack-lock release/stack-lock.json \
+            --claim-run-id "$(jq -r .claim_run_id transaction/release-transaction.json)" \
+            --output "$RUNNER_TEMP/selfhost-consumer-transaction.json"
+          jq -e '
+            (.state == "qualified" or .state == "promoting" or
+             .state == "promoted") and
+            (.gates | length == 2)
+          ' "$RUNNER_TEMP/selfhost-consumer-transaction.json" >/dev/null
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --verify-archive-only
+          mkdir "$RUNNER_TEMP/selfhost-consumer"
+          unzip -q prepared/prepared-selfhost-bundle.zip -d "$RUNNER_TEMP/selfhost-consumer"
+          (
+            cd "$RUNNER_TEMP/selfhost-consumer/selfhost-prepared"
+            docker compose --profile '*' --env-file .env.selfhost.production.example \
+              -f docker-compose.yml config --format json \
+              > "$RUNNER_TEMP/selfhost-consumer-compose.json"
+          )
+          python scripts/check_prepared_selfhost_consumer.py \
+            --archive prepared/prepared-selfhost-bundle.zip \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --transaction transaction/release-transaction.json \
+            --receipt prepared/prepared-selfhost-bundle.json \
+            --descriptor prepared/prepared-selfhost-product-descriptor.json \
+            --expected-source-sha "$GITHUB_SHA" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --compose-model "$RUNNER_TEMP/selfhost-consumer-compose.json" \
+            --source-checkout "$GITHUB_WORKSPACE" \
+            --output "$RUNNER_TEMP/selfhost-consumer-preflight.json"
+      - name: Require anonymous exact-digest pulls from the downloaded lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DOCKER_CONFIG="$RUNNER_TEMP/selfhost-anonymous-docker-config"
+          mkdir "$DOCKER_CONFIG"
+          jq -r '.services[]' prepared/prepared-selfhost-images.json | LC_ALL=C sort -u |
+          while IFS= read -r image; do
+            docker pull "$image" >/dev/null
+          done
 
   notify-release-approval:
     # This is a parallel handoff, never a prerequisite for publication.

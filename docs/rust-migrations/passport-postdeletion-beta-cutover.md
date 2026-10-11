@@ -29,14 +29,16 @@ check and is never a deployment target.
    wrote an artifact into the protected checkout before checking source
    cleanliness. The signed v1.1.241 release passed qualification, but the
    read-only fence rebind exposed `psql` status lines before its JSON result.
-   After the reviewed quiet-output fix and signed v1.1.242 release,
-   run `scripts/rebind-passport-beta-fence.ps1` on clean protected main with
-   the v1.1.242 manifest, approved beta baseline, signed v1.1.240 manifest,
-   saved preinstallation target, v1.1.240 fence receipt, and a fresh private
-   receipt path. It checks unchanged SQL and the live fence, repeats the
-   rollback-only direct write probes, and atomically replaces only the host
-   receipt record. Preserve the prior receipt and host-record backup. Use the
-   new receipt in every subsequent step.
+   The signed v1.1.242 release was rebound to the live fence, then protected
+   main advanced before maintenance. Rebind the current host record again
+   from its v1.1.242 receipt to the next signed source: supply that receipt,
+   its signed v1.1.242 manifest, the new signed manifest, approved beta
+   baseline, saved preinstallation target, and a fresh private output path.
+   The operator checks signed receipt lineage, unchanged SQL and the live
+   fence, repeats rollback-only direct write probes, preserves earlier
+   rebind evidence, and atomically replaces only the host receipt record.
+   Preserve every prior receipt and host-record backup. Use the latest receipt
+   in every subsequent step.
 3. Dispatch the protected-main `passport-beta-rust-readiness.yml` workflow with
    the merged `marty-credentials` PR #305 head and the fenced receipt's WSL
    path. Download its three artifacts: the exact fence installation receipt,

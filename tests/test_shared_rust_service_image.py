@@ -87,7 +87,10 @@ def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
     )
     assert builder.count("RUN --mount=type=cache,id=marty-public-cargo-registry") == 1
     assert dependencies.count("--mount=type=secret,id=sccache_token") == 2
-    assert "RUSTFLAGS" not in dockerfile
+    assert (
+        'ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"'
+        in dockerfile.split("FROM rust-service-base AS rust-service-planner", 1)[0]
+    )
     assert "ENV SCCACHE" not in dockerfile
     wrapper = (ROOT / "scripts/ci/run-public-rust-build.sh").read_text(encoding="utf-8")
     assert "export RUSTC_WRAPPER=sccache" in wrapper
@@ -134,6 +137,31 @@ def test_public_builder_preserves_supported_amd64_and_arm64_registry_builds() ->
     )
     assert "linux/arm64" in registry
     assert '"services/Dockerfile"' in registry
+
+
+def test_public_builder_pins_build_only_mold_for_both_architectures() -> None:
+    dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    base, remainder = dockerfile.split(
+        "FROM rust-service-base AS rust-service-planner", 1
+    )
+    runtime = dockerfile.split("FROM debian:bookworm-slim@sha256:", 1)[1]
+    assert "mold-2.41.0-${target}-linux.tar.gz" in base
+    assert (
+        "checksum=a3696680d99e692970590a178bc3a33d78d60d1c6dc9db7a11b557b02b751f5d"
+        in base
+    )
+    assert (
+        "checksum=946de2774b06a71346bd59b55fddba610b65b8d93c3a4a1559cc84e103472710"
+        in base
+    )
+    assert "amd64) target=x86_64" in base
+    assert "arm64) target=aarch64" in base
+    assert "sha256sum --check --status" in base
+    assert "ln -s mold /usr/local/bin/ld.mold" in base
+    assert 'ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"' in base
+    assert "FROM rust-service-cache AS rust-service-dependencies" in remainder
+    assert "COPY --from=rust-service-builder" in runtime
+    assert "COPY --from=rust-service-base /usr/local/bin/mold" not in runtime
 
 
 def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release() -> (
