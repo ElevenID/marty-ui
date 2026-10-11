@@ -56,20 +56,26 @@ impl SigningOrigin {
                         && claims.service_id.as_deref() == Some(service_id)
                         && claims.issuer_did.is_none()
                 }),
+            Self::FlowWalletRequest => {
+                issuer_did_route_shape(claims)
+                    && claims.key_purpose == "oid4vp_request_signing"
+                    && claims.algorithm == "ES256"
+            }
             Self::GatewayIssuerDid
-            | Self::FlowWalletRequest
             | Self::IssuanceCredential
             | Self::IssuanceCanvas
-            | Self::IssuancePassport => {
-                claims.route == "/internal/compat/issuer-dids/sign"
-                    && claims.service_id.is_none()
-                    && claims
-                        .issuer_did
-                        .as_deref()
-                        .is_some_and(|did| did.starts_with("did:"))
-            }
+            | Self::IssuancePassport => issuer_did_route_shape(claims),
         }
     }
+}
+
+fn issuer_did_route_shape(claims: &GrantClaims) -> bool {
+    claims.route == "/internal/compat/issuer-dids/sign"
+        && claims.service_id.is_none()
+        && claims
+            .issuer_did
+            .as_deref()
+            .is_some_and(|did| did.starts_with("did:"))
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -457,6 +463,9 @@ mod tests {
             claims.route = "/internal/compat/issuer-dids/sign".into();
             claims.service_id = None;
             claims.issuer_did = Some("did:web:issuer.example".into());
+            if origin == SigningOrigin::FlowWalletRequest {
+                claims.key_purpose = "oid4vp_request_signing".into();
+            }
             let binding = GrantBinding {
                 origin,
                 operation_id: &claims.operation_id,
@@ -475,6 +484,15 @@ mod tests {
                 bound_input(&claims, &binding, 1_700_000_001),
                 Err(GrantError::Malformed)
             );
+            if origin == SigningOrigin::FlowWalletRequest {
+                let mut elevated = claims.clone();
+                elevated.route = "/internal/compat/issuer-dids/sign".into();
+                elevated.key_purpose = "mdoc_dsc".into();
+                assert_eq!(
+                    bound_input(&elevated, &binding, 1_700_000_001),
+                    Err(GrantError::Malformed)
+                );
+            }
         }
         let mut claims = sample_claims();
         claims.service_id = Some("different-service".into());

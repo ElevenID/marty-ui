@@ -14504,3 +14504,26 @@ route even if a caller could supply matching request fields. Eight local
 grant tests and warnings-denied Clippy pass. Certificate and CSR ceremonies
 need explicit, separately reviewed route/authority shapes before kernel
 enforcement; they cannot silently reuse an unrestricted issuer grant.
+
+Issuance signing-origin call review: `credential_builder::SignRequest` is
+shared by four production paths, not only credential materialization.
+Credential construction has a reserved credential ID assigned from the
+authorized transaction before commit. Passport SOD signing has a persisted
+`PassportJob.id` at `PassportHttpService::sign`; Canvas LTI signing is used
+for deep-linking, OAuth client assertions and readiness JWTs; Canvas DID
+readiness also signs a generated challenge. Adding a required operation ID
+at the common signer boundary correctly exposed each caller at compile time,
+but there is no honest single default ID for them. The attempted cross-path
+field change was reverted before commit. Wire authorized operation IDs through
+each producer first, with Canvas launch/session or generated assertion IDs
+and the passport job ID, then require the field and mint exact-payload grants.
+Do not derive tenant authority merely from an arbitrary payload hash or add a
+compatibility default. The HTTP grant header, token mounts and Signing Keys
+enforcement remain open.
+
+Flow grant capability self-review: the shared route/origin validator now also
+limits `FlowWalletRequest` grants to the actual OID4VP request-object purpose
+`oid4vp_request_signing` and ES256. A Flow-scoped mint token can no longer
+authenticate a passport/credential key purpose even on the shared issuer-DID
+route. The grant suite and warnings-denied Clippy pass locally. Other origin
+capability restrictions still require their complete producer call inventories.
