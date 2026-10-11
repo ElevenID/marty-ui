@@ -20,7 +20,7 @@
       "run_canvas_worker_mixed_roster_oracle.py",
       "run_canvas_worker_provider_recovery_oracle.py", "run_canvas_worker_provider_signals_oracle.py",
       "run_canvas_worker_resource_race_oracle.py", "run_canvas_worker_resources_unavailable_oracle.py",
-      "run_canvas_worker_retry_after_oracle.py", "run_canvas_worker_roster_failure_oracle.py",
+      "run_canvas_worker_retry_after_oracle.py",
       "run_canvas_worker_timeout_oracle.py"
     ],
     "run_canvas_operations_oracle.py": [],
@@ -91,10 +91,6 @@
       "canvas_worker_https_fixture.py", "run_canvas_worker_rest_oracle.py",
       "run_canvas_worker_startup_oracle.py"
     ],
-    "run_canvas_worker_roster_failure_oracle.py": [
-      "canvas_worker_https_fixture.py", "run_canvas_worker_rest_oracle.py",
-      "run_canvas_worker_startup_oracle.py"
-    ],
     "run_canvas_worker_single_cycle.py": [],
     "run_canvas_worker_startup_oracle.py": [],
     "run_canvas_worker_timeout_oracle.py": [
@@ -131,7 +127,6 @@
     "run_canvas_worker_resources_unavailable_oracle.py": ["canvas-worker-resources-unavailable-scenarios.json"],
     "run_canvas_worker_rest_oracle.py": ["canvas-worker-rest-scenarios.json"],
     "run_canvas_worker_retry_after_oracle.py": ["canvas-worker-retry-after-scenarios.json"],
-    "run_canvas_worker_roster_failure_oracle.py": ["canvas-worker-roster-failure-scenarios.json"],
     "run_canvas_worker_startup_oracle.py": ["canvas-worker-startup-scenarios.json"],
     "run_canvas_worker_timeout_oracle.py": ["canvas-worker-timeout-scenarios.json"]
   },
@@ -144,7 +139,6 @@
     {"when": "\"worker_dispatch\"", "paths": ["scripts/canvas_worker_dispatch_hooks.py", "contracts/canvas-worker-validation-scenarios.json", "scripts/run_canvas_worker_provider_signals_oracle.py", "scripts/run_canvas_worker_provider_recovery_oracle.py"]},
     {"when": "\"worker_mixed_roster\"", "paths": ["scripts/canvas_worker_mixed_roster_https_fixture.py", "contracts/canvas-mixed-roster-scenarios.json", "contracts/canvas-mixed-roster-oracle.json", "scripts/run_canvas_worker_provider_signals_oracle.py", "scripts/run_canvas_worker_provider_recovery_oracle.py"]},
     {"when": "\"worker_resources_unavailable\"", "paths": ["contracts/canvas-worker-validation-scenarios.json", "scripts/run_canvas_worker_provider_signals_oracle.py", "scripts/run_canvas_worker_provider_recovery_oracle.py"]},
-    {"when": "\"worker_roster_failure\"", "paths": ["contracts/canvas-worker-retry-scenarios.json"]},
     {"when": "\"worker_resource_race\"", "paths": ["contracts/canvas-worker-retry-scenarios.json", "scripts/run_canvas_worker_provider_signals_oracle.py", "scripts/run_canvas_worker_provider_recovery_oracle.py"]},
     {"when": "\"worker_provider_recovery_first\"", "paths": ["contracts/canvas-worker-provider-completion-scenarios.json", "contracts/canvas-worker-provider-final-scenarios.json", "scripts/run_canvas_worker_provider_completion_oracle.py"]},
     {"when": "\"worker_provider_generation\" | \"worker_provider_completion\"", "paths": ["contracts/canvas-worker-provider-final-scenarios.json"]},

@@ -202,7 +202,7 @@ if [[ "$mode" == worker-* ]]; then
     expected_worker_skips=4
     if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]]; then
       worker_preflight_skips+=(--skip reference_matches_published)
-      expected_worker_skips=23
+      expected_worker_skips=22
       worker_retry_tier=routine
       worker_validation_tier=routine
     fi
@@ -320,10 +320,10 @@ if [[ "$mode" == full-after-preflights ]]; then
       --skip worker_lease_expiry_matches_frozen_published_process
       --skip reference_matches_published
     )
-    # All 19 remaining historical process/repository/cycle replays are available in
+    # All 18 remaining historical process/repository/cycle replays are available in
     # manual qualification, not the PR and merge-queue critical path. A new
     # replay changes this count and must be deliberately classified.
-    expected_skipped_worker_tests=23
+    expected_skipped_worker_tests=22
   fi
 fi
 pull_images() {
@@ -392,7 +392,6 @@ printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_lease_matche
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_selection_repository_matches_published: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_repository_matches_frozen_errors: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_failure_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_failure_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_resource_race_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_resources_unavailable_reference_matches_published_process: test'

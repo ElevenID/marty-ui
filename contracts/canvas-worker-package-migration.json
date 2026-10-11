@@ -136,7 +136,6 @@
     "worker_retry_after_reference_matches_published_process",
     "worker_retry_matches_frozen_published_process",
     "worker_roster_failure_matches_frozen_published_process",
-    "worker_roster_failure_reference_matches_published_process",
     "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
     "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
     "worker_roster_metadata_reconciliation_preserves_current_fields_and_fences",

@@ -234,15 +234,6 @@ def prepare():
                 contextlib.redirect_stderr(io.StringIO()),
             ):
                 report["worker_resource_race"] = run(resource_race_case)
-        roster_failure_case = os.environ.get("MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE")
-        if roster_failure_case is not None:
-            from run_canvas_worker_roster_failure_oracle import run
-
-            with (
-                contextlib.redirect_stdout(io.StringIO()),
-                contextlib.redirect_stderr(io.StringIO()),
-            ):
-                report["worker_roster_failure"] = run(roster_failure_case)
         retry_after_case = os.environ.get("MARTY_CANVAS_WORKER_RETRY_AFTER_CASE")
         if retry_after_case is not None:
             from run_canvas_worker_retry_after_oracle import run

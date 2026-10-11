@@ -13841,3 +13841,56 @@ pin in the local correction above; no timeout/lease behavior regression was
 observed in this run because neither case got past fixture setup. The exact
 head's Rust CodeQL run 38104474303 completed successfully. Remaining hosted
 jobs were still active at this checkpoint.
+
+The exact-head Rust Service Images job subsequently built its images but
+failed the published Canvas image-startup probe when the official migration
+container exited nonzero. That probe mounts the edited
+`prepare_canvas_published_schema.py` and the old consumer-range pin, so the
+same preparer provenance mismatch is a likely cause; its bounded failure
+message did not expose container logs, so the cause is not proven from this
+job alone. The next hosted run must verify image startup with the corrected
+pin rather than treating the local source review as image qualification.
+
+K8 roster-failure retirement in the next local UI batch: removed the live
+Python published-image runner, preparer selector, Rust historical wrapper,
+and its published-case constructor. The five frozen roster-failure cases
+and their native HTTPS worker replay remain. Producer and script-closure
+inventories now classify the corpus as frozen native input; the tier guard
+pins both frozen files and requires the compiled native process owner. The
+published Python timing collector no longer admits retired wrapper labels,
+while the native HTTPS scenario timer retains all five cases. Current-input
+preparer/constructor hashes, transitive consumer-range pin and registration
+roster hashes were updated together. The affected 210 inventory/workflow
+tests and 139 focused provenance/tier/roster tests pass locally; Rustfmt,
+Ruff and JSON parsing pass. The complete published preflight and Rust
+acceptance compile/tier guard subsequently passed locally: 18 historical
+references, one native roster owner, one native validation owner and 132
+package-migrated cases were discovered from the compiled executable. The
+Canvas acceptance Clippy with warnings denied also passes locally. The
+complete published preflight is still running, and hosted Linux process
+qualification is required before this retirement is accepted.
+
+K6 Issuance signer-origin review: `HttpDidSigner` is shared by credential
+building, Canvas LTI tool JWT signing, Canvas readiness challenge signing,
+and passport SOD signing. Each builds a `SignRequest` with organization,
+issuer DID, format/purpose/algorithm and exact signing bytes, then sends
+the shared issuer credential. A single user-session proof would break
+readiness (a configured machine health operation), public Canvas launch
+flows, and passport issuance. The grant design must instead identify the
+authorized operation record or configured tenant service for each origin,
+bind that origin and payload digest to the matching issuer profile, and
+have Signing Keys independently validate it before KMS use. The common
+`HttpDidSigner` is the DRY transport point; authorization context must be
+supplied by its caller rather than inferred from a body `organization_id`.
+
+UI head `2acb9f8cd` [CI
+38104474349](https://github.com/ElevenID/marty-ui/actions/runs/38104474349)
+is terminal **failure**. The OpenBao DIDComm plugin image job succeeded,
+including its coordinated PostgreSQL/Raft integration-secret recovery; Rust
+CodeQL [38104474303](https://github.com/ElevenID/marty-ui/actions/runs/38104474303)
+also succeeded. Five leaf jobs failed: Rust Lint and Packaging, Rust Service
+Tests (contracts), Release Contract Tests, Rust Service Tests (canvas), and
+Rust Service Images. The grouped local corrections above address the observed
+compile, reviewed-pin, historical-timing and published-preparer failures.
+CI Gate failed because those leaves failed. Preserve this run as immutable
+failed evidence; qualify the next published head from scratch.
