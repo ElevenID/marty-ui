@@ -16055,3 +16055,13 @@ containers were removed. This is source-built local functional evidence,
 not exact release-artifact qualification. The previous `ec63b4de4` hosted
 Canvas job remains in progress; the two failed standalone-Rust jobs have the
 validated lockfile correction in this local batch.
+
+K10 shared Canvas fact transaction follow-up: direct candidate repository
+calls could bypass the synchronization and legacy-ingest guards. The common
+Rust transaction now rejects private material in the fact, requirements and
+optional fact-event metadata before any database write. Its Canvas candidate
+PostgreSQL contract passed against a fresh disposable PostgreSQL 16 instance,
+including a private JWK rejection with zero evidence facts or issuance events;
+Issuance all-targets warnings-denied Clippy passed. The disposable container
+was removed. The grouped batch remains local while the prior hosted Canvas
+job completes.

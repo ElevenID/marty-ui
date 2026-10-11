@@ -429,7 +429,14 @@ pub(crate) async fn record_fact_and_policy_in_transaction(
     evaluate_policy: bool,
     fact_event_metadata: Option<Value>,
 ) -> Result<Option<Value>, CanvasAwardCandidateRepositoryError> {
-    if text(fact.get("organization_id")) != application.organization_id
+    if marty_key_material_policy::contains_private_key_map(fact)
+        || requirements
+            .iter()
+            .any(marty_key_material_policy::contains_private_key)
+        || fact_event_metadata
+            .as_ref()
+            .is_some_and(marty_key_material_policy::contains_private_key)
+        || text(fact.get("organization_id")) != application.organization_id
         || text(fact.get("application_id")) != application.id
         || !text(
             fact.get("verification")

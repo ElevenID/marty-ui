@@ -245,6 +245,25 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         || "fact-1".to_owned(),
     )
     .expect("fresh verified candidate plan");
+    let mut private_fact = plan.facts[0].clone();
+    private_fact["source"]["signing_key"] = json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": "private-seed"
+    });
+    assert_eq!(
+        repository
+            .record_fact_and_evaluate_policy(
+                &application,
+                &snapshot.binding,
+                &snapshot.application_template,
+                &private_fact,
+            )
+            .await,
+        Err(CanvasAwardCandidateRepositoryError::Unavailable)
+    );
+    assert_eq!(table_count(&pool, "evidence_facts").await, 0);
+    assert_eq!(table_count(&pool, "issuance_events").await, 0);
     assert!(repository
         .record_fact_and_evaluate_policy(
             &application,
