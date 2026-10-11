@@ -592,6 +592,7 @@ jobs:
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           bun install
+          bun x puppeteer browsers install
       - name: Verify crawler configuration and artifact validator
         run: |
           node --test scripts/crawler-config.test.mjs
