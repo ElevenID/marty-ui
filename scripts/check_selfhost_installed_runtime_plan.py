@@ -66,9 +66,63 @@ EXPECTED_DEPENDENCIES = {
     "tunnel-nginx-proxy": {"edge": H},
     "verification": {"credential-template": H, "presentation-policy": H, "redis": H},
 }
+EXPECTED_ROLE_SECRETS = {
+    "applicant": {"marty_db_password", "grpc_service_token", "applicant_workload_client_cert",
+                  "applicant_workload_client_key", "workload_identity_ca_cert",
+                  "notification_applicant_event_token", "flow_application_event_hmac_key"},
+    "auth": {"marty_api_client_secret", "marty_db_password", "grpc_service_token",
+             "auth_workload_client_cert", "auth_workload_client_key",
+             "workload_identity_ca_cert", "flow_webhook_secret"},
+    "canvas-sync-worker": {"marty_db_password", "integration_secret_master_key",
+                           "issuance_api_key", "token_hmac_key"},
+    "cloudflared": {"cloudflare_tunnel_token"},
+    "cloudflared-beta": {"cloudflare_beta_tunnel_token"},
+    "compliance-profile": {"marty_db_password", "grpc_service_token",
+                           "compliance_profile_workload_client_cert",
+                           "compliance_profile_workload_client_key", "workload_identity_ca_cert"},
+    "credential-template": {"marty_db_password", "issuance_api_key", "grpc_service_token"},
+    "db-migrate": {"marty_db_password", "openbao_service_token", "notification_openbao_token"},
+    "deployment-profile": {"marty_db_password", "grpc_service_token",
+                           "deployment_profile_workload_client_cert",
+                           "deployment_profile_workload_client_key", "workload_identity_ca_cert"},
+    "device-registration": {"marty_db_password", "grpc_service_token"},
+    "event-stream": {"grpc_service_token"},
+    "flow": {"marty_db_password", "grpc_service_token", "flow_workload_client_cert",
+             "flow_workload_client_key", "flow_workload_server_cert",
+             "flow_workload_server_key", "workload_identity_ca_cert", "flow_webhook_secret",
+             "flow_application_event_hmac_key", "issuance_api_key"},
+    "gateway": {"issuance_api_key", "openbao_service_token", "grpc_service_token"},
+    "issuance": {"marty_db_password", "openbao_service_token", "issuance_api_key",
+                 "integration_secret_master_key", "token_hmac_key",
+                 "canvas_credentials_shared_secret", "grpc_service_token"},
+    "issuance-migrations": {"marty_db_password"},
+    "issuance-native": {"marty_db_password", "issuance_api_key",
+                        "integration_secret_master_key", "token_hmac_key",
+                        "canvas_credentials_shared_secret", "grpc_service_token"},
+    "keycloak": {"keycloak_admin_password", "keycloak_db_password", "google_client_id",
+                 "google_client_secret", "marty_api_client_secret"},
+    "keycloak-configurator": {"keycloak_admin_password", "google_client_id",
+                              "google_client_secret", "marty_api_client_secret", "smtp_password"},
+    "notification": {"marty_db_password", "grpc_service_token", "smtp_password",
+                     "notification_webhook_secret", "notification_applicant_event_token",
+                     "notification_openbao_token"},
+    "organization": {"marty_db_password", "grpc_service_token"},
+    "postgres": {"postgres_password", "keycloak_db_password", "marty_db_password"},
+    "presentation-policy": {"marty_db_password", "grpc_service_token",
+                            "pp_workload_server_cert", "pp_workload_server_key",
+                            "workload_identity_ca_cert"},
+    "revocation-profile": {"marty_db_password", "grpc_service_token"},
+    "revocation-profile-migrate": {"marty_db_password"},
+    "signing-keys": {"issuance_api_key", "openbao_service_token"},
+    "trust-profile": {"marty_db_password", "grpc_service_token", "issuance_api_key"},
+    "ui": {"google_analytics_measurement_id", "google_site_verification"},
+    "verification": {"grpc_service_token", "verification_workload_client_cert",
+                     "verification_workload_client_key", "workload_identity_ca_cert"},
+}
+EXPECTED_SECRET_NAMES = frozenset().union(*EXPECTED_ROLE_SECRETS.values())
 
 
-def plan(model: dict, preflight: dict) -> dict:
+def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
     """Validate every rendered role and edge, then emit non-secret identity/counts."""
     services = model.get("services")
     if not isinstance(services, dict) or set(services) != EXPECTED_SERVICES:
@@ -83,8 +137,15 @@ def plan(model: dict, preflight: dict) -> dict:
 
     secrets = model.get("secrets", {})
     configs = model.get("configs", {})
-    if not isinstance(secrets, dict) or not isinstance(configs, dict):
+    if not isinstance(secrets, dict) or set(secrets) != EXPECTED_SECRET_NAMES or configs != {}:
         raise ValueError("installed runtime secret/config declarations are invalid")
+    for name, declaration in secrets.items():
+        if (not isinstance(declaration, dict)
+                or set(declaration) != {"name", "file"}
+                or declaration["name"] != f"marty-selfhost-prod_{name}"
+                or not isinstance(declaration["file"], str)
+                or Path(declaration["file"]).resolve() != (secret_root / name).resolve()):
+            raise ValueError(f"installed runtime secret {name} changed declaration")
     edges: dict[str, set[str]] = {}
     profile_members: dict[str, set[str]] = {"default": set(), "beta-tunnel": set()}
     for name, service in services.items():
@@ -100,15 +161,20 @@ def plan(model: dict, preflight: dict) -> dict:
             profile_members["beta-tunnel"].add(name)
         else:
             profile_members["default"].add(name)
-        for kind, declared in (("secrets", secrets), ("configs", configs)):
-            references = service.get(kind, [])
-            if not isinstance(references, list):
-                raise ValueError(f"installed runtime service {name} has invalid {kind}")
-            for reference in references:
-                if (not isinstance(reference, dict)
-                        or not isinstance(reference.get("source"), str)
-                        or reference["source"] not in declared):
-                    raise ValueError(f"installed runtime service {name} has undeclared {kind}")
+        references = service.get("secrets", [])
+        if not isinstance(references, list) or service.get("configs", []) != []:
+            raise ValueError(f"installed runtime service {name} changed secret/config bindings")
+        seen_secrets = set()
+        for reference in references:
+            if (not isinstance(reference, dict) or set(reference) != {"source", "target"}
+                    or not isinstance(reference["source"], str)
+                    or reference["source"] not in secrets
+                    or reference["target"] != f"/run/secrets/{reference['source']}"
+                    or reference["source"] in seen_secrets):
+                raise ValueError(f"installed runtime service {name} has invalid secret binding")
+            seen_secrets.add(reference["source"])
+        if seen_secrets != EXPECTED_ROLE_SECRETS.get(name, set()):
+            raise ValueError(f"installed runtime service {name} changed required secrets")
         dependencies = service.get("depends_on", {})
         if not isinstance(dependencies, dict):
             raise ValueError(f"installed runtime service {name} has invalid dependencies")
@@ -124,8 +190,12 @@ def plan(model: dict, preflight: dict) -> dict:
             if peer in BETA_SERVICES and name not in BETA_SERVICES:
                 raise ValueError("default runtime depends on beta-tunnel service")
             healthcheck = services[peer].get("healthcheck")
+            health_test = healthcheck.get("test") if isinstance(healthcheck, dict) else None
             if dependency["condition"] == "service_healthy" and (
-                    not isinstance(healthcheck, dict) or healthcheck.get("disable") is True):
+                    not isinstance(health_test, list) or len(health_test) < 2
+                    or health_test[0] not in ("CMD", "CMD-SHELL")
+                    or not all(isinstance(part, str) and part.strip() for part in health_test)
+                    or healthcheck.get("disable") is True):
                 raise ValueError(f"installed runtime dependency {peer} has no healthcheck")
             if dependency["condition"] == "service_completed_successfully" and str(
                     services[peer].get("restart")) != "no":
@@ -179,7 +249,8 @@ def main() -> None:
     verified_receipt = json.loads(receipt.read_text(encoding="utf-8"))
     preflight.update({name: verified_receipt[name] for name in
                       ("image_lock_sha256", "transaction_sha256", "release")})
-    result = plan(json.loads(Path(args.compose_model).read_text(encoding="utf-8")), preflight)
+    result = plan(json.loads(Path(args.compose_model).read_text(encoding="utf-8")),
+                  preflight, Path(args.secret_root))
     Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
                                  encoding="utf-8")
 
