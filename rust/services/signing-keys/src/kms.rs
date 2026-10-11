@@ -2775,6 +2775,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gcp_signing_rejects_versionless_key_before_network_io() {
+        let result = sign(SignRequest {
+            service_config: json!({
+                "service_type": "gcp-cloud-kms",
+                "auth_mode": "workload_identity",
+                "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+                "algorithm": "ES256"
+            }),
+            payload_b64: "cGF5bG9hZA".into(),
+        })
+        .await;
+        assert!(
+            matches!(result, Err(KmsError::InvalidConfig(message)) if message.contains("CryptoKeyVersion"))
+        );
+    }
+
+    #[tokio::test]
     async fn gcp_impersonation_uses_short_lived_cloud_scope_without_a_key() {
         async fn token(request: axum::extract::Request) -> axum::Json<Value> {
             assert_eq!(request.method(), reqwest::Method::POST);
