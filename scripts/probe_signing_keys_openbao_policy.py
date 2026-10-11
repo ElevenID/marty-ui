@@ -786,6 +786,22 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(
                     f"Rust live-provider tenant check failed:\n{detail[-2000:]}"
                 )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-signing-keys",
+                    "--test", "public_service_sign_live_kms", "--locked", "--offline",
+                    "-j2", "public_service_sign_uses_registered_kms_key_and_rejects_unbound_selection",
+                    "--", "--ignored", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                raise RuntimeError(
+                    f"Rust registered-service signing check failed:\n{detail[-2000:]}"
+                )
             mock_environment = dict(environment, BAO_TOKEN="test-only")
             result = subprocess.run(
                 [

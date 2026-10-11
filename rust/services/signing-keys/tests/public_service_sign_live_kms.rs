@@ -187,7 +187,7 @@ async fn disposable_openbao() -> (String, String) {
 }
 
 async fn sign(app: &Router, organization_id: &str, payload: Value) -> (StatusCode, Value) {
-    sign_service(app, organization_id, "service-a", payload).await
+    sign_service(app, organization_id, "managed-openbao-transit", payload).await
 }
 
 async fn sign_service(
@@ -718,20 +718,13 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
     let redis_url = disposable_redis_url().await;
     let (bao_url, bao_token) = disposable_openbao().await;
     let suffix = Uuid::new_v4().simple().to_string();
-    let key_name = format!("marty-public-sign-{suffix}");
-    let profile_key_name = format!("marty-public-sign-profile-{suffix}");
     let organization_id = format!("test-public-sign-{suffix}");
+    let namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    let key_name = format!("cred-issuer-{namespace}-default-es256");
+    let profile_key_name = format!("cred-issuer-{namespace}-profile-es256");
     let client = reqwest::Client::new();
-    let mount = client
-        .get(format!("{bao_url}/v1/sys/mounts/transit"))
-        .header("X-Vault-Token", &bao_token)
-        .send()
-        .await
-        .unwrap();
-    assert!(
-        mount.status().is_success(),
-        "disposable Transit mount is unavailable"
-    );
     let created = client
         .post(format!("{bao_url}/v1/transit/keys/{key_name}"))
         .header("X-Vault-Token", &bao_token)
@@ -748,19 +741,18 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         .await
         .unwrap();
     assert!(profile_key_created.status().is_success());
-    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_managed_openbao(Some(bao_url.clone()));
     registry
         .save(
             &organization_id,
             &json!({
-                "services": [{
-                    "id": "service-a", "name": "Test KMS signer",
-                    "service_type": "openbao-transit", "endpoint": bao_url,
-                    "mount": "transit", "auth_mode": "token", "auth_reference": bao_token,
-                    "key_reference": key_name, "algorithms": ["ES256"],
-                    "key_purposes": ["vc_jwt_issuer"]
-                }],
-                "default_service_id": "service-a"
+                "services": [],
+                "key_reference_purposes": {
+                    "managed-openbao-transit": {(key_name.clone()): ["vc_jwt_issuer"]}
+                }
             }),
         )
         .await
@@ -771,7 +763,7 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         serde_json::from_str(include_str!("fixtures/issuer_profile_vectors.json")).unwrap();
     let mut profile = fixture["normalize"]["expected"].clone();
     profile["organization_id"] = json!(organization_id);
-    profile["signing_service_id"] = json!("service-a");
+    profile["signing_service_id"] = json!("managed-openbao-transit");
     profile["signing_key_reference"] = json!(profile_key_name);
     profiles
         .put(&organization_id, "ip-vector", profile)
@@ -788,7 +780,7 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
     let (status, signed) = sign(&app, &organization_id, request.clone()).await;
     assert_eq!(status, StatusCode::OK, "{signed}");
     assert_eq!(signed["ok"], true);
-    assert_eq!(signed["service_id"], "service-a");
+    assert_eq!(signed["service_id"], "managed-openbao-transit");
     assert_eq!(signed["algorithm"], "ES256");
     assert_eq!(signed["payload_length"], 7);
     assert!(!signed["signature_b64"].as_str().unwrap().is_empty());
@@ -822,20 +814,14 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
     );
     assert_eq!(
         sign(&app, &organization_id, json!({})).await.0,
-        StatusCode::BAD_REQUEST
+        StatusCode::UNAUTHORIZED
     );
-    let missing = app
-        .oneshot(
-            Request::post(format!(
-                "/v1/signing-keys/services/missing/sign?organization_id={organization_id}"
-            ))
-            .header("content-type", "application/json")
-            .body(Body::from(request.to_string()))
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        sign_service(&app, &organization_id, "missing", request)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
 
     let mut connection = registry.connection();
     let _: () = connection.del(storage_key(&organization_id)).await.unwrap();

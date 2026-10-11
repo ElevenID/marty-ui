@@ -15508,3 +15508,15 @@ bootstrap token handoff. The focused bootstrap/preparation suite passes 44
 tests locally (three POSIX-only cases skip on Windows); shell syntax and diff
 checks pass. GitHub did not start a pull-request run for the conflicting
 `29806d9f1` head, so push the reconciled merge to restore exact-head checks.
+
+The merge was pushed as UI #1192 head `48b57224e`, and exact-head CI run
+`38152537463` is active. During local self-review, an ignored registered-key
+live test still persisted the OpenBao token in a service fixture and used an
+unscoped key name. The fixture now uses tenant-scoped managed keys, the
+mounted managed service, real origin-bound grants, and no stored token. It
+verifies positive signing and active-profile selection, and denies unbound
+keys, wrong-tenant scope, private-key input, missing grants, and unknown
+services. It is now part of the disposable `--rust-adapter` probe. The full
+OpenBao/Redis/PostgreSQL probe passed again after this addition. Hold this
+local test-only correction for grouping with any findings from the running
+exact-head CI before the next push.
