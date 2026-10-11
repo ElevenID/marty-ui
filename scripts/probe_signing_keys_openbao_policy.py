@@ -50,7 +50,8 @@ def ensure(condition: bool, operation: str) -> None:
         raise RuntimeError(f"Scoped signing-keys policy failed: {operation}")
 
 
-def qualify(*, rust_adapter: bool = False) -> None:
+def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None:
+    ensure(not (rust_adapter and grant_verifier), "select one Rust adapter mode")
     version = require_docker("run", "--rm", IMAGE, "version")
     ensure(
         f"OpenBao v{OPENBAO['version']}" in version
@@ -377,6 +378,61 @@ def qualify(*, rust_adapter: bool = False) -> None:
                     and wrong_origin.get("data", {}).get("valid") is False,
                     f"{origin} grant cannot verify as {other}",
                 )
+        if grant_verifier:
+            require_docker(
+                "run", "--rm", "-d", "--name", redis_name,
+                "--label", "marty.disposable=kms-signing-policy",
+                "-p", "127.0.0.1::6379", REDIS_IMAGE,
+            )
+            redis_started = True
+            redis_port = int(
+                require_docker("port", redis_name, "6379/tcp")
+                .splitlines()[0].rsplit(":", 1)[1]
+            )
+            redis_nonce = uuid.uuid4().hex
+            for _ in range(40):
+                ready = docker("exec", redis_name, "redis-cli", "ping")
+                if ready.returncode == 0 and ready.stdout.strip() == "PONG":
+                    break
+                time.sleep(0.25)
+            else:
+                raise RuntimeError("Disposable Redis did not become healthy")
+            require_docker(
+                "exec", redis_name, "redis-cli", "-n", "13", "SET",
+                "marty:tests:disposable-guard", redis_nonce,
+            )
+            nonce = uuid.uuid4().hex
+            status, _ = call(
+                "POST", "secret/data/marty-test-disposable-guard",
+                root_token, {"data": {"nonce": nonce}},
+            )
+            ensure(status in (200, 204), "write disposable grant verifier guard")
+            environment = os.environ.copy()
+            environment.update({
+                "MARTY_TEST_OPENBAO_URL": endpoint.removesuffix("/v1"),
+                "BAO_ADDR": endpoint.removesuffix("/v1"),
+                "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
+                "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
+                "MARTY_TEST_GRANT_MINT_TOKEN": grant_mint_tokens["gateway-service"],
+                "MARTY_TEST_GRANT_VERIFY_TOKEN": grant_verify_token,
+                "MARTY_TEST_REDIS_URL": f"redis://127.0.0.1:{redis_port}/13",
+                "MARTY_TEST_REDIS_DISPOSABLE_NONCE": redis_nonce,
+            })
+            result = subprocess.run(
+                ["cargo", "+1.95.0", "test", "-p", "marty-signing-grant",
+                 "--lib", "--locked", "--offline", "-j1",
+                 "live_grant_verification_is_one_use_before_kms_signing",
+                 "--", "--ignored", "--nocapture"],
+                cwd=ROOT / "rust", env=environment, capture_output=True,
+                text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(grant_verify_token, "[verify]")
+                detail = detail.replace(
+                    grant_mint_tokens["gateway-service"], "[mint]",
+                )
+                raise RuntimeError(f"Rust live grant verifier failed:\n{detail[-2000:]}")
         if rust_adapter:
             require_docker(
                 "run",
@@ -731,6 +787,8 @@ def qualify(*, rust_adapter: bool = False) -> None:
             print(
                 "Rust managed-key adapter, ES256/ES384/ES512 CSR custody, holder service/DB/OpenBao lifecycle, credential durability, Redis pairing tickets, tenant routes, and managed-profile routes passed"
             )
+        if grant_verifier:
+            print("Rust signing-grant verifier consumed exactly one live OpenBao grant in disposable Redis")
     finally:
         if postgres_started:
             docker("rm", "-f", postgres_name, timeout=30)
@@ -743,4 +801,6 @@ def qualify(*, rust_adapter: bool = False) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust-adapter", action="store_true")
-    qualify(rust_adapter=parser.parse_args().rust_adapter)
+    parser.add_argument("--grant-verifier", action="store_true")
+    args = parser.parse_args()
+    qualify(rust_adapter=args.rust_adapter, grant_verifier=args.grant_verifier)

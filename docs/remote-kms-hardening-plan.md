@@ -15180,3 +15180,12 @@ path. The verify-only token cannot mint. Every grant verifies under its own
 key and fails under all six other keys. The probe passed and removed its
 disposable container. This proves live OpenBao key and policy isolation, but
 not Signing Keys replay consumption or the exact production service route.
+
+The same disposable probe now has a focused `--grant-verifier` mode. It
+provisions a guarded Redis database and invokes the ignored Rust live verifier
+test with the scoped Gateway mint token and shared verify-only token. Against
+actual OpenBao HMAC verification and Redis one-use consumption, concurrent
+authorization of the same grant yielded exactly one success; replay and
+altered payload were denied. The command passed and its OpenBao/Redis
+containers were removed. Signing Keys HTTP route acceptance remains a
+separate gate because this exercises the shared verifier directly.
