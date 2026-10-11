@@ -14201,3 +14201,13 @@ parsers before returning JOSE bytes. Its feature-enabled Core library and
 verification-only tests plus warnings-denied Clippy pass. Hold this Core
 follow-up until head `aa69c9ca` has terminal hosted evidence, then repin the
 UI branch to the new Core head and rerun its provider and service suites.
+
+K6 authority-route audit: the Gateway
+`/internal/signing-keys/issuer-dids/sign` compatibility path is used by native
+Flow's wallet request-object signer and native Issuance's credential builder;
+the Signing Keys `/internal/compat/issuer-dids/sign` receiver is also exercised
+by managed-key acceptance. It cannot simply be removed as unused without
+breaking supported behavior. The tenant-signing grant must cover this route
+and tie Flow's persisted verification instance or Issuance's authorized
+credential operation to the exact sign request. The public service-sign route
+also remains supported and needs its own Gateway authorization grant.
