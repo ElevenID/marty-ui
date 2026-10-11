@@ -15589,3 +15589,9 @@ same rotation, managed signing, certificate and Gateway cases. Keep this as a
 reliability finding for exact-head CI; the observed denial was fail-closed,
 and the root cause is not established. No authorization bypass was added to
 make the fixture pass.
+
+Run `38152537463` is terminal: 20 jobs passed, including Canvas, DIDComm
+plugin, release contracts, Rust images and lint. Rust service contracts failed
+at the old Gateway mock signing expectation already corrected locally; the
+dependent CI Gate failed. This is the complete prior-head result for the next
+grouped UI push.
