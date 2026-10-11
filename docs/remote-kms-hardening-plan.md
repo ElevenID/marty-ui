@@ -15271,3 +15271,12 @@ Quality and CodeQL runs started; the PR is mergeable. The complete local
 CI workflow-performance contract suite passed 145 tests after the optional
 cache wiring change. Await exact-head hosted results before readying or
 landing this feature PR.
+
+Self-host preflight review found that the newly catalogued grant-token files
+were checked for presence and placeholders but could reuse one another or a
+broader provider token. The local follow-up checks all eight grant values and
+five OpenBao provider values for separation without printing any credential;
+synthetic duplicate-origin, grant/provider, and provider/provider cases are
+rejected. The focused self-host credential and secret-closure suites pass.
+This remains local while the exact-head hosted run is active, to avoid an
+overlapping full CI run.

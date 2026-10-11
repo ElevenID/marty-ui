@@ -74,8 +74,9 @@ The `sign_grant_mint_*` files hold separate OpenBao HMAC mint tokens for each
 workload and signing origin. `sign_grant_verify_token` is verify-only and
 belongs to Signing Keys. Run `scripts/bootstrap-selfhost-vault.sh` with
 `SELFHOST_SECRET_DIR` set to the operator secret directory, or provision
-equivalent scoped tokens in an external OpenBao instance. Do not reuse one
-origin's token for a different signing origin.
+equivalent scoped tokens in an external OpenBao instance. Every grant token
+must differ from the other grant tokens and from the workload's provider
+tokens; the self-host preflight checks this separation.
 
 The Signing Keys TLS certificate must chain to `workload_identity_ca_cert` and
 contain the `signing-keys` DNS name. Its key terminates the private

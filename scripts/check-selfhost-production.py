@@ -222,6 +222,31 @@ def validate_integration_secret_credential(secret_dir: Path) -> str:
     return "dedicated integration-secret credential length and separation verified"
 
 
+def validate_signing_grant_credentials(secret_dir: Path) -> str:
+    grant_files = (
+        "sign_grant_verify_token",
+        "sign_grant_mint_flow_wallet_token",
+        "sign_grant_mint_gateway_service_token",
+        "sign_grant_mint_gateway_issuer_did_token",
+        "sign_grant_mint_issuance_credential_token",
+        "sign_grant_mint_issuance_canvas_token",
+        "sign_grant_mint_issuance_readiness_token",
+        "sign_grant_mint_issuance_passport_token",
+    )
+    provider_files = (
+        "openbao_service_token",
+        "signing_keys_openbao_token",
+        "didcomm_issuance_openbao_token",
+        "haip_kms_token",
+        "notification_openbao_token",
+    )
+    grants = [read_required_secret(secret_dir / name, name) for name in grant_files]
+    providers = [read_required_secret(secret_dir / name, name) for name in provider_files]
+    if len(set(grants + providers)) != len(grants) + len(providers):
+        raise CheckError("Signing grant and provider KMS credentials must be distinct.")
+    return "eight signing grant and five provider credentials are distinct"
+
+
 def validate_tunnel_token(secret_dir: Path) -> str:
     token = read_required_secret(secret_dir / "cloudflare_tunnel_token", "Cloudflare tunnel token")
     return f"token_length={len(token)}"
@@ -1285,6 +1310,7 @@ def main() -> int:
         run_check("service-sign-gateway-credential", lambda: validate_service_sign_gateway_credential(secret_dir)),
         run_check("issuer-sign-credential", lambda: validate_issuer_sign_credential(secret_dir)),
         run_check("integration-secret-credential", lambda: validate_integration_secret_credential(secret_dir)),
+        run_check("signing-grant-credentials", lambda: validate_signing_grant_credentials(secret_dir)),
         run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),

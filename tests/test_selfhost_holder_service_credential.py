@@ -52,3 +52,40 @@ def test_selfhost_issuer_signing_credential_is_long_and_dedicated(tmp_path: Path
         (tmp_path / "signing_keys_issuer_sign_key").write_text(values[name], encoding="utf-8")
         with pytest.raises(PREFLIGHT["CheckError"], match="must be dedicated"):
             validate(tmp_path)
+
+
+def test_selfhost_signing_grants_cannot_reuse_an_origin_or_provider_token(tmp_path: Path) -> None:
+    grant_files = (
+        "sign_grant_verify_token",
+        "sign_grant_mint_flow_wallet_token",
+        "sign_grant_mint_gateway_service_token",
+        "sign_grant_mint_gateway_issuer_did_token",
+        "sign_grant_mint_issuance_credential_token",
+        "sign_grant_mint_issuance_canvas_token",
+        "sign_grant_mint_issuance_readiness_token",
+        "sign_grant_mint_issuance_passport_token",
+    )
+    provider_files = (
+        "openbao_service_token",
+        "signing_keys_openbao_token",
+        "didcomm_issuance_openbao_token",
+        "haip_kms_token",
+        "notification_openbao_token",
+    )
+    for index, name in enumerate((*grant_files, *provider_files)):
+        (tmp_path / name).write_text(f"disposable-token-{index}", encoding="utf-8")
+    validate = PREFLIGHT["validate_signing_grant_credentials"]
+    assert "distinct" in validate(tmp_path)
+
+    for name, source in (
+        (grant_files[1], grant_files[0]),
+        (provider_files[0], grant_files[0]),
+        (provider_files[1], provider_files[0]),
+    ):
+        duplicate = (tmp_path / source).read_text(encoding="utf-8")
+        previous = (tmp_path / name).read_text(encoding="utf-8")
+        (tmp_path / name).write_text(duplicate, encoding="utf-8")
+        with pytest.raises(PREFLIGHT["CheckError"], match="must be distinct") as error:
+            validate(tmp_path)
+        assert duplicate not in str(error.value)
+        (tmp_path / name).write_text(previous, encoding="utf-8")
