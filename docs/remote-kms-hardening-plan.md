@@ -15922,3 +15922,27 @@ focused OID4VCI management library tests passed. This remains in the local
 grouped security batch while hosted Canvas completes. Local
 `cargo +1.95 clippy --locked --offline -p marty-issuance-service --lib -- -D warnings`
 passed for the combined Issuance corrections.
+
+K10 local-instance qualification before the next grouped UI push: the full
+`py -3.12 scripts/probe_signing_keys_openbao_policy.py --rust-adapter`
+probe passed with fresh disposable OpenBao, Redis and PostgreSQL containers.
+It exercised scoped signing-key policy and origin-bound grants, the Rust
+managed-key adapter, ES256/ES384/ES512 CSR custody, holder service/database/
+OpenBao lifecycle, credential durability, Redis pairing tickets, tenant
+routes and managed-profile routes. A separate fresh PostgreSQL 16 run of
+`probe_kms_profile_runtime_schema.py` passed source-built Deployment and
+Compliance Profile migrations and two startups per service: 52 columns,
+one migration ledger row per service, zero private-key catalog entries, and
+the JSON/text private-material scan passed. These are local source-built
+runtime checks, not signed release-artifact qualification. The disposable
+containers were removed by their probes.
+
+Main #1272 added the installed self-host Organization runtime probe. After
+merging main into the KMS branch, its fixture lacked the KMS-only `services`
+image, separate verifier/signing-key tokens, and empty private-storage scan
+responses. The fixture now models the current disposable topology. The
+installed-migrations, Organization probe and runtime-plan suites pass together:
+45 passed, 1 skipped. This correction stays in the grouped local batch.
+On pushed head `828bc6ecd`, all substantive jobs in run `38164123792`,
+including Canvas, have passed; the aggregate CI Gate was queued at this
+checkpoint.
