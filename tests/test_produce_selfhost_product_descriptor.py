@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import release_transaction as transaction
+from check_prepared_selfhost_consumer import verify_descriptor
 from produce_selfhost_product_descriptor import produce
 from record_selfhost_bundle_preparation import record
 
@@ -72,6 +73,17 @@ def test_produces_sparse_exact_unqualified_descriptor(inputs):
     for unsupported in ("platform", "capabilities", "license", "sbom", "provenance",
                         "signature", "installation", "dependencies", "compatibility"):
         assert unsupported not in descriptor
+
+
+def test_consumer_binds_downloaded_descriptor_to_exact_inputs(inputs, tmp_path):
+    descriptor_path = tmp_path / "descriptor.json"
+    descriptor = produce(*inputs)
+    write_json(descriptor_path, descriptor)
+    verify_descriptor(*inputs, descriptor_path)
+    descriptor["artifact"]["digest"] = "sha256:" + "0" * 64
+    write_json(descriptor_path, descriptor)
+    with pytest.raises(ValueError, match="descriptor differs"):
+        verify_descriptor(*inputs, descriptor_path)
 
 
 @pytest.mark.parametrize("changed", ["archive", "lock", "transaction", "receipt"])

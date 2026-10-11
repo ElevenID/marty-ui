@@ -45,7 +45,9 @@ GitHub Actions run, attest image architecture, verify every independent image's
 provenance, or exercise an extracted clean install; those remain release-gate
 responsibilities. The opt-in self-host preparation job uploads this unqualified
 descriptor beside the ZIP, lock, and receipt for later artifact-consumer checks;
-it does not publish or promote any of them as release assets.
+the separate consumer recomputes and compares that downloaded descriptor with
+the exact ZIP, lock, transaction, and receipt. It does not publish or promote
+any of them as release assets.
 
 ## Initial sequence and evidence still needed
 

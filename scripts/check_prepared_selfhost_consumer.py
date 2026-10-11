@@ -9,6 +9,7 @@ import argparse
 import json
 from pathlib import Path
 
+from produce_selfhost_product_descriptor import produce
 from record_selfhost_bundle_preparation import record
 
 
@@ -24,6 +25,14 @@ def verify_receipt(archive: Path, lock: Path, transaction: Path, receipt_path: P
     if receipt != expected:
         raise ValueError("prepared ZIP, image lock, transaction, or receipt changed")
     return expected
+
+
+def verify_descriptor(archive: Path, lock: Path, transaction: Path,
+                      receipt_path: Path, descriptor_path: Path) -> None:
+    actual = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    expected = produce(archive, lock, transaction, receipt_path)
+    if actual != expected:
+        raise ValueError("prepared product descriptor differs from exact inputs")
 
 
 def check(archive: Path, lock: Path, transaction: Path, receipt_path: Path,
@@ -77,12 +86,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("archive", "image-lock", "transaction", "receipt"):
         parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--descriptor", required=True)
     parser.add_argument("--expected-source-sha", required=True)
     parser.add_argument("--expected-run-id", required=True)
     for name in ("compose-model", "source-checkout", "output"):
         parser.add_argument(f"--{name}")
     parser.add_argument("--verify-archive-only", action="store_true")
     args = parser.parse_args()
+    verify_descriptor(Path(args.archive), Path(args.image_lock), Path(args.transaction),
+                      Path(args.receipt), Path(args.descriptor))
     if args.verify_archive_only:
         verify_receipt(Path(args.archive), Path(args.image_lock),
                        Path(args.transaction), Path(args.receipt),
