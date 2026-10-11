@@ -3309,6 +3309,25 @@ headroom and avoids unnecessary local proof launches; it does not add a new
 skip or establish a hosted runtime saving. Independent re-review and full
 protected merge-group qualification passed; #1249 merged as `1fe6860b4`.
 
+A6 public-builder linker candidate (2026-10-11): the [#1253 PR run](https://github.com/ElevenID/marty-ui/actions/runs/38105743442)
+spent about 416 seconds in the public self-host image step, with about 55
+seconds in dependency cook and 336 seconds in the release-binary build. Host
+CI already pins mold 2.41.0, while the public service Docker builder did not.
+The candidate installs that same version only in the build base, downloads
+only the selected amd64/arm64 archive, verifies its SHA-256 before extraction,
+and gives dependency cook and binary build the same linker flag. Neither mold
+nor the flag is copied into the runtime image. Both architecture-specific base
+stages built locally; tiny Rust executables linked and ran under amd64 and
+emulated arm64, with no mold runtime dependency. Fourteen focused tests, Ruff,
+formatting, and diff checks pass; an independent reviewer found no remaining
+P1-P3 issue after the unused-archive download was removed. The
+[full-main run](https://github.com/ElevenID/marty-ui/actions/runs/38106053215)
+spent about 324 seconds in its public image step on a different head/runner.
+These are bottleneck observations, not a comparable before/after or speedup
+claim. A linker-flag change initially invalidates Rust cache entries; retain
+full protected image and acceptance qualification and compare repeated runs
+before attributing any saving.
+
 A5 child-process invocation follow-up (2026-10-11, local candidate): the v7
 inventory stopped at the mounted provider oracle's outer `runpy` call. The v8
 candidate witnesses its no-argument `run(source=None)` path, the guarded

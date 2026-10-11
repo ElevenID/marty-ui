@@ -6,6 +6,28 @@ RUN --mount=type=cache,id=marty-public-cargo-registry,target=/usr/local/cargo/re
     --mount=type=cache,id=marty-public-cargo-git,target=/usr/local/cargo/git,sharing=locked \
     cargo install cargo-chef --locked --version 0.1.78
 
+# Match the pinned mold version used by host CI. These build-only binaries are
+# never copied into the public runtime image. Keep the linker flag on the
+# common base so cargo-chef cook and the final binary build share one profile.
+ARG TARGETARCH
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) target=x86_64; checksum=a3696680d99e692970590a178bc3a33d78d60d1c6dc9db7a11b557b02b751f5d ;; \
+      arm64) target=aarch64; checksum=946de2774b06a71346bd59b55fddba610b65b8d93c3a4a1559cc84e103472710 ;; \
+      *) echo "Unsupported public linker architecture: $TARGETARCH" >&2; exit 2 ;; \
+    esac; \
+    archive=/tmp/mold.tar.gz; \
+    curl --fail --location --retry 3 --silent --show-error \
+      "https://github.com/rui314/mold/releases/download/v2.41.0/mold-2.41.0-${target}-linux.tar.gz" \
+      --output "$archive" \
+    && printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check --status \
+    && tar -xzf "$archive" -C /tmp \
+    && install "/tmp/mold-2.41.0-${target}-linux/bin/mold" /usr/local/bin/mold \
+    && ln -s mold /usr/local/bin/ld.mold \
+    && rm -rf "/tmp/mold-2.41.0-${target}-linux" "$archive" \
+    && mold --version | grep -Eq '^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$'
+ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+
 WORKDIR /build/rust
 
 FROM rust-service-base AS rust-service-planner
