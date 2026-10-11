@@ -73,6 +73,10 @@ fn issuer_did_route_shape(claims: &GrantClaims) -> bool {
     claims.route == "/internal/compat/issuer-dids/sign"
         && claims.service_id.is_none()
         && claims
+            .key_reference
+            .as_deref()
+            .is_some_and(|reference| !reference.is_empty())
+        && claims
             .issuer_did
             .as_deref()
             .is_some_and(|did| did.starts_with("did:"))
@@ -479,6 +483,12 @@ mod tests {
                 payload: b"exact.payload",
             };
             assert!(bound_input(&claims, &binding, 1_700_000_001).is_ok());
+            let mut missing_key = claims.clone();
+            missing_key.key_reference = None;
+            assert_eq!(
+                bound_input(&missing_key, &binding, 1_700_000_001),
+                Err(GrantError::Malformed)
+            );
             claims.route = "/v1/signing-keys/services/service-1/sign".into();
             assert_eq!(
                 bound_input(&claims, &binding, 1_700_000_001),

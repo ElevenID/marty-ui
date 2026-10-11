@@ -951,6 +951,7 @@ services:
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
       HAIP_KMS_TOKEN_FILE: /run/secrets/haip_kms_token
+      SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/secrets/sign_grant_verify_token
       RUST_LOG: info
     secrets:
       - issuance_api_key
@@ -960,6 +961,7 @@ services:
       - device_registration_signing_keys_key
       - signing_keys_openbao_token
       - haip_kms_token
+      - sign_grant_verify_token
       - signing_keys_workload_server_cert
       - signing_keys_workload_server_key
     depends_on:
@@ -1283,6 +1285,8 @@ services:
     restart: unless-stopped
 
 secrets:
+  sign_grant_verify_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/sign_grant_verify_token
   sign_grant_mint_flow_wallet_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/sign_grant_mint_flow_wallet_token
   postgres_password:

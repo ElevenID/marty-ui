@@ -80,6 +80,8 @@ spec:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_OPENBAO_TOKEN
+            - name: SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE
+              value: /run/secrets/signing-grant-verify/token
             - name: PUBLIC_DOMAIN
               valueFrom:
                 configMapKeyRef:
@@ -93,6 +95,9 @@ spec:
           volumeMounts:
             - name: integration-secret-tls
               mountPath: /run/secrets/integration-secret-tls
+              readOnly: true
+            - name: signing-grant-verify
+              mountPath: /run/secrets/signing-grant-verify
               readOnly: true
           resources:
             requests:
@@ -117,6 +122,12 @@ spec:
         - name: integration-secret-tls
           secret:
             secretName: signing-keys-integration-secret-server-tls
+        - name: signing-grant-verify
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: SIGNING_KEYS_GRANT_VERIFY_TOKEN
+                path: token
 ---
 apiVersion: v1
 kind: Service

@@ -1393,7 +1393,7 @@ fn validate_resolve_request(request: &ResolveIssuerDidRequest) -> Result<(), Com
     Ok(())
 }
 
-fn signing_payload(
+pub(crate) fn signing_payload(
     payload_b64: Option<&str>,
     payload_hex: Option<&str>,
 ) -> Result<Vec<u8>, CompatibilityError> {

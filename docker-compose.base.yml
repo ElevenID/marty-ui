@@ -218,17 +218,20 @@ services:
 
   openbao-init:
     image: quay.io/openbao/openbao:2
+    user: "0:0"
     entrypoint: ["/bin/sh", "/scripts/openbao-init.sh"]
     environment:
       BAO_ADDR: "http://openbao:8200"
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
-      BAO_GRANT_TOKEN_DIR: /bao/grants
+      BAO_FLOW_GRANT_TOKEN_FILE: /bao/flow-grant/token
+      BAO_VERIFY_GRANT_TOKEN_FILE: /bao/verify-grant/token
     depends_on:
       openbao:
         condition: service_healthy
     volumes:
       - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
-      - openbao_grants:/bao/grants
+      - openbao_flow_grant:/bao/flow-grant
+      - openbao_verify_grant:/bao/verify-grant
     restart: "no"
     networks:
       - marty-network
@@ -821,6 +824,7 @@ services:
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:-dev-device-registration-signing-keys-key-change-me}
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
+      SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /bao/verify-grant/token
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
@@ -830,11 +834,15 @@ services:
     secrets:
       - dev_integration_secret_server_cert
       - dev_integration_secret_server_key
+    volumes:
+      - openbao_verify_grant:/bao/verify-grant:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      openbao-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
       interval: 10s
@@ -881,7 +889,7 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
       BAO_ADDR: http://openbao:8200
-      FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /bao/grants/sign_grant_mint_flow_wallet_token
+      FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /bao/flow-grant/token
       ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       REDIS_URL: redis://redis:6379
@@ -894,7 +902,7 @@ services:
       - "127.0.0.1:8011:8011"
       - "127.0.0.1:9011:9011"
     volumes:
-      - openbao_grants:/bao/grants:ro
+      - openbao_flow_grant:/bao/flow-grant:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1315,7 +1323,8 @@ volumes:
   applicant_data:
   envoy_proto_descriptor:
   openbao_data:
-  openbao_grants:
+  openbao_flow_grant:
+  openbao_verify_grant:
 
 networks:
   marty-network:

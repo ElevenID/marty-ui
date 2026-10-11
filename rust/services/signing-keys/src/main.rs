@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use axum_server::{tls_rustls::RustlsConfig, Handle};
+use marty_signing_grant::{replay::RedisGrantReplayStore, verifier::GrantVerifier};
 use marty_signing_keys::{
     config::Config, csca_lifecycle::CscaLifecycleStore, documents::DocumentStore,
     flow_envelope::OpenBaoEnvelopeProvider, http, managed_holder_http,
@@ -44,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let registry_store = RegistryStore::connect(&config.registry_redis_url)
         .await?
-        .with_managed_openbao(managed_openbao_endpoint);
+        .with_managed_openbao(managed_openbao_endpoint.clone());
     let document_store = DocumentStore::from_connection(registry_store.connection());
     let csca_lifecycle_store = CscaLifecycleStore::from_connection(registry_store.connection());
     let profile_store = ProfileStore::from_connection(registry_store.connection());
@@ -66,6 +67,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         (None, Some(_)) => unreachable!("configuration requires BAO_ADDR for HAIP token"),
     };
     let registry_store = registry_store.with_auth_envelopes(flow_envelopes.clone());
+    let grant_verifier = GrantVerifier::for_managed_openbao(
+        managed_openbao_endpoint
+            .as_deref()
+            .ok_or("BAO_ADDR is required for signing grants")?,
+        config
+            .sign_grant_verify_token_file
+            .clone()
+            .ok_or("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE is required")?,
+        RedisGrantReplayStore::new(registry_store.connection()),
+    )?;
     if let Some(holder_proofs) = holder_proofs {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(300));
@@ -91,7 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         build_revision = %config.build_revision,
         "starting Rust signing-keys service"
     );
-    let app = http::router_with_all_keys(
+    let app = http::router_with_all_keys_and_grants(
         config.internal_api_key,
         Some(config.service_sign_gateway_key),
         Some(config.issuer_sign_key),
@@ -105,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(profile_store),
         flow_envelopes,
         config.public_domain,
+        Some(grant_verifier),
     );
     let app = match holder_api {
         Some((device_key, provider)) => {

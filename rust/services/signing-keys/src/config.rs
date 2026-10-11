@@ -31,6 +31,7 @@ pub struct Config {
     pub bao_addr: Option<String>,
     pub bao_token: Option<String>,
     pub haip_kms_token_file: Option<PathBuf>,
+    pub sign_grant_verify_token_file: Option<PathBuf>,
     pub public_domain: Option<String>,
 }
 
@@ -223,6 +224,8 @@ impl Config {
             return Err("DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from BAO_TOKEN".into());
         }
         let haip_kms_token_file = value(values, "HAIP_KMS_TOKEN_FILE").map(PathBuf::from);
+        let sign_grant_verify_token_file =
+            value(values, "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE").map(PathBuf::from);
         if values.iter().any(|(name, value)| {
             name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
                 && name != "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE"
@@ -277,6 +280,9 @@ impl Config {
         if haip_kms_token_file.is_some() && bao_addr.is_none() {
             return Err("HAIP_KMS_TOKEN_FILE requires BAO_ADDR".into());
         }
+        if sign_grant_verify_token_file.is_some() && bao_addr.is_none() {
+            return Err("SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE requires BAO_ADDR".into());
+        }
         Ok(Self {
             http_addr: SocketAddr::from(([0, 0, 0, 0], port)),
             integration_secret_tls,
@@ -295,6 +301,7 @@ impl Config {
             bao_addr,
             bao_token,
             haip_kms_token_file,
+            sign_grant_verify_token_file,
             public_domain: value(values, "PUBLIC_DOMAIN"),
         })
     }

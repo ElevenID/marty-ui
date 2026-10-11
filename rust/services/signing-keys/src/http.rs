@@ -57,6 +57,10 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use marty_signing_grant::{
+    verifier::{GrantAuthorizationError, GrantVerifier},
+    GrantBinding, GrantEnvelope, SigningOrigin, HEADER_NAME,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -95,6 +99,7 @@ struct AppState {
     dsc_issuance_store: Option<DscIssuanceStore>,
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     compatibility: Option<SigningCompatibilityService>,
+    grant_verifier: Option<GrantVerifier>,
     public_domain: Option<String>,
 }
 
@@ -225,6 +230,41 @@ pub fn router_with_all_keys(
     profile_store: Option<ProfileStore>,
     flow_envelopes: Option<OpenBaoEnvelopeProvider>,
     public_domain: Option<String>,
+) -> Router {
+    router_with_all_keys_and_grants(
+        internal_api_key,
+        service_sign_gateway_key,
+        issuer_sign_key,
+        integration_secret_key,
+        dsc_issue_gateway_key,
+        csca_issue_gateway_key,
+        beta_csca_issuance_enabled,
+        registry_store,
+        document_store,
+        csca_lifecycle_store,
+        profile_store,
+        flow_envelopes,
+        public_domain,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn router_with_all_keys_and_grants(
+    internal_api_key: String,
+    service_sign_gateway_key: Option<String>,
+    issuer_sign_key: Option<String>,
+    integration_secret_key: Option<String>,
+    dsc_issue_gateway_key: Option<String>,
+    csca_issue_gateway_key: Option<String>,
+    beta_csca_issuance_enabled: bool,
+    registry_store: Option<RegistryStore>,
+    document_store: Option<DocumentStore>,
+    csca_lifecycle_store: Option<CscaLifecycleStore>,
+    profile_store: Option<ProfileStore>,
+    flow_envelopes: Option<OpenBaoEnvelopeProvider>,
+    public_domain: Option<String>,
+    grant_verifier: Option<GrantVerifier>,
 ) -> Router {
     let dsc_issuance_store = profile_store.as_ref().map(ProfileStore::dsc_issuance_store);
     let compatibility = match (&registry_store, &document_store, &profile_store) {
@@ -555,6 +595,7 @@ pub fn router_with_all_keys(
             dsc_issuance_store,
             flow_envelopes,
             compatibility,
+            grant_verifier,
             public_domain,
         })
 }
@@ -3672,6 +3713,15 @@ async fn sign_public_service_payload(
     {
         return error.into_response();
     }
+    let Some(header) = headers
+        .get(HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return public_error(StatusCode::UNAUTHORIZED, "Signing grant required.");
+    };
+    let Ok(envelope) = GrantEnvelope::from_header_value(header) else {
+        return public_error(StatusCode::UNAUTHORIZED, "Signing grant is invalid.");
+    };
     let Some(service) = state.compatibility.as_ref() else {
         return public_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -3695,6 +3745,53 @@ async fn sign_public_service_payload(
         .await
         {
             return error.into_response();
+        }
+    }
+    let (Some(key_reference), Some(key_purpose), Some(algorithm)) = (
+        input.key_reference.as_deref(),
+        input.key_purpose.as_deref(),
+        input.algorithm.as_deref(),
+    ) else {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "A bound signing key, purpose, and algorithm are required.",
+        );
+    };
+    let payload = match crate::compat::signing_payload(
+        input.payload_b64.as_deref(),
+        input.payload_hex.as_deref(),
+    ) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return public_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "A valid signing payload is required.",
+            )
+        }
+    };
+    let route = format!("/v1/signing-keys/services/{service_id}/sign");
+    let binding = GrantBinding {
+        origin: SigningOrigin::GatewayService,
+        operation_id: &envelope.claims.operation_id,
+        organization_id: &scope.organization_id,
+        route: &route,
+        service_id: Some(&service_id),
+        issuer_did: None,
+        key_reference: Some(key_reference),
+        key_purpose,
+        algorithm,
+        payload: &payload,
+    };
+    match consume_bound_signing_grant(&state, header, &binding).await {
+        Ok(()) => {}
+        Err(GrantAuthorizationError::Denied) => {
+            return public_error(StatusCode::UNAUTHORIZED, "Signing grant is denied.")
+        }
+        Err(GrantAuthorizationError::Unavailable) => {
+            return public_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Signing grant verifier is unavailable.",
+            )
         }
     }
     let request = ServiceSignRequest {
@@ -6571,11 +6668,61 @@ async fn issuer_did_sign(
     if !authorize_issuer_sign(&state, &headers) {
         return Err(CompatibilityError::Unauthorized);
     }
+    let header = headers
+        .get(HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(CompatibilityError::Unauthorized)?;
+    let envelope =
+        GrantEnvelope::from_header_value(header).map_err(|_| CompatibilityError::Unauthorized)?;
+    let key_reference = request
+        .key_reference
+        .as_deref()
+        .filter(|reference| !reference.is_empty())
+        .ok_or(CompatibilityError::Unauthorized)?;
+    let payload = crate::compat::signing_payload(
+        request.payload_b64.as_deref(),
+        request.payload_hex.as_deref(),
+    )?;
+    let binding = GrantBinding {
+        origin: envelope.claims.origin,
+        operation_id: &envelope.claims.operation_id,
+        organization_id: &request.organization_id,
+        route: "/internal/compat/issuer-dids/sign",
+        service_id: None,
+        issuer_did: Some(&request.issuer_did),
+        key_reference: Some(key_reference),
+        key_purpose: &request.key_purpose,
+        algorithm: &request.algorithm,
+        payload: &payload,
+    };
+    consume_bound_signing_grant(&state, header, &binding)
+        .await
+        .map_err(|error| match error {
+            GrantAuthorizationError::Denied => CompatibilityError::Unauthorized,
+            GrantAuthorizationError::Unavailable => CompatibilityError::Unavailable,
+        })?;
     let service = state
         .compatibility
         .as_ref()
         .ok_or(CompatibilityError::Unavailable)?;
     service.sign_with_issuer_did(&request).await.map(Json)
+}
+
+async fn consume_bound_signing_grant(
+    state: &AppState,
+    header: &str,
+    binding: &GrantBinding<'_>,
+) -> Result<(), GrantAuthorizationError> {
+    let verifier = state
+        .grant_verifier
+        .as_ref()
+        .ok_or(GrantAuthorizationError::Unavailable)?;
+    let consumed = verifier.authorize(header, binding).await?;
+    if consumed.authorizes(binding) {
+        Ok(())
+    } else {
+        Err(GrantAuthorizationError::Denied)
+    }
 }
 
 async fn create_compatibility_profile(
@@ -7895,6 +8042,47 @@ mod public_contract_tests {
     use tower::ServiceExt;
 
     #[tokio::test]
+    async fn service_signing_denies_api_key_without_a_bound_grant() {
+        let app = router_with_all_keys(
+            "shared-internal-signing-key-32-chars".into(),
+            Some("dedicated-service-sign-key-32-chars".into()),
+            Some("dedicated-issuer-sign-key-32-chars".into()),
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        let payload = json!({
+            "organization_id": "org-a",
+            "payload_b64": "cGF5bG9hZA",
+            "algorithm": "ES256",
+            "key_reference": "issuer-key-1",
+            "key_purpose": "vc_jwt_issuer"
+        });
+        for grant in [None, Some("invalid-grant")] {
+            let mut request =
+                Request::post("/v1/signing-keys/services/service-1/sign?organization_id=org-a")
+                    .header("content-type", "application/json")
+                    .header("x-api-key", "dedicated-service-sign-key-32-chars");
+            if let Some(grant) = grant {
+                request = request.header(HEADER_NAME, grant);
+            }
+            let response = app
+                .clone()
+                .oneshot(request.body(Body::from(payload.to_string())).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
     async fn issuer_signing_rejects_shared_internal_key_before_reaching_provider() {
         let app = router_with_all_keys(
             "shared-internal-signing-key-32-chars".into(),
@@ -7926,7 +8114,7 @@ mod public_contract_tests {
             ),
             (
                 "dedicated-issuer-sign-key-32-chars",
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::UNAUTHORIZED,
             ),
         ] {
             let response = app
@@ -8602,6 +8790,7 @@ mod public_contract_tests {
             dsc_issuance_store: None,
             flow_envelopes: None,
             compatibility: None,
+            grant_verifier: None,
             public_domain: None,
         };
         let lease = store
@@ -9625,6 +9814,7 @@ mod public_contract_tests {
             dsc_issuance_store: None,
             flow_envelopes: None,
             compatibility: None,
+            grant_verifier: None,
             public_domain: Some("beta.example".into()),
         };
         let projected = public_config_document(
@@ -9669,6 +9859,7 @@ mod public_contract_tests {
             dsc_issuance_store: None,
             flow_envelopes: None,
             compatibility: None,
+            grant_verifier: None,
             public_domain: None,
         };
         let projected = public_config_document(

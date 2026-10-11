@@ -14568,3 +14568,43 @@ initially exhausted local memory with parallel Rust compilers; targeted
 single-job checks completed. This is still producer/resolver binding; the
 Signing Keys grant verifier and replay gate remain mandatory before the
 remote KMS call and before this can be called KMS-only enforcement.
+
+Signing Keys issuer-DID receiver, local grouped follow-up: the Rust route now
+requires a syntactically bounded grant header and a requested key reference
+even when the static API key is valid. It reconstructs the binding from the
+exact body payload, tenant, issuer DID, key reference, purpose and algorithm,
+verifies the origin-specific HMAC with a separate OpenBao verify-only token,
+atomically consumes the nonce in Redis, and rechecks the consumed proof before
+calling the compatibility signer. The shared grant validator forbids
+issuer-DID grants without a key reference. Signing Keys production startup
+requires the verifier's OpenBao endpoint and absolute token file. Development,
+self-hosted and Kubernetes manifests supply a dedicated verifier token mount;
+Kubernetes secret setup requires an operator-supplied verify-only token.
+Self-review split development Compose into disjoint Flow-mint and
+Signing-Keys-verify volumes, so neither runtime mounts the other's token;
+the trusted OpenBao bootstrap alone writes both scoped files.
+The OpenBao image runs as UID 100 and cannot write a fresh named Docker
+volume at these paths; a disposable image/volume probe reproduced the
+permission failure. Development `openbao-init` now runs as root only for
+bootstrap, writes read-only files, and the separate runtime mounts stay
+read-only. The same disposable image/volume probe confirmed the corrected
+write and mode.
+Static API-key-only requests now fail closed on the issuer-DID HTTP route.
+The Signing Keys unit suite passes 184 tests (nine live tests ignored); the
+grant crate passes eight tests (three live tests ignored); all-target
+warnings-denied Clippy, shell syntax, manifest parsing and diff checks pass.
+
+The public `/v1/signing-keys/services/{id}/sign` route now also rejects a
+static API key without a bounded grant and binds a fixed GatewayService
+origin, exact service path and ID, tenant, key reference, purpose, algorithm
+and decoded payload before the same OpenBao verification and Redis one-use
+consumption. A focused HTTP test proves missing or malformed grants fail
+before backend access; all-target warnings-denied Clippy passes. The two
+routes share one consumed-proof helper. `sign_with_service` can still be
+called from other in-process paths, and direct KMS signing calls serve CSR
+and holder-proof work. Do not describe this as a kernel-wide gate. Next
+thread a move-only consumed proof, or a separately verified ceremony
+authority, through each issuer signing call to its exact KMS invocation;
+wire Gateway and Issuance grant producers and add live HMAC/replay/KMS-denial
+acceptance. The current UI PR does not contain this local batch; its Canvas
+CI job remains in progress.
