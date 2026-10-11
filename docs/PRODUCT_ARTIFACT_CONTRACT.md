@@ -8,7 +8,8 @@ signature-verify, or qualify the artifact. No current product is declared
 supported by adding this contract.
 
 The descriptor binds product identity and capability list to an artifact digest,
-source commit, license notice digest, SBOM digest, provenance digest, explicit
+source commit, license notice digest, SBOM digest, provenance and signature
+digests, explicit
 runtime/build/optional-extension dependencies, schema/protocol compatibility,
 installation channel, and qualification evidence references. An OCI artifact
 must use a digest reference matching the declared digest; a tag is rejected.

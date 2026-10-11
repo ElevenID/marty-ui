@@ -33,7 +33,7 @@ def validate_manifest(manifest: object, schema: dict) -> None:
         raise ValueError(f"{path}: {error.message}")
 
     assert isinstance(manifest, dict)  # enforced by schema
-    for field in ("artifact", "sbom", "provenance"):
+    for field in ("artifact", "sbom", "provenance", "signature"):
         item = manifest[field]
         uri, digest = item["uri"], item["digest"]
         oci = OCI.fullmatch(uri)
