@@ -16183,3 +16183,20 @@ head `44e94b746`, hosted Rust Lint and Packaging and Rust Feature Regression
 Probe have both passed, confirming the standalone lockfile repair. Rust
 contracts and Canvas are still running; hold this local correction for their
 terminal result and the next grouped push.
+
+K10 DIDComm delivery read follow-up: `delivery_state` rebuilt an issued
+credential directly and bypassed the shared read guard, while transport claim
+read delivery metadata without a private-material check. Both paths now reuse
+the guarded credential decoder and reject private metadata before returning or
+claiming a delivery. A fresh PostgreSQL 16 contract injected private JWK data
+into the credential status list and delivery metadata; each read and claim
+failed closed, then normal DIDComm and credential management behavior passed.
+The initial local build hit disk capacity in this worktree's 41.3 GiB Issuance
+Cargo cache; scoped `cargo clean -p marty-issuance-service` freed it. The same
+test and all-targets warnings-denied Clippy then passed with incremental
+compilation disabled. The disposable database was removed. This correction
+stays in the local batch while the pushed head's hosted contracts and Canvas
+jobs remain live.
+The accumulated local read/finalization batch also passed the complete
+Issuance library suite with incremental compilation disabled: 583 passed,
+zero failed, eight opt-in cases ignored.

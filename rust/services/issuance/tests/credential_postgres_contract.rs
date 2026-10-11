@@ -1027,12 +1027,43 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
     .await
     .unwrap();
     assert!(repository
+        .delivery_state("org-a", "tx-didcomm-contract")
+        .await
+        .is_err());
+    assert!(repository
         .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
         .await
         .is_err());
     sqlx::query(
         "UPDATE issuance_service.issued_credentials SET status_list_entries = '[]'::jsonb
          WHERE id = $1",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = jsonb_set(metadata, '{private_jwk}',
+                 '{\"kty\":\"OKP\",\"d\":\"private-seed\"}'::jsonb)
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
+    )
+    .bind(credential_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repository
+        .delivery_state("org-a", "tx-didcomm-contract")
+        .await
+        .is_err());
+    assert!(repository
+        .claim_transport("org-a", "tx-didcomm-contract", "did:key:holder")
+        .await
+        .is_err());
+    sqlx::query(
+        "UPDATE issuance_service.credential_delivery_records
+         SET metadata = metadata - 'private_jwk'
+         WHERE credential_id = $1 AND delivery_target = 'didcomm_v2'",
     )
     .bind(credential_id)
     .execute(pool)

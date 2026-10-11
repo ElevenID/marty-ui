@@ -779,6 +779,10 @@ impl PostgresCredentialRepository {
             return Ok(None);
         };
         let metadata = get::<Value>(&row, "metadata")?;
+        if marty_key_material_policy::contains_private_key(&metadata) {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        let credential = issued_credential_row(&row)?;
         let metadata_text = |name: &str| {
             metadata
                 .get(name)
@@ -794,7 +798,7 @@ impl PostgresCredentialRepository {
                 DeliveredInitiationDidcommDelivery {
                     transaction_id: transaction.id,
                     organization_id: transaction.organization_id,
-                    credential_id: get(&row, "id")?,
+                    credential_id: credential.id,
                     holder_did: metadata_text("holder_did")?,
                     service_endpoint: metadata_text("service_endpoint")?,
                     message_id: metadata_text("didcomm_message_id")?,
@@ -804,22 +808,7 @@ impl PostgresCredentialRepository {
         Ok(Some(InitiationDidcommDeliveryState::Pending(Box::new(
             PendingInitiationDidcommDelivery {
                 transaction,
-                credential: IssuedCredential {
-                    id: get(&row, "id")?,
-                    transaction_id: get(&row, "transaction_id")?,
-                    organization_id: get(&row, "organization_id")?,
-                    credential_template_id: get(&row, "credential_template_id")?,
-                    applicant_id: get(&row, "applicant_id")?,
-                    subject_did: get(&row, "subject_did")?,
-                    issuer_did: get(&row, "issuer_did")?,
-                    revocation_profile_id: get(&row, "revocation_profile_id")?,
-                    renewed_from_credential_id: get(&row, "renewed_from_credential_id")?,
-                    status_list_entries: json_vec(&row, "status_list_entries")?,
-                    credential: get(&row, "credential_jwt")?,
-                    credential_hash: get(&row, "credential_hash")?,
-                    issued_at: get(&row, "issued_at")?,
-                    expires_at: get(&row, "expires_at")?,
-                },
+                credential,
                 delivery: StagedInitiationDidcommDelivery {
                     holder_did: metadata_text("holder_did")?,
                     service_endpoint: metadata_text("service_endpoint")?,
@@ -894,6 +883,13 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         let delivery_status = get::<String>(&delivery_row, "status")?;
         let last_error = get::<Option<String>>(&delivery_row, "last_error")?;
         let metadata = get::<Value>(&delivery_row, "metadata")?;
+        if marty_key_material_policy::contains_private_key(&metadata)
+            || last_error.as_ref().is_some_and(|value| {
+                marty_key_material_policy::contains_private_key(&Value::String(value.to_owned()))
+            })
+        {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         let database_now = get::<DateTime<Utc>>(&delivery_row, "database_now")?;
 
         let holder = metadata_required_text(&metadata, "holder_did")?;
