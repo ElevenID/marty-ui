@@ -319,6 +319,11 @@ fn normalize_provider_signature(
     signature: &[u8],
     algorithm: &str,
 ) -> Result<Option<String>, KmsError> {
+    if signature.is_empty() {
+        return Err(KmsError::InvalidResponse(
+            "Remote signer returned an empty signature.".into(),
+        ));
+    }
     match algorithm {
         "ES256" | "ES384" | "ES512" => {
             marty_crypto::ecdsa::normalize_signature(signature, algorithm)
@@ -3407,6 +3412,12 @@ mod tests {
             normalize_provider_signature(&[0, 1, 2], "RS256").unwrap(),
             None
         );
+        for algorithm in ["ES256", "RS256", "EdDSA"] {
+            assert!(matches!(
+                normalize_provider_signature(&[], algorithm),
+                Err(KmsError::InvalidResponse(_))
+            ));
+        }
     }
 
     #[test]
