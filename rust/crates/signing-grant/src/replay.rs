@@ -55,6 +55,33 @@ pub struct ApprovedServiceCsrSign {
     expires_at: i64,
 }
 
+/// Move-only authority for a managed issuer CSR. Gateway authorizes the
+/// public identity; Signing Keys selects and binds the actual remote key.
+pub struct ApprovedIssuerCsrSign {
+    organization_id: String,
+    route: String,
+    issuer_did: String,
+    key_reference: String,
+    key_purpose: String,
+    algorithm: String,
+    payload_sha256_b64: String,
+    expires_at: i64,
+}
+
+impl ApprovedIssuerCsrSign {
+    pub fn authorizes(self, actual: &FinalSignBinding<'_>) -> bool {
+        chrono::Utc::now().timestamp() <= self.expires_at
+            && self.organization_id == actual.organization_id
+            && self.route == actual.route
+            && actual.service_id.is_none()
+            && Some(self.issuer_did.as_str()) == actual.issuer_did
+            && Some(self.key_reference.as_str()) == actual.key_reference
+            && self.key_purpose == actual.key_purpose
+            && self.algorithm == actual.algorithm
+            && self.payload_sha256_b64 == payload_digest(actual.payload)
+    }
+}
+
 impl ApprovedServiceCsrSign {
     pub fn authorizes(self, actual: &FinalSignBinding<'_>) -> bool {
         chrono::Utc::now().timestamp() <= self.expires_at
@@ -123,6 +150,39 @@ impl ConsumedGrant {
             expires_at: self.claims.expires_at,
         })
     }
+
+    pub fn approve_issuer_csr(
+        self,
+        intent: &GrantBinding<'_>,
+        actual: &FinalSignBinding<'_>,
+    ) -> Option<ApprovedIssuerCsrSign> {
+        if self.claims.origin != SigningOrigin::GatewayIssuerDid
+            || intent.route != "/v1/signing-keys/issuer-identities/certificate-csr"
+            || intent.service_id.is_some()
+            || intent.key_reference.is_some()
+            || !matches!(intent.key_purpose, "csca" | "x509_doc_signer")
+            || bound_input(&self.claims, intent, chrono::Utc::now().timestamp()).is_err()
+            || actual.organization_id != intent.organization_id
+            || actual.route != intent.route
+            || actual.service_id.is_some()
+            || actual.issuer_did != intent.issuer_did
+            || actual.key_reference.is_none()
+            || actual.key_purpose != intent.key_purpose
+            || actual.algorithm != intent.algorithm
+        {
+            return None;
+        }
+        Some(ApprovedIssuerCsrSign {
+            organization_id: actual.organization_id.to_owned(),
+            route: actual.route.to_owned(),
+            issuer_did: actual.issuer_did?.to_owned(),
+            key_reference: actual.key_reference?.to_owned(),
+            key_purpose: actual.key_purpose.to_owned(),
+            algorithm: actual.algorithm.to_owned(),
+            payload_sha256_b64: payload_digest(actual.payload),
+            expires_at: self.claims.expires_at,
+        })
+    }
 }
 
 impl RedisGrantReplayStore {
@@ -169,7 +229,80 @@ impl RedisGrantReplayStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ceremony::ServiceCsrIntent;
+    use crate::ceremony::{IssuerCsrIntent, ServiceCsrIntent};
+
+    #[test]
+    fn issuer_csr_approval_binds_resolved_key_and_generated_bytes() {
+        let now = chrono::Utc::now().timestamp();
+        let csr: IssuerCsrIntent = serde_json::from_str(
+            r#"{"issuer_did":"did:web:example.test:issuer","key_purpose":"csca","credential_format":"MDOC","algorithm":"ES256","country":"US","organization":"Example","common_name":"Issuer"}"#,
+        )
+        .unwrap();
+        let payload = csr.bound_payload();
+        let route = "/v1/signing-keys/issuer-identities/certificate-csr";
+        let claims = GrantClaims {
+            version: 1,
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id: "gateway-csr-1".into(),
+            organization_id: "tenant-1".into(),
+            route: route.into(),
+            service_id: None,
+            issuer_did: Some(csr.issuer_did.clone()),
+            key_reference: None,
+            key_purpose: csr.key_purpose.clone(),
+            algorithm: csr.algorithm.clone(),
+            payload_sha256_b64: payload_digest(&payload),
+            issued_at: now,
+            expires_at: now + 30,
+            nonce: "0123456789abcdef0123456789abcdef".into(),
+        };
+        let intent = GrantBinding {
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id: "gateway-csr-1",
+            organization_id: "tenant-1",
+            route,
+            service_id: None,
+            issuer_did: Some(&csr.issuer_did),
+            key_reference: None,
+            key_purpose: &csr.key_purpose,
+            algorithm: &csr.algorithm,
+            payload: &payload,
+        };
+        let actual = FinalSignBinding {
+            organization_id: "tenant-1",
+            route,
+            service_id: None,
+            issuer_did: Some(&csr.issuer_did),
+            key_reference: Some("resolved-remote-key"),
+            key_purpose: "csca",
+            algorithm: "ES256",
+            payload: b"generated CSR signing bytes",
+        };
+        let approved = ConsumedGrant {
+            claims: claims.clone(),
+        }
+        .approve_issuer_csr(&intent, &actual)
+        .unwrap();
+        assert!(approved.authorizes(&actual));
+        let approved = ConsumedGrant {
+            claims: claims.clone(),
+        }
+        .approve_issuer_csr(&intent, &actual)
+        .unwrap();
+        assert!(!approved.authorizes(&FinalSignBinding {
+            payload: b"changed CSR bytes",
+            ..actual
+        }));
+        assert!(ConsumedGrant { claims }
+            .approve_issuer_csr(
+                &intent,
+                &FinalSignBinding {
+                    issuer_did: Some("did:web:other.test:issuer"),
+                    ..actual
+                }
+            )
+            .is_none());
+    }
 
     #[test]
     fn csr_approval_rechecks_generated_bytes_at_final_sign() {

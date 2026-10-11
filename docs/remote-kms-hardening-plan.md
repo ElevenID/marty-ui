@@ -14801,3 +14801,17 @@ certificate CSR and the five issuer certificate/CSR signs, issuance service
 signing producers, and a kernel-wide barrier so no direct `kms::sign` call can
 operate without an exact consumed or ceremony-specific proof. Preserve holder
 proof and certificate behavior while removing any private-key paths and tables.
+
+Issuer CSR grant work has started locally. `IssuerCsrIntent` is now shared
+between the Gateway-facing contract and Signing Keys, with a canonical
+subject/identity payload that excludes only the independently authenticated
+tenant. The GatewayIssuerDid origin accepts the exact public CSR route with no
+caller-selected key reference. A move-only `ApprovedIssuerCsrSign` can bind a
+consumed grant to the profile-resolved remote key and generated CSR bytes;
+its focused mismatch test, shared grant suite (15 active, three opt-in ignored),
+Signing Keys contract test, and warnings-denied Clippy pass. This is only a
+local prerequisite: Gateway still needs a separate scoped issuer-CSR mint
+token and producer, Signing Keys still needs to consume this grant and carry
+the proof to its final sign, and disposable OpenBao acceptance remains. The
+current hosted Canvas lane is still active, so keep these local changes in the
+next grouped push rather than starting overlapping hosted CI.

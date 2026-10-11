@@ -59,7 +59,7 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_signing_grant::{
-    ceremony::ServiceCsrIntent,
+    ceremony::{IssuerCsrIntent, ServiceCsrIntent},
     replay::ConsumedGrant,
     verifier::{GrantAuthorizationError, GrantVerifier},
     GrantBinding, GrantEnvelope, SigningOrigin, HEADER_NAME,
@@ -711,20 +711,6 @@ struct CscaCertificateEnrollment {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PassportCsrRequest {
-    #[serde(default)]
-    organization_id: Option<String>,
-    issuer_did: String,
-    key_purpose: String,
-    credential_format: String,
-    algorithm: String,
-    country: String,
-    organization: String,
-    common_name: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct DscCertificateIssueRequest {
     #[serde(default)]
     organization_id: Option<String>,
@@ -842,18 +828,16 @@ fn default_certificate_alert_days() -> i64 {
     30
 }
 
-impl PassportCsrRequest {
-    fn identity(&self) -> IssuerIdentityRequest {
-        IssuerIdentityRequest {
-            organization_id: self.organization_id.clone(),
-            issuer_did: self.issuer_did.clone(),
-            key_purpose: self.key_purpose.clone(),
-            credential_format: self.credential_format.clone(),
-            algorithm: self.algorithm.clone(),
-            key_attestation_policy: None,
-            cert_pem: None,
-            cert_chain_pem: None,
-        }
+fn passport_csr_identity(input: &IssuerCsrIntent) -> IssuerIdentityRequest {
+    IssuerIdentityRequest {
+        organization_id: input.organization_id.clone(),
+        issuer_did: input.issuer_did.clone(),
+        key_purpose: input.key_purpose.clone(),
+        credential_format: input.credential_format.clone(),
+        algorithm: input.algorithm.clone(),
+        key_attestation_policy: None,
+        cert_pem: None,
+        cert_chain_pem: None,
     }
 }
 
@@ -2415,7 +2399,7 @@ fn same_managed_identity(profile: &Value, resolved: &Value) -> bool {
 async fn generate_public_issuer_csr(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
-    Json(input): Json<PassportCsrRequest>,
+    Json(input): Json<IssuerCsrIntent>,
 ) -> Response {
     if !matches!(input.key_purpose.as_str(), "csca" | "x509_doc_signer") {
         return public_error(
@@ -2423,7 +2407,7 @@ async fn generate_public_issuer_csr(
             "Passport CSR purpose is unsupported.",
         );
     }
-    let identity = input.identity();
+    let identity = passport_csr_identity(&input);
     if let Err(error) = validate_identity_scope(&scope.organization_id, &identity) {
         return error.into_response();
     }
@@ -9184,11 +9168,11 @@ mod public_contract_tests {
             "key_purpose": "csca", "credential_format": "MDOC", "algorithm": "ES256",
             "country": "US", "organization": "ElevenID Beta", "common_name": "Pilot CSCA"
         });
-        let parsed: PassportCsrRequest = serde_json::from_value(request.clone()).unwrap();
-        assert_eq!(parsed.identity().key_purpose, "csca");
+        let parsed: IssuerCsrIntent = serde_json::from_value(request.clone()).unwrap();
+        assert_eq!(passport_csr_identity(&parsed).key_purpose, "csca");
         let mut with_key = request;
         with_key["key_reference"] = json!("attacker-key");
-        assert!(serde_json::from_value::<PassportCsrRequest>(with_key).is_err());
+        assert!(serde_json::from_value::<IssuerCsrIntent>(with_key).is_err());
     }
 
     #[tokio::test]

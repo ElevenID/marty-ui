@@ -71,10 +71,21 @@ impl SigningOrigin {
                     && claims.key_purpose == "oid4vp_request_signing"
                     && claims.algorithm == "ES256"
             }
-            Self::GatewayIssuerDid
-            | Self::IssuanceCredential
-            | Self::IssuanceCanvas
-            | Self::IssuancePassport => issuer_did_route_shape(claims),
+            Self::GatewayIssuerDid => {
+                issuer_did_route_shape(claims)
+                    || (claims.route == "/v1/signing-keys/issuer-identities/certificate-csr"
+                        && claims.service_id.is_none()
+                        && claims.key_reference.is_none()
+                        && claims
+                            .issuer_did
+                            .as_deref()
+                            .is_some_and(|did| did.starts_with("did:"))
+                        && matches!(claims.key_purpose.as_str(), "csca" | "x509_doc_signer")
+                        && matches!(claims.algorithm.as_str(), "ES256" | "ES384" | "ES512"))
+            }
+            Self::IssuanceCredential | Self::IssuanceCanvas | Self::IssuancePassport => {
+                issuer_did_route_shape(claims)
+            }
         }
     }
 }
