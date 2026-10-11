@@ -74,6 +74,9 @@ binding and installed service/image closure, rejects source builds and source
 checkout paths in bind volumes, Compose secret files, and Compose config files,
 and anonymously pulls every exact locked image with a
 fresh Docker configuration. Its output remains `qualification: unqualified`.
+The consumer explicitly requests Linux/amd64 for each exact locked digest and
+checks the pulled image's reported OS/architecture and digest association;
+this does not independently attest architecture or prove the runtime boots.
 It does not start containers or prove migrations, readiness, login, or an
 issuer/credential journey. A later protected installation gate must use this
 same archive digest with disposable external state and prove those runtime

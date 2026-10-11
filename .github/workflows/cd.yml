@@ -1315,10 +1315,9 @@ jobs:
           set -euo pipefail
           export DOCKER_CONFIG="$RUNNER_TEMP/selfhost-anonymous-docker-config"
           mkdir "$DOCKER_CONFIG"
-          jq -r '.services[]' prepared/prepared-selfhost-images.json | LC_ALL=C sort -u |
-          while IFS= read -r image; do
-            docker pull "$image" >/dev/null
-          done
+          python scripts/check_selfhost_locked_image_platform.py \
+            --image-lock prepared/prepared-selfhost-images.json \
+            --output "$RUNNER_TEMP/selfhost-image-platform-preflight.json"
 
   notify-release-approval:
     # This is a parallel handoff, never a prerequisite for publication.

@@ -58,6 +58,10 @@ The consumer also compares the complete extracted bundle tree against the
 validated ZIP, rejecting changed, missing, extra, symlink, or special entries
 before accepting its rendered Compose model. Disposable state and secret roots are
 separate from the bundle and are not mistaken for shipped files.
+The separate consumer also anonymously pulls each exact digest from the
+downloaded lock for Linux/amd64 and checks that the inspected image reports
+that platform and retains the exact digest association. This is a platform
+preflight observation, not architecture attestation or installed-runtime proof.
 
 ## Initial sequence and evidence still needed
 
