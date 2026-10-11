@@ -182,6 +182,7 @@ def empty_project(compose: list[str], install_root: Path,
 def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       model: dict, integration_checkout: Path,
                       environment: dict[str, str], setup_script: Path,
+                      setup_sha256: str,
                       evidence: Path, signature: Path, public_key: Path,
                       preflight: dict) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
@@ -215,8 +216,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                        "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature)}
         if evidence.exists() or signature.exists():
             raise ValueError("KMS custody output exists before fresh fixture setup")
-        fixture_setup(setup_script, hashlib.sha256(setup_script.read_bytes()).hexdigest(),
-                      integration_checkout)
+        fixture_setup(setup_script, setup_sha256, integration_checkout)
         command([sys.executable, str(setup_script)], cwd=integration_checkout,
                 env=journey_env, timeout=600)
         custody_sha256 = verify_kms_custody(evidence, signature, public_key,
@@ -293,6 +293,7 @@ def run(args: argparse.Namespace) -> dict:
         states, custody_sha256 = installed_journey(
             compose, args.install_root, args.state_root, model,
             args.integration_checkout, environment, args.fixture_setup,
+            args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
             args.kms_custody_public_key, preflight)
     return {"schema": "marty.selfhost-installed-business-journey/v1",

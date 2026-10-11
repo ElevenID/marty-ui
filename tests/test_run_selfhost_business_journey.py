@@ -1,5 +1,6 @@
 """Installed journey status gate refuses incomplete service closure and health."""
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -94,6 +95,7 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
     with pytest.raises(ValueError, match="signed custody evidence is absent"):
         installed_journey(["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"],
                           tmp_path, state, model, integration, {}, setup_script,
+                          hashlib.sha256(setup_script.read_bytes()).hexdigest(),
                           tmp_path / "custody.json", tmp_path / "custody.sig",
                           tmp_path / "custody.pub", {})
     assert any("pull" in call for call in calls)
@@ -108,7 +110,7 @@ def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("Docker was touched"))
     with pytest.raises(ValueError, match="fresh empty directory"):
         installed_journey(["docker", "compose"], tmp_path, tmp_path, {}, tmp_path, {},
-                          tmp_path / "setup.py", tmp_path / "custody.json",
+                          tmp_path / "setup.py", "0" * 64, tmp_path / "custody.json",
                           tmp_path / "custody.sig", tmp_path / "custody.pub", {})
 
 
