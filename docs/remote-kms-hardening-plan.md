@@ -15299,3 +15299,14 @@ authorize no signing. The Rust fixture compiled with toolchain 1.95 and passed
 targeted rustfmt; the Python image-fixture suite passed 12 tests. This batch,
 including the local distinct-token preflight, remains unpushed until the
 active hosted run concludes.
+
+The run concluded with those two fixture failures and one Canvas self-host
+acceptance failure. The latter was an obsolete hard-coded count in the
+owned-service recovery validator: its mount allowlist already named all ten
+current Issuance secrets, including the four grant tokens, but the final
+cardinality check still expected six. The validator and synthetic fixture now
+share one exact mount list, so allowed names and count cannot drift. The
+targeted Rust recovery test passes on toolchain 1.95. All other hosted jobs,
+including OpenBao Raft recovery, passed on `38138126662`; its CI Gate failed
+as expected from the three failed jobs. The next grouped push combines the
+three corrections and the local distinct-token preflight.
