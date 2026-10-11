@@ -242,11 +242,9 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
                 "Azure key reference must name a key in the configured Key Vault or Managed HSM.",
             ),
             "gcp" => (
-                Regex::new(r"^projects/[a-z0-9-]+/locations/[a-z0-9-]+/keyRings/[A-Za-z0-9_-]+/cryptoKeys/[A-Za-z0-9_-]+(/cryptoKeyVersions/[0-9]+)?$")
-                    .expect("static provider regex")
-                    .is_match(key_reference),
+                kms::gcp_key_version_reference(payload).is_ok(),
                 "GCP key reference looks like a Cloud KMS resource path.",
-                "GCP key reference should look like projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>[/cryptoKeyVersions/<v>].",
+                "GCP key reference must pin projects/<p>/locations/<l>/keyRings/<r>/cryptoKeys/<k>/cryptoKeyVersions/<v>.",
             ),
             _ => (false, "", ""),
         };

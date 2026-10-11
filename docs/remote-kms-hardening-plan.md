@@ -14069,3 +14069,13 @@ registry/validation golden suites and Signing Keys library suite (177 passed,
 nine ignored) pass. Real Azure response `kid` and public-key/certificate
 binding still need provider acceptance; a pinned request path alone does not
 prove the response came from that version.
+
+K6 GCP reference qualification, local UI batch: service validation previously
+accepted an unversioned CryptoKey path, while `asymmetricSign` and public-key
+reads require a CryptoKeyVersion. A shared Rust parser now requires the full
+versioned resource path, rejects path/query escapes and nonpositive versions,
+and is used by registration validation, sign and public-key reads. The two
+connectivity vectors now probe a pinned version. The local Signing Keys
+library suite (178 passed, nine ignored) and provider, registry and service
+validation golden suites pass after correcting their versioned probe paths.
+This is configuration and protocol-shape evidence, not a live GCP key proof.

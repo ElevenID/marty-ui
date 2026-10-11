@@ -171,7 +171,11 @@ pub(crate) fn validate_service_auth_config(config: &Value) -> Result<(), KmsErro
         }
         "gcp-cloud-kms" => {
             validate_cloud_endpoint(config, "gcp")?;
-            validate_gcp_auth_config(config)
+            validate_gcp_auth_config(config)?;
+            if string(config, "key_reference").is_some_and(|value| !value.is_empty()) {
+                gcp_key_version_reference(config)?;
+            }
+            Ok(())
         }
         other => Err(KmsError::UnsupportedProvider(other.to_string())),
     }
@@ -1618,13 +1622,44 @@ fn gcp_endpoint(config: &Value) -> &str {
         .unwrap_or("https://cloudkms.googleapis.com")
 }
 
-async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
-    let endpoint = gcp_endpoint(config);
-    let key_reference = required(
+pub(crate) fn gcp_key_version_reference(config: &Value) -> Result<&str, KmsError> {
+    let reference = required(
         config,
         "key_reference",
-        "gcp-cloud-kms adapter requires 'key_reference' in service_config",
+        "GCP Cloud KMS requires a version-pinned key reference.",
     )?;
+    let parts: Vec<_> = reference.split('/').collect();
+    let valid = parts.len() == 10
+        && parts[0] == "projects"
+        && parts[2] == "locations"
+        && parts[4] == "keyRings"
+        && parts[6] == "cryptoKeys"
+        && parts[8] == "cryptoKeyVersions"
+        && [parts[1], parts[3]].iter().all(|value| {
+            !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        })
+        && [parts[5], parts[7]].iter().all(|value| {
+            !value.is_empty()
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+        })
+        && parts[9].bytes().all(|byte| byte.is_ascii_digit())
+        && parts[9].parse::<u64>().is_ok_and(|version| version > 0);
+    if !valid {
+        return Err(KmsError::InvalidConfig(
+            "GCP Cloud KMS key reference must pin a CryptoKeyVersion.".into(),
+        ));
+    }
+    Ok(reference)
+}
+
+async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
+    let endpoint = gcp_endpoint(config);
+    let key_reference = gcp_key_version_reference(config)?;
     let algorithm = string(config, "algorithm").unwrap_or("ES256");
     let body = gcp_sign_body(algorithm, payload)?;
     let response = send_json(
@@ -1654,11 +1689,7 @@ async fn sign_gcp(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
 
 async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
     let endpoint = gcp_endpoint(config);
-    let key_reference = required(
-        config,
-        "key_reference",
-        "gcp-cloud-kms adapter requires 'key_reference' in service_config",
-    )?;
+    let key_reference = gcp_key_version_reference(config)?;
     let response = send_json(
         gcp_bearer(
             cloud_http_client()?.get(format!(
@@ -2723,6 +2754,24 @@ mod tests {
         assert_eq!(azure_key_path(&bare).unwrap(), "signing-key/version-1");
         bare.as_object_mut().unwrap().remove("key_version");
         assert!(azure_key_path(&bare).is_err());
+    }
+
+    #[test]
+    fn gcp_key_reference_requires_a_versioned_resource_path() {
+        let reference = "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1";
+        assert_eq!(
+            gcp_key_version_reference(&json!({"key_reference": reference})).unwrap(),
+            reference
+        );
+        for invalid in [
+            "projects/p/locations/l/keyRings/r/cryptoKeys/k",
+            "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/0",
+            "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/+1",
+            "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1?alt=json",
+            "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1/../2",
+        ] {
+            assert!(gcp_key_version_reference(&json!({"key_reference": invalid})).is_err());
+        }
     }
 
     #[tokio::test]
