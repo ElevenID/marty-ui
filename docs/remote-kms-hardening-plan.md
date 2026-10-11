@@ -16133,3 +16133,14 @@ standalone offline Clippy/fetch proof are in the grouped local batch. Main
 advanced to `9cce92659` with CI inventory changes; the batch merged it as
 `6462cc5b0`. Its affected local CI tests passed (84 passed, 1 skipped, 427
 subtests). The next push will be one grouped update to PR #1192.
+
+Grouped UI head `44e94b746` was pushed to draft
+[PR #1192](https://github.com/ElevenID/marty-ui/pull/1192) after the previous
+run became terminal. The batch contains the standalone lockfile correction,
+K10 Rust write-boundary guards and the merged mainline CI inventory. The
+post-merge locked offline standalone probe fetch/Clippy and Issuance
+all-targets warnings-denied Clippy passed locally. The PR description was
+updated to this head and its remaining release gates. Exact-head
+[CI run 38171770054](https://github.com/ElevenID/marty-ui/actions/runs/38171770054)
+has started; preserve this checkpoint locally for the next grouped tracker
+push rather than launching a second hosted cycle for documentation alone.
