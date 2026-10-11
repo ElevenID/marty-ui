@@ -16031,3 +16031,15 @@ The full Issuance library suite passed 582 tests with 8 ignored and
 all-targets warnings-denied Clippy passed. This is batched with the other
 K10 corrections; the previous `ec63b4de4` Rust contracts and Canvas jobs
 are still in progress at this checkpoint.
+
+K10 Canvas synchronization follow-up: the worker's direct evidence-fact
+commit and candidate-observation insert accepted provider-derived JSON
+outside the management repository guards. The local PostgreSQL adapter now
+rejects private material in facts, observation assertions and source payloads
+before acquiring a write lease or opening a transaction. The fresh PostgreSQL
+16 Canvas management contract passed with a private JWK observation rejected
+before any roster state changed; the disposable container was removed.
+Issuance all-targets warnings-denied Clippy passed. On pushed head
+`ec63b4de4`, Rust contracts subsequently passed; Canvas remains the only
+running job in CI run `38167183578` at this checkpoint. The local correction
+stays in the grouped batch.

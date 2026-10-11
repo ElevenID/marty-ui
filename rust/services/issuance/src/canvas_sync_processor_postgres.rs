@@ -246,6 +246,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         resources: &CanvasSyncResources,
         fact: &Value,
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError> {
+        if marty_key_material_policy::contains_private_key(fact) {
+            return Err(unavailable());
+        }
         let lease = self.lease.clone().ok_or_else(lease_lost)?;
         let application = resources.application.as_ref().ok_or_else(unavailable)?;
         let template = resources
@@ -470,6 +473,11 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         requirement_id: &str,
         observation: &CanvasAuthoritativeObservation,
     ) -> Result<bool, CanvasSyncProcessingError> {
+        if marty_key_material_policy::contains_private_key_map(&observation.assertion)
+            || marty_key_material_policy::contains_private_key_map(&observation.source_payload)
+        {
+            return Err(unavailable());
+        }
         let canonical = crate::canvas_award_candidate::python_canonical_json(&json!({
             "assertion": observation.assertion,
             "payload": observation.source_payload,
