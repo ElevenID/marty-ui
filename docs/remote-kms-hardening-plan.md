@@ -14436,3 +14436,16 @@ rejection, header propagation, and organization override; warnings-denied
 Gateway Clippy passes. This is transport plumbing only: Flow and Issuance must
 mint appropriately scoped grants, and Signing Keys must authenticate, consume,
 and recheck them at every relevant signing kernel entry before K6 is complete.
+
+Signing-kernel call inventory for K6 implementation: issuer signing enters
+through public service sign, internal issuer-DID sign, managed certificate/DSC
+ceremonies that call `sign_with_issuer_did`, and public service CSR generation
+that calls `kms::sign` directly. Separately, `managed_holder_key` and
+`vc_api_holder_proof` also call `kms::sign` for holder/device proofs. A blanket
+grant requirement on the generic KMS adapter would break those supported
+holder flows. Introduce an issuer-signing kernel entry that requires a consumed
+grant and exact binding, route every issuer/certificate/CSR call through it,
+and keep the independently authorized holder/device signing path distinct.
+The grant operation identifier must originate with the authorized operation;
+the HMAC-authenticated envelope alone cannot turn an arbitrary HTTP request
+identifier into tenant authorization.
