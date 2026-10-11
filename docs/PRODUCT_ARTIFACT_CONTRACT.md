@@ -1,22 +1,50 @@
 # Product artifact contract (PKG01 / CICD02 foundation)
 
 `deploy-config/schemas/product-artifact-manifest.schema.json` defines the
-descriptor for **one immutable artifact of one product on one OS/architecture**.
+descriptor for **one immutable artifact of one product**. A qualified descriptor
+also names its verified OS/architecture.
 `python scripts/check_product_artifact_manifest.py path/to/manifest.json` checks
 its shape and cross-field invariants. It does not build, publish, install,
 signature-verify, or qualify the artifact. No current product is declared
 supported by adding this contract.
 
-The descriptor binds product identity and capability list to an artifact digest,
-source commit, license notice digest, SBOM digest, provenance and signature
-digests, explicit
+Every descriptor requires the product, support state, exact artifact digest,
+source commit and qualification state. An **unqualified** `experimental` or
+`preview` candidate may omit platform, capabilities, license, SBOM, provenance,
+signature, dependency, compatibility and installation claims it cannot prove.
+Its artifact may use `urn:sha256:<digest>` to identify local bytes without
+pretending they have a public download URL. Present fields remain strictly
+validated. A **qualified** descriptor requires all those fields, a real HTTPS
+file or digest-pinned OCI artifact URI, and at least one qualification evidence
+reference. `supported` and `deprecated` also require qualified state. Schema
+validity alone does not verify a reference's bytes or grant supported status.
+
+For a qualified descriptor, the artifact digest is bound to source commit,
+license notice digest, SBOM digest, provenance and signature digests, explicit
 runtime/build/optional-extension dependencies, schema/protocol compatibility,
 installation channel, and qualification evidence references. An OCI artifact
 must use a digest reference matching the declared digest; a tag is rejected.
-The no-integration graph has an empty `extensions` list and no
-`optional-extension` dependency. Every selected extension must have exactly one
+When a complete no-integration graph is declared, it has an empty `extensions`
+list and no `optional-extension` dependency. Every selected extension must have exactly one
 matching optional-extension dependency. This is descriptor closure, not a
 transitive SBOM or runtime dependency proof.
+
+`scripts/produce_selfhost_product_descriptor.py` consumes a prepared self-host
+ZIP, image lock, stack release transaction and preparation receipt. It
+recomputes the receipt by extracting and validating the ZIP's owned inventory,
+embedded lock and Compose image closure; compares every recorded byte hash;
+validates the transaction's exact source and stack gate state; matches the
+image-lock release to the transaction version; and requires the lock to contain
+the transaction's exact services and migrations image references. It emits a
+deterministic `experimental`/`unqualified` organizational-platform candidate
+with a content-addressed ZIP URN and preparation hashes. It never emits a
+public locator, platform or install claim, or a purported ZIP signature, SBOM,
+provenance, or license notice. The qualified **stack transaction** is not
+qualification of this self-host ZIP. The producer does not authenticate the
+GitHub Actions run, attest image architecture, verify every independent image's
+provenance, or exercise an extracted clean install; those remain release-gate
+responsibilities. Its output path must be new and is not automatically uploaded
+or promoted.
 
 ## Initial sequence and evidence still needed
 

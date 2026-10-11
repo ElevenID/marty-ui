@@ -70,9 +70,14 @@ def validate_manifest(manifest: object, schema: dict) -> None:
         raise ValueError(f"{path}: {error.message}")
 
     assert isinstance(manifest, dict)  # enforced by schema
+    unqualified = manifest["qualification"]["state"] == "unqualified"
     for field in ("artifact", "sbom", "provenance", "signature"):
+        if field not in manifest:
+            continue
         item = manifest[field]
         uri, digest = item["uri"], item["digest"]
+        if field == "artifact" and unqualified and uri == "urn:" + digest:
+            continue
         try:
             canonical_oci = _is_canonical_oci(uri, digest)
         except ValueError as error:
@@ -80,26 +85,28 @@ def validate_manifest(manifest: object, schema: dict) -> None:
         if not canonical_oci and not _is_https_file(uri):
             raise ValueError(f"{field}: URI must be an HTTPS file or digest-pinned OCI reference")
 
-    notice = manifest["license"]["notice"]
-    if not _is_https_file(notice["uri"]):
-        raise ValueError("license.notice: URI must be an HTTPS file")
+    if "license" in manifest:
+        notice = manifest["license"]["notice"]
+        if not _is_https_file(notice["uri"]):
+            raise ValueError("license.notice: URI must be an HTTPS file")
 
-    urls = [("source.repository", manifest["source"]["repository"]),
-            ("installation.channel", manifest["installation"]["channel"]),
-            ("installation.guide", manifest["installation"]["guide"])]
+    urls = [("source.repository", manifest["source"]["repository"])]
+    if "installation" in manifest:
+        urls.extend((("installation.channel", manifest["installation"]["channel"]),
+                     ("installation.guide", manifest["installation"]["guide"])))
     urls.extend((f"dependencies.{item['name']}.source", item["source"])
-                for item in manifest["dependencies"])
+                for item in manifest.get("dependencies", []))
     urls.extend(("qualification.evidence", uri)
                 for uri in manifest["qualification"]["evidence"])
     for field, uri in urls:
         if not _is_https_file(uri):
             raise ValueError(f"{field}: URL must be HTTPS with a valid host/path and no credentials or fragment")
 
-    names = [dependency["name"] for dependency in manifest["dependencies"]]
+    names = [dependency["name"] for dependency in manifest.get("dependencies", [])]
     if len(names) != len(set(names)):
         raise ValueError("dependencies: names must be unique across scopes")
-    optional = {item["name"] for item in manifest["dependencies"] if item["scope"] == "optional-extension"}
-    if optional != set(manifest["extensions"]):
+    optional = {item["name"] for item in manifest.get("dependencies", []) if item["scope"] == "optional-extension"}
+    if optional != set(manifest.get("extensions", [])):
         raise ValueError("extensions: must exactly match optional-extension dependency names")
 
     if manifest["qualification"]["state"] == "qualified" and not manifest["qualification"]["evidence"]:

@@ -52,7 +52,6 @@ def test_preview_candidate_is_structurally_valid(manifest):
         lambda m: m["artifact"].update(uri="ghcr.io/elevenid/edge:latest"),
         lambda m: m["artifact"].update(uri="ghcr.io/elevenid/edge@sha256:" + "c" * 64),
         lambda m: m["sbom"].update(uri="http://example.test/sbom.json"),
-        lambda m: m.pop("signature"),
         lambda m: m["source"].update(commit="main"),
         lambda m: m["license"].update(expression=""),
         lambda m: m["dependencies"].append({"name": "canvas", "scope": "optional-extension", "source": "https://example.test/canvas"}),
@@ -75,6 +74,31 @@ def test_qualified_descriptor_requires_evidence(manifest):
         MODULE.validate_manifest(manifest, SCHEMA)
     manifest["qualification"]["evidence"] = ["https://example.test/qualification/run-1"]
     MODULE.validate_manifest(manifest, SCHEMA)
+
+
+def test_unqualified_content_addressed_candidate_can_omit_unproven_claims(manifest):
+    candidate = {key: manifest[key] for key in
+                 ("schema", "product", "support_state", "artifact", "source", "qualification")}
+    candidate["support_state"] = "experimental"
+    candidate["artifact"] = {"uri": "urn:" + DIGEST, "digest": DIGEST}
+    MODULE.validate_manifest(candidate, SCHEMA)
+    candidate["artifact"]["uri"] = "urn:sha256:" + "c" * 64
+    with pytest.raises(ValueError, match="artifact"):
+        MODULE.validate_manifest(candidate, SCHEMA)
+
+
+def test_qualified_candidate_requires_all_supported_evidence(manifest):
+    manifest["support_state"] = "supported"
+    manifest["qualification"] = {"state": "qualified", "evidence": ["https://example.test/run"]}
+    for field in ("capabilities", "platform", "license", "sbom", "provenance",
+                  "signature", "compatibility", "dependencies", "extensions", "installation"):
+        candidate = copy.deepcopy(manifest)
+        candidate.pop(field)
+        with pytest.raises(ValueError):
+            MODULE.validate_manifest(candidate, SCHEMA)
+    manifest["artifact"]["uri"] = "urn:" + DIGEST
+    with pytest.raises(ValueError, match="artifact"):
+        MODULE.validate_manifest(manifest, SCHEMA)
 
 
 def test_declared_extension_matches_optional_dependency(manifest):
