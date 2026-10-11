@@ -31,7 +31,8 @@ pub struct ConsumedGrant {
 
 impl ConsumedGrant {
     /// Recheck the exact operation at the point of KMS use, including expiry.
-    pub fn authorizes(&self, binding: &GrantBinding<'_>) -> bool {
+    /// Consuming the proof prevents a caller from using one grant for two signs.
+    pub fn authorizes(self, binding: &GrantBinding<'_>) -> bool {
         bound_input(&self.claims, binding, chrono::Utc::now().timestamp()).is_ok()
     }
 }

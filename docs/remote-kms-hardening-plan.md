@@ -14449,3 +14449,10 @@ and keep the independently authorized holder/device signing path distinct.
 The grant operation identifier must originate with the authorized operation;
 the HMAC-authenticated envelope alone cannot turn an arbitrary HTTP request
 identifier into tenant authorization.
+
+Grant-use self-review tightened `ConsumedGrant::authorizes` to consume its
+proof. Once the Signing Keys kernel requires this value, one replay-store
+consumption can permit at most one invocation of the issuer KMS sign entry;
+the same Rust proof cannot be borrowed repeatedly to sign twice. The Redis
+one-use key still prevents separate requests from consuming the envelope
+again. Production kernel wiring and its end-to-end acceptance remain open.

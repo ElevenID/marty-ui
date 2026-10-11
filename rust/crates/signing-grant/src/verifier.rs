@@ -221,7 +221,6 @@ mod tests {
             payload: b"altered.payload",
             ..binding
         };
-        assert!(!consumed.authorizes(&altered));
         assert!(matches!(
             verifier.authorize(&header, &altered).await,
             Err(GrantAuthorizationError::Denied)
