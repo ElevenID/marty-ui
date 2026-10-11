@@ -15039,3 +15039,24 @@ fixture, while Flow's twelve and issuance-native's nine also match. This
 removes one stale expected source; the Linux hosted rerun still needs to
 prove the full extracted-bundle test. Do not push while the rest of run
 38129327296 remains active.
+
+Credential producer boundary preparation: `IssuerContext` now exposes the
+resolved remote signing-key reference only when the flattened resolver value
+and the nested active-profile value agree. Native context parsing rejects a
+conflict instead of allowing the future grant producer to bind one view while
+Signing Keys selects the other. The focused resolver regression passes and
+warnings-denied Issuance library Clippy is clean. This alone does not mint
+credential grants; the signer still needs the operation ID, exact payload
+and fixed-origin OpenBao minter wired before the route can work under the
+downstream grant gate.
+
+Passport producer test review: the main managed-SOD mock resolver in
+`passport_signer.rs` currently returns profile ID, certificate chain,
+algorithm and verification method but omits `signing_key_reference` in both
+its flattened response and nested profile. The real Signing Keys resolver
+publishes the profile-selected reference in the flattened response. When
+wiring the passport grant, update this mock to model the selected remote key,
+exercise an inconsistent top-level versus nested reference as a denial, and
+bind the persisted passport job ID and exact CMS signing input before the
+Gateway call. Do not treat the current managed-SOD test as proof of grant
+authorization merely because its returned signature verifies.
