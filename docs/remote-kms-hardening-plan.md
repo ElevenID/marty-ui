@@ -15745,3 +15745,14 @@ The runnable probe is `scripts/probe_kms_profile_runtime_schema.py`; receipt
 `artifacts/kms-profile-runtime-schema-audit-20261011.json`. Ruff and diff
 checks passed. Both containers were removed. This is local source-built
 runtime evidence, not release-image qualification or proof of later API writes.
+
+Main #1269 added exact DIDComm test-source release feedback after UI #1192's
+previous push. Its CI classifier and gate changes conflicted with this branch's
+OpenBao lane. The local reconciliation retains the KMS OpenBao gate and the
+new DIDComm-only release selector, forbids the DIDComm-only path from selecting
+OpenBao, and updates the DIDComm consumer test count from 31 to the branch's
+actual 38 (63 across its three exact sources). The first merged full workflow
+file run passed 146 tests and identified only that count mismatch; after the
+correction, all six affected DIDComm/CI-gate cases passed. Ruff, YAML parsing
+and diff checks passed. Main remains merged locally pending the previous
+head's Canvas result and one grouped push.

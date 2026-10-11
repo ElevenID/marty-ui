@@ -446,6 +446,7 @@ def _classify_changed_paths(
     include_planner_plan: bool = False,
     include_rollback_plan: bool = False,
     include_k8s_plan: bool = False,
+    include_didcomm_plan: bool = False,
     include_shadow: bool = False,
     proof_failure: bool = False,
     fetch_failure: bool = False,
@@ -459,7 +460,7 @@ def _classify_changed_paths(
         for step in document["jobs"]["changes"]["steps"]
         if step.get("id") == "classify"
     ]
-    assert event in {"pull_request", "merge_group", "push"}
+    assert event in {"pull_request", "merge_group", "push", "workflow_dispatch", "schedule"}
     script = classifier["run"].replace("${{ github.event_name }}", event)
     assert "${{" not in script
     # Run the actual Bash classifier, not a Python copy of its path patterns.
@@ -576,6 +577,7 @@ done < "$SYNTHETIC_PATHS_FILE"
                 and (include_planner_plan or key != "planner_only")
                 and (include_rollback_plan or key != "rollback_test_only")
                 and (include_k8s_plan or key != "k8s_policy_test_only")
+                and (include_didcomm_plan or key != "didcomm_release_test_only")
             )
         }
         for output in (
@@ -1241,6 +1243,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "openbao",
         "planner_only",
         "rollback_test_only",
+        "didcomm_release_test_only",
         "k8s_policy_test_only",
         "release",
         "verification",
@@ -1352,6 +1355,9 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert gate["env"]["ROLLBACK_TEST_ONLY"] == (
         "${{ needs.changes.outputs.rollback_test_only }}"
     )
+    assert gate["env"]["DIDCOMM_RELEASE_TEST_ONLY"] == (
+        "${{ needs.changes.outputs.didcomm_release_test_only }}"
+    )
     bash = "bash"
     if os.name == "nt":
         git = shutil.which("git")
@@ -1395,6 +1401,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         )
         environment.update(selection_overrides or {})
         environment.setdefault("ROLLBACK_TEST_ONLY", "false")
+        environment.setdefault("DIDCOMM_RELEASE_TEST_ONLY", "false")
         environment["RUST_MATRIX"] = (
             '["worker"]'
             if worker_only
@@ -1525,6 +1532,25 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise((), {"changes": "failure"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
     assert exercise((), result_count=16).returncode != 0
+    didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
+    assert exercise(("release",), selection_overrides=didcomm_mode).returncode == 0
+    assert (
+        exercise(
+            ("release",),
+            overrides={"test-release-contracts": "skipped"},
+            selection_overrides=didcomm_mode,
+        ).returncode
+        != 0
+    )
+    assert exercise(("ui", "release"), selection_overrides=didcomm_mode).returncode != 0
+    assert exercise(("release",), event="merge_group", selection_overrides=didcomm_mode).returncode != 0
+    assert exercise(("release",), event="workflow_dispatch", selection_overrides=didcomm_mode).returncode != 0
+    for invalid in ("", "TRUE", "invalid"):
+        assert exercise(("release",), selection_overrides={"DIDCOMM_RELEASE_TEST_ONLY": invalid}).returncode != 0
+    assert (
+        exercise(("release", "openbao"), selection_overrides=didcomm_mode).returncode
+        != 0
+    )
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
     assert (
         exercise(
@@ -2343,8 +2369,8 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
     for path in candidates:
         assert (ROOT / path).is_file(), f"stale release-only selector: {path}"
         # The policy owner has one classifier reference, one collection
-        # command, and three mutually exclusive test-source-only PR invocations.
-        expected_refs = 5 if path == "tests/test_ci_workflow_performance.py" else 1
+        # command, and four mutually exclusive test-source-only PR invocations.
+        expected_refs = 6 if path == "tests/test_ci_workflow_performance.py" else 1
         assert ci_source.count(path) == expected_refs, (
             f"other direct CI consumer: {path}"
         )
@@ -2723,7 +2749,8 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
     full_only = (
         "needs.changes.outputs.planner_only != 'true' && "
         "needs.changes.outputs.rollback_test_only != 'true' && "
-        "needs.changes.outputs.k8s_policy_test_only != 'true'"
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
     for name in (
         "Replay Canvas mirror oracle in exact Credentials release image",
@@ -2737,6 +2764,174 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         assert not steps[name].get("continue-on-error", False)
     assert steps["Run repository release checks"]["run"] == (
         RELEASE_TEST_COMMAND
+    )
+
+
+def test_didcomm_policy_test_sources_have_exact_release_owner(
+    tmp_path: Path,
+) -> None:
+    cases = {
+        "tests/test_didcomm_native_consumer_ownership.py": 38,
+        "tests/test_didcomm_native_credentials_release.py": 21,
+        "tests/test_issuance_retention_credentials_release.py": 4,
+    }
+    _, workflow = _workflow(CI_PATH)
+    ci_source = CI_PATH.read_text(encoding="utf-8")
+
+    def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
+        return _classify_changed_paths(paths, tmp_path, combined=True, **kwargs)[0]
+
+    selected = {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "false",
+        "openbao": "false",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    assert classify([])["release"] == "false"
+    for source, count in cases.items():
+        assert ci_source.count(source) == 3  # Proof, classifier arm and owned test command.
+        assert (ROOT / source).is_file() and not (ROOT / source).is_symlink()
+        for other_workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+            if other_workflow != CI_PATH:
+                assert source not in other_workflow.read_text(encoding="utf-8")
+        assert classify([source]) == selected
+        for paths in (
+            [source, source],
+            [source, "docs/architecture-feedback-improvement-plan.md"],
+            [source, "contracts/didcomm-native-consumer-ownership.json"],
+            [source, "docker-compose.base.yml"],
+            [source, "tests/test_didcomm_native_consumer_ownership_helper.py"],
+            ["tests/renamed_didcomm_owner.py", source],
+            *([source, other] for other in cases if other != source),
+        ):
+            assert classify(paths)["all"] == "true", paths
+        assert classify([source], event="merge_group")["all"] == "true"
+        assert classify([source], event="push")["all"] == "true"
+        assert classify([source], missing_base=True)["all"] == "true"
+
+        absent = tmp_path / f"absent-{Path(source).stem}"
+        absent.mkdir()
+        assert classify([source], working_directory=absent)["all"] == "true"
+        linked = tmp_path / f"linked-{Path(source).stem}"
+        (linked / "tests").mkdir(parents=True)
+        try:
+            (linked / source).symlink_to(ROOT / source)
+        except (OSError, NotImplementedError):
+            pass  # Windows without symlink privilege; protected Linux checks it.
+        else:
+            assert classify([source], working_directory=linked)["all"] == "true"
+
+        collected = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q", source],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert f"{count} tests collected" in collected.stdout
+
+    release = workflow["jobs"]["test-release-contracts"]
+    assert "needs.changes.outputs.release == 'true'" in release["if"]
+    assert any(
+        step.get("run") == RELEASE_TEST_COMMAND for step in release["steps"]
+    )
+    assert "tests" in RELEASE_TEST_COMMAND.split()
+    assert sum(cases.values()) == 63
+
+
+def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
+    tmp_path: Path,
+) -> None:
+    _, workflow = _workflow(CI_PATH)
+    assert workflow["jobs"]["changes"]["outputs"]["didcomm_release_test_only"] == (
+        "${{ steps.classify.outputs.didcomm_release_test_only }}"
+    )
+    sources = (
+        "tests/test_didcomm_native_consumer_ownership.py",
+        "tests/test_didcomm_native_credentials_release.py",
+        "tests/test_issuance_retention_credentials_release.py",
+    )
+
+    def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
+        return _classify_changed_paths(
+            paths, tmp_path, combined=True, include_didcomm_plan=True, **kwargs
+        )[0]
+
+    for source in sources:
+        selected = classify([source])
+        assert selected["didcomm_release_test_only"] == "true"
+        assert selected["release"] == "true"
+        assert all(selected[name] == "false" for name in (
+            "all", "ui", "python", "rust", "openbao", "verification", "security"
+        ))
+        for other in (
+            source,
+            *(path for path in sources if path != source),
+            "docs/architecture-feedback-improvement-plan.md",
+            "contracts/didcomm-native-consumer-ownership.json",
+            "docker-compose.base.yml",
+            "tests/unknown_didcomm_test.py",
+            "renamed/old_didcomm_test.py",
+        ):
+            mixed = classify([source, other])
+            assert mixed["didcomm_release_test_only"] == "false", other
+            assert mixed["all"] == "true", other
+        for event in ("merge_group", "push"):
+            protected = classify([source], event=event)
+            assert protected["didcomm_release_test_only"] == "false"
+            assert protected["all"] == "true"
+        for event in ("workflow_dispatch", "schedule"):
+            official = classify([source], event=event, missing_base=True)
+            assert official["didcomm_release_test_only"] == "false"
+            assert official["all"] == "true"
+        no_base = classify([source], missing_base=True)
+        assert no_base["didcomm_release_test_only"] == "false"
+        assert no_base["all"] == "true"
+    assert classify([])["didcomm_release_test_only"] == "false"
+
+    release = workflow["jobs"]["test-release-contracts"]
+    assert release["name"] == "Release Contract Tests"
+    steps = {step.get("name"): step for step in release["steps"]}
+    focused_flag = "needs.changes.outputs.didcomm_release_test_only"
+    focused = steps["Run exact DIDComm test-source PR checks"]
+    assert focused["if"] == f"{focused_flag} == 'true'"
+    assert focused["run"].split() == [
+        "python", "-m", "pytest", *sources,
+        "tests/test_ci_workflow_performance.py::test_didcomm_policy_test_sources_have_exact_release_owner",
+        "-v", "--tb=short",
+    ]
+    # Missing or malformed output must run the existing full path, not the
+    # focused one. The other bounded PR modes retain their own exclusions.
+    full_only = (
+        "needs.changes.outputs.planner_only != 'true' && "
+        "needs.changes.outputs.rollback_test_only != 'true' && "
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        f"{focused_flag} != 'true'"
+    )
+    for name in (
+        "Replay Canvas mirror oracle in exact Credentials release image",
+        "Run repository release checks",
+        "Configure the pinned containerd image store",
+        "Configure the pinned OCI exporter",
+        "Require the exact supported OCI backend",
+        "Prove the same OCI archive through the future consumer path",
+    ):
+        assert steps[name]["if"] == full_only
+    assert steps["Run repository release checks"]["run"] == RELEASE_TEST_COMMAND
+    for name in (
+        "Install released test dependencies",
+        "Verify released mdoc binding evidence contract",
+        "Enforce OSS commerce boundary",
+        "Require workflow policy test collection",
+    ):
+        assert "if" not in steps[name]
+    assert "if" not in release["steps"][0]  # Main checkout remains mandatory.
+    assert workflow["jobs"]["ci-gate"]["env"]["DIDCOMM_RELEASE_TEST_ONLY"] == (
+        f"${{{{ {focused_flag} }}}}"
     )
 
 
@@ -2811,7 +3006,8 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
     complete_only = (
         "needs.changes.outputs.planner_only != 'true' && "
         "needs.changes.outputs.rollback_test_only != 'true' && "
-        "needs.changes.outputs.k8s_policy_test_only != 'true'"
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
     assert steps["Run repository release checks"]["if"] == complete_only
     assert steps["Run repository release checks"]["run"] == (
@@ -2924,7 +3120,8 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
     full_only = (
         "needs.changes.outputs.planner_only != 'true' && "
         "needs.changes.outputs.rollback_test_only != 'true' && "
-        "needs.changes.outputs.k8s_policy_test_only != 'true'"
+        "needs.changes.outputs.k8s_policy_test_only != 'true' && "
+        "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
     for name in (
         "Replay Canvas mirror oracle in exact Credentials release image",
