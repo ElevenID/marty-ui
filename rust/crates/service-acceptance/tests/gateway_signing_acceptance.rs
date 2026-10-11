@@ -15,6 +15,7 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
+use base64::Engine as _;
 use marty_gateway::{
     authorization::{OrganizationMembership, OrganizationMembershipProvider},
     contract::GatewayContract,
@@ -422,13 +423,22 @@ async fn gateway_transit_sign(
     if !gateway_transit_authorized(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if !fixture.keys.lock().unwrap().contains_key(&reference) {
+    let Some(key_type) = fixture.keys.lock().unwrap().get(&reference).cloned() else {
         return StatusCode::NOT_FOUND.into_response();
-    }
+    };
     fixture.signs.lock().unwrap().push((reference, body));
-    // Minimal valid ECDSA DER encoding; the remote-signing boundary rejects
-    // malformed provider signatures before Gateway can report success.
-    Json(json!({"data":{"signature":"vault:v1:MAYCAQECAQI="}})).into_response()
+    // Return structurally valid remote signatures for each managed key type.
+    // This stub proves routing and custody boundaries, not cryptographic
+    // validity against a real provider key.
+    let signature = if key_type == "ed25519" {
+        format!(
+            "vault:v1:{}",
+            base64::engine::general_purpose::STANDARD.encode([7_u8; 64])
+        )
+    } else {
+        "vault:v1:MAYCAQECAQI=".to_owned()
+    };
+    Json(json!({"data":{"signature":signature}})).into_response()
 }
 
 #[tokio::test]

@@ -14366,3 +14366,13 @@ producer-to-Signing-Keys paths. It rejects malformed, oversized or multiline
 values before JSON parsing; its synthetic mint/header/verify test and
 warnings-denied Clippy pass. Gateway still must replace any caller-supplied
 grant header, and Signing Keys must bind and consume it before KMS signing.
+
+The `9c91af91f` hosted Rust Contracts job also failed one Gateway managed-key
+case: its shared Transit stub returned an ECDSA DER signature for the Ed25519
+issuer key. The local fixture now returns a 64-byte Ed25519-shaped response
+for that key and retains DER for ECDSA. The exact ignored Gateway-to-Signing-
+Keys case passed locally against a fresh marked disposable Redis DB 13 with
+the test-only Transit token; that container was stopped. This is a fixture
+repair, not live provider cryptographic acceptance. The prior exact-head run
+is still active on other jobs; keep the local corrections batched until it
+is terminal.
