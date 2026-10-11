@@ -11,7 +11,7 @@
         "headers": { "x-amz-target": "TrentService.Sign" },
         "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test", "Message": "I59Z7VXnN8dxR89VrQwbAwttfudIp0JpUvm4UtWpNeU=", "MessageType": "DIGEST", "SigningAlgorithm": "ECDSA_SHA_256" }
       },
-      "provider_response": { "Signature": "MAYCAQECAQI=" },
+      "provider_response": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test", "SigningAlgorithm": "ECDSA_SHA_256", "Signature": "MAYCAQECAQI=" },
       "expected_response": { "signature_b64": "MAYCAQECAQI", "signature_encoding": "der", "transcoded_signature_b64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAg" }
     },
     {
@@ -209,7 +209,7 @@
       "name": "aws_kms_spki_public_key",
       "service_config": { "service_type": "aws-kms", "endpoint": "$STUB", "region": "us-east-1", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "auth_mode": "access_key", "auth_reference": "{\"access_key_id\":\"test-access-key\",\"secret_access_key\":\"test-secret-key\"}" },
       "expected_request": { "method": "POST", "path_query": "/", "headers": { "x-amz-target": "TrentService.GetPublicKey" }, "json": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test" } },
-      "provider_response": { "PublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==", "SigningAlgorithms": ["ECDSA_SHA_256"], "KeySpec": "ECC_NIST_P256", "KeyUsage": "SIGN_VERIFY" },
+      "provider_response": { "KeyId": "arn:aws:kms:us-east-1:111122223333:key/test", "PublicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==", "SigningAlgorithms": ["ECDSA_SHA_256"], "KeySpec": "ECC_NIST_P256", "KeyUsage": "SIGN_VERIFY" },
       "expected_response": { "provider": "aws", "key_reference": "arn:aws:kms:us-east-1:111122223333:key/test", "public_key_der_b64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==", "signing_algorithms": ["ECDSA_SHA_256"], "key_spec": "ECC_NIST_P256", "key_usage": "SIGN_VERIFY", "public_jwk": { "kty": "EC", "crv": "P-256", "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY", "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU", "kid": "arn:aws:kms:us-east-1:111122223333:key/test" } }
     },
     {

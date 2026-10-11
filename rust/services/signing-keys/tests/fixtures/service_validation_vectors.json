@@ -4,6 +4,7 @@
     "input": {
       "service_type": "aws-kms",
       "auth_mode": "iam_role",
+      "region": "us-west-2",
       "key_reference": "arn:aws:kms:us-west-2:123456789012:key/abc123",
       "algorithms": ["ES256"],
       "live_probe": false
@@ -32,8 +33,8 @@
       {"name": "Authentication reference", "status": "pass", "detail": "Authentication mode and reference look ready.", "source": "baseline"},
       {"name": "Key reference", "status": "pass", "detail": "Key reference was provided.", "source": "baseline"},
       {"name": "Algorithm coverage", "status": "pass", "detail": "Selected algorithms: ES256", "source": "baseline"},
-      {"name": "Provider key format", "status": "fail", "detail": "AWS key reference should be a key ARN (arn:aws:kms:region:account:key/<id>).", "source": "provider"},
-      {"name": "Provider auth policy", "status": "pass", "detail": "AWS credential configuration matches the selected auth mode.", "source": "provider"},
+      {"name": "Provider key format", "status": "fail", "detail": "AWS key reference must be a key ARN in the configured region (arn:partition:kms:region:account:key/<id>).", "source": "provider"},
+      {"name": "Provider auth policy", "status": "fail", "detail": "AWS KMS key reference must be a key ARN in the configured region.", "source": "provider"},
       {"name": "Provider algorithm fit", "status": "pass", "detail": "Selected algorithms are compatible with expected aws signer capabilities.", "source": "provider"}
     ]
   },

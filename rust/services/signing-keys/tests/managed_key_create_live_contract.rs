@@ -190,15 +190,25 @@ async fn sign_key(
             Json(json!({"errors": ["test token required"]})),
         );
     }
-    if !keys.lock().unwrap().contains_key(&reference) {
+    let key_type = keys.lock().unwrap().get(&reference).cloned();
+    let Some(key_type) = key_type else {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"errors": ["key not found"]})),
         );
-    }
+    };
+    // The disposable provider returns valid signature shapes for each
+    // algorithm without keeping an issuer private key in the test process.
+    let signature = if key_type.starts_with("ecdsa-") {
+        "vault:v1:MAYCAQECAQI="
+    } else if key_type.starts_with("ed25519") {
+        "vault:v1:QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQg=="
+    } else {
+        "vault:v1:c2lnbmF0dXJl"
+    };
     (
         StatusCode::OK,
-        Json(json!({"data": {"signature": "vault:v1:AQ=="}})),
+        Json(json!({"data": {"signature": signature}})),
     )
 }
 

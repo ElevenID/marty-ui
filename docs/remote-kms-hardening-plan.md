@@ -14136,3 +14136,30 @@ parsed origin and exact path, still rejecting a different vault, key version,
 query or fragment. Its focused unit test, all five provider golden cases and
 changed-file Rustfmt pass. Hold this follow-up for a grouped push after the
 current exact-head run is terminal.
+
+K6 AWS BYOK binding, local follow-up: the AWS adapter previously forwarded
+any `KeyId` string, including a movable alias, despite registration format
+checks expecting a key ARN. A shared Rust parser now requires a key ARN in the
+configured region at registration, signing, public-key read and connectivity
+probe. The adapter checks the returned key ARN on Sign and GetPublicKey and
+the returned signing algorithm on Sign, as described in the
+[AWS Sign](https://docs.aws.amazon.com/kms/latest/APIReference/API_Sign.html)
+and [GetPublicKey](https://docs.aws.amazon.com/kms/latest/APIReference/API_GetPublicKey.html)
+contracts. The golden valid-region vector now declares its region; an invalid
+reference fails both provider-format and registration-policy checks. Focused
+alias/wrong-region/response-ID tests, all five provider vectors, validation
+golden vectors, the Signing Keys library suite (183 passed, nine ignored),
+Clippy with warnings denied, changed-file Rustfmt and diff hygiene pass.
+Real AWS key/certificate acceptance remains outstanding.
+
+UI #1192 head `ba2724cba2e37320fafc62e1333647baf667b15d` [CI
+38113449573](https://github.com/ElevenID/marty-ui/actions/runs/38113449573)
+passed the exact Gateway managed-signing case but failed two other opt-in
+managed-key creation cases. Their shared disposable Transit stub still returned
+one-byte `vault:v1:AQ==` for ES256 keys, which the fail-closed signature
+boundary rightly rejects. The local stub now chooses syntactically valid DER
+for ECDSA and fixed-width output for Ed25519, without test-process issuer
+private keys. All five opt-in managed-key cases passed locally against a fresh
+loopback disposable Redis DB 13 and its sentinel; the container was stopped.
+This hosted failure remains immutable evidence; hold the local correction for
+the next grouped push after the current run is terminal.

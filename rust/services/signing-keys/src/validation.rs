@@ -3,7 +3,6 @@
 use std::{env, fs};
 
 use chrono::Utc;
-use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -230,11 +229,9 @@ fn append_provider_checks(payload: &Value, checks: &mut Vec<ValidationCheck>) {
     if !key_reference.is_empty() {
         let (valid, pass, fail) = match provider {
             "aws" => (
-                Regex::new(r"^arn:aws:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+$")
-                    .expect("static provider regex")
-                    .is_match(key_reference),
+                kms::aws_key_arn(payload).is_ok(),
                 "AWS key reference looks like a valid KMS key ARN.",
-                "AWS key reference should be a key ARN (arn:aws:kms:region:account:key/<id>).",
+                "AWS key reference must be a key ARN in the configured region (arn:partition:kms:region:account:key/<id>).",
             ),
             "azure" => (
                 kms::azure_key_path(payload).is_ok(),

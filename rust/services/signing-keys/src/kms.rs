@@ -159,7 +159,11 @@ pub(crate) fn validate_service_auth_config(config: &Value) -> Result<(), KmsErro
         "aws-kms" => {
             validate_cloud_endpoint(config, "aws")?;
             aws_region(config)?;
-            validate_aws_auth_config(config)
+            validate_aws_auth_config(config)?;
+            if string(config, "key_reference").is_some_and(|value| !value.is_empty()) {
+                aws_key_arn(config)?;
+            }
+            Ok(())
         }
         "azure-key-vault" => {
             validate_cloud_endpoint(config, "azure")?;
@@ -2011,12 +2015,36 @@ fn valid_aws_role_arn(value: &str) -> bool {
         && !value.chars().any(char::is_whitespace)
 }
 
-async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
-    let key_id = required(
+pub(crate) fn aws_key_arn(config: &Value) -> Result<&str, KmsError> {
+    let reference = required(
         config,
         "key_reference",
-        "aws-kms adapter requires 'key_reference' in service_config",
+        "AWS KMS requires a key ARN, not a movable alias or key ID.",
     )?;
+    let parts: Vec<_> = reference.split(':').collect();
+    let valid = parts.len() == 6
+        && parts[0] == "arn"
+        && matches!(parts[1], "aws" | "aws-us-gov" | "aws-cn")
+        && parts[2] == "kms"
+        && parts[3] == aws_region(config)?
+        && parts[4].len() == 12
+        && parts[4].bytes().all(|byte| byte.is_ascii_digit())
+        && parts[5].strip_prefix("key/").is_some_and(|key| {
+            !key.is_empty()
+                && key
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    if !valid {
+        return Err(KmsError::InvalidConfig(
+            "AWS KMS key reference must be a key ARN in the configured region.".into(),
+        ));
+    }
+    Ok(reference)
+}
+
+async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
+    let key_id = aws_key_arn(config)?;
     let jose_algorithm = string(config, "algorithm").unwrap_or("ES256");
     let algorithm = aws_signing_algorithm(jose_algorithm)?;
     if string(config, "aws_signing_algorithm").is_some_and(|configured| configured != algorithm) {
@@ -2037,6 +2065,12 @@ async fn sign_aws(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsError> {
         .send()
         .await
         .map_err(|_| KmsError::Provider("AWS KMS sign failed.".into()))?;
+    require_aws_response_key(output.key_id(), key_id)?;
+    if output.signing_algorithm().map(|value| value.as_str()) != Some(algorithm) {
+        return Err(KmsError::InvalidResponse(
+            "AWS KMS sign response algorithm did not match the requested algorithm.".into(),
+        ));
+    }
     output
         .signature()
         .map(|signature| signature.as_ref().to_vec())
@@ -2064,12 +2098,18 @@ pub(crate) fn aws_signing_algorithm(algorithm: &str) -> Result<&'static str, Kms
     }
 }
 
+fn require_aws_response_key(actual: Option<&str>, expected: &str) -> Result<(), KmsError> {
+    if actual == Some(expected) {
+        Ok(())
+    } else {
+        Err(KmsError::InvalidResponse(
+            "AWS KMS response key ARN did not match the pinned key.".into(),
+        ))
+    }
+}
+
 async fn public_key_aws(config: &Value) -> Result<Value, KmsError> {
-    let key_id = required(
-        config,
-        "key_reference",
-        "aws-kms adapter requires 'key_reference' in service_config",
-    )?;
+    let key_id = aws_key_arn(config)?;
     let output = aws_client(config)
         .await?
         .get_public_key()
@@ -2077,6 +2117,7 @@ async fn public_key_aws(config: &Value) -> Result<Value, KmsError> {
         .send()
         .await
         .map_err(|_| KmsError::Provider("AWS KMS get public key failed.".into()))?;
+    require_aws_response_key(output.key_id(), key_id)?;
     let der = output
         .public_key()
         .map(|value| value.as_ref())
@@ -2099,9 +2140,9 @@ async fn public_key_aws(config: &Value) -> Result<Value, KmsError> {
 }
 
 async fn verify_aws(config: &Value) -> CapabilityResult {
-    let key_id = match string(config, "key_reference").filter(|value| !value.is_empty()) {
-        Some(value) => value,
-        None => return CapabilityResult::fail("Key reference", "key_reference is required"),
+    let key_id = match aws_key_arn(config) {
+        Ok(value) => value,
+        Err(error) => return CapabilityResult::fail("Key reference", error.to_string()),
     };
     let mut result = CapabilityResult::ok();
     let client = match aws_client(config).await {
@@ -2821,6 +2862,45 @@ mod tests {
         ] {
             assert!(gcp_key_version_reference(&json!({"key_reference": invalid})).is_err());
         }
+    }
+
+    #[test]
+    fn aws_signing_requires_a_region_bound_key_arn_and_matching_response() {
+        let reference = "arn:aws:kms:us-east-1:111122223333:key/test";
+        assert_eq!(
+            aws_key_arn(&json!({"key_reference": reference})).unwrap(),
+            reference
+        );
+        assert!(require_aws_response_key(Some(reference), reference).is_ok());
+        for invalid in [
+            "alias/movable",
+            "arn:aws:kms:us-east-1:111122223333:alias/movable",
+            "arn:aws:kms:us-west-2:111122223333:key/test",
+            "arn:aws:kms:us-east-1:111122223333:key/test/other",
+        ] {
+            assert!(aws_key_arn(&json!({"key_reference": invalid})).is_err());
+        }
+        assert!(require_aws_response_key(None, reference).is_err());
+        assert!(require_aws_response_key(
+            Some("arn:aws:kms:us-east-1:111122223333:key/other"),
+            reference
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn aws_signing_rejects_alias_before_network_io() {
+        let result = sign(SignRequest {
+            service_config: json!({
+                "service_type": "aws-kms",
+                "auth_mode": "iam_role",
+                "key_reference": "alias/movable",
+                "algorithm": "ES256"
+            }),
+            payload_b64: "cGF5bG9hZA".into(),
+        })
+        .await;
+        assert!(matches!(result, Err(KmsError::InvalidConfig(_))));
     }
 
     #[test]
