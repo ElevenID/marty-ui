@@ -1153,6 +1153,16 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         credential: &IssuedCredential,
         delivery: &StagedInitiationDidcommDelivery,
     ) -> Result<(), CredentialIssuanceError> {
+        let metadata = json!({
+            "protocol": "didcomm_v2",
+            "holder_did": delivery.holder_did,
+            "service_endpoint": delivery.service_endpoint,
+            "didcomm_message_id": delivery.message_id,
+            "encrypted_message": delivery.encrypted_message,
+        });
+        if marty_key_material_policy::contains_private_key(&metadata) {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         let mut database = self.pool.begin().await.map_err(repository_error)?;
         finalize_credential(&mut database, transaction, credential, None).await?;
         sqlx::query(
@@ -1169,13 +1179,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         .bind(&transaction.organization_id)
         .bind(&transaction.delivery_mode)
         .bind(DIDCOMM_TRANSPORT_READY_STATUS)
-        .bind(json!({
-            "protocol": "didcomm_v2",
-            "holder_did": delivery.holder_did,
-            "service_endpoint": delivery.service_endpoint,
-            "didcomm_message_id": delivery.message_id,
-            "encrypted_message": delivery.encrypted_message,
-        }))
+        .bind(metadata)
         .execute(&mut *database)
         .await
         .map_err(repository_error)?;
@@ -1581,7 +1585,11 @@ fn validate_finalization_input(
     transaction: &CredentialTransaction,
     credential: &IssuedCredential,
 ) -> Result<(), CredentialIssuanceError> {
-    if transaction.status != CredentialTransactionStatus::Signing
+    if marty_key_material_policy::contains_private_key(&json!(credential.status_list_entries))
+        || marty_key_material_policy::contains_private_key(&Value::String(
+            credential.credential.clone(),
+        ))
+        || transaction.status != CredentialTransactionStatus::Signing
         || transaction.reserved_credential_id.as_deref() != Some(&credential.id)
         || credential.transaction_id != transaction.id
         || credential.organization_id != transaction.organization_id
@@ -1717,7 +1725,11 @@ async fn insert_notification_binding(
     credential: &IssuedCredential,
     notification_id: &str,
 ) -> Result<(), CredentialIssuanceError> {
-    if notification_id.trim().is_empty() {
+    if notification_id.trim().is_empty()
+        || marty_key_material_policy::contains_private_key(&Value::String(
+            notification_id.to_owned(),
+        ))
+    {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
     sqlx::query(INSERT_NOTIFICATION_BINDING)

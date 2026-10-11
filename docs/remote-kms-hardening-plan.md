@@ -16159,3 +16159,14 @@ The complete Issuance library selection on this accumulated source head also
 passed: 583 tests, zero failures, eight opt-in tests ignored. This confirms
 the new final-write guards did not regress the default library suite; opt-in
 live provider acceptance and exact release-image checks remain separate.
+
+K10 final credential write follow-up: direct repository finalization could
+write private material in status-list JSON, raw credential text or the
+notification ID; DIDComm delivery staging could write it in delivery metadata.
+The shared Rust finalization validation and staged-delivery boundary now
+reject those inputs before persistence. A fresh PostgreSQL 16 credential
+contract passed four negative cases with no issued credential row, then the
+normal finalization, DIDComm staging and management contracts passed. Issuance
+all-targets warnings-denied Clippy passed, and the disposable database was
+removed. This correction stays local for the next grouped push while exact-
+head CI on `44e94b746` runs.

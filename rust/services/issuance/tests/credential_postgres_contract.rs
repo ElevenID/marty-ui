@@ -508,6 +508,43 @@ async fn credential_repository_is_hmac_compatible_atomic_and_canvas_safe() {
         issued_at: now,
         expires_at: now + Duration::days(365),
     };
+    for (credential, notification_id) in [
+        (
+            IssuedCredential {
+                status_list_entries: vec![
+                    json!({"private_jwk": {"kty": "OKP", "d": "private-seed"}}),
+                ],
+                ..issued.clone()
+            },
+            "notification-contract",
+        ),
+        (
+            IssuedCredential {
+                credential: "{\"private_jwk\":\"private-seed\"}".to_owned(),
+                ..issued.clone()
+            },
+            "notification-contract",
+        ),
+        (
+            issued.clone(),
+            "-----BEGIN PRIVATE KEY-----private-seed-----END PRIVATE KEY-----",
+        ),
+    ] {
+        assert!(repository
+            .finalize(&claimed, &credential, notification_id)
+            .await
+            .is_err());
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM issuance_service.issued_credentials WHERE id = $1",
+            )
+            .bind(credential_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            0
+        );
+    }
     repository
         .finalize(&claimed, &issued, "notification-contract")
         .await
@@ -907,6 +944,23 @@ async fn assert_didcomm_retry_and_lifecycle_contract(
         message_id: "didcomm-message-contract".to_owned(),
         encrypted_message: "encrypted-didcomm-contract".to_owned(),
     };
+    let mut private_staged = staged.clone();
+    private_staged.service_endpoint =
+        "{\"kty\":\"OKP\",\"crv\":\"X25519\",\"d\":\"private-seed\"}".to_owned();
+    assert!(repository
+        .stage_delivery(&claim.transaction, &issued, &private_staged)
+        .await
+        .is_err());
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.issued_credentials WHERE id = $1",
+        )
+        .bind(credential_id)
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
+    );
     repository
         .stage_delivery(&claim.transaction, &issued, &staged)
         .await
