@@ -487,7 +487,7 @@ async fn live_managed_alias_requires_tenant_purpose_and_algorithm_before_kms_sig
                             return StatusCode::NOT_FOUND.into_response();
                         }
                         calls.fetch_add(1, Ordering::SeqCst);
-                        Json(json!({"data": {"signature": "vault:v1:c2lnbmF0dXJl"}}))
+                        Json(json!({"data": {"signature": "vault:v1:MAYCAQECAQI="}}))
                             .into_response()
                     }
                 }

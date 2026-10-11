@@ -14211,3 +14211,14 @@ breaking supported behavior. The tenant-signing grant must cover this route
 and tie Flow's persisted verification instance or Issuance's authorized
 credential operation to the exact sign request. The public service-sign route
 also remains supported and needs its own Gateway authorization grant.
+
+UI head `7baec03ee` [CI
+38115174182](https://github.com/ElevenID/marty-ui/actions/runs/38115174182)
+passed all five opt-in managed-key creation cases and the corrected Gateway
+case, but Rust Contracts failed the separate managed-alias cross-tenant case.
+Its disposable Transit stub still returned the text `signature` for ES256,
+which the fail-closed ECDSA boundary rejected before the expected 200. The
+fixture now returns valid DER; that exact ignored case passed locally against
+a fresh marked disposable loopback Redis DB 13 and test-only Transit token.
+The container was stopped. Exact-head Rust CodeQL passed. Hold this correction
+with the Azure/Core follow-up until the remaining UI jobs are terminal.
