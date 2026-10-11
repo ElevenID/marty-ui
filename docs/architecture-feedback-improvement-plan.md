@@ -3412,6 +3412,26 @@ database suite steps took 7m03s, 10m45s, 7s, and 7m10s respectively. The
 [main cache warm-up](https://github.com/ElevenID/marty-ui/actions/runs/38117238266)
 was queued immediately after merge; steady-state timings remain unproven.
 
+Product-pipeline foundation [UI #1255](https://github.com/ElevenID/marty-ui/pull/1255)
+merged as `26f693d8f` at 07:40 UTC after exact-head and protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38120304640)
+passed. It adds an opt-in, explicitly unqualified exact-lock self-host ZIP,
+receipt, product descriptor, and separate downloaded-artifact consumer preflight;
+it does not install the runtime or promote a product. The exact-head Canvas job
+took 31m06s: reusable Rust test compilation 10m15s, public self-host image
+build 6m37s, and isolated database suites 10m28s. These are stage observations,
+not a demonstrated speedup or regression against a comparable baseline.
+
+The next local UI candidate confines extracted Compose mounts to the downloaded
+bundle and disposable state/secret roots, and pilots `CARGO_PROFILE_DEV_DEBUG=0`
+only inside the pinned Bookworm Canvas host compile. All four Cargo phases,
+artifact inventory, and protected tests remain. Local focused tests and
+independent review pass; hosted speed and full installed-runtime qualification
+remain unproven. A separate no-start secret-closure validator currently detects
+`flow_webhook_secret` missing from the catalog and three required notification
+secrets missing from the stack list. It is not a gate until the product owner
+resolves that declaration mismatch.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
