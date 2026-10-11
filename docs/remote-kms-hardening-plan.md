@@ -16423,3 +16423,22 @@ PyYAML only behind its `dev` extra. The pushed prior head's hosted Python
 Security and Core Python Wheels jobs passed; its Python Tests job failed at
 the missing PyYAML import described above. This wheel is a test-harness
 artifact, not the still-unqualified released native Core wheel.
+Credentials' `release/dependencies.json` and `scripts/install_pinned_core.py`
+were then audited as a separate route: no workflow or product code invokes the
+installer, but it could fetch historical `marty-rs` v0.2.0 and
+`marty-verification` v0.1.60 wheels that predate the reviewed Core graph.
+The local follow-up removes that unused download route, its stale manifest
+and installer-only tests; the historical Canvas privacy note now explicitly
+marks those old pins as retired. CI still builds the required native wheels
+from the reviewed Core revision. The affected 170 retirement/wheel-pin tests
+pass locally with Ruff and diff hygiene. This removes an old-key-capable
+artifact path, but does not itself qualify the future signed release wheels.
+On prior pushed UI head `5f235b835`, hosted run `38180019573` has now passed
+every substantive job, including Canvas migrated-base and database contracts,
+OpenBao plugin image, service images, Rust feature probe, Rust packaging,
+security and release contracts. Its aggregate CI Gate was still finishing at
+this checkpoint. The local grouped UI batch includes the six-service fresh
+database audit, the retired `marty-common` release graph and seed migration,
+the fail-closed release manifest guard, and the fresh local
+OpenBao/PostgreSQL/Redis Rust-adapter probe. Publish that batch together to
+draft PR #1192, then qualify its exact new head.
