@@ -15,6 +15,32 @@ TEST_TARGETS = VERIFY["TEST_TARGETS"]
 BIN_TARGETS = VERIFY["BIN_TARGETS"]
 
 
+def test_canvas_dev_profile_pilot_is_confined_to_bookworm_compile() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    job = workflow["jobs"]["test-rust-services"]
+    assert "CARGO_PROFILE_DEV_DEBUG" not in job["env"]
+    compile_run = next(
+        step["run"] for step in job["steps"]
+        if step.get("name") == "Compile reusable Rust test executables"
+    )
+    owner_and_contracts, canvas = compile_run.split(
+        'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
+    )[1].split("else\n", 1)
+    owner_branch = compile_run.split(
+        'elif [[ "${{ matrix.lane }}" == contracts ]]; then', 1
+    )[0]
+    assert "CARGO_PROFILE_DEV_DEBUG" not in owner_branch
+    assert "CARGO_PROFILE_DEV_DEBUG" not in owner_and_contracts
+    assert canvas.count("--env CARGO_PROFILE_DEV_DEBUG=0") == 1
+    assert canvas.index("--env CARGO_PROFILE_TEST_DEBUG=0") < canvas.index(
+        "--env CARGO_PROFILE_DEV_DEBUG=0"
+    )
+    assert '"$bookworm_builder"' in canvas
+    assert canvas.count("run_cargo_phase ") == 4
+
+
 def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")

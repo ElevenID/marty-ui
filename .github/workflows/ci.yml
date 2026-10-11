@@ -1127,6 +1127,7 @@ jobs:
               --env "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/target" \
               --env CARGO_INCREMENTAL=0 \
               --env CARGO_PROFILE_TEST_DEBUG=0 \
+              --env CARGO_PROFILE_DEV_DEBUG=0 \
               --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
               --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
               --volume "$host_cargo_home:$host_cargo_home" \
