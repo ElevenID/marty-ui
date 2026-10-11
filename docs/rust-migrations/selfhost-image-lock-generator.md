@@ -65,3 +65,16 @@ infrastructure digests have exact repository/anonymous-pull checks but no
 independent provenance policy yet. The bundle ZIP, source notices, and clean
 installed-bundle acceptance still require a separate gated release slice.
 Do not advertise the preparation artifact as an installable release.
+
+The separate `preflight-selfhost-prepared-consumer` job downloads the exact
+unqualified ZIP, lock, and receipt across an artifact boundary. It revalidates
+the source-bound stack transaction and renders every Compose profile from the
+extracted ZIP, checks the complete receipt/ZIP/lock/transaction
+binding and installed service/image closure, rejects source builds and source
+checkout paths in bind volumes, Compose secret files, and Compose config files,
+and anonymously pulls every exact locked image with a
+fresh Docker configuration. Its output remains `qualification: unqualified`.
+It does not start containers or prove migrations, readiness, login, or an
+issuer/credential journey. A later protected installation gate must use this
+same archive digest with disposable external state and prove those runtime
+steps before any customer-support claim or publication dependency is added.
