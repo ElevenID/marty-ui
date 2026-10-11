@@ -227,7 +227,7 @@ jobs:
           jq -e '.image_digest | test("^sha256:[0-9a-f]{64}$")' tests/artifacts/canvas-oss-image/canvas-oss-image-manifest.json >/dev/null
 
       - name: Upload digest and provenance record
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: canvas-oss-image-${{ steps.lock.outputs.source_sha }}
           path: |
