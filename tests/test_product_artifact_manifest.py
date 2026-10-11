@@ -82,3 +82,33 @@ def test_declared_extension_matches_optional_dependency(manifest):
     manifest["extensions"] = ["canvas"]
     manifest["dependencies"].append({"name": "canvas", "scope": "optional-extension", "source": "https://example.test/canvas"})
     MODULE.validate_manifest(manifest, SCHEMA)
+
+
+@pytest.mark.parametrize("uri", [
+    "https://user:pass@example.test/source",
+    "https://@example.test/source",
+    "https://example.test:bad/source",
+    "https://example.test:99999/source",
+    "https://example..test/source",
+    "https://example.test/source#fragment",
+    "https://example.test/source\n",
+])
+@pytest.mark.parametrize("field", ["source", "dependency", "channel", "guide", "evidence"])
+def test_all_https_references_reject_malformed_or_credentialed_authorities(manifest, field, uri):
+    if field == "source":
+        manifest["source"]["repository"] = uri
+    elif field == "dependency":
+        manifest["dependencies"][0]["source"] = uri
+    elif field in ("channel", "guide"):
+        manifest["installation"][field] = uri
+    else:
+        manifest["qualification"]["evidence"] = [uri]
+    with pytest.raises(ValueError):
+        MODULE.validate_manifest(manifest, SCHEMA)
+
+
+@pytest.mark.parametrize("path", ["../edge", "a/../edge", "./edge", "a//edge", "a/./edge", "/edge", "edge/"])
+def test_oci_path_must_be_canonical(manifest, path):
+    manifest["artifact"]["uri"] = f"ghcr.io/{path}@{DIGEST}"
+    with pytest.raises(ValueError, match="artifact"):
+        MODULE.validate_manifest(manifest, SCHEMA)
