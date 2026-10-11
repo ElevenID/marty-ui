@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).parents[1]
 SCRIPT = ROOT / "scripts/check_product_artifact_manifest.py"
 SPEC = importlib.util.spec_from_file_location("check_product_artifact_manifest", SCRIPT)
