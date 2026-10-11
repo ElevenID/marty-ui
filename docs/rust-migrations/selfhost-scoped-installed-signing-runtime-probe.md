@@ -19,6 +19,16 @@ The helper runs its Linux CLI container as the invoking user and replaces
 placeholder token files through private atomic writes. A successful handoff
 does not qualify the production Compose stack, login, or an issuer journey.
 
+Before either runtime probe, the consumer also renders the complete extracted
+Compose model with isolated state and secret roots. The unqualified
+`check_selfhost_installed_runtime_plan.py` reuses the archive, descriptor,
+receipt, image, and mount preflight; it then checks all 31 current roles across
+the default and opt-in beta-tunnel profiles, every dependency reference and
+condition, one-shot/health prerequisites, secret/config references, and acyclic
+startup order. Its sanitized report binds the ZIP, lock, transaction, source,
+and producer run. This is a fail-closed static runtime plan, not evidence that
+the complete stack started or that its business journey passed.
+
 The script first repeats that probe's exact-bundle and disposable migration
 checks. It takes `signing-keys` only from the verified image lock, pulls its
 exact `services` digest for Linux amd64, and checks the selected local image's

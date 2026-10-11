@@ -15776,3 +15776,15 @@ progress and twelve were queued, with no failures. The PR description now
 reflects the grouped fix and remaining release gates. Hold this tracker-only
 update locally until the run produces terminal evidence or a code correction,
 so recording status does not start another full CI run.
+
+Main #1270 added a fail-closed extracted self-host runtime DAG plan while UI
+#1192 head `5d25ac629` was under CI. Its source-render test initially failed
+on this branch: upstream expected the retired local
+`integration_secret_master_key`, a shared Signing Keys OpenBao token, and no
+origin-specific grant files. The local merge updates the exact expected
+secret/role bindings and Issuance dependency edge to the rendered KMS-only
+Compose graph; it explicitly rejects reintroduction of the local master-key
+secret. The new DAG plan, preparation-artifact and release-preparation suites
+passed 46 tests; Ruff, YAML parsing and diff checks passed. This merge and
+tracker update remain local until the current exact-head run terminates, so
+one grouped correction can be pushed if that run finds anything else.
