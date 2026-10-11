@@ -15843,3 +15843,16 @@ the JSON preferences guard rejected a synthetic PEM private key. The resulting
 `device_registration_service` catalog had 7 tables and 60 columns, with zero
 private/secret/JWK/PEM-shaped table or column names. This is a local migration
 and write result, not exact released-image qualification.
+
+K10 Notification source-built runtime check: on a third fresh PostgreSQL 16
+instance with a disposable OpenBao 2.5.2 dev Transit key, the native
+`postgres_integration` test passed migration, encrypted webhook-secret and
+outbox behavior. The catalog has 7 tables and 90 columns with zero
+private/secret-key/JWK/PEM-shaped names; one webhook endpoint held a `vault:v`
+secret envelope. A second fresh PostgreSQL/OpenBao run passed the same test in
+`ENVIRONMENT=production` with an orphan token limited to read of that one
+Transit key and update of its exact encrypt/decrypt paths; it stored one
+`vault:v` envelope. Root access was used only to bootstrap the disposable
+backend. This is scoped-policy functional evidence, not an exact release image
+or installed-stack qualification. This tracker-only result stays local until
+the pushed head's CI finishes.
