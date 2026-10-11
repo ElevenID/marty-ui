@@ -426,7 +426,9 @@ async fn gateway_transit_sign(
         return StatusCode::NOT_FOUND.into_response();
     }
     fixture.signs.lock().unwrap().push((reference, body));
-    Json(json!({"data":{"signature":"vault:v1:AQ=="}})).into_response()
+    // Minimal valid ECDSA DER encoding; the remote-signing boundary rejects
+    // malformed provider signatures before Gateway can report success.
+    Json(json!({"data":{"signature":"vault:v1:MAYCAQECAQI="}})).into_response()
 }
 
 #[tokio::test]

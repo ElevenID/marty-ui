@@ -14079,3 +14079,17 @@ connectivity vectors now probe a pinned version. The local Signing Keys
 library suite (178 passed, nine ignored) and provider, registry and service
 validation golden suites pass after correcting their versioned probe paths.
 This is configuration and protocol-shape evidence, not a live GCP key proof.
+
+UI #1192 head `5ba6851d0eb431305c75419b32b207cbadf96df2` [CI
+38111105084](https://github.com/ElevenID/marty-ui/actions/runs/38111105084)
+exposed a stale managed-key Gateway acceptance fixture: its disposable
+Transit stub returned a one-byte `AQ==` value for an ES256 signature. The
+new fail-closed ECDSA boundary correctly rejected it, and the test observed
+HTTP 503 instead of its expected 200. The failure is retained as immutable
+evidence. The local correction gives the stub a syntactically valid DER
+ECDSA signature (`MAYCAQECAQI=`); the affected acceptance target compiled,
+and its exact ignored case passed locally against a fresh disposable Redis
+DB 13 with the required sentinel and test-only Transit token. The disposable
+container was stopped afterward. The remaining hosted jobs and CodeQL on
+that published head are still pending; this fixture correction and the Azure
+and GCP reference checks await grouped publication and exact-head recheck.
