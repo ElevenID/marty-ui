@@ -190,7 +190,7 @@ def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Compose CLI unavailable")
-@pytest.mark.parametrize("failure", [None, "private_storage", "reused_token"])
+@pytest.mark.parametrize("failure", [None, "private_storage", "reused_token", "reused_verifier"])
 def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
     tmp_path, monkeypatch, failure,
 ):
@@ -217,6 +217,9 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
             (secret_dir / "bao_service_token").write_text("scoped-service")
             (secret_dir / "notification_openbao_token").write_text(
                 "scoped-service" if failure == "reused_token" else "scoped-notification"
+            )
+            (secret_dir / "sign_grant_verify_token").write_text(
+                "scoped-service" if failure == "reused_verifier" else "scoped-verifier"
             )
         output = (success if args[-1] == "db-migrate" else
                   "table:issuer.signing_private_keys\n" if failure == "private_storage" and
@@ -298,7 +301,10 @@ def test_actual_scoped_openbao_bootstrap():
             service = (secret_dir / "bao_service_token").read_text(encoding="ascii")
             notification = (secret_dir / "notification_openbao_token").read_text(
                 encoding="ascii")
-            assert service and notification and len({root, service, notification}) == 3
+            verifier = (secret_dir / "sign_grant_verify_token").read_text(
+                encoding="ascii")
+            assert service and notification and verifier
+            assert len({root, service, notification, verifier}) == 4
         finally:
             probe._checked(probe.command([*compose, "down", "--volumes"],
                                          environment, 120), "OpenBao cleanup failed")

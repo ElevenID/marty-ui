@@ -15409,3 +15409,19 @@ their dependent aggregate. The local grouped correction comprises
 suites pass (14 runnable Rust Kubernetes cases plus 34 Python cases), and
 the direct packaged KMS-backed renewal test passes locally with grant binding
 assertions. The exact-head hosted run on the correction is still required.
+
+Main advanced to `49a0a2454` with an opt-in installed Signing Keys consumer
+while UI #1192's correction head was pushed. GitHub reported that head as
+conflicting, so the next batch reconciles the new consumer before restarting
+hosted CI. The local merge preserves this branch's five-role bundle lock,
+native Rust schema replay, and private-key schema/content scans, then invokes
+the upstream runtime callback only after both migration passes. The KMS-only
+Signing Keys image requires distinct service and issuer signing API keys plus
+an absolute verify-only grant token file; the new overlay now mounts all three
+as disposable secrets. The root-only OpenBao bootstrap mints the verifier
+token under the existing seven-origin policy, checks verify authority and
+HMAC-mint denial, and keeps it out of the migration container. The focused
+merge suite passes 97 tests and 421 subtests with two opt-in cases skipped;
+the disposable live OpenBao bootstrap case separately passed. The exact
+installed signing image has not yet been run by this local check, so the
+consumer remains explicitly unqualified pending a prepared bundle.

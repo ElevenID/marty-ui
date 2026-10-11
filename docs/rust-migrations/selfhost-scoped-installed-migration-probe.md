@@ -1,7 +1,10 @@
-# Local draft: scoped installed-bundle migration probe
+# Scoped installed-bundle migration probe (unqualified)
 
-`scripts/probe_selfhost_installed_migrations.py` is an opt-in, local-only
-experiment. It is not called from CI or release workflows and always reports
+`scripts/probe_selfhost_installed_migrations.py` is an opt-in experiment. The
+downstream `selfhost-prepared-consumer.yml` workflow runs the signing-runtime
+continuation, which includes this migration probe exactly once, against a
+successful, first-attempt, opt-in Stack release preparation from the same
+protected-main source SHA. It is not a release or ordinary CI gate and reports
 `qualification: unqualified`.
 
 Supply the already-downloaded prepared ZIP, image lock, transaction, receipt,
@@ -19,6 +22,16 @@ python scripts/probe_selfhost_installed_migrations.py \
   --run-id NUMERIC_RUN_ID
 ```
 
+Dispatch `Stack release` on `main` with `prepare_selfhost_lock` explicitly
+enabled. Its successful completion triggers the read-only-cache consumer for
+that exact run; other Stack releases have no prepared bundle and skip the
+probe. The consumer rejects a rerun, an artifact from another source SHA, or a
+preparation from an older `main` commit. It downloads only the exact unqualified bundle and its
+qualified Stack transaction, checks the archive before extraction, and uploads
+a sanitized unqualified migration-and-signing probe report for 30 days. If no prepared artifact
+exists for the current `main` SHA, a new opt-in preparation is required. This
+does not publish a self-host product or change Stack release qualification.
+
 The probe rechecks the exact ZIP, descriptor, receipt, lock, and extracted
 inventory. It takes the migrations, Rust services, PostgreSQL, and Redis images
 only from the bundle lock and requires the Issuance runtime and migration
@@ -32,7 +45,9 @@ The disposable project has an internal network, no host ports or persistent
 volumes, and no source builds. A root token is available only to OpenBao and
 the one-shot bootstrap container; the migration receives distinct scoped
 credential-service and Notification tokens. The bootstrap verifies allowed and
-denied capabilities before writing those tokens to disposable files. Migration
+denied capabilities before writing those tokens to disposable files. It also
+creates a distinct verify-only signing-grant token for the later opt-in
+Signing Keys consumer; the migration container never mounts that token. Migration
 and native Rust schema migrations then run twice. Each pass verifies the native
 schema owners, the notification ledger and signing registry, and scans the
 assembled database for private-key tables, columns, and content before project

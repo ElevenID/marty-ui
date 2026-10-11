@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local-only, exact-bundle migration probe with disposable scoped OpenBao.
+"""Opt-in exact-bundle migration probe with disposable scoped OpenBao.
 
 This is migration evidence only, not a release gate or installed-stack claim.
 """
@@ -7,37 +7,55 @@ This is migration evidence only, not a release gate or installed-stack claim.
 from __future__ import annotations
 
 import argparse
-from copy import deepcopy
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import subprocess
 import tempfile
-from typing import Callable
+from collections.abc import Callable
+from copy import deepcopy
+from pathlib import Path
 
 if __package__:
     from .check_prepared_selfhost_consumer import (
-        verify_descriptor, verify_extracted_bundle, verify_receipt,
+        verify_descriptor,
+        verify_extracted_bundle,
+        verify_receipt,
     )
-    from .passport_supported_infra_images import registry_index
     from .check_selfhost_locked_image_platform import accepted_repo_digests
+    from .passport_supported_infra_images import registry_index
     from .qualify_selfhost_migrations import (
-        PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
-        QualificationError, _assert_run, _checked, _empty_project, command,
-        native_command, validate_images, validate_model,
+        PRIVATE_KEY_CONTENT_QUERY,
+        PRIVATE_KEY_SCHEMA_QUERY,
+        QualificationError,
+        _assert_run,
+        _checked,
+        _empty_project,
+        command,
+        native_command,
+        validate_images,
+        validate_model,
     )
 else:
     from check_prepared_selfhost_consumer import (
-        verify_descriptor, verify_extracted_bundle, verify_receipt,
+        verify_descriptor,
+        verify_extracted_bundle,
+        verify_receipt,
     )
-    from passport_supported_infra_images import registry_index
     from check_selfhost_locked_image_platform import accepted_repo_digests
+    from passport_supported_infra_images import registry_index
     from qualify_selfhost_migrations import (
-        PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
-        QualificationError, _assert_run, _checked, _empty_project, command,
-        native_command, validate_images, validate_model,
+        PRIVATE_KEY_CONTENT_QUERY,
+        PRIVATE_KEY_SCHEMA_QUERY,
+        QualificationError,
+        _assert_run,
+        _checked,
+        _empty_project,
+        command,
+        native_command,
+        validate_images,
+        validate_model,
     )
 
 
@@ -225,7 +243,8 @@ def validate_scoped_model(model: dict, images: dict[str, str],
 
 def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
           run: Callable[..., subprocess.CompletedProcess[str]] = command,
-          project: str | None = None) -> dict:
+          project: str | None = None,
+          after_migrations: Callable[..., dict] | None = None) -> dict:
     project = project or "marty-selfhost-scoped-migrate-" + secrets.token_hex(8)
     require(PROJECT.fullmatch(project) is not None, "Disposable project name is invalid")
     with tempfile.TemporaryDirectory(prefix="marty-selfhost-scoped-migrate-") as temporary:
@@ -268,13 +287,15 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                      "Disposable dependencies did not become ready")
             _checked(run([*compose, "run", "--no-deps", "--rm", "openbao-bootstrap"],
                          environment, 180), "Disposable scoped OpenBao bootstrap failed")
-            for name in ("bao_service_token", "notification_openbao_token"):
+            for name in ("bao_service_token", "notification_openbao_token",
+                         "sign_grant_verify_token"):
                 path = secret_dir / name
                 require(path.is_file() and not path.is_symlink()
                         and path.stat().st_size > 0, "Disposable scoped token is missing")
             token_values = [(secret_dir / name).read_bytes().strip()
                             for name in ("bao_root_token", "bao_service_token",
-                                         "notification_openbao_token")]
+                                         "notification_openbao_token",
+                                         "sign_grant_verify_token")]
             require(all(token_values) and len(set(token_values)) == len(token_values),
                     "Disposable OpenBao tokens must be distinct")
             ledger = None
@@ -313,13 +334,16 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                               "marty", "-d", "marty", "-v", "ON_ERROR_STOP=1",
                               "-qAtc", PRIVATE_KEY_CONTENT_QUERY], environment),
                          "Private-key content storage scan failed")
-            return {"schema": "marty.selfhost-installed-migrations-probe/v1",
+            report = {"schema": "marty.selfhost-installed-migrations-probe/v1",
                     "qualification": "unqualified", "archive_sha256": receipt["archive_sha256"],
                     "image_lock_sha256": receipt["image_lock_sha256"],
                     "migrations_image": images["migrations"],
                     "services_image": images["services"], "openbao_image": images["openbao"],
                     "native_schemas": "verified", "private_key_storage": "absent",
                     "notification_head": ledger, "runs": 2}
+            if after_migrations is not None:
+                report["runtime"] = after_migrations(compose, environment, secret_dir, run)
+            return report
         finally:
             if started:
                 _checked(run([*compose, "down", "--volumes"], environment, 120),
