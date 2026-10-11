@@ -14243,3 +14243,25 @@ are running. The UI branch locally pins `6acba9d`; its Signing Keys library
 (183 passed, nine ignored) and all five provider golden cases pass against
 that exact Core dependency. Keep the UI follow-up local until its published
 head `7baec03ee` has terminal hosted evidence.
+
+K6 signing-grant implementation direction: use OpenBao Transit HMAC keys as
+non-exportable, separately policy-scoped grant issuers for Gateway, Flow and
+Issuance operations. OpenBao's [Transit API](https://openbao.org/docs/next/api/secret/transit/)
+supports `/transit/hmac/:name` and `/transit/verify/:name` with versioned HMAC
+results. Each producer may call HMAC only after its own authorization check
+has resolved an authoritative organization and operation record: Gateway's
+`signing-key:create` decision, Flow's persisted verification instance, or
+Issuance's authorized credential/passport/Canvas operation. The grant input
+must encode a versioned domain, producer identity, operation/record ID,
+organization, route/service or issuer DID, key purpose, algorithm, exact
+payload digest, issued/expiry times and a random one-use ID. Signing Keys
+holds verify-only Transit policy and checks this canonical input against the
+parsed signing request, bounded clock, and an atomic Redis one-use consume
+before any signing KMS call. Producer service credentials remain transport
+authentication, not substitutes for this grant. Separate origin policies
+must prevent a Flow token from minting Gateway or Issuance grants. Fail
+closed when Transit verification or replay storage is unavailable. Add
+wrong-tenant/payload/purpose/key/operation, expiry, replay, concurrent-use,
+direct-backend and outage tests; prove live OpenBao policy denial and allowed
+wallet/credential paths. This is an implementation design, not completed K6
+authority evidence.
