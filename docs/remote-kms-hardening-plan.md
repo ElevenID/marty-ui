@@ -15384,3 +15384,14 @@ negative cases. The file passes 34 tests locally and Ruff is clean. The
 packaged image, Canvas composition and OpenBao plugin lanes were still live
 when these two fixes were committed locally; defer the next grouped push until
 their final outcomes are inspected.
+
+The published `e1967e993` run's OpenBao DIDComm plugin lane completed
+successfully, including the coordinated PostgreSQL/Raft integration-secret
+recovery. Independently, the local direct packaged renewal test passed both
+anoncrypt and authcrypt against disposable pinned PostgreSQL, the Go plugin
+OpenBao image, and the actual Windows Issuance binary after the test-only
+signing peer was tightened to inspect the scoped grant binding. The same
+local rendered-base test reached its fixture's `docker compose config` call,
+which failed on the Windows path representation before the service started;
+that Linux-rendered profile remains for the hosted Canvas lane. All local
+disposable OpenBao and PostgreSQL containers were cleaned up.
