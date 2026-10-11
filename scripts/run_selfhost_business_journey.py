@@ -23,12 +23,11 @@ from check_prepared_selfhost_consumer import check, verify_descriptor
 from check_selfhost_installed_runtime_plan import (
     BETA_SERVICES, EXPECTED_SECRET_NAMES, EXPECTED_SERVICES, plan,
 )
+from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 
 
-SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
-PINNED_INTEGRATION_SHA = "71a34c96f4bff2911919ebd3a41644ec2631ee07"
 TRUST_ROOTS_PATH = "deploy-config/selfhost-kms-custody-trust-roots.json"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
 JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",

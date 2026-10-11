@@ -18,6 +18,7 @@ from check_prepared_selfhost_consumer import verify_descriptor, verify_receipt
 from check_product_artifact_manifest import SCHEMA, validate_manifest
 from record_selfhost_bundle_preparation import file_digest
 from release_transaction import validate_claim
+from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 
 
 REQUIRED = frozenset({
@@ -118,7 +119,7 @@ def audit(directory: Path, tag: str) -> dict:
             or evidence.get("image_lock_sha256") != receipt["image_lock_sha256"]
             or evidence.get("transaction_sha256") != receipt["transaction_sha256"]
             or evidence.get("run_id") != run_id
-            or re.fullmatch(r"[0-9a-f]{40}", str(evidence.get("integration_revision", ""))) is None
+            or evidence.get("integration_revision") != PINNED_INTEGRATION_SHA
             or evidence.get("qualification") != "qualified"):
         raise ValueError("installed qualification evidence does not bind the exact release")
     steps = evidence.get("steps")
