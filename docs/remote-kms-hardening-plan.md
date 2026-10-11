@@ -14220,8 +14220,10 @@ Its disposable Transit stub still returned the text `signature` for ES256,
 which the fail-closed ECDSA boundary rejected before the expected 200. The
 fixture now returns valid DER; that exact ignored case passed locally against
 a fresh marked disposable loopback Redis DB 13 and test-only Transit token.
-The container was stopped. Exact-head Rust CodeQL passed. Hold this correction
-with the Azure/Core follow-up until the remaining UI jobs are terminal.
+The container was stopped. Exact-head Rust CodeQL passed. The published-head
+run completed with 20 successful jobs; Rust Contracts and its dependent CI
+Gate failed on this fixture. The corrected fixture passed its exact local
+regression case and is included in the next grouped UI push.
 The same provider-boundary self-review also found that EdDSA accepted any
 nonempty byte sequence. The local Rust signing adapter now requires Ed25519's
 fixed 64-byte signature length before exposing it as a successful remote
@@ -14239,7 +14241,7 @@ The raw-scalar validation follow-up is published at
 CI](https://github.com/ElevenID/marty-core/actions/runs/38116313173)
 and [release-wheel
 preflight](https://github.com/ElevenID/marty-core/actions/runs/38116313196)
-are running. The UI branch locally pins `6acba9d`; its Signing Keys library
+both passed. The UI branch locally pins `6acba9d`; its Signing Keys library
 (183 passed, nine ignored) and all five provider golden cases pass against
 that exact Core dependency. Keep the UI follow-up local until its published
 head `7baec03ee` has terminal hosted evidence.
