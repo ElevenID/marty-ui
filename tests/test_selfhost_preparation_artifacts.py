@@ -91,6 +91,7 @@ def test_manual_workflow_is_separate_unqualified_and_cannot_publish() -> None:
     assert set(trigger) == {"workflow_dispatch"}
     assert trigger["workflow_dispatch"]["inputs"]["stack_run_id"]["required"] is True
     assert document["permissions"] == {"contents": "read"}
+    assert document["cache-mode"] == "none"
     assert set(document["jobs"]) == {"installed-migrations"}
     job = document["jobs"]["installed-migrations"]
     assert job["runs-on"] == "ubuntu-24.04"

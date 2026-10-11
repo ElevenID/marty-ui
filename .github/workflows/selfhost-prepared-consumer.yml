@@ -15,6 +15,10 @@ concurrency:
 permissions:
   contents: read
 
+# The downloaded bundle is treated as untrusted data. This manual run must not
+# be able to write or restore default-branch Actions caches while probing it.
+cache-mode: none
+
 jobs:
   installed-migrations:
     runs-on: ubuntu-24.04
