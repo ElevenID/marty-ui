@@ -279,7 +279,7 @@
       "service_config": { "service_type": "gcp-cloud-kms", "endpoint": "$STUB", "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "auth_mode": "workload_identity" },
       "expected_request": { "method": "GET", "path_query": "/v1/projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1", "headers": { "authorization": "Bearer gcp-token" } },
       "provider_status": 200,
-      "provider_response": { "name": "projects/p/locations/l/keyRings/r/cryptoKeys/k" },
+      "provider_response": { "name": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1" },
       "expected_response": { "ok": true, "checks": [{ "name": "Key exists", "status": "pass", "detail": "GCP KMS key 'projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1' is reachable.", "source": "adapter" }] }
     }
   ]

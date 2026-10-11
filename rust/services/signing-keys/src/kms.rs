@@ -1725,9 +1725,9 @@ async fn public_key_gcp(config: &Value) -> Result<Value, KmsError> {
 
 async fn verify_gcp(config: &Value) -> CapabilityResult {
     let endpoint = gcp_endpoint(config);
-    let key_reference = match string(config, "key_reference").filter(|value| !value.is_empty()) {
-        Some(value) => value,
-        None => return CapabilityResult::fail("Key reference", "key_reference is required"),
+    let key_reference = match gcp_key_version_reference(config) {
+        Ok(value) => value,
+        Err(error) => return CapabilityResult::fail("Key reference", error.to_string()),
     };
     let client = match cloud_http_client() {
         Ok(client) => client,

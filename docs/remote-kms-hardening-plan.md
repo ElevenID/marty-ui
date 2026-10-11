@@ -14079,6 +14079,11 @@ connectivity vectors now probe a pinned version. The local Signing Keys
 library suite (178 passed, nine ignored) and provider, registry and service
 validation golden suites pass after correcting their versioned probe paths.
 This is configuration and protocol-shape evidence, not a live GCP key proof.
+Self-review found that the GCP connectivity probe still accepted a versionless
+reference directly, bypassing that shared parser. It now rejects such a probe
+before network I/O. The reachable-provider fixture reports the same pinned
+version it was asked to probe; provider and service-validation golden suites
+pass locally (six tests total), as do file Rustfmt and diff hygiene.
 
 UI #1192 head `5ba6851d0eb431305c75419b32b207cbadf96df2` [CI
 38111105084](https://github.com/ElevenID/marty-ui/actions/runs/38111105084)
