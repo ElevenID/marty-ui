@@ -24,8 +24,9 @@ if __package__:
     from .passport_supported_infra_images import registry_index
     from .check_selfhost_locked_image_platform import accepted_repo_digests
     from .qualify_selfhost_migrations import (
+        PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
         QualificationError, _assert_run, _checked, _empty_project, command,
-        validate_images, validate_model,
+        native_command, validate_images, validate_model,
     )
 else:
     from check_prepared_selfhost_consumer import (
@@ -34,8 +35,9 @@ else:
     from passport_supported_infra_images import registry_index
     from check_selfhost_locked_image_platform import accepted_repo_digests
     from qualify_selfhost_migrations import (
+        PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
         QualificationError, _assert_run, _checked, _empty_project, command,
-        validate_images, validate_model,
+        native_command, validate_images, validate_model,
     )
 
 
@@ -101,8 +103,11 @@ def bundle_images(archive: Path, lock_path: Path, transaction: Path,
     require((install_root / "docker/openbao-init.sh").is_file(),
             "Installed bundle lacks OpenBao initializer")
     images = {"migrations": lock["services"].get("db-migrate"),
+              "services": lock["services"].get("issuance"),
               "postgres": lock["services"].get("postgres"),
               "redis": lock["services"].get("redis")}
+    require(lock["services"].get("issuance-migrations") == images["services"],
+            "Installed Issuance runtime and migration images differ")
     # Existing image-role validator rejects mutable or wrong-repository inputs.
     validate_images({**images, "openbao": EXPECTED_PIN})
     return images, receipt
@@ -141,7 +146,8 @@ def validate_scoped_model(model: dict, images: dict[str, str],
             "Disposable Compose model has unexpected top-level inputs")
     services = model.get("services")
     require(isinstance(services, dict) and set(services) ==
-            {"postgres", "redis", "openbao", "openbao-bootstrap", "db-migrate"},
+            {"postgres", "redis", "openbao", "openbao-bootstrap", "db-migrate",
+             "native-schema-migrate"},
             "Disposable service set changed")
     require(all(isinstance(service, dict)
                 and service.get("platform") == "linux/amd64"
@@ -234,6 +240,7 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
         environment = os.environ.copy()
         environment.update({
             "PROBE_MIGRATIONS_IMAGE": images["migrations"],
+            "PROBE_SERVICES_IMAGE": images["services"],
             "PROBE_POSTGRES_IMAGE": images["postgres"],
             "PROBE_REDIS_IMAGE": images["redis"],
             "PROBE_OPENBAO_IMAGE": images["openbao"],
@@ -265,12 +272,25 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                 path = secret_dir / name
                 require(path.is_file() and not path.is_symlink()
                         and path.stat().st_size > 0, "Disposable scoped token is missing")
+            token_values = [(secret_dir / name).read_bytes().strip()
+                            for name in ("bao_root_token", "bao_service_token",
+                                         "notification_openbao_token")]
+            require(all(token_values) and len(set(token_values)) == len(token_values),
+                    "Disposable OpenBao tokens must be distinct")
             ledger = None
             for _ in range(2):
                 migration = run([*compose, "run", "--no-deps", "--rm", "db-migrate"],
                                 environment, 900)
                 _checked(migration, "Exact-bundle self-host migrations failed")
                 _assert_run(migration.stdout + migration.stderr)
+                _checked(run([*compose, "run", "--no-deps", "--rm",
+                              "native-schema-migrate"], environment, 900),
+                         "Exact-bundle Rust native schema migrations failed")
+                _checked(run([*compose, "run", "--no-deps", "--rm",
+                              "--entrypoint", "/bin/sh", "native-schema-migrate",
+                              "-ec", native_command("verify-owned-schema")],
+                             environment, 900),
+                         "Exact-bundle Rust native schema verification failed")
                 head = _checked(run([*compose, "exec", "-T", "postgres", "psql", "-U",
                                      "marty", "-d", "marty", "-Atqc", HEAD], environment),
                                 "Notification migration ledger is unavailable").strip()
@@ -282,10 +302,23 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                                       "-n", "2", "EXISTS", REGISTRY], environment),
                                  "KMS registry verification failed").strip()
                 require(redis == "1", "KMS registry was not seeded")
+                private_schema = _checked(run([*compose, "exec", "-T", "postgres",
+                                               "psql", "-U", "marty", "-d", "marty",
+                                               "-Atqc", PRIVATE_KEY_SCHEMA_QUERY],
+                                              environment),
+                                          "Private-key schema inventory failed").strip()
+                require(not private_schema,
+                        "Exact-bundle schema created private-key storage")
+                _checked(run([*compose, "exec", "-T", "postgres", "psql", "-U",
+                              "marty", "-d", "marty", "-v", "ON_ERROR_STOP=1",
+                              "-qAtc", PRIVATE_KEY_CONTENT_QUERY], environment),
+                         "Private-key content storage scan failed")
             return {"schema": "marty.selfhost-installed-migrations-probe/v1",
                     "qualification": "unqualified", "archive_sha256": receipt["archive_sha256"],
                     "image_lock_sha256": receipt["image_lock_sha256"],
-                    "migrations_image": images["migrations"], "openbao_image": images["openbao"],
+                    "migrations_image": images["migrations"],
+                    "services_image": images["services"], "openbao_image": images["openbao"],
+                    "native_schemas": "verified", "private_key_storage": "absent",
                     "notification_head": ledger, "runs": 2}
         finally:
             if started:

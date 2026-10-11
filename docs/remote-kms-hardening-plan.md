@@ -15310,3 +15310,18 @@ targeted Rust recovery test passes on toolchain 1.95. All other hosted jobs,
 including OpenBao Raft recovery, passed on `38138126662`; its CI Gate failed
 as expected from the three failed jobs. The next grouped push combines the
 three corrections and the local distinct-token preflight.
+
+The grouped correction head `900568fae` is published as UI PR #1192; its
+exact-head [CI run 38140853256](https://github.com/ElevenID/marty-ui/actions/runs/38140853256)
+is active. Main then added the local installed self-host migration probe in
+`5ef0a424d`. Merge `34e091498` brought that probe into this branch without
+overlap, but its original migration-only four-role model conflicted with the
+KMS branch's five-role release validator and native-schema requirement. The
+local follow-up now derives the exact Rust services digest from the installed
+bundle lock, binds its Issuance runtime and migration roles, runs all four
+native schema owners and verification twice, and scans the assembled database
+for private-key schema and content. It also rejects reused root, service and
+Notification OpenBao tokens without printing them. The scoped and base probe
+tests pass 22 cases with one optional live-Docker case skipped; Ruff and diff
+checks pass. This merge and follow-up remain local until the active CI run
+concludes, to avoid overlapping full CI runs.

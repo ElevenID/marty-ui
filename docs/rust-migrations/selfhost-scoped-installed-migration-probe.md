@@ -20,10 +20,12 @@ python scripts/probe_selfhost_installed_migrations.py \
 ```
 
 The probe rechecks the exact ZIP, descriptor, receipt, lock, and extracted
-inventory. It takes the migrations, PostgreSQL, and Redis images only from the
-bundle lock. The separate OpenBao 2.5.2 pin has an explicit Linux amd64,
-disposable self-host migration scope and is checked against the registry index.
-All five Compose services select `linux/amd64`; before startup the probe pulls
+inventory. It takes the migrations, Rust services, PostgreSQL, and Redis images
+only from the bundle lock and requires the Issuance runtime and migration
+roles to resolve to the same services image. The separate OpenBao 2.5.2 pin
+has an explicit Linux amd64, disposable self-host migration scope and is
+checked against the registry index.
+All six Compose services select `linux/amd64`; before startup the probe pulls
 each distinct exact reference for that platform and checks the selected local
 image's OS, architecture, and repository-digest association.
 The disposable project has an internal network, no host ports or persistent
@@ -31,7 +33,10 @@ volumes, and no source builds. A root token is available only to OpenBao and
 the one-shot bootstrap container; the migration receives distinct scoped
 credential-service and Notification tokens. The bootstrap verifies allowed and
 denied capabilities before writing those tokens to disposable files. Migration
-then runs twice, with ledger and signing-registry checks, before project teardown.
+and native Rust schema migrations then run twice. Each pass verifies the native
+schema owners, the notification ledger and signing registry, and scans the
+assembled database for private-key tables, columns, and content before project
+teardown.
 
 This proves neither an operational external OpenBao deployment nor full stack
 startup, login, issuer readiness, customer installation, provenance of third-party
