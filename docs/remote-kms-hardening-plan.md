@@ -16417,3 +16417,9 @@ ignoring stale bytecode. All 176 affected retirement, wheel-pin and installer
 tests pass locally with Ruff and diff hygiene. Neither issue justifies
 restoring the retired wheel. Preserve the failed CI job as evidence and batch
 these fixes with the Core wheel-pin correction before the next push.
+The actual local Credentials test-harness wheel built with `uv build --wheel`
+contains five metadata files, no `marty-common` runtime requirement, and
+PyYAML only behind its `dev` extra. The pushed prior head's hosted Python
+Security and Core Python Wheels jobs passed; its Python Tests job failed at
+the missing PyYAML import described above. This wheel is a test-harness
+artifact, not the still-unqualified released native Core wheel.
