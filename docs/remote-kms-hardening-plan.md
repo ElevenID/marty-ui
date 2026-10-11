@@ -15357,3 +15357,18 @@ Kubernetes model and paired-configuration tests pass locally. The Canvas
 acceptance executable compiles locally; the full Linux composition and
 Kubernetes child tests still require the next grouped hosted run. This batch
 is local and unpushed at this checkpoint.
+
+The grouped correction was pushed as UI PR #1192 head `e1967e993` and its
+exact-head CI run is `38144557664`. During independent local review, the
+full Kubernetes contract file exposed one more stale negative assertion that
+rejected `BAO_ADDR` on native Issuance. The corrected assertion requires the
+closed ConfigMap reference and rejects all other provider environment names;
+14 of 14 locally runnable Kubernetes model tests pass. The one excluded CLI
+case requires a Linux executable. A disposable local OpenBao plugin image
+also proved the test fixture's non-exportable Transit HMAC key creation,
+credential-scoped mint policy, successful HMAC operation and denial of key
+metadata read. The Canvas named signing peer now asserts the received grant's
+origin, tenant, issuer DID, resolved key reference, route, and exact payload
+digest before returning its remote Transit signature. These post-push review
+improvements remain local for the next grouped correction after the running
+exact-head CI reports its complete results.

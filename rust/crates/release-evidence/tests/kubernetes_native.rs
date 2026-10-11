@@ -1191,9 +1191,14 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
             }
         }
         let native_env = env(&rows[index(rows, "Deployment", "issuance-native")]);
+        assert_eq!(
+            native_env["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
         assert!(!native_env
             .keys()
-            .any(|name| name.starts_with("BAO") || name.starts_with("OPENBAO")));
+            .any(|name| (name.starts_with("BAO") && name != "BAO_ADDR")
+                || name.starts_with("OPENBAO")));
         let signing = env(&rows[index(rows, "Deployment", "signing-keys")]);
         assert_eq!(
             signing["SIGNING_KEYS_REDIS_URL"]["value"],

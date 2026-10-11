@@ -29,6 +29,7 @@ use marty_issuance_service::{
     credential_template_proto as template, organization_proto as organization,
     revocation_profile_proto as revocation,
 };
+use marty_signing_grant::{payload_digest, GrantEnvelope, SigningOrigin, HEADER_NAME};
 use prost::Message;
 use serde_json::{json, Value};
 
@@ -432,6 +433,22 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
             let payload = URL_SAFE_NO_PAD
                 .decode(body["payload_b64"].as_str().unwrap())
                 .unwrap();
+            let grant = GrantEnvelope::from_header_value(
+                headers[HEADER_NAME]
+                    .to_str()
+                    .expect("scoped signing grant header"),
+            )
+            .expect("well-formed scoped signing grant");
+            assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCredential);
+            assert_eq!(grant.claims.organization_id, ORGANIZATION);
+            assert_eq!(grant.claims.issuer_did.as_deref(), Some(ISSUER));
+            assert_eq!(grant.claims.route, "/internal/compat/issuer-dids/sign");
+            assert_eq!(
+                grant.claims.key_reference.as_deref(),
+                Some("synthetic-opaque-signing-key")
+            );
+            assert_eq!(grant.claims.payload_sha256_b64, payload_digest(&payload));
+            assert_eq!(body["key_reference"], "synthetic-opaque-signing-key");
             let signature = state.signer.sign(&payload).await;
             state.signed.lock().unwrap().push(payload);
             Json(json!({"ok":true,"issuer_did":ISSUER,"algorithm":"EdDSA",
