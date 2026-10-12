@@ -408,6 +408,62 @@ class AffectedRustPlannerTests(unittest.TestCase):
                         gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"], "false"
                     )
 
+    def test_physical_provider_ingress_has_a_callback_signer_witness(self) -> None:
+        """Retain the isolated signer obligation without selecting fewer checks."""
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["rust/services/signing-keys/src/passport_callback_hmac.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-signing-keys"
+            and edge["package"] == "marty-issuance-service"
+            and edge.get("conditional")
+            == "physical-provider ingress callback signing only"
+        ]
+        self.assertEqual(len(edges), 1)
+        witness = edges[0]
+        for marker, evidence in (
+            ("binding", "consumer_evidence"),
+            ("callback_binding", "consumer_evidence"),
+            ("handoff_marker", "handoff_evidence"),
+            ("callback_marker", "handoff_evidence"),
+            ("request_marker", "request_evidence"),
+            ("body_marker", "request_evidence"),
+            ("delivery_marker", "request_evidence"),
+            ("provider_route_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_registration_marker", "provider_registration_evidence"),
+            ("provider_binary_marker", "provider_manifest_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    witness[marker],
+                    (ROOT / witness[evidence]).read_text(encoding="utf-8"),
+                )
+        profile = yaml.safe_load(
+            (ROOT / witness["profile_evidence"]).read_text(encoding="utf-8")
+        )
+        ingress = profile["services"][witness["profile_consumer_service"]]
+        signer = profile["services"][witness["profile_provider_service"]]
+        self.assertEqual(ingress["environment"]["PASSPORT_PROVIDER_INGRESS_ENABLED"], "true")
+        self.assertEqual(
+            ingress["environment"]["PASSPORT_PROVIDER_SIGNER_URL"],
+            witness["profile_signer_url"],
+        )
+        self.assertEqual(
+            ingress["environment"]["PASSPORT_PROVIDER_NATIVE_CALLBACK_URL"],
+            witness["profile_callback_url"],
+        )
+        self.assertEqual(
+            signer["environment"]["SERVICE_NAME"], "passport_callback_signer_supported"
+        )
+        self.assertIn(
+            witness["profile_provider_service"], ingress["depends_on"]
+        )
+
     def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
@@ -2574,6 +2630,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     for edge in result["observed_non_cargo_consumers"]
                     if edge["producer"] == "marty-signing-keys"
                     and edge["package"] == consumer
+                    and "gateway_route_marker" in edge
                 ]
                 self.assertEqual(len(edges), 1)
                 edge = edges[0]

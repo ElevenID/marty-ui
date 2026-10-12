@@ -3741,9 +3741,11 @@ passport selector and physical-provider ingress selector use two distinct
 beta-profile route owners in the Issuance Cargo package. The shadow planner
 now inventories their configuration, route-table tests, binary declarations,
 and profile bindings separately from the default public Issuance route. The
-existing Gateway/Issuance package relationship is unchanged, and all service
-changes still select the full Rust workspace. The local planner suite passed
-51 tests (one existing Windows skip); this is source-backed obligation
+same physical-provider flow calls the isolated Signing Keys callback signer;
+its request, route, binary, and Compose witnesses are also inventoried. The
+existing package relationships are unchanged, and all service changes still
+select the full Rust workspace. The local planner suite passed 51 tests
+(one existing Windows skip); this is source-backed obligation
 inventory, not a complete runtime graph or a CI speedup. Independent review
 and protected CI remain required before merge.
 
