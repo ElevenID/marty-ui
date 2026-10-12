@@ -435,6 +435,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("handoff_marker", "handoff_evidence"),
             ("callback_marker", "handoff_evidence"),
             ("request_marker", "request_evidence"),
+            ("auth_marker", "request_evidence"),
             ("body_marker", "request_evidence"),
             ("delivery_marker", "request_evidence"),
             ("provider_route_marker", "provider_evidence"),
@@ -467,6 +468,73 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertIn(
             witness["profile_provider_service"], ingress["depends_on"]
         )
+
+    def test_beta_bureau_has_a_distinct_callback_signer_witness(self) -> None:
+        """Record the beta-only signer operation without narrowing CI."""
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["rust/services/signing-keys/src/passport_callback_hmac.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-signing-keys"
+            and edge["package"] == "marty-issuance-service"
+            and edge.get("conditional") == "beta passport bureau callback signing only"
+        ]
+        self.assertEqual(len(edges), 1)
+        witness = edges[0]
+        for marker, evidence in (
+            ("gate_marker", "consumer_evidence"),
+            ("gate_logic_marker", "consumer_evidence"),
+            ("enable_marker", "consumer_evidence"),
+            ("binding", "consumer_evidence"),
+            ("private_url_marker", "consumer_evidence"),
+            ("callback_binding", "consumer_evidence"),
+            ("callback_selection_marker", "consumer_evidence"),
+            ("handoff_marker", "consumer_evidence"),
+            ("test_marker", "consumer_evidence"),
+            ("request_marker", "request_evidence"),
+            ("auth_marker", "request_evidence"),
+            ("body_marker", "request_evidence"),
+            ("provider_route_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_beta_gate_marker", "provider_registration_evidence"),
+            ("provider_enable_gate_marker", "provider_registration_evidence"),
+            ("provider_registration_marker", "provider_registration_evidence"),
+            ("provider_binary_marker", "provider_manifest_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    witness[marker],
+                    (ROOT / witness[evidence]).read_text(encoding="utf-8"),
+                )
+        profile = yaml.safe_load(
+            (ROOT / witness["profile_evidence"]).read_text(encoding="utf-8")
+        )
+        bureau = profile["services"][witness["profile_consumer_service"]]
+        signer = profile["services"][witness["profile_provider_service"]]
+        self.assertEqual(bureau["environment"]["ENVIRONMENT"], "beta")
+        self.assertEqual(bureau["environment"]["PASSPORT_BETA_BUREAU_ENABLED"], "true")
+        self.assertEqual(
+            bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"],
+            witness["profile_signer_url"],
+        )
+        self.assertEqual(
+            bureau["environment"]["PASSPORT_BUREAU_CALLBACK_URL"],
+            witness["profile_callback_url"],
+        )
+        self.assertEqual(
+            bureau["environment"]["PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED"],
+            "true",
+        )
+        self.assertEqual(signer["environment"]["ENVIRONMENT"], "beta")
+        self.assertEqual(signer["environment"]["PASSPORT_CALLBACK_SIGNER_ENABLED"], "true")
+        self.assertEqual(signer["environment"]["SERVICE_NAME"], "passport_callback_signer")
+        self.assertIn(witness["profile_provider_service"], bureau["depends_on"])
+        self.assertIn("passport-callback-signing", bureau["networks"])
+        self.assertIn("passport-callback-signing", signer["networks"])
 
     def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()

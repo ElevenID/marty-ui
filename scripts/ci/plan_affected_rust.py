@@ -91,11 +91,22 @@ PASSPORT_GATEWAY_ISSUANCE_SELECTOR_WITNESSES = (
     },
 )
 
+PASSPORT_CALLBACK_SIGNING_REQUEST_WITNESS = {
+    "request_evidence": "rust/services/issuance/src/passport_callback_handoff.rs",
+    "request_marker": ".post(sign_url)",
+    "auth_marker": '.header("x-api-key", signing_api_key)',
+    "body_marker": '.json(&json!({"body_b64": STANDARD.encode(body)}))',
+    "provider_evidence": "rust/services/signing-keys/src/passport_callback_hmac.rs",
+    "provider_route_marker": '"/internal/documents/{organization_id}/passport-callbacks/sign"',
+    "provider_handler_marker": "post(sign_callback)",
+}
+
 # Physical-provider ingress requests a KMS-backed signature from the isolated
 # Signing Keys callback binary before forwarding the same body to native
 # Issuance. This is a distinct conditional operation on an existing package
 # pair, not evidence that the whole runtime graph is mapped.
 PASSPORT_PROVIDER_CALLBACK_SIGNER_WITNESS = {
+    **PASSPORT_CALLBACK_SIGNING_REQUEST_WITNESS,
     "package": "marty-issuance-service",
     "conditional": "physical-provider ingress callback signing only",
     "consumer_evidence": "rust/services/issuance/src/bin/passport_provider_ingress.rs",
@@ -104,13 +115,7 @@ PASSPORT_PROVIDER_CALLBACK_SIGNER_WITNESS = {
     "handoff_evidence": "rust/services/issuance/src/passport_provider_ingress.rs",
     "handoff_marker": "sign_and_deliver(",
     "callback_marker": "&state.native_callback_url,",
-    "request_evidence": "rust/services/issuance/src/passport_callback_handoff.rs",
-    "request_marker": ".post(sign_url)",
-    "body_marker": '.json(&json!({"body_b64": STANDARD.encode(body)}))',
     "delivery_marker": ".post(callback_url.clone())",
-    "provider_evidence": "rust/services/signing-keys/src/passport_callback_hmac.rs",
-    "provider_route_marker": '"/internal/documents/{organization_id}/passport-callbacks/sign"',
-    "provider_handler_marker": "post(sign_callback)",
     "provider_registration_evidence": "rust/services/signing-keys/src/bin/passport_callback_signer_supported.rs",
     "provider_registration_marker": "isolated_supported_signer_router(provider, key)",
     "provider_manifest_evidence": "rust/services/signing-keys/Cargo.toml",
@@ -120,6 +125,36 @@ PASSPORT_PROVIDER_CALLBACK_SIGNER_WITNESS = {
     "profile_provider_service": "passport-callback-signer-supported",
     "profile_signer_url": "http://passport-callback-signer-supported:8018/internal/documents",
     "profile_callback_url": "http://issuance-native:8005/v1/passport/webhooks/personalization",
+}
+
+# The beta bureau is a separate consumer of that same signed-body request.
+# Its private signer and Gateway callback are selected only by the synthetic
+# passport beta profile; this observation does not narrow service checks.
+PASSPORT_BETA_CALLBACK_SIGNER_WITNESS = {
+    **PASSPORT_CALLBACK_SIGNING_REQUEST_WITNESS,
+    "package": "marty-issuance-service",
+    "conditional": "beta passport bureau callback signing only",
+    "consumer_evidence": "rust/services/issuance/src/bin/passport_beta_bureau.rs",
+    "gate_marker": "if !beta_gate(",
+    "gate_logic_marker": 'environment == Some("beta") && enabled == Some("true")',
+    "enable_marker": 'env::var("PASSPORT_BETA_BUREAU_ENABLED").ok().as_deref()',
+    "binding": 'required_url("SIGNING_KEYS_INTERNAL_URL")?',
+    "private_url_marker": '"http://passport-callback-signer:8018/internal/documents"',
+    "callback_binding": 'required_url("PASSPORT_BUREAU_CALLBACK_URL")?',
+    "callback_selection_marker": 'env::var("PASSPORT_BETA_BUREAU_GATEWAY_CALLBACK_ENABLED")',
+    "handoff_marker": "let receipt = sign_and_deliver(",
+    "test_marker": "assert!(deliver_one(&state).await.unwrap());",
+    "provider_registration_evidence": "rust/services/signing-keys/src/bin/passport_callback_signer.rs",
+    "provider_beta_gate_marker": 'std::env::var("ENVIRONMENT").as_deref() != Ok("beta")',
+    "provider_enable_gate_marker": 'std::env::var("PASSPORT_CALLBACK_SIGNER_ENABLED").as_deref() != Ok("true")',
+    "provider_registration_marker": "isolated_signer_router(provider, config.internal_api_key)",
+    "provider_manifest_evidence": "rust/services/signing-keys/Cargo.toml",
+    "provider_binary_marker": 'path = "src/bin/passport_callback_signer.rs"',
+    "profile_evidence": "docker-compose.profile.passport-native-beta.yml",
+    "profile_consumer_service": "passport-beta-bureau",
+    "profile_provider_service": "passport-callback-signer",
+    "profile_signer_url": "http://passport-callback-signer:8018/internal/documents",
+    "profile_callback_url": "http://gateway:8000/v1/passport/webhooks/personalization",
 }
 
 # These are observed HTTP/deployment consumers, not a complete runtime graph.
@@ -863,6 +898,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-signing-keys": [
         PASSPORT_PROVIDER_CALLBACK_SIGNER_WITNESS,
+        PASSPORT_BETA_CALLBACK_SIGNER_WITNESS,
         {
             # Issuance resolves its issuer identity through the configured
             # signing-keys URL, normally Gateway's authenticated compat route.
