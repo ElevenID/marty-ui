@@ -3884,6 +3884,20 @@ and database steps of 300s, 332s, and 439s. The protected head included the
 earlier remote-KMS merge and ran under different conditions, so the 8m17s
 spread is not a before/after effect of the selector.
 
+Next cache-invalidation candidate: the 24 tracked Canvas composition
+acceptance test sources were still copied by the root and migration Docker
+contexts, despite those recipes building production binaries only. The public
+service and CI-image Dockerfile-specific contexts already excluded whole
+integration-test trees. An exact-file exclusion now covers the remaining
+root/migration contexts; a checked-out proof guards the sole Cargo test target,
+regular Git modes, source consumers, every Rust-copying recipe and effective
+ignore rules across all seven contexts. A local BuildKit root-context probe
+rejected a named excluded test source and accepted `rust/Cargo.toml` as a
+control. The normal checkout Canvas lane still compiles and runs these tests.
+The 33 local context-policy tests pass; image build and protected CI remain
+required before merge. This removes a known
+source-layer invalidation input but is not yet a measured hosted speedup.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
