@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import socket
 import subprocess
@@ -18,6 +19,13 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def normalized_powershell_error(output: str) -> str:
+    plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", output)
+    return re.sub(r"\s+", "", plain)
+
+
 CONTRACT = json.loads(
     (ROOT / "contracts/canvas-localhost-bridge-behavior.json").read_text(
         encoding="utf-8"
@@ -329,7 +337,9 @@ def test_beta_preflight_rejects_running_optional_bridge_before_mutation(tmp_path
     )
     assert (result.returncode != 0) is running
     if running:
-        assert "Stop the optional Canvas localhost bridge before beta release" in result.stderr
+        assert normalized_powershell_error(
+            "Stop the optional Canvas localhost bridge before beta release"
+        ) in normalized_powershell_error(result.stderr)
 
 
 @pytest.mark.parametrize(
@@ -383,4 +393,6 @@ def test_aggregate_preflight_requires_no_running_optional_bridge(
     )
     assert (result.returncode != 0) is (expected_message is not None)
     if expected_message:
-        assert expected_message in result.stderr
+        assert normalized_powershell_error(expected_message) in normalized_powershell_error(
+            result.stderr
+        )
