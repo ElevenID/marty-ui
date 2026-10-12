@@ -1,0 +1,23 @@
+# Canvas demo seed Rust qualification
+
+The Rust seeder is packaged at `/usr/local/bin/marty-canvas-demo-seed` in the migrations image. Its intended journey covers Canvas LMS, platform, binding, badge template, signed AGS, wallet, and mirror operations. The Python Make target remains active until a complete isolated run and recorded demo establish parity.
+
+## Disposable project
+
+Run this on a dedicated Docker daemon with enough capacity for the full Marty dependency graph and Canvas LMS. The overlay gives the test its own Compose project, network, Canvas container names, and volumes. Only the gateway and Canvas LMS publish loopback ports (`18000` and `18088` by default). The local issuance bridge serves Canvas metadata on the same localhost port inside issuance. The harness refuses a project name outside `marty-canvas-disposable-*`, validates local endpoints before `up` or `seed`, and checks the Canvas container's Compose project label before seeding. It never joins the beta or self-host production network.
+
+1. Copy `config/canvas/disposable-seed.env.example` to `.env.canvas-disposable.local` and keep the latter untracked. Set only credentials created inside this disposable stack. In particular, create an organization actor key with Canvas integration read/write scopes there and replace `MARTY_API_KEY`. Do not copy a beta or production key.
+2. Run `bash scripts/qualify-canvas-seed-disposable.sh config` to validate the Compose model.
+3. Run `bash scripts/qualify-canvas-seed-disposable.sh up`. Compose starts the gateway's dependent services, database migrations, OpenBao bootstrap, issuance, signing keys, Canvas LMS, and Canvas Credentials sandbox. Wait for their health. The Canvas image is resource intensive; allow at least the capacity documented in `docs/canvas-real-test-environment.md`.
+4. On the same isolated host, run the UI from `ui/` with `VITE_API_URL=http://localhost:18000 npm run dev -- --host 127.0.0.1`, using Node 24 and the pinned dependencies. Create the disposable organization actor key with Canvas integration, application, and credential scopes through the local organization console. Replace the placeholder `MARTY_API_KEY` in the env file. Check that the migration-created OpenBao issuer profile resolves through the signing registry with an active key reference. No external CA or physical signer files are required for this local demo.
+5. Run `bash scripts/qualify-canvas-seed-disposable.sh seed`. The script requires internal gateway, issuance, signing registry, Canvas, and wallet URLs and rejects database overrides. It mounts the Docker socket only for this one-shot runner because the Canvas Rails bootstrap uses `docker exec`; the runner exits afterward.
+6. Run the seed command a second time to verify idempotence. Capture the CLI summary, Canvas course/learner/tool/quiz, issuer profile, approved AGS policy, issued credential, wallet claim, and mirror delivery/provenance. Replay the same Canvas launch from the browser and record the demo journey before switching the Make target or deleting Python.
+7. Run `bash scripts/qualify-canvas-seed-disposable.sh down` after evidence capture to remove only this project's containers and volumes.
+
+The example env deliberately contains a placeholder organization actor key. `seed` fails before any mutation until it is replaced. A working isolated organization actor and issuer profile have not yet been provisioned in this worktree, so the complete journey and recording are still pending. This machine's Docker daemon has 16 GB total memory and also hosts beta and self-host production; the full run requires a separate runner to avoid disrupting them. Browser login also needs locally reachable Keycloak and the UI, which are not yet qualified by the overlay. The migrations image build and `marty-canvas-demo-seed --help` smoke pass; they do not establish functional parity by themselves.
+
+## Release gates
+
+- Run `MARTY_CANVAS_SEED_REQUIRE_DATABASE_TEST=1` and `MARTY_CANVAS_SEED_TEST_DATABASE_URL` against disposable PostgreSQL in the hosted Rust contracts lane. The test checks current and optional legacy schema upsert, rollback, and transition lookup. The CI workflow edit is reserved for the active CI owner.
+- Recheck the image build, disposable two-run journey, local Canvas launch, wallet/mirror result, and demo recording at the exact PR head.
+- Obtain independent maintainer review with no P1–P3 findings, then switch `make canvas-real-seed` to the packaged Rust runner and delete the Python seeder in the same reviewed change.

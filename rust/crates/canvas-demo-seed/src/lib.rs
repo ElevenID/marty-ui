@@ -11,6 +11,7 @@ mod canvas_rest;
 mod cli_config;
 mod database;
 mod demo_evidence;
+mod issuer_profile;
 mod lms;
 mod run;
 mod transition;
@@ -32,6 +33,7 @@ pub use demo_evidence::{
     ags_score_payload, application_payload, send_signed_ags, signed_ags_wire, DemoEvidenceConfig,
     SignedAgsWire,
 };
+pub use issuer_profile::IssuerProfileContext;
 pub use lms::{seed_canvas_lms_objects, CanvasLmsSeedResult};
 pub use run::run_seed;
 pub use transition::{lookup_transition, transition_display_lines, transition_summary};
@@ -59,6 +61,7 @@ pub struct GatewaySeedConfig {
     pub program_binding_direct_issue: bool,
     pub program_binding_score_threshold: i64,
     pub signing_keys_internal_base_url: String,
+    pub badge_vct: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -182,14 +185,17 @@ pub fn demo_scope(
     Value::Object(scope)
 }
 
-pub fn remote_signing_config(signing_keys_internal_base_url: &str) -> Value {
+pub fn remote_signing_config(
+    signing_keys_internal_base_url: &str,
+    issuer: &IssuerProfileContext,
+) -> Value {
     json!({
         "provider": "gateway-signing-key-registry",
-        "issuer_profile_id": "ip-marty-vc-jwt-issuer",
-        "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
-        "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
-        "signing_service_id": "managed-openbao-transit",
-        "signing_key_reference": "cred-issuer-marty-es256",
+        "issuer_profile_id": issuer.issuer_profile_id,
+        "issuer_did": issuer.issuer_did,
+        "verification_method_id": issuer.verification_method_id,
+        "signing_service_id": issuer.signing_service_id,
+        "signing_key_reference": issuer.signing_key_reference,
         "key_purpose": "vc_jwt_issuer",
         "credential_formats": ["sd_jwt_vc", "jwt_vc_json"],
         "secret_boundary": {
@@ -208,7 +214,6 @@ const BADGE_VCT: &str =
     "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge";
 const BADGE_NAME: &str = "Interoperable Credentials Foundations Badge";
 const BADGE_DESCRIPTION: &str = "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.";
-const ISSUER_DID: &str = "did:web:beta.elevenidllc.com:orgs:marty";
 
 fn badge_claims() -> Value {
     let claims: [(&str, &str, &str, bool); 18] = [
@@ -264,8 +269,12 @@ fn badge_claims() -> Value {
     )
 }
 
-pub fn credential_template_payload(cfg: &GatewaySeedConfig) -> Value {
-    let image = format!("{BADGE_VCT}/image.svg");
+pub fn credential_template_payload(
+    cfg: &GatewaySeedConfig,
+    issuer: &IssuerProfileContext,
+) -> Value {
+    let badge_vct = &cfg.badge_vct;
+    let image = format!("{badge_vct}/image.svg");
     json!({
         "id": cfg.credential_template_id,
         "organization_id": cfg.organization_id,
@@ -273,7 +282,7 @@ pub fn credential_template_payload(cfg: &GatewaySeedConfig) -> Value {
         "description": BADGE_DESCRIPTION,
         "status": "active",
         "credential_type": "OpenBadgeCredential",
-        "vct": BADGE_VCT,
+        "vct": badge_vct,
         "doctype": "org.openbadges.v3",
         "claims": badge_claims(),
         "privacy_posture": "selective_disclosure",
@@ -282,7 +291,7 @@ pub fn credential_template_payload(cfg: &GatewaySeedConfig) -> Value {
         "derived_attributes": [],
         "display_style": {"background_color": "#0B5F7A", "text_color": "#ffffff", "icon": "award", "logo_url": image},
         "validity_rules": {"duration": "P1Y", "renewal_required": false},
-        "issuer_requirements": {"allowed_issuer_dids": [ISSUER_DID], "trust_tier_required": "organization_managed_remote_signing", "audit_level_required": "standard"},
+        "issuer_requirements": {"allowed_issuer_dids": [issuer.issuer_did], "trust_tier_required": "organization_managed_remote_signing", "audit_level_required": "standard"},
         "supported_formats": ["sd_jwt_vc"],
         "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
         "wallet_configs": [
@@ -290,9 +299,9 @@ pub fn credential_template_payload(cfg: &GatewaySeedConfig) -> Value {
             {"wallet_id": "spruceid", "deep_link_scheme": "spruceid://", "format_variant": "dc+sd-jwt"}
         ],
         "key_access_mode": "REMOTE_SIGNING",
-        "issuer_key_id": "cred-issuer-marty-es256",
+        "issuer_key_id": issuer.signing_key_reference,
         "issuer_algorithm": "ES256",
-        "remote_signing_config": remote_signing_config(&cfg.signing_keys_internal_base_url),
+        "remote_signing_config": remote_signing_config(&cfg.signing_keys_internal_base_url, issuer),
         "version": 1
     })
 }
@@ -312,7 +321,12 @@ pub fn open_badge_evidence_requirement(cfg: &GatewaySeedConfig, scope: &Value) -
     })
 }
 
-pub fn application_template_payload(cfg: &GatewaySeedConfig, scope: &Value) -> Value {
+pub fn application_template_payload(
+    cfg: &GatewaySeedConfig,
+    scope: &Value,
+    issuer: &IssuerProfileContext,
+) -> Value {
+    let badge_vct = &cfg.badge_vct;
     let fields = [
         ("email", "Email", "email"),
         ("given_name", "Given name", "text"),
@@ -342,12 +356,12 @@ pub fn application_template_payload(cfg: &GatewaySeedConfig, scope: &Value) -> V
             "scope": scope,
             "delivery_mode": cfg.program_binding_delivery_mode,
             "issuer_mode": "org_managed",
-            "issuer_did": ISSUER_DID,
+            "issuer_did": issuer.issuer_did,
             "open_badge": {
-                "vct": BADGE_VCT,
+                "vct": badge_vct,
                 "name": BADGE_NAME,
-                "image": format!("{BADGE_VCT}/image.svg"),
-                "criteria": format!("{BADGE_VCT}/criteria")
+                "image": format!("{badge_vct}/image.svg"),
+                "criteria": format!("{badge_vct}/criteria")
             }
         },
         "notification_config": {},

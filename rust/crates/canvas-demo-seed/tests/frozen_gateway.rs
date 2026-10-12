@@ -3,7 +3,7 @@ use marty_canvas_demo_seed::{
     ags_score_payload, application_payload, application_template_payload,
     credential_template_payload, demo_scope, remote_signing_config, resolve_issuer_context,
     run_mirror_publish, signed_ags_wire, upsert_binding, upsert_platform, DemoEvidenceConfig,
-    GatewaySeedConfig, GatewayTransport, Operation,
+    GatewaySeedConfig, GatewayTransport, IssuerProfileContext, Operation,
 };
 use serde_json::{json, Value};
 use std::{collections::VecDeque, sync::Mutex};
@@ -11,6 +11,17 @@ use std::{collections::VecDeque, sync::Mutex};
 struct Stub {
     responses: Mutex<VecDeque<Value>>,
     operations: Mutex<Vec<Value>>,
+}
+
+fn issuer() -> IssuerProfileContext {
+    IssuerProfileContext {
+        issuer_profile_id: "ip-marty-vc-jwt-issuer".into(),
+        issuer_did: "did:web:beta.elevenidllc.com:orgs:marty".into(),
+        signing_service_id: "managed-openbao-transit".into(),
+        signing_key_reference: "cred-issuer-marty-es256".into(),
+        verification_method_id: "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256"
+            .into(),
+    }
 }
 
 struct MirrorStub {
@@ -116,9 +127,12 @@ fn badge_template_payloads_match_frozen_python_contract() {
         ),
     ] {
         let writes = &contract["database_seed"][case]["writes"];
-        assert_eq!(credential_template_payload(&cfg), writes[0]["payload"]);
         assert_eq!(
-            application_template_payload(&cfg, &scope),
+            credential_template_payload(&cfg, &issuer()),
+            writes[0]["payload"]
+        );
+        assert_eq!(
+            application_template_payload(&cfg, &scope, &issuer()),
             writes[1]["payload"]
         );
     }
@@ -146,9 +160,36 @@ fn demo_application_and_ags_payloads_match_frozen_python_contract() {
     });
     let cfg = config();
     let expected = &contract["demo_evidence"]["operations"];
+    let mut expected_profile_payload = expected[0]["payload"].clone();
+    expected_profile_payload["integration_context"]["issuer"]["issuer_profile_id"] =
+        json!("ip-marty-vc-jwt-issuer");
     assert_eq!(
-        application_payload(&cfg, &demo, &canvas_seed, "2025-04-05"),
-        expected[0]["payload"]
+        application_payload(&cfg, &demo, &canvas_seed, "2025-04-05", &issuer()),
+        expected_profile_payload
+    );
+    let rotated = IssuerProfileContext {
+        issuer_profile_id: "profile-rotated".into(),
+        issuer_did: "did:web:rotated.example".into(),
+        signing_service_id: "kms-v2".into(),
+        signing_key_reference: "kms://profile-rotated/key-2".into(),
+        verification_method_id: "did:web:rotated.example#key-2".into(),
+    };
+    let rotated_payload = application_payload(&cfg, &demo, &canvas_seed, "2025-04-05", &rotated);
+    assert_eq!(
+        rotated_payload["integration_context"]["issuer"]["issuer_profile_id"],
+        "profile-rotated"
+    );
+    assert_eq!(
+        rotated_payload["integration_context"]["issuer"]["issuer_did"],
+        "did:web:rotated.example"
+    );
+    assert_eq!(
+        rotated_payload["integration_context"]["issuer"]["signing_service_id"],
+        "kms-v2"
+    );
+    assert_eq!(
+        rotated_payload["integration_context"]["issuer"]["signing_key_reference"],
+        "kms://profile-rotated/key-2"
     );
     assert_eq!(
         ags_score_payload(
@@ -161,6 +202,30 @@ fn demo_application_and_ags_payloads_match_frozen_python_contract() {
         ),
         expected[1]["payload"]
     );
+}
+
+#[test]
+fn disposable_badge_vct_stays_local_across_templates_and_evidence() {
+    let mut cfg = config();
+    cfg.badge_vct =
+        "http://localhost:5173/credentials/canvas-interoperability-foundations-badge".into();
+    let credential = credential_template_payload(&cfg, &issuer());
+    let application = application_template_payload(&cfg, &json!({"id": "scope-1"}), &issuer());
+    let demo = DemoEvidenceConfig {
+        learner_name: "First Last".into(),
+        learner_email: "learner@example.com".into(),
+        course_name: "Course".into(),
+        quiz_title: "Quiz".into(),
+        quiz_passing_score_percent: 80,
+        quiz_points_possible: 100,
+    };
+    let evidence = application_payload(&cfg, &demo, &json!({}), "2025-04-05", &issuer());
+    for payload in [&credential, &application, &evidence] {
+        assert!(!payload
+            .to_string()
+            .contains("beta.elevenidllc.com/credentials"));
+        assert!(payload.to_string().contains(&cfg.badge_vct));
+    }
 }
 
 #[test]
@@ -212,6 +277,9 @@ fn config() -> GatewaySeedConfig {
         program_binding_direct_issue: false,
         program_binding_score_threshold: 80,
         signing_keys_internal_base_url: "http://signing-keys:8000".into(),
+        badge_vct:
+            "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge"
+                .into(),
     }
 }
 
@@ -262,7 +330,7 @@ async fn gateway_operations_match_frozen_python_contract() {
         contract["gateway_seed"]["scope"]
     );
     assert_eq!(
-        remote_signing_config(&cfg.signing_keys_internal_base_url),
+        remote_signing_config(&cfg.signing_keys_internal_base_url, &issuer()),
         contract["gateway_seed"]["remote_signing"]
     );
 }

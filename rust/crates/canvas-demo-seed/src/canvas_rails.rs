@@ -51,9 +51,70 @@ pub trait CanvasDockerTransport {
 
 pub struct CanvasDocker;
 
+fn disposable_canvas_target(args: &[String], project: &str) -> Result<String, String> {
+    let suffix = project
+        .strip_prefix("marty-canvas-disposable-")
+        .unwrap_or_default();
+    if suffix.is_empty()
+        || !suffix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err("Invalid disposable Canvas project name".into());
+    }
+    let target = format!("{project}-canvas-real");
+    if args.first().map(String::as_str) != Some("exec") || !args.iter().any(|arg| arg == &target) {
+        return Err(
+            "Disposable Canvas runner may only exec its project-owned Canvas container".into(),
+        );
+    }
+    Ok(target)
+}
+
+#[cfg(test)]
+mod disposable_tests {
+    use super::disposable_canvas_target;
+
+    #[test]
+    fn docker_exec_is_limited_to_project_owned_canvas() {
+        let project = "marty-canvas-disposable-local";
+        let own = vec![
+            "exec".into(),
+            "-i".into(),
+            format!("{project}-canvas-real"),
+            "bash".into(),
+        ];
+        assert_eq!(
+            disposable_canvas_target(&own, project).unwrap(),
+            "marty-canvas-disposable-local-canvas-real"
+        );
+        let other = vec!["exec".into(), "marty-canvas-real".into(), "bash".into()];
+        assert!(disposable_canvas_target(&other, project).is_err());
+        let inspect = vec!["inspect".into(), "marty-issuance".into()];
+        assert!(disposable_canvas_target(&inspect, project).is_err());
+        assert!(disposable_canvas_target(&own, "elevenid-beta").is_err());
+    }
+}
+
 #[async_trait]
 impl CanvasDockerTransport for CanvasDocker {
     async fn run(&self, operation: CanvasDockerOperation) -> Result<CanvasDockerOutput, String> {
+        if let Ok(project) = std::env::var("CANVAS_DISPOSABLE_PROJECT") {
+            let target = disposable_canvas_target(&operation.args, &project)?;
+            let owner = Command::new("docker")
+                .args([
+                    "inspect",
+                    "--format",
+                    "{{ index .Config.Labels \"com.docker.compose.project\" }}",
+                    &target,
+                ])
+                .output()
+                .await
+                .map_err(|error| error.to_string())?;
+            if !owner.status.success() || String::from_utf8_lossy(&owner.stdout).trim() != project {
+                return Err("Canvas container does not belong to the disposable project".into());
+            }
+        }
         let mut child = Command::new("docker")
             .args(&operation.args)
             .stdin(if operation.input.is_some() {
@@ -93,6 +154,9 @@ pub async fn resolve_container_name<T: CanvasDockerTransport + Sync>(
     configured: &str,
 ) -> String {
     let configured = configured.trim();
+    if std::env::var_os("CANVAS_DISPOSABLE_PROJECT").is_some() {
+        return configured.into();
+    }
     let result = transport
         .run(CanvasDockerOperation {
             args: vec!["ps".into(), "--format".into(), "{{.Names}}".into()],

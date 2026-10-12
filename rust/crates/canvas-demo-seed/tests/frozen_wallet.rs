@@ -74,6 +74,9 @@ fn config() -> GatewaySeedConfig {
         program_binding_direct_issue: false,
         program_binding_score_threshold: 80,
         signing_keys_internal_base_url: "http://signing-keys:8000".into(),
+        badge_vct:
+            "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge"
+                .into(),
     }
 }
 

@@ -52,3 +52,29 @@ fn cli_rejects_gateway_service_key_and_direct_issuance_confusion() {
         json!(false)
     );
 }
+
+#[test]
+fn disposable_badge_vct_override_preserves_frozen_default() {
+    let mut env = HashMap::from([
+        ("MARTY_API_KEY".into(), "gateway-key".into()),
+        (
+            "ISSUANCE_INTERNAL_API_BASE_URL".into(),
+            "http://issuance:8008".into(),
+        ),
+        ("ISSUANCE_API_KEY".into(), "service-key".into()),
+    ]);
+    assert!(build_run_config(&env, true, false)
+        .unwrap()
+        .connector
+        .badge_vct
+        .starts_with("https://beta.elevenidllc.com/"));
+    env.insert(
+        "CANVAS_INTEROPERABILITY_BADGE_VCT".into(),
+        "http://localhost:5173/credentials/canvas-interoperability-foundations-badge".into(),
+    );
+    assert!(build_run_config(&env, true, false)
+        .unwrap()
+        .connector
+        .badge_vct
+        .starts_with("http://localhost:5173/"));
+}

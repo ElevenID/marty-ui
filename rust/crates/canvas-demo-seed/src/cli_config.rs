@@ -1,6 +1,6 @@
 //! Canvas demo CLI configuration, kept separate from side effects.
 
-use crate::{DemoEvidenceConfig, GatewaySeedConfig};
+use crate::{DemoEvidenceConfig, GatewaySeedConfig, BADGE_VCT};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -33,6 +33,10 @@ pub struct ConnectorRunConfig {
     pub demo_wallet_claim_enabled: bool,
     pub demo_mirror_publish_enabled: bool,
     pub signing_keys_internal_base_url: String,
+    // Keep the frozen CLI configuration JSON stable while allowing a local
+    // disposable VCT override for generated badge metadata.
+    #[serde(skip_serializing, default = "default_badge_vct")]
+    pub badge_vct: String,
     pub signing_keys_internal_api_key: String,
 }
 
@@ -69,6 +73,10 @@ pub struct SeedRunConfig {
     pub canvas: CanvasRunConfig,
 }
 
+fn default_badge_vct() -> String {
+    BADGE_VCT.into()
+}
+
 impl From<&ConnectorRunConfig> for GatewaySeedConfig {
     fn from(config: &ConnectorRunConfig) -> Self {
         Self {
@@ -89,6 +97,7 @@ impl From<&ConnectorRunConfig> for GatewaySeedConfig {
             program_binding_direct_issue: config.program_binding_direct_issue,
             program_binding_score_threshold: config.program_binding_score_threshold,
             signing_keys_internal_base_url: config.signing_keys_internal_base_url.clone(),
+            badge_vct: config.badge_vct.clone(),
         }
     }
 }
@@ -293,6 +302,7 @@ pub fn build_run_config(
             "SIGNING_KEYS_INTERNAL_BASE_URL",
             "http://localhost:8000/internal/signing-keys",
         ),
+        badge_vct: value(env, "CANVAS_INTEROPERABILITY_BADGE_VCT", BADGE_VCT),
         signing_keys_internal_api_key: value(
             env,
             "SIGNING_KEYS_INTERNAL_API_KEY",

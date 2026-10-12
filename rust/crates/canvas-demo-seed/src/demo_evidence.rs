@@ -1,4 +1,4 @@
-use crate::{GatewaySeedConfig, BADGE_DESCRIPTION, BADGE_NAME, BADGE_VCT, ISSUER_DID};
+use crate::{GatewaySeedConfig, IssuerProfileContext, BADGE_DESCRIPTION, BADGE_NAME};
 use hmac::{Hmac, Mac};
 use serde_json::{json, Map, Value};
 use sha2::Sha256;
@@ -30,17 +30,17 @@ fn score(cfg: &GatewaySeedConfig, demo: &DemoEvidenceConfig) -> i64 {
         .max(demo.quiz_passing_score_percent)
 }
 
-fn achievement(threshold: i64) -> Value {
+fn achievement(badge_vct: &str, threshold: i64) -> Value {
     let criteria = format!(
         "Complete the Canvas learning activity and earn at least {threshold}% on the interoperability quiz. ElevenID issues the credential from the Marty organization using the canonical DID issuer and remote signing service."
     );
     json!({
-        "id": format!("{BADGE_VCT}#achievement"),
+        "id": format!("{badge_vct}#achievement"),
         "type": ["Achievement"],
         "name": BADGE_NAME,
         "description": BADGE_DESCRIPTION,
-        "criteria": {"id": format!("{BADGE_VCT}/criteria"), "narrative": criteria},
-        "image": {"id": format!("{BADGE_VCT}/image.svg"), "type": "Image", "caption": BADGE_NAME},
+        "criteria": {"id": format!("{badge_vct}/criteria"), "narrative": criteria},
+        "image": {"id": format!("{badge_vct}/image.svg"), "type": "Image", "caption": BADGE_NAME},
         "alignment": [
             {"targetName": "Open Badges 3.0", "targetDescription": "Portable achievement credential carried as a verifiable credential."},
             {"targetName": "Marty Identity Protocol", "targetDescription": "MIP-governed issuance, status-list allocation, and destination projection."}
@@ -53,6 +53,7 @@ pub fn application_payload(
     demo: &DemoEvidenceConfig,
     canvas_seed: &Value,
     today: &str,
+    issuer: &IssuerProfileContext,
 ) -> Value {
     let score = score(cfg, demo);
     let course_name =
@@ -74,12 +75,13 @@ pub fn application_payload(
         .split_once(' ')
         .map_or("Learner", |(_, family)| family)
         .to_owned();
-    let achievement = achievement(cfg.program_binding_score_threshold);
-    json!({
+    let badge_vct = &cfg.badge_vct;
+    let achievement = achievement(badge_vct, cfg.program_binding_score_threshold);
+    let mut payload = json!({
         "application_template_id": cfg.application_template_id,
         "applicant_data": {
             "_credential_type": "OpenBadgeCredential",
-            "_vct": BADGE_VCT,
+            "_vct": badge_vct,
             "email": demo.learner_email,
             "given_name": given_name,
             "family_name": family_name,
@@ -87,7 +89,7 @@ pub fn application_payload(
             "achievement_name": BADGE_NAME,
             "achievement_description": BADGE_DESCRIPTION,
             "achievement_criteria": achievement["criteria"]["narrative"],
-            "badge_image_url": format!("{BADGE_VCT}/image.svg"),
+            "badge_image_url": format!("{badge_vct}/image.svg"),
             "course_name": course_name,
             "quiz_name": quiz_name,
             "score_percent": score,
@@ -114,14 +116,21 @@ pub fn application_payload(
         "integration_context": {
             "scenario": "canvas_mip_quiz_open_badge",
             "credential_type": "OpenBadgeCredential",
-            "credential_vct": BADGE_VCT,
+            "credential_vct": badge_vct,
             "delivery_mode": cfg.program_binding_delivery_mode,
             "delivery": {"mode": cfg.program_binding_delivery_mode},
-            "open_badge": {"vct": BADGE_VCT, "name": BADGE_NAME, "image": format!("{BADGE_VCT}/image.svg"), "criteria": format!("{BADGE_VCT}/criteria")},
+            "open_badge": {"vct": badge_vct, "name": BADGE_NAME, "image": format!("{badge_vct}/image.svg"), "criteria": format!("{badge_vct}/criteria")},
             "canvas": {"canvas_account_id": cfg.canvas_account_id, "canvas_course_id": course_id, "canvas_quiz_id": quiz_id, "learner_email": demo.learner_email},
-            "issuer": {"mode": "org_managed", "issuer_did": ISSUER_DID, "signing_service_id": "managed-openbao-transit", "signing_key_reference": "cred-issuer-marty-es256"}
         }
-    })
+    });
+    payload["integration_context"]["issuer"] = json!({
+        "mode": "org_managed",
+        "issuer_profile_id": issuer.issuer_profile_id,
+        "issuer_did": issuer.issuer_did,
+        "signing_service_id": issuer.signing_service_id,
+        "signing_key_reference": issuer.signing_key_reference,
+    });
+    payload
 }
 
 pub fn ags_score_payload(

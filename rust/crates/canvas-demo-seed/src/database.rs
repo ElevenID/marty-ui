@@ -1,4 +1,7 @@
-use crate::{application_template_payload, credential_template_payload, GatewaySeedConfig};
+use crate::{
+    application_template_payload, credential_template_payload, GatewaySeedConfig,
+    IssuerProfileContext,
+};
 use serde_json::Value;
 use sqlx::{Connection, PgConnection, Postgres, Transaction};
 
@@ -163,9 +166,10 @@ pub async fn seed_open_badge_templates(
     database_url: &str,
     cfg: &GatewaySeedConfig,
     scope: &Value,
+    issuer: &IssuerProfileContext,
 ) -> Result<(), String> {
-    let credential = credential_template_payload(cfg);
-    let application = application_template_payload(cfg, scope);
+    let credential = credential_template_payload(cfg, issuer);
+    let application = application_template_payload(cfg, scope, issuer);
     let mut connection = PgConnection::connect(database_url)
         .await
         .map_err(|e| e.to_string())?;

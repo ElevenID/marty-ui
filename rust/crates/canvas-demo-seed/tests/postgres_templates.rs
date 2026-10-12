@@ -1,6 +1,8 @@
 //! Local disposable Postgres gate for the Canvas badge/application template pair.
 
-use marty_canvas_demo_seed::{lookup_transition, seed_open_badge_templates, GatewaySeedConfig};
+use marty_canvas_demo_seed::{
+    lookup_transition, seed_open_badge_templates, GatewaySeedConfig, IssuerProfileContext,
+};
 use serde_json::{json, Value};
 use sqlx::{Connection, PgConnection};
 use std::{env, process, time::SystemTime};
@@ -25,6 +27,20 @@ fn config() -> GatewaySeedConfig {
         program_binding_direct_issue: false,
         program_binding_score_threshold: 80,
         signing_keys_internal_base_url: "http://signing-keys:8000".into(),
+        badge_vct:
+            "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge"
+                .into(),
+    }
+}
+
+fn issuer() -> IssuerProfileContext {
+    IssuerProfileContext {
+        issuer_profile_id: "ip-marty-vc-jwt-issuer".into(),
+        issuer_did: "did:web:beta.elevenidllc.com:orgs:marty".into(),
+        signing_service_id: "managed-openbao-transit".into(),
+        signing_key_reference: "cred-issuer-marty-es256".into(),
+        verification_method_id: "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256"
+            .into(),
     }
 }
 
@@ -71,7 +87,7 @@ async fn run_case(url: &Url) {
 
     let cfg = config();
     let initial_scope = json!({});
-    seed_open_badge_templates(url.as_str(), &cfg, &initial_scope)
+    seed_open_badge_templates(url.as_str(), &cfg, &initial_scope, &issuer())
         .await
         .unwrap();
     let mut conn = PgConnection::connect(url.as_str()).await.unwrap();
@@ -82,7 +98,7 @@ async fn run_case(url: &Url) {
     drop(conn);
 
     let scoped = json!({"course_id": "42", "quiz_id": "9"});
-    seed_open_badge_templates(url.as_str(), &cfg, &scoped)
+    seed_open_badge_templates(url.as_str(), &cfg, &scoped, &issuer())
         .await
         .unwrap();
     let mut conn = PgConnection::connect(url.as_str()).await.unwrap();
@@ -98,6 +114,32 @@ async fn run_case(url: &Url) {
     .unwrap();
     assert_eq!(ui["scope"], scoped);
 
+    let rotated = IssuerProfileContext {
+        issuer_profile_id: "profile-rotated".into(),
+        issuer_did: "did:web:rotated.example".into(),
+        signing_service_id: "kms-v2".into(),
+        signing_key_reference: "kms://profile-rotated/key-2".into(),
+        verification_method_id: "did:web:rotated.example#key-2".into(),
+    };
+    drop(conn);
+    seed_open_badge_templates(url.as_str(), &cfg, &scoped, &rotated)
+        .await
+        .unwrap();
+    let mut conn = PgConnection::connect(url.as_str()).await.unwrap();
+    let requirements: Value = sqlx::query_scalar("SELECT issuer_requirements::jsonb FROM credential_template_service.credential_templates WHERE id='ct-1'")
+        .fetch_one(&mut conn).await.unwrap();
+    assert_eq!(
+        requirements["allowed_issuer_dids"],
+        json!(["did:web:rotated.example"])
+    );
+    let ui: Value = sqlx::query_scalar(
+        "SELECT ui_config::jsonb FROM issuance_service.application_templates WHERE id='at-1'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .unwrap();
+    assert_eq!(ui["issuer_did"], "did:web:rotated.example");
+
     // Legacy schemas can still carry remote-signing and auto-approval columns.
     exec(&mut conn, "ALTER TABLE credential_template_service.credential_templates ADD COLUMN key_access_mode text, ADD COLUMN issuer_key_id text, ADD COLUMN remote_signing_config jsonb").await;
     exec(
@@ -106,13 +148,17 @@ async fn run_case(url: &Url) {
     )
     .await;
     drop(conn);
-    seed_open_badge_templates(url.as_str(), &cfg, &scoped)
+    seed_open_badge_templates(url.as_str(), &cfg, &scoped, &rotated)
         .await
         .unwrap();
     let mut conn = PgConnection::connect(url.as_str()).await.unwrap();
     let remote: Value = sqlx::query_scalar("SELECT remote_signing_config FROM credential_template_service.credential_templates WHERE id='ct-1'")
         .fetch_one(&mut conn).await.unwrap();
-    assert_eq!(remote["issuer_profile_id"], "ip-marty-vc-jwt-issuer");
+    assert_eq!(remote["issuer_profile_id"], "profile-rotated");
+    assert_eq!(
+        remote["signing_key_reference"],
+        "kms://profile-rotated/key-2"
+    );
     let auto: Value = sqlx::query_scalar("SELECT auto_approval_rules::jsonb FROM issuance_service.application_templates WHERE id='at-1'")
         .fetch_one(&mut conn).await.unwrap();
     assert_eq!(auto, json!([]));
@@ -121,9 +167,11 @@ async fn run_case(url: &Url) {
     exec(&mut conn, "UPDATE credential_template_service.credential_templates SET name='stale badge' WHERE id='ct-1'").await;
     exec(&mut conn, "ALTER TABLE issuance_service.application_templates ADD CONSTRAINT reject_demo_seed CHECK (false) NOT VALID").await;
     drop(conn);
-    assert!(seed_open_badge_templates(url.as_str(), &cfg, &scoped)
-        .await
-        .is_err());
+    assert!(
+        seed_open_badge_templates(url.as_str(), &cfg, &scoped, &rotated)
+            .await
+            .is_err()
+    );
     let mut conn = PgConnection::connect(url.as_str()).await.unwrap();
     let name: String = sqlx::query_scalar(
         "SELECT name FROM credential_template_service.credential_templates WHERE id='ct-1'",

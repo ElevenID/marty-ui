@@ -7,7 +7,7 @@ use crate::{
     seed_canvas_lms_objects, seed_open_badge_templates, send_signed_ags, upsert_binding,
     upsert_platform, CanonicalWalletProof, CanvasDocker, CanvasRailsConfig, CanvasRestHttp,
     CanvasRunConfig, ConnectorRunConfig, DemoEvidenceConfig, GatewayHttp, GatewaySeedConfig,
-    SeedRunConfig, WalletHttp,
+    IssuerProfileContext, SeedRunConfig, WalletHttp,
 };
 use chrono::Utc;
 use serde_json::{json, Value};
@@ -33,6 +33,22 @@ fn env_first(env: &HashMap<String, String>, names: &[&str]) -> Option<String> {
             .filter(|value| !value.is_empty())
             .map(str::to_owned)
     })
+}
+
+fn validate_disposable_secret(
+    env: &HashMap<String, String>,
+    evidence_enabled: bool,
+) -> Result<(), String> {
+    if env.contains_key("CANVAS_DISPOSABLE_PROJECT")
+        && evidence_enabled
+        && env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).is_none()
+    {
+        return Err(
+            "Disposable Canvas evidence requires an explicit CANVAS_CREDENTIALS_SHARED_SECRET"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 fn admin_scope(env: &HashMap<String, String>) -> Value {
@@ -138,8 +154,9 @@ async fn create_demo_application(
     demo: &DemoEvidenceConfig,
     canvas_seed: &Value,
     date: &str,
+    issuer: &IssuerProfileContext,
 ) -> Result<Value, String> {
-    let payload = application_payload(cfg, demo, canvas_seed, date);
+    let payload = application_payload(cfg, demo, canvas_seed, date, issuer);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
@@ -173,12 +190,40 @@ pub async fn run_seed(
     env: &HashMap<String, String>,
     database_url: &str,
 ) -> Result<Value, String> {
+    validate_disposable_secret(env, config.connector.demo_evidence_event_enabled)?;
     let mut connector = config.connector.clone();
     let mut gateway_cfg = GatewaySeedConfig::from(&connector);
     let gateway = GatewayHttp::new(connector.issuance_api_key.clone())?;
     let mut warnings = Vec::<String>::new();
+    let issuer_context = if connector.signing_keys_internal_api_key.trim().is_empty() {
+        None
+    } else {
+        let signing = GatewayHttp::new(connector.signing_keys_internal_api_key.clone())?;
+        resolve_issuer_context(
+            &signing,
+            &connector.organization_id,
+            &connector.signing_keys_internal_base_url,
+            &connector.signing_keys_internal_api_key,
+        )
+        .await
+    };
+    let issuer = if connector.open_badge_scenario_enabled {
+        Some(IssuerProfileContext::try_from(
+            issuer_context.as_ref().ok_or(
+                "Canvas Open Badge requires an active issuer profile from the signing registry",
+            )?,
+        )?)
+    } else {
+        None
+    };
     if connector.open_badge_scenario_enabled {
-        seed_open_badge_templates(database_url, &gateway_cfg, &json!({})).await?;
+        seed_open_badge_templates(
+            database_url,
+            &gateway_cfg,
+            &json!({}),
+            issuer.as_ref().expect("validated issuer profile"),
+        )
+        .await?;
     }
     let platform_result = upsert_platform(&gateway, &gateway_cfg).await?;
     let mut platform = platform_result.value;
@@ -221,7 +266,13 @@ pub async fn run_seed(
     scope.extend(admin_scope(env).as_object().cloned().unwrap_or_default());
     let scope = Value::Object(scope);
     if connector.open_badge_scenario_enabled {
-        seed_open_badge_templates(database_url, &gateway_cfg, &scope).await?;
+        seed_open_badge_templates(
+            database_url,
+            &gateway_cfg,
+            &scope,
+            issuer.as_ref().expect("validated issuer profile"),
+        )
+        .await?;
     }
     let binding = if connector.program_binding_seed_enabled {
         Some(
@@ -232,18 +283,6 @@ pub async fn run_seed(
     } else {
         None
     };
-    let issuer_context = if connector.signing_keys_internal_api_key.trim().is_empty() {
-        None
-    } else {
-        let signing = GatewayHttp::new(connector.signing_keys_internal_api_key.clone())?;
-        resolve_issuer_context(
-            &signing,
-            &connector.organization_id,
-            &connector.signing_keys_internal_base_url,
-            &connector.signing_keys_internal_api_key,
-        )
-        .await
-    };
     let mut application = None;
     let mut evidence = None;
     let mut wallet = None;
@@ -252,25 +291,35 @@ pub async fn run_seed(
     if connector.open_badge_scenario_enabled && connector.demo_application_seed_enabled {
         let date = Utc::now().format("%Y-%m-%d").to_string();
         let demo = DemoEvidenceConfig::from(&config.canvas);
-        match create_demo_application(&connector, &gateway_cfg, &demo, &canvas_seed, &date).await {
+        match create_demo_application(
+            &connector,
+            &gateway_cfg,
+            &demo,
+            &canvas_seed,
+            &date,
+            issuer.as_ref().expect("validated issuer profile"),
+        )
+        .await
+        {
             Ok(created) => {
                 let application_id = value_id(&created["id"]).expect("validated application ID");
                 application = Some(created);
                 if connector.demo_evidence_event_enabled {
                     let secret = env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"])
                         .unwrap_or_else(|| String::new());
-                    let secret = if secret.is_empty() {
-                        docker_container_env_value(
-                            &CanvasDocker,
-                            "marty-issuance",
-                            "CANVAS_CREDENTIALS_SHARED_SECRET",
-                        )
-                        .await
-                        .trim()
-                        .to_owned()
-                    } else {
-                        secret
-                    };
+                    let secret =
+                        if secret.is_empty() && !env.contains_key("CANVAS_DISPOSABLE_PROJECT") {
+                            docker_container_env_value(
+                                &CanvasDocker,
+                                "marty-issuance",
+                                "CANVAS_CREDENTIALS_SHARED_SECRET",
+                            )
+                            .await
+                            .trim()
+                            .to_owned()
+                        } else {
+                            secret
+                        };
                     if secret.is_empty() {
                         warnings.push("CANVAS_CREDENTIALS_SHARED_SECRET is not set; demo AGS event was not submitted".into());
                     } else {
@@ -368,8 +417,9 @@ pub async fn run_seed(
 
 #[cfg(test)]
 mod tests {
-    use super::has_ags_evidence_response;
+    use super::{has_ags_evidence_response, validate_disposable_secret};
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn empty_ags_response_does_not_start_transition_or_wallet_followup() {
@@ -378,5 +428,21 @@ mod tests {
         assert!(has_ags_evidence_response(
             &json!({"application_status": "approved"})
         ));
+    }
+
+    #[test]
+    fn disposable_secret_is_required_before_any_journey_side_effect() {
+        let mut env = HashMap::from([(
+            "CANVAS_DISPOSABLE_PROJECT".to_owned(),
+            "marty-canvas-disposable-local".to_owned(),
+        )]);
+        assert!(validate_disposable_secret(&env, true).is_err());
+        env.insert("CANVAS_CREDENTIALS_SHARED_SECRET".into(), "  ".into());
+        assert!(validate_disposable_secret(&env, true).is_err());
+        env.insert(
+            "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
+            "local-only-secret".into(),
+        );
+        assert!(validate_disposable_secret(&env, true).is_ok());
     }
 }
