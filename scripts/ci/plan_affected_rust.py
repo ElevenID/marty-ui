@@ -46,6 +46,51 @@ PASSPORT_BETA_GATEWAY_CALLBACK_WITNESS = {
     "profile_callback_url": "http://gateway:8000/v1/passport/webhooks/personalization",
 }
 
+# The physical-provider beta profile selects an Issuance-owned ingress binary
+# for the signed webhook, while both beta profiles select native Issuance for
+# public passport routes. These are distinct conditional operations on the
+# already-observed Gateway/Issuance relationship, not a new package edge or
+# permission to narrow service checks.
+PASSPORT_GATEWAY_ISSUANCE_SELECTOR_WITNESSES = (
+    {
+        "package": "marty-gateway",
+        "conditional": "beta passport native Gateway routes only",
+        "config_evidence": "rust/services/gateway/src/config.rs",
+        "binding": 'boolean(values, "PASSPORT_NATIVE_GATEWAY_ENABLED", false)?',
+        "url_binding": 'value(values, "ISSUANCE_NATIVE_SERVICE_URL")',
+        "dispatch_evidence": "rust/services/gateway/src/main.rs",
+        "dispatch_marker": "config.passport_native_gateway_enabled,",
+        "route_evidence": "rust/services/gateway/src/contract.rs",
+        "route_marker": "issuance_native::is_passport_public_http(declared.method, upstream_path)",
+        "owner_marker": "issuance_native::NATIVE_SERVICE",
+        "route_test_marker": "assert_eq!(new.route.upstream_service, issuance_native::NATIVE_SERVICE);",
+        "provider_evidence": "rust/services/issuance/Cargo.toml",
+        "provider_marker": 'name = "marty-issuance-service"',
+        "provider_path_marker": 'path = "src/main.rs"',
+        "profile_evidence": "docker-compose.profile.passport-native-beta.yml",
+        "profile_gateway_service": "gateway",
+    },
+    {
+        "package": "marty-gateway",
+        "conditional": "physical-provider beta signed webhook only",
+        "config_evidence": "rust/services/gateway/src/config.rs",
+        "binding": 'boolean(values, "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED", false)?',
+        "url_binding": 'value(values, "PASSPORT_PROVIDER_INGRESS_SERVICE_URL")',
+        "dispatch_evidence": "rust/services/gateway/src/main.rs",
+        "dispatch_marker": "config.passport_provider_ingress_gateway_enabled,",
+        "route_evidence": "rust/services/gateway/src/contract.rs",
+        "route_marker": "&& issuance_native::is_passport_signed_webhook(declared.method, upstream_path)",
+        "owner_marker": '"passport-provider-ingress"',
+        "route_test_marker": 'assert_eq!(ingress.route.upstream_service, "passport-provider-ingress");',
+        "provider_evidence": "rust/services/issuance/Cargo.toml",
+        "provider_marker": 'name = "marty-passport-provider-ingress"',
+        "provider_path_marker": 'path = "src/bin/passport_provider_ingress.rs"',
+        "profile_evidence": "docker-compose.profile.passport-native-physical-beta.yml",
+        "profile_gateway_service": "gateway",
+        "profile_provider_service": "passport-provider-ingress",
+    },
+)
+
 # These are observed HTTP/deployment consumers, not a complete runtime graph.
 # Keep the service fallback below until every service and its transitive inputs
 # have an obligation owner. The paths document the source of each observation.
@@ -544,6 +589,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
         },
     ],
     "marty-issuance-service": [
+        *PASSPORT_GATEWAY_ISSUANCE_SELECTOR_WITNESSES,
         {
             # Applicant resolves application templates from native Issuance
             # over HTTP; it has no Cargo dependency on the provider.
