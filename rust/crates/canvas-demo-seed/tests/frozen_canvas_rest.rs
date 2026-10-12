@@ -198,3 +198,34 @@ async fn canvas_list_http_failure_creates_but_transport_failure_stops() {
     );
     assert_eq!(stub.operations.lock().unwrap().len(), 1);
 }
+
+#[tokio::test]
+async fn module_item_compatibility_retries_match_frozen_python() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-real-seed-behavior-v1.json"
+    ))
+    .unwrap();
+    let frozen = &contract["canvas_module_item_retries"];
+    let stub = Stub {
+        responses: Mutex::new(VecDeque::from(vec![
+            Ok(json!([])),
+            Err(CanvasRestError::Http(422, "incompatible".into())),
+            Err(CanvasRestError::Http(400, "incompatible".into())),
+            Ok(frozen["result"].clone()),
+        ])),
+        operations: Mutex::new(Vec::new()),
+    };
+    assert_eq!(
+        ensure_module_quiz_item(&stub, &cfg(), "42", "10", "12")
+            .await
+            .unwrap()["item"],
+        frozen["result"]
+    );
+    let operations = stub.operations.lock().unwrap();
+    let forms: Vec<Value> = operations
+        .iter()
+        .skip(1)
+        .map(|operation| operation["form"].clone())
+        .collect();
+    assert_eq!(json!(forms), frozen["forms"]);
+}

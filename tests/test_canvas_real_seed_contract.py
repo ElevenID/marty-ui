@@ -8,6 +8,7 @@ import sys
 import types
 from datetime import date as real_date
 from pathlib import Path
+from urllib.error import HTTPError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -181,6 +182,39 @@ def capture_canvas_launch_surface_rest(monkeypatch) -> dict:
 def test_frozen_canvas_launch_surface_rest(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_canvas_launch_surface_rest(monkeypatch) == contract["canvas_launch_surface_rest"]
+
+
+def capture_canvas_module_item_retries(monkeypatch) -> dict:
+    forms = []
+    responses = [422, 400, {"id": 13}]
+
+    def form_request(method, url, *, form, headers=None, timeout=20):
+        forms.append(form)
+        response = responses.pop(0)
+        if isinstance(response, int):
+            raise HTTPError(url, response, "incompatible module item form", None, None)
+        return response
+
+    monkeypatch.setattr(seed, "_form_request", form_request)
+    cfg = canvas_config()
+    result = seed._create_canvas_module_item_with_retries(
+        cfg,
+        "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        {
+            "module_item[title]": cfg.quiz_title,
+            "module_item[type]": "Quiz",
+            "module_item[content_id]": "12",
+            "module_item[published]": "true",
+            "module_item[completion_requirement][type]": "must_submit",
+        },
+    )
+    assert not responses
+    return {"forms": forms, "result": result}
+
+
+def test_frozen_canvas_module_item_retries(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_module_item_retries(monkeypatch) == contract["canvas_module_item_retries"]
 
 
 def capture(monkeypatch) -> dict:

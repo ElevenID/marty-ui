@@ -1423,5 +1423,31 @@
         }
       }
     }
+  },
+  "canvas_module_item_retries": {
+    "forms": [
+      {
+        "module_item[title]": "Credential Quiz",
+        "module_item[type]": "Quiz",
+        "module_item[content_id]": "12",
+        "module_item[published]": "true",
+        "module_item[completion_requirement][type]": "must_submit"
+      },
+      {
+        "module_item[title]": "Credential Quiz",
+        "module_item[type]": "Quiz",
+        "module_item[content_id]": "12",
+        "module_item[published]": "true"
+      },
+      {
+        "module_item[title]": "Credential Quiz",
+        "module_item[type]": "Quiz",
+        "module_item[published]": "true",
+        "module_item[completion_requirement][type]": "must_submit"
+      }
+    ],
+    "result": {
+      "id": 13
+    }
   }
 }
