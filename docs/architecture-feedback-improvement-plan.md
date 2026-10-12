@@ -125,7 +125,7 @@ Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, 
 | A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Pure Python-value extraction [UI #1060](https://github.com/ElevenID/marty-ui/pull/1060), mixed-roster/body-reader unit coverage [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) merged. [#1112](https://github.com/ElevenID/marty-ui/pull/1112) moved pure self-host fixture controls and an Envoy scalar-value matrix to fast owners; [#1124](https://github.com/ElevenID/marty-ui/pull/1124), [#1126](https://github.com/ElevenID/marty-ui/pull/1126), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added layered worker/configuration and typed-transport owners. Real CLI, ZIP, Compose, Envoy-image/process, database, and published-process guarantees retain their acceptance owners. |
 | A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Provenance, producer, scenario, and input safeguards [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050), [#1055](https://github.com/ElevenID/marty-ui/pull/1055), [#1073](https://github.com/ElevenID/marty-ui/pull/1073), [#1076](https://github.com/ElevenID/marty-ui/pull/1076)–[#1079](https://github.com/ElevenID/marty-ui/pull/1079), and [#1082](https://github.com/ElevenID/marty-ui/pull/1082) merged. [#1102](https://github.com/ElevenID/marty-ui/pull/1102) moved 33 pinned historical replays to weekly/manual full qualification while retaining native regression; [#1106](https://github.com/ElevenID/marty-ui/pull/1106) requires exact-main full qualification before stable tagging. [#1110](https://github.com/ElevenID/marty-ui/pull/1110) guards preparer dispatch; [#1112](https://github.com/ElevenID/marty-ui/pull/1112) guards Canvas helper mount inputs. Neither establishes complete historical reference closure or authorizes additional qualification skips. |
 | A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | [UI #1064](https://github.com/ElevenID/marty-ui/pull/1064) retained fail-closed planned-skip and all-success merge-group gates; [#1080](https://github.com/ElevenID/marty-ui/pull/1080), [#1082](https://github.com/ElevenID/marty-ui/pull/1082), and [#1107](https://github.com/ElevenID/marty-ui/pull/1107) proved initial exact-input selection. [#1110](https://github.com/ElevenID/marty-ui/pull/1110), [#1112](https://github.com/ElevenID/marty-ui/pull/1112), [#1119](https://github.com/ElevenID/marty-ui/pull/1119), and [#1127](https://github.com/ElevenID/marty-ui/pull/1127) added bounded test-only paths; [#1114](https://github.com/ElevenID/marty-ui/pull/1114) preserves failed timing-artifact upload as a failing job after one same-job retry. [#1129](https://github.com/ElevenID/marty-ui/pull/1129) moved two required Canvas configuration proofs earlier while retaining late checks. [#1131](https://github.com/ElevenID/marty-ui/pull/1131) measured a 12m20s compile-stage saving by removing duplicate compatible compilation. [#1134](https://github.com/ElevenID/marty-ui/pull/1134) routed exact shadow-planner-only PR inputs to their release owner, and [#1135](https://github.com/ElevenID/marty-ui/pull/1135) measured a 10m56s scoped PR run versus 39m50s for #1134's full-matrix PR; protected #1135 still ran all 23 jobs. This is observed scoped feedback, not a whole-repository average or faster Canvas execution. Unknown/mixed implementation inputs remain broad. |
-| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | CI | Seven of eight recent successful Core PR runs put preflight after affected tests, justifying a bounded fail-fast pilot. [Core #359](https://github.com/ElevenID/marty-core/pull/359) separates cheap policy/format checks, unchanged KMS graphs, and unchanged lint/compatibility checks; the aggregate gate requires all three. Exact-head PR CI passed: cheap preflight 34s, KMS 6m50s, lint/compatibility 8m25s, affected tests 11m40s, Rust CodeQL 12m28s. Independent review found no P1-P3 issue. This proves earlier cheap-check feedback, not a general end-to-end saving. GitHub approval and protected merge-group qualification remain pending; the full feature/security matrix stays required. |
+| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | merged | Seven of eight recent successful Core PR runs put preflight after affected tests, justifying a bounded fail-fast pilot. [Core #359](https://github.com/ElevenID/marty-core/pull/359) separates cheap policy/format checks, unchanged KMS graphs, and unchanged lint/compatibility checks; the aggregate gate requires all three. After current main added verifier artifacts, #359 was merged forward at `4e9fc30`; focused contract checks, independent review, and exact-head [PR CI](https://github.com/ElevenID/marty-core/actions/runs/38173395763) passed. Its cheap preflight took 30s, KMS 7m54s, lint/compatibility 7m49s, and affected tests 15m52s. The [protected merge-group run](https://github.com/ElevenID/marty-core/actions/runs/38175840330) passed all required gates, including unchanged KMS, lint, feature, and security jobs; cheap preflight took 27s. #359 merged into Core main as `2e10a3a1`. This proves earlier cheap-check feedback, not a general end-to-end saving. |
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Separate immutable nightly prerelease tag selected by the user. [#1106](https://github.com/ElevenID/marty-ui/pull/1106) merged the release-owner inventory, fail-closed tag grammar, and exact-main stable qualification gate. [#1113](https://github.com/ElevenID/marty-ui/pull/1113) merged a read-only nightly-claim preparation step; [#1127](https://github.com/ElevenID/marty-ui/pull/1127) merged typed OID4VP/verification transport, not signed-presentation trust or nightly E2E qualification. Neither creates qualified nightly deployment nor relaxes official E2E/YouTube gates. |
 
 2026-10-10 A3 source-inventory candidate: a tracked-source test compares the
@@ -3517,15 +3517,61 @@ passed. Sequential eight-database local timings were 39.43s off versus
 23.22s on, with an independent repeat of 37.90s versus 24.18s. The
 pilot remains opt-in; these timings do not establish hosted parallel Canvas
 improvement. Compare complete Linux CI case inventory and wall time before
-any routine or release promotion. The next A6 candidate assigns three exact
-DIDComm/retention Python test sources to a focused Release Contract Tests PR
-path: 56 owned cases plus the actual-Bash classifier/collection proof. Only a
+any routine or release promotion. [#1276](https://github.com/ElevenID/marty-ui/pull/1276)
+merged the opt-in four-concurrent-by-two-batch published-base isolation
+diagnostic after 23 protected checks passed. Its exact ignored local case
+passed in 32.93s, but the protected run did not enable the manual diagnostic.
+The first attempted same-commit manual-dispatch pilot was canceled before
+execution because the preceding
+full-main run failed its unchanged crawler artifact gate: the build log reports
+missing Chrome 154.0.8037.57 for Puppeteer. [#1277](https://github.com/ElevenID/marty-ui/pull/1277)
+provisions that browser through the locally installed Puppeteer CLI, with
+`--no-install` to forbid an unpinned CLI fallback. Its reviewed amended head
+passed 147 local workflow-policy tests and all 23 jobs in exact-head
+[PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38175378391),
+including both crawler jobs and the retained Canvas lane. Protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38178073919)
+passed and #1277 merged to main as `d140bda5e`. The off-side manual
+[baseline run](https://github.com/ElevenID/marty-ui/actions/runs/38180950901)
+was dispatched at that main revision; its opt-in diagnostic step was skipped,
+and all 23 jobs passed. Its Canvas job took 43m42s; the timing artifact
+retained 1,334 successful rows, including four `canvas_target` rows
+(`worker` 787.488s, `composition` 471.907s, `selfhost` 154.039s, `flow`
+10.086s), 132 `oracle_case` rows, and 105 `scenario` rows. A redundant
+off-side pending run was canceled before execution. The
+[on-side manual pilot](https://github.com/ElevenID/marty-ui/actions/runs/38183804123)
+ran at the same `d140bda5e` revision. Its database suites passed, and the
+249 successful `scenario`/`oracle_case`/`canvas_serial`/`canvas_target`
+identities matched the off-side artifact exactly. However, the affected
+database step took 28m15s on versus 21m48s off (+6m27s), and the Canvas job
+took 51m36s on versus 43m42s off (+7m54s). The on-side artifact had 286
+`migration_seed` and `database_readiness` rows versus 245 each off; the
+published Canvas worker target took 1,154.680s on versus 787.488s off.
+These rows overlap and are not additive wall-clock savings. The separate
+opt-in isolation diagnostic then failed immediately at its first Docker
+create (`Docker create failed`); the other 21 job families passed, but the
+Canvas and final CI gates correctly failed. The exact Docker cause is not
+established by the sanitized log. The process-local base cache may pay
+repeated cold initialization across test executables, consistent with the
+extra setup rows, but this remains a hypothesis. Keep reuse manual-only;
+do not promote it to routine or release validation from the local speedup.
+Before another hosted pilot, attribute the extra per-case setup work and add
+a bounded, credential-free Docker-create failure category to the manual
+diagnostic; rerunning the unchanged configuration would repeat a slower,
+unqualified full workflow.
+[#1269](https://github.com/ElevenID/marty-ui/pull/1269)
+merged the A6 assignment of three exact DIDComm/retention Python test sources
+to a focused Release Contract Tests PR path: 56 owned cases plus the
+actual-Bash classifier/collection proof. Only a
 single existing regular test file in a PR qualifies; mixed, unknown, missing,
 renamed, protected merge-group, scheduled and manual inputs keep the full
 path. Released-wheel bootstrap, mdoc binding, OSS boundary and final gate
 remain mandatory. Local focused tests passed (57 cases, 12.48s), as did 146
-workflow-policy cases and independent review. This is not yet hosted timing
-or a measured CI speedup.
+workflow-policy cases and independent review. Its exact-head
+[PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38156075041)
+passed the full matrix because the PR changed the workflow itself. A later
+eligible test-source-only PR is still needed to measure scoped hosted feedback;
+this is not yet a measured CI speedup.
 
 A0 passport callback inventory (2026-10-11): the beta bureau's selected
 `PASSPORT_BUREAU_CALLBACK_URL` can target Gateway's signed personalization
@@ -3551,10 +3597,21 @@ their obligations before trialing a fail-closed, stratified routine DB subset.
 Retain all 64 route cases for manual/official qualification until exact-case
 parity and protected CI evidence justify any routine reduction. This is a
 candidate, not a measured speedup or a coverage change.
-The follow-up candidate emits sanitized elapsed time for each of those 64
+The merged instrumentation emits sanitized elapsed time for each of those 64
 real-route cases into the existing allowlisted DB timing artifact, without
-changing the case matrix or any gate. Hosted timings and a safe routine
-subset remain unproven.
+changing the case matrix or any gate. The exact-head [#1273 PR run](https://github.com/ElevenID/marty-ui/actions/runs/38165252960)
+and its successful [protected merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/38167327860)
+each recorded 64 unique, successful route cases: 23.353s and 29.516s of
+summed case time, respectively. The same artifacts each recorded 83
+`published_probe` migration spans totaling 405.228s and 423.159s,
+respectively; those spans overlap across targets and are not wall-clock
+savings. The PR run's worker and composition targets took 486.549s and
+449.438s. The route matrix is therefore a lower-priority speed target than
+repeated database preparation. Keep all 64 real-route cases in routine and
+qualification checks; no subset or hosted speedup has been established. The
+pilot still needs same-commit, manual-dispatch off/on Canvas target and case
+inventory comparisons: manual dispatch enables full historical qualification,
+so its wall time is not directly comparable to these PR/merge-group runs.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
