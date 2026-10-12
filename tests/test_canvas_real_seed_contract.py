@@ -205,3 +205,40 @@ def capture_demo_evidence(monkeypatch) -> dict:
 def test_frozen_demo_application_and_ags_event(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_demo_evidence(monkeypatch) == contract["demo_evidence"]
+
+
+def capture_signed_ags_wire(monkeypatch) -> dict:
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return b'{"ok":true}'
+
+    def open_request(request, timeout):
+        captured.update({
+            "method": request.get_method(),
+            "url": request.full_url,
+            "body": request.data.decode("utf-8"),
+            "headers": {key.lower(): value for key, value in request.header_items()},
+            "timeout": timeout,
+        })
+        return Response()
+
+    monkeypatch.setattr(seed, "urlopen", open_request)
+    monkeypatch.setattr(seed.time, "time", lambda: 1743811200)
+    assert seed._signed_json_request(
+        "POST", "https://gateway.example/ags", payload={"z": 2, "a": {"y": 2, "x": 1}},
+        secret="test-shared-secret",
+    ) == {"ok": True}
+    return captured
+
+
+def test_frozen_signed_ags_wire(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_signed_ags_wire(monkeypatch) == contract["signed_ags_wire"]

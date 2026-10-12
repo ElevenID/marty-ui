@@ -986,5 +986,17 @@
         "timeout": 20
       }
     ]
+  },
+  "signed_ags_wire": {
+    "method": "POST",
+    "url": "https://gateway.example/ags",
+    "body": "{\"a\":{\"x\":1,\"y\":2},\"z\":2}",
+    "headers": {
+      "accept": "application/json",
+      "content-type": "application/json",
+      "x-canvas-timestamp": "1743811200",
+      "x-canvas-signature-256": "sha256=0d18ba0e129f2b9b9485b22c45c71998f2f33c603119ad95b367582ceb387145"
+    },
+    "timeout": 20
   }
 }
