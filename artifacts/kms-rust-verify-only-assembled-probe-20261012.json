@@ -1,0 +1,4895 @@
+{
+  "images": {
+    "migrations": "marty-kms-migrations:rust-verify-local",
+    "openbao": "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878",
+    "postgres": "docker.io/library/postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+    "redis": "docker.io/library/redis@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065",
+    "services": "marty-kms-services:rust-merge-local"
+  },
+  "inventory_sha256": "afab3feb9abac53bcbfb702f6e6976d2cf31bc98da71044c21272d749dbd03d3",
+  "json_column_count": 85,
+  "local_image_digests": {
+    "migrations": "sha256:d9654904b7ca5b9f35735618ec49b06211addd93bd3eeafd7d7d0c7c5678fb2d",
+    "services": "sha256:aa353b067ce61994f06534cd3a76658bddecb355b8fa745eb24ed2e7d89508ec"
+  },
+  "migrations_image": "marty-kms-migrations:rust-verify-local",
+  "native_schemas": "verified",
+  "notification_head": "20260808_0002",
+  "private_key_storage": "absent",
+  "profile": "selfhost-production",
+  "runs": "2",
+  "schema": "marty.selfhost-migrations-qualification/v3",
+  "services_image": "marty-kms-services:rust-merge-local",
+  "source": "source-built disposable local images; digest validator substituted only for local tag acceptance",
+  "table_column_count": 811,
+  "table_columns": [
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(20)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "credential_type",
+      "data_type": "character varying(255)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "vct",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "doctype",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "claims",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "privacy_posture",
+      "data_type": "character varying(30)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "selective_disclosure_fields",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "zk_predicate_claims",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "derived_attributes",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "display_style",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "validity_rules",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "issuer_requirements",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "supported_formats",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "credential_payload_format",
+      "data_type": "character varying(30)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "wallet_configs",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "compliance_profile",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "compliance_profile_id",
+      "data_type": "character varying(36)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "application_template_id",
+      "data_type": "character varying(36)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "trust_profile_id",
+      "data_type": "character varying(36)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "revocation_profile_id",
+      "data_type": "character varying(36)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "issuer_algorithm",
+      "data_type": "character varying(20)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "issuer_did",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "issuance_protocol",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "version",
+      "data_type": "integer",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "credential_templates"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(128)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "is_system",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "provider",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "mode",
+      "data_type": "character varying(40)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "setup_actor",
+      "data_type": "character varying(40)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "delivery_target",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "wallet_profile_id",
+      "data_type": "character varying(128)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "credential_format",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "issuance_protocol",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "compliance_profile_code",
+      "data_type": "character varying(128)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "connector_type",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "connector_id",
+      "data_type": "character varying(128)",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "requires_consent",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "claim_projection_policy",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "setup_requirements",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "capabilities",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "docs_url",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "is_enabled",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "delivery_destinations"
+    },
+    {
+      "column": "version",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "rust_schema_versions"
+    },
+    {
+      "column": "applied_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "rust_schema_versions"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "is_override",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "override_precedence",
+      "data_type": "integer",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "merge_strategy",
+      "data_type": "character varying(16)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "credential_format",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "issuance_protocol",
+      "data_type": "character varying(64)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "compliance_profile_code",
+      "data_type": "character varying(128)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "wallet_apps",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "specifications",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "logo_url",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "deep_link_template",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "routing_templates",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "install_urls",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "ios_scheme",
+      "data_type": "character varying(128)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "universal_link_template",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "android_package",
+      "data_type": "character varying(255)",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "supported_formats",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "supported_protocols",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "platforms",
+      "data_type": "jsonb",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "supports_qr",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "supports_deeplink",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "supports_digital_credentials",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "supports_haip",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "docs_url",
+      "data_type": "text",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "is_active",
+      "data_type": "boolean",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "credential_template_service",
+      "table": "wallet_registry"
+    },
+    {
+      "column": "version_num",
+      "data_type": "character varying(32)",
+      "schema": "device_registration_service",
+      "table": "alembic_version"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "registration_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "token_sha256",
+      "data_type": "bytea",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "issued_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "revoked_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_credentials"
+    },
+    {
+      "column": "provider_reference",
+      "data_type": "character varying(128)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_deletions"
+    },
+    {
+      "column": "queued_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_deletions"
+    },
+    {
+      "column": "retry_after",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_deletions"
+    },
+    {
+      "column": "attempts",
+      "data_type": "integer",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_deletions"
+    },
+    {
+      "column": "deleted_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_deletions"
+    },
+    {
+      "column": "provider_reference",
+      "data_type": "character varying(128)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "registration_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "purpose",
+      "data_type": "character varying(32)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "algorithm",
+      "data_type": "character varying(16)",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "reserved_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "cleanup_after",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "retry_after",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "bound_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "cleaned_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_key_provisions"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "registration_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "purpose",
+      "data_type": "character varying(32)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "algorithm",
+      "data_type": "character varying(16)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "provider_reference",
+      "data_type": "character varying(128)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "remote_version",
+      "data_type": "bigint",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "public_x",
+      "data_type": "character varying(43)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "public_y",
+      "data_type": "character varying(43)",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "revoked_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_holder_keys"
+    },
+    {
+      "column": "pairing_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "trust_profile_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "registration_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "issued_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "confirmed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "expired_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_pairing_confirmations"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "device_id",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "platform",
+      "data_type": "character varying(32)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "fcm_token",
+      "data_type": "text",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "app_version",
+      "data_type": "character varying(64)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "os_version",
+      "data_type": "character varying(128)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "device_model",
+      "data_type": "character varying(255)",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "preferences",
+      "data_type": "json",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "is_active",
+      "data_type": "boolean",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "last_seen_at",
+      "data_type": "timestamp with time zone",
+      "schema": "device_registration_service",
+      "table": "device_registrations"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "description",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "credential_template_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "form_fields",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "evidence_requirements",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "claim_collection_rules",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "approval_strategy",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "application_validity_days",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "ui_config",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "notification_config",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "required_checks",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "approval_policy_set_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "management_version",
+      "data_type": "bigint",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "idempotency_key_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "idempotency_request_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "application_templates"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "application_template_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "applicant_identifier",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "form_data",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "submitted_evidence",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "review_notes",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "rejection_reason",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "derived_claims",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "reviewer_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "issuance_transaction_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "submitted_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "reviewed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "integration_context",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "applications"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "code",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "client_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "redirect_uri",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "scope",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "state",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "issuer_state",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "credential_configuration_ids",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "code_challenge",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "code_challenge_method",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "access_token",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "c_nonce",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "dpop_jkt",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "access_token_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "authorization_sessions"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "binding_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "learner_identity_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "candidate_key",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "canvas_user_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "lti_subject",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "state",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "claimed_credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "observed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_award_candidates"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "candidate_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "requirement_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "logical_key",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "assertion",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "verification",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "payload_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "superseded_observation_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "is_current",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "observed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_candidate_observations"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "provider_event_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "credential_template_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "canvas_account_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "payload_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "issuance_transaction_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "issuance_response",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(50)",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "error_summary",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "first_seen_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "last_seen_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_event_receipts"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "target_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(32)",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "attempt_count",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "max_attempts",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "available_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "lease_owner",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "lease_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "last_error_code",
+      "data_type": "character varying(120)",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "last_error_summary",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "result",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "started_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "completed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_jobs"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "binding_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "target_type",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "logical_key",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "candidate_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "schedule_seconds",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "next_run_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "last_enqueued_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "last_succeeded_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "config_version",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "metadata",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_evidence_sync_targets"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "deployment_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "lti_subject",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "canvas_user_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "sis_user_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(32)",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "conflict_reason",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "verified_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_learner_identities"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "canvas_account_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "state",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "nonce",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "login_hint",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "target_link_uri",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "lti_message_hint",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "redirect_uri",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(50)",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "metadata",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "consumed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_lti_launch_states"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "canvas_base_url",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "platform_config_version",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "client_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "client_secret_ref",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "state_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "capabilities",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "scopes",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "redirect_uri",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "consumed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_authorizations"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "canvas_base_url",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "platform_config_version",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "client_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "client_secret_ref",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "capabilities",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "scopes",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "access_token_secret_ref",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "refresh_token_secret_ref",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "token_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "reauthorization_required",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "refresh_lease_owner",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "refresh_lease_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "revoke_retry_count",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "revoke_retry_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "revoke_last_error_code",
+      "data_type": "character varying(120)",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "connected_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "last_refreshed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_oauth_connections"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_platform_state_backups"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_platform_state_backups"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_platform_state_backups"
+    },
+    {
+      "column": "backed_up_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platform_state_backups"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "canvas_account_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "display_name",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "canvas_base_url",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_client_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_deployment_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_issuer",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_jwks_url",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_jwks_json",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_jwks_fetched_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_jwks_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_openid_configuration",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "lti_trust_profile",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "registration_status",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "connection_config",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "capability_snapshot",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "last_validated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "last_connection_error",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "config_version",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "archived_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_platforms"
+    },
+    {
+      "column": "binding_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "evidence_requirements",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "direct_issue_enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "auto_approve_on_evidence",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "backed_up_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_program_binding_requirement_backups"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "platform_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "application_template_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "credential_template_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "display_name",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "flow_mode",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "direct_issue_enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "auto_approve_on_evidence",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "evidence_requirements",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "canvas_scope",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "delivery_mode",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "issuer_mode",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "approval_policy_set_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "deployment_profile_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "feature_flags",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "canvas_credentials",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "config_version",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "validated_config_version",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "readiness_checks",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "readiness_validated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "activated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "archived_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "credential_template_snapshot",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_program_bindings"
+    },
+    {
+      "column": "worker_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "canvas_worker_heartbeats"
+    },
+    {
+      "column": "role",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "canvas_worker_heartbeats"
+    },
+    {
+      "column": "started_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_worker_heartbeats"
+    },
+    {
+      "column": "last_heartbeat_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "canvas_worker_heartbeats"
+    },
+    {
+      "column": "metadata",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "canvas_worker_heartbeats"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "transaction_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "delivery_target",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "delivery_mode",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "canvas_account_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "external_credential_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "external_issuer_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "last_error",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "metadata",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "credential_delivery_records"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_fact_heads"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_fact_heads"
+    },
+    {
+      "column": "logical_key",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "evidence_fact_heads"
+    },
+    {
+      "column": "fact_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_fact_heads"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_fact_heads"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "subject_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "provider",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "fact_type",
+      "data_type": "character varying(160)",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "scope",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "assertion",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "verification",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "source",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "requirement_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "logical_key",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "source_revision",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "payload_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "observed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "effective_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "superseded_fact_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_facts"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "binding_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(32)",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "prior_decision",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "current_decision",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "triggering_fact_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolution_action",
+      "data_type": "character varying(32)",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolution_notes",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolved_by",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolved_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolution_claim_token",
+      "data_type": "character varying(128)",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolution_claim_action",
+      "data_type": "character varying(32)",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolution_claimed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "resolution_recovery_pending",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "evidence_policy_reviews"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "transaction_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "event_type",
+      "data_type": "character varying(50)",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "metadata",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_events"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "credential_template_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "applicant_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "subject_did",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "pre_auth_code",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "access_token",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "c_nonce",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "claims",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "issued_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "credential_type",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "zk_predicate_claims",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "credential_payload_format",
+      "data_type": "character varying(30)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "wallet_configs",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "revoked_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "revocation_reason",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "selective_disclosure_claims",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "issuer_did_override",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "signing_service_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "issuer_profile_id",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "issuer_mode",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "delivery_mode",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "revocation_profile_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "renewal_of_credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "validity_days",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "renewable",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "renewal_window_days",
+      "data_type": "integer",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "reserved_credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "oid4vci_client_id",
+      "data_type": "character varying(512)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "issuer_algorithm",
+      "data_type": "character varying(20)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "idempotency_key_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "idempotency_request_hash",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "access_token_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issuance_transactions"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "transaction_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "credential_template_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "applicant_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "subject_did",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "credential_jwt",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "credential_hash",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "status_updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "revoked",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "revoked_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "revocation_reason",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "issued_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "issuer_did",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "revocation_profile_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "status_list_entries",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "renewed_from_credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "renewed_to_credential_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "issued_credentials"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "oid4vci_client_assertions"
+    },
+    {
+      "column": "client_id",
+      "data_type": "character varying(512)",
+      "schema": "issuance_service",
+      "table": "oid4vci_client_assertions"
+    },
+    {
+      "column": "jti",
+      "data_type": "character varying(256)",
+      "schema": "issuance_service",
+      "table": "oid4vci_client_assertions"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "oid4vci_client_assertions"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "oid4vci_client_assertions"
+    },
+    {
+      "column": "purpose",
+      "data_type": "character varying(32)",
+      "schema": "issuance_service",
+      "table": "oid4vci_ephemeral_capabilities"
+    },
+    {
+      "column": "key_digest",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "oid4vci_ephemeral_capabilities"
+    },
+    {
+      "column": "payload",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "oid4vci_ephemeral_capabilities"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "oid4vci_ephemeral_capabilities"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "oid4vci_ephemeral_capabilities"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "client_id",
+      "data_type": "character varying(512)",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "jwks",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "redirect_uris",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "token_endpoint_auth_method",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "active",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "oid4vci_registered_clients"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "provider",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "purpose",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "encrypted_secret_value",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "secret_hint",
+      "data_type": "character varying(80)",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "metadata",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "last_used_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "organization_integration_secrets"
+    },
+    {
+      "column": "batch_id",
+      "data_type": "uuid",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "selected_flow_instance_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "selected_job_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "companion_job_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "last_send_started_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "send_attempts",
+      "data_type": "smallint",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "last_receipt_completion_started_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "receipt_completion_attempts",
+      "data_type": "bigint",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "first_dispatch_response_seen_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "first_dispatch_wire_ciphertext",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "first_dispatch_request_commitment",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "first_dispatch_response_commitment",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "first_dispatch_wire_key_sha256",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "passport_beta_batch_intents"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "flow_execution_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "application_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "application_template_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "credential_template_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "delivery_destination_profile_id",
+      "data_type": "character varying(128)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "document_type",
+      "data_type": "character varying(3)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "country_code",
+      "data_type": "character varying(3)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "secure_artifact_ciphertext",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "secure_artifact_reference",
+      "data_type": "character varying(512)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "sod_sha256",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "bureau_job_id",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "tracking_number",
+      "data_type": "character varying(255)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(40)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "quality_result",
+      "data_type": "json",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "error_code",
+      "data_type": "character varying(128)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "error_message",
+      "data_type": "character varying(1024)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submitted_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "completed_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "revocation_profile_id",
+      "data_type": "character varying",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "issuer_did",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "bureau_provider_profile_id",
+      "data_type": "character varying(128)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_intent_id",
+      "data_type": "uuid",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_intent_started_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_intent_provider_profile_id",
+      "data_type": "character varying(128)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_intent_bureau_endpoint_sha256",
+      "data_type": "character varying(64)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_intent_signing_provenance",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_id",
+      "data_type": "uuid",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_selected_flow_instance_id",
+      "data_type": "character varying(36)",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_selected_job_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_companion_job_id",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_signing_provenance",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_bureau_endpoint_sha256",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "submission_batch_material_digests",
+      "data_type": "jsonb",
+      "schema": "issuance_service",
+      "table": "physical_document_jobs"
+    },
+    {
+      "column": "version",
+      "data_type": "text",
+      "schema": "issuance_service",
+      "table": "rust_schema_migrations"
+    },
+    {
+      "column": "applied_at",
+      "data_type": "timestamp with time zone",
+      "schema": "issuance_service",
+      "table": "rust_schema_migrations"
+    },
+    {
+      "column": "version_num",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "alembic_version"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(64)",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "notification_type",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "subject_template",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "body_template",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "active",
+      "data_type": "boolean",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notification_templates"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "recipient_id",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "recipient_email",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "recipient_phone",
+      "data_type": "character varying(64)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "notification_type",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "template_id",
+      "data_type": "character varying(64)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "subject",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "body",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "severity",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "link",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "data",
+      "data_type": "json",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "priority",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "attempts",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "last_attempt_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "delivered_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "error_message",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "scheduled_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "read_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "notifications"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "event_types",
+      "data_type": "json",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "delivery_channel",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "filter_config",
+      "data_type": "json",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "retry_policy",
+      "data_type": "json",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "delivery_target_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "subscriptions"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "webhook_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "subscription_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "event_id",
+      "data_type": "character varying(64)",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "event_type",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "success",
+      "data_type": "boolean",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "response_status_code",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "error_message",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "retry_count",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "response_time_ms",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_deliveries"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "url",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "secret_envelope",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "secret_hint",
+      "data_type": "character varying(8)",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "event_types",
+      "data_type": "json",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "failure_count",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "last_failure_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "last_triggered_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "circuit_breaker_open_until",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_endpoints"
+    },
+    {
+      "column": "id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "webhook_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "subscription_id",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "event_id",
+      "data_type": "character varying(64)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "event_type",
+      "data_type": "character varying(255)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "payload",
+      "data_type": "json",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "max_attempts",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "initial_backoff_seconds",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "max_backoff_seconds",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(32)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "attempt_count",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "next_attempt_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "lease_token",
+      "data_type": "character varying(36)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "lease_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "delivered_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "last_error_code",
+      "data_type": "character varying(128)",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "response_status_code",
+      "data_type": "integer",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "notification_service",
+      "table": "webhook_outbox"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "key_prefix",
+      "data_type": "character varying(20)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "key_hash",
+      "data_type": "character varying(64)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "scopes",
+      "data_type": "text[]",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "scope_type",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "deployment_profile_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "enabled",
+      "data_type": "boolean",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "rate_limit",
+      "data_type": "integer",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "created_by",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "last_used_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "last_used_ip",
+      "data_type": "character varying(45)",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "api_keys"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "event_type",
+      "data_type": "character varying(120)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "action",
+      "data_type": "character varying(120)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "category",
+      "data_type": "character varying(100)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "resource_type",
+      "data_type": "character varying(100)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "resource_id",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "resource_name",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "actor_id",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "actor_type",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "severity",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "message",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "changes",
+      "data_type": "jsonb",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "metadata",
+      "data_type": "jsonb",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "audit_events"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "console_context_preferences"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "console_context_preferences"
+    },
+    {
+      "column": "last_view_mode",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "console_context_preferences"
+    },
+    {
+      "column": "last_active_org_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "console_context_preferences"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "console_context_preferences"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "console_context_preferences"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "code",
+      "data_type": "character varying(8)",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "created_by",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "max_uses",
+      "data_type": "integer",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "use_count",
+      "data_type": "integer",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "is_active",
+      "data_type": "boolean",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "join_codes"
+    },
+    {
+      "column": "member_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "member_roles"
+    },
+    {
+      "column": "role_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "member_roles"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "user_id",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "email",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "invited_by",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "invited_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "joined_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "members"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "display_name",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "logo_url",
+      "data_type": "character varying(1024)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "website_url",
+      "data_type": "character varying(1024)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "metadata",
+      "data_type": "jsonb",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "created_by",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "updated_by",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "owner_id",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "slug",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "org_type",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "contact_email",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "contact_phone",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "website",
+      "data_type": "character varying(1024)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "settings",
+      "data_type": "jsonb",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "plan",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "plan_expires_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "join_mechanism",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "requires_approval",
+      "data_type": "boolean",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "is_discoverable",
+      "data_type": "boolean",
+      "schema": "organization_service",
+      "table": "organizations"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "permissions"
+    },
+    {
+      "column": "resource",
+      "data_type": "character varying(100)",
+      "schema": "organization_service",
+      "table": "permissions"
+    },
+    {
+      "column": "action",
+      "data_type": "character varying(100)",
+      "schema": "organization_service",
+      "table": "permissions"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "permissions"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "policy_type",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "status",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "cedar_policies",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "cedar_schema_version",
+      "data_type": "character varying(50)",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "created_by",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "policy_sets"
+    },
+    {
+      "column": "role_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "role_permissions"
+    },
+    {
+      "column": "permission_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "role_permissions"
+    },
+    {
+      "column": "id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "organization_id",
+      "data_type": "uuid",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "name",
+      "data_type": "character varying(100)",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "display_name",
+      "data_type": "character varying(255)",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "description",
+      "data_type": "text",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "is_system",
+      "data_type": "boolean",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "is_default_for_new_members",
+      "data_type": "boolean",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "created_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "updated_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "roles"
+    },
+    {
+      "column": "version",
+      "data_type": "character varying(64)",
+      "schema": "organization_service",
+      "table": "rust_schema_versions"
+    },
+    {
+      "column": "applied_at",
+      "data_type": "timestamp with time zone",
+      "schema": "organization_service",
+      "table": "rust_schema_versions"
+    }
+  ],
+  "table_count": 61,
+  "verify_only_database": "reachable-unreachable-read-only"
+}

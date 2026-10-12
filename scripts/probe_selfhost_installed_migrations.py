@@ -36,6 +36,7 @@ if __package__:
         native_command,
         validate_images,
         validate_model,
+        verify_rust_database_probe,
     )
 else:
     from check_prepared_selfhost_consumer import (
@@ -56,6 +57,7 @@ else:
         native_command,
         validate_images,
         validate_model,
+        verify_rust_database_probe,
     )
 
 
@@ -299,6 +301,7 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                                          "signing_keys_openbao_token")]
             require(all(token_values) and len(set(token_values)) == len(token_values),
                     "Disposable OpenBao tokens must be distinct")
+            verify_rust_database_probe(compose, environment, run)
             ledger = None
             for _ in range(2):
                 migration = run([*compose, "run", "--no-deps", "--rm", "db-migrate"],
@@ -341,6 +344,7 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                     "migrations_image": images["migrations"],
                     "services_image": images["services"], "openbao_image": images["openbao"],
                     "native_schemas": "verified", "private_key_storage": "absent",
+                    "verify_only_database": "reachable-unreachable-read-only",
                     "notification_head": ledger, "runs": 2}
             if after_migrations is not None:
                 report["runtime"] = after_migrations(compose, environment, secret_dir, run)

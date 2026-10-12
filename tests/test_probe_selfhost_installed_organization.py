@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import probe_selfhost_installed_organization as probe
+from qualify_selfhost_migrations import VERIFY_ONLY_CATALOG_QUERY
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64
 IMAGES = {
@@ -199,6 +200,11 @@ def test_runtime_hook_after_two_migrations_remains_unqualified(tmp_path, monkeyp
 
     def run(args, environment, timeout=90):
         calls.append(args)
+        if args[-1] == VERIFY_ONLY_CATALOG_QUERY:
+            return subprocess.CompletedProcess(args, 0, "0\n", "")
+        if args[-1] == "--verify-only":
+            return subprocess.CompletedProcess(args, 1 if "--env" in args else 0,
+                                               "", "")
         if args[-1] == "openbao-bootstrap":
             secret_dir = Path(environment["PROBE_SECRET_DIR"])
             (secret_dir / "bao_service_token").write_text("scoped-service")

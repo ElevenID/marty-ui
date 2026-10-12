@@ -13,8 +13,9 @@ import pytest
 from scripts.qualify_selfhost_migrations import (
     ROOT, NOTIFICATION_HEAD, PRIVATE_KEY_CONTENT_QUERY,
     PRIVATE_KEY_SCHEMA_QUERY, SCHEMA_INVENTORY_QUERY,
+    VERIFY_ONLY_CATALOG_QUERY,
     QualificationError,
-    _assert_run, native_command, qualify,
+    _assert_run, native_command, qualify, verify_rust_database_probe,
     validate_images, validate_model,
 )
 
@@ -129,6 +130,41 @@ def result(args: list[str], stdout: str = "", status: int = 0
     return subprocess.CompletedProcess(args, status, stdout, "")
 
 
+def verify_only_fixture(args: list[str]) -> subprocess.CompletedProcess[str] | None:
+    if args[-1:] == [VERIFY_ONLY_CATALOG_QUERY]:
+        return result(args, "0\n")
+    if args[-1:] == ["--verify-only"]:
+        return result(args, status=1 if "--env" in args else 0)
+    return None
+
+
+@pytest.mark.parametrize(("failure", "expected"), [
+    ("reachable", "could not reach disposable database"),
+    ("unreachable", "accepted unreachable database"),
+    ("credential", "exposed database credentials"),
+    ("write", "changed the database catalog"),
+])
+def test_verify_only_rejects_incorrect_packaged_behavior(
+    failure: str, expected: str,
+) -> None:
+    catalog_reads = 0
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        nonlocal catalog_reads
+        if args[-1] == VERIFY_ONLY_CATALOG_QUERY:
+            catalog_reads += 1
+            return result(args, "1\n" if failure == "write" and catalog_reads == 2
+                          else "0\n")
+        if args[-1] == "--verify-only":
+            return result(args, "verify-only-probe-secret" if failure == "credential"
+                          else "", 0 if failure == "unreachable" else 1)
+        return result(args, status=1 if failure == "reachable" else 0)
+
+    with pytest.raises(QualificationError, match=expected):
+        verify_rust_database_probe(["docker", "compose"], {}, run)
+
+
 def test_rejects_mutable_or_foreign_image() -> None:
     validate_images(IMAGES)
     for role, bad in (
@@ -187,6 +223,9 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     def run(args: list[str], environment: dict[str, str], timeout: int = 90
             ) -> subprocess.CompletedProcess[str]:
         calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
         assert environment["PROBE_MIGRATIONS_IMAGE"] == IMAGES["migrations"]
         assert environment["PROBE_SERVICES_IMAGE"] == IMAGES["services"]
         assert Path(environment["PROBE_SECRET_DIR"]).is_dir()
@@ -221,10 +260,12 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert report["runs"] == "2"
     assert report["private_key_storage"] == "absent"
     assert report["native_schemas"] == "verified"
+    assert report["verify_only_database"] == "reachable-unreachable-read-only"
     assert report["services_image"] == IMAGES["services"]
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
-    assert sum("psql" in args for args in calls) == 10
+    assert sum("psql" in args for args in calls) == 12
+    assert sum("--verify-only" in " ".join(args) for args in calls) == 2
     assert sum(args[-1] == PRIVATE_KEY_CONTENT_QUERY for args in calls) == 2
     assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
     assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2
@@ -253,6 +294,9 @@ def test_private_key_storage_fails_qualification_and_cleans(
     def run(args: list[str], environment: dict[str, str], timeout: int = 90
             ) -> subprocess.CompletedProcess[str]:
         calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
         if args[-3:] == ["config", "--format", "json"]:
             return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
                                                 args[args.index("--project-name") + 1])))
@@ -282,6 +326,9 @@ def test_migration_failure_still_cleans(tmp_path: Path) -> None:
     def run(args: list[str], environment: dict[str, str], timeout: int = 90
             ) -> subprocess.CompletedProcess[str]:
         calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
         if args[-3:] == ["config", "--format", "json"]:
             return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
                                                 args[args.index("--project-name") + 1])))
@@ -300,6 +347,9 @@ def test_native_schema_failure_still_cleans() -> None:
     def run(args: list[str], environment: dict[str, str], timeout: int = 90
             ) -> subprocess.CompletedProcess[str]:
         calls.append(args)
+        mock = verify_only_fixture(args)
+        if mock is not None:
+            return mock
         if args[-3:] == ["config", "--format", "json"]:
             return result(args, json.dumps(model(Path(environment["PROBE_SECRET_DIR"]),
                                                 args[args.index("--project-name") + 1])))

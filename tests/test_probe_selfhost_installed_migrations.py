@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import probe_selfhost_installed_migrations as probe  # noqa: E402
+from qualify_selfhost_migrations import VERIFY_ONLY_CATALOG_QUERY  # noqa: E402
 
 
 IMAGES = {
@@ -203,6 +204,11 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
 
     def run(args, environment, timeout=90):
         calls.append(args)
+        if args[-1:] == [VERIFY_ONLY_CATALOG_QUERY]:
+            return subprocess.CompletedProcess(args, 0, "0\n", "")
+        if args[-1:] == ["--verify-only"]:
+            return subprocess.CompletedProcess(args, 1 if "--env" in args else 0,
+                                               "", "")
         assert environment["PROBE_MIGRATIONS_IMAGE"] == IMAGES["migrations"]
         assert environment["PROBE_SERVICES_IMAGE"] == IMAGES["services"]
         if args[-3:] == ["config", "--format", "json"]:
@@ -241,6 +247,7 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
     assert report["services_image"] == IMAGES["services"]
     assert report["native_schemas"] == "verified"
     assert report["private_key_storage"] == "absent"
+    assert report["verify_only_database"] == "reachable-unreachable-read-only"
     assert sum(args[-1] == "openbao-bootstrap" for args in calls) == 1
     assert sum(args[-1] == "db-migrate" for args in calls) == 2
     assert sum(args[-1] == "native-schema-migrate" for args in calls) == 2

@@ -16957,3 +16957,18 @@ The rebuilt binary also matched all 18 frozen Python bootstrap effect/state
 cases in a network-isolated Docker invocation using standard input. An initial
 invocation omitted Docker's `-i` and correctly exited on empty input; the
 corrected invocation passed 18/18.
+
+The disposable self-host migration qualification and exact-bundle installed
+probe now share a packaged Rust `--verify-only` gate. Before applying migrations,
+each checks a reachable database through the image, requires a nonzero result
+for an unreachable address without echoing its sentinel password, and confirms
+the database catalog is unchanged. Focused probe tests passed 44 cases with one
+platform skip; Ruff and diff checks passed. The source-built corrected migration
+image ran the updated full assembled-schema probe twice against fresh pinned
+PostgreSQL/Redis/OpenBao, retaining 61 tables, 811 columns and inventory hash
+`afab3feb9abac53bcbfb702f6e6976d2cf31bc98da71044c21272d749dbd03d3`.
+Private-key catalog/content scans were empty and teardown succeeded. Receipt:
+`artifacts/kms-rust-verify-only-assembled-probe-20261012.json`. This qualifies
+the local Compose command and source-built image, not the eventual signed
+release image. UI #1192 run `38205991904` remains in progress with 17 passed
+and four running jobs; the grouped correction is held locally until it finishes.

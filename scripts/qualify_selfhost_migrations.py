@@ -120,6 +120,14 @@ WHERE c.relkind IN ('r', 'p', 'm', 'f')
   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
   AND left(n.nspname, 3) <> 'pg_'
 """
+VERIFY_ONLY_CATALOG_QUERY = """
+SELECT count(*)
+FROM pg_catalog.pg_class AS c
+JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+WHERE c.relkind IN ('r', 'p', 'm', 'f')
+  AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND left(n.nspname, 3) <> 'pg_'
+"""
 REDIS_REGISTRY = f"org:{ORG_ID}:signing-key-services"
 NATIVE_BINARIES = (
     "marty-organization", "marty-credential-template",
@@ -318,6 +326,38 @@ def _assert_run(stdout: str) -> None:
             "Released migration image did not complete the self-host entrypoint")
 
 
+def verify_rust_database_probe(
+    compose: list[str], environment: dict[str, str],
+    run: Callable[..., subprocess.CompletedProcess[str]] = command,
+) -> None:
+    """Require the packaged Rust verify-only command to read, never mutate."""
+    catalog = [*compose, "exec", "-T", "postgres", "psql", "-U", "marty",
+               "-d", "marty", "-Atqc", VERIFY_ONLY_CATALOG_QUERY]
+    before = _checked(run(catalog, environment),
+                      "Verify-only catalog preflight failed").strip()
+    require(re.fullmatch(r"[0-9]+", before) is not None,
+            "Verify-only catalog preflight is invalid")
+    _checked(run([*compose, "run", "--no-deps", "--rm", "--entrypoint", "/bin/sh",
+                  "db-migrate", "-ec", ". /app/load-secrets-env.sh; "
+                  "exec /usr/local/bin/marty-migration-bootstrap --verify-only"],
+                 environment, 120),
+             "Rust migration verify-only could not reach disposable database")
+    sentinel = "verify-only-probe-secret"
+    disconnected = run([
+        *compose, "run", "--no-deps", "--rm", "--entrypoint",
+        "/usr/local/bin/marty-migration-bootstrap", "--env",
+        f"DATABASE_URL=postgresql://marty:{sentinel}@127.0.0.1:1/marty",
+        "db-migrate", "--verify-only",
+    ], environment, 120)
+    require(disconnected.returncode != 0,
+            "Rust migration verify-only accepted unreachable database")
+    require(sentinel not in disconnected.stdout + disconnected.stderr,
+            "Rust migration verify-only exposed database credentials")
+    after = _checked(run(catalog, environment),
+                     "Verify-only catalog postflight failed").strip()
+    require(after == before, "Rust migration verify-only changed the database catalog")
+
+
 def qualify(images: dict[str, str], *,
             run: Callable[..., subprocess.CompletedProcess[str]] = command,
             project: str | None = None) -> dict[str, str]:
@@ -364,6 +404,7 @@ def qualify(images: dict[str, str], *,
             _checked(run([*compose, "up", "-d", "--wait", "--wait-timeout", "120",
                           "postgres", "redis", "openbao"], environment, 240),
                      "Disposable dependencies did not become ready")
+            verify_rust_database_probe(compose, environment, run)
             ledger = None
             inventory = None
             for _ in range(2):
@@ -445,6 +486,7 @@ def qualify(images: dict[str, str], *,
                     "native_schemas": "verified",
                     "notification_head": ledger,
                     "private_key_storage": "absent",
+                    "verify_only_database": "reachable-unreachable-read-only",
                     "table_columns": inventory,
                     "profile": "selfhost-production", "runs": "2"}
         finally:
