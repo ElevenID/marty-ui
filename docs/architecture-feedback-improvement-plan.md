@@ -692,16 +692,19 @@ representative Core-authority-certificate-to-Signing import proof in the
 existing cross-service acceptance package. This preserves the independent
 Core-to-Signing compatibility witness while removing Verification from the
 Signing Keys package-scoped test graph. The Redis tests remain ignored for
-ordinary local execution but explicitly runnable with owned disposable Redis;
-production Docker contexts exclude the new acceptance test source and shared
-test fixture. This candidate does not change runtime behavior, CI gates, or
-claim a hosted speedup. Locked
+ordinary local execution, but both are now required in the existing
+disposable-Redis contracts lane with an exact two-case execution assertion
+and a workflow-policy guard. Production Docker contexts exclude the new
+acceptance test source and shared test fixture. This candidate does not
+change runtime behavior or relax CI gates, and it does not claim a hosted
+speedup. Locked
 offline package-scoped Cargo-tree counts, normalized for display duplicates,
 are 587 to 322 for Signing Keys and 718 to 721 for the already broad service
 acceptance package. This is compile-surface evidence, not a measured build
 duration. Local Rust 1.95 validation passed seven lifecycle cases, both new
 acceptance cases, and both real Redis/HTTP cases against an owned disposable
-Redis container; independent review found no P1-P3 issue.
+Redis container; 147 workflow-policy tests passed, and independent review
+found no P1-P3 issue.
 
 A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull/1117), merged 2026-10-06): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup or narrower gate is claimed.
 
