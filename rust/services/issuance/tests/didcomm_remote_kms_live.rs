@@ -173,6 +173,15 @@ async fn issuer_authcrypt_uses_scoped_openbao_key_and_holder_decrypts_after_rota
     let plaintext = json!({"id":"live-1","type":"https://didcomm.org/basicmessage/2.0/message",
         "from":sender_did,"to":[holder_did],"body":{"live":true}})
     .to_string();
+    std::fs::write(&token_file, "invalid-token\n").unwrap();
+    assert!(
+        envelope
+            .encrypt_prepared(&plaintext, &prepared)
+            .await
+            .is_err(),
+        "remote auth failure must not fall back to local or anoncrypt packing"
+    );
+    std::fs::write(&token_file, format!("{scoped_token}\n")).unwrap();
     let encrypted = envelope
         .encrypt_prepared(&plaintext, &prepared)
         .await
