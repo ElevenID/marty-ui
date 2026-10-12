@@ -1614,6 +1614,8 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in contracts:
         assert steps[name]["if"] == "matrix.lane == 'contracts'"
         assert not steps[name].get("continue-on-error", False)
+    live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
+    assert "csca_lifecycle_storage_contract:2" in live_signing
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
     ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
