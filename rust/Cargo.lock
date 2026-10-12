@@ -4709,6 +4709,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-spruce-metadata-probe"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "marty-status"
 version = "0.2.2"
 source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"

@@ -169,7 +169,7 @@ jobs:
             --report wallet-attachment-verification.json
 
       - name: Recheck live SpruceKit issuer metadata
-        run: python scripts/check_spruceid_metadata.py --base "$BETA_ORIGIN"
+        run: cargo run --locked --quiet --manifest-path rust/Cargo.toml -p marty-spruce-metadata-probe -- --base "$BETA_ORIGIN"
 
       - name: Validate all gates and promote manifest
         shell: bash
