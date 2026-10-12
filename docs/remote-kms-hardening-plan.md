@@ -16805,3 +16805,9 @@ need qualification before lifting any hold.
 The rebuilt image also ran with networking disabled and reported Core packages
 `marty-rs`, `marty-verification-py`, and `marty-iso18013` all at 0.2.2, with
 retired `marty-common` absent.
+The grouped branch was pushed as PR #1192 head `7bc066bfd4ce07a3bbdf2cea6d728d2b08b8c29c`;
+GitHub reports it mergeable and exact-head CI `38197275350` is running. A
+post-push beta-fence review found the newly owned migration Docker context
+allowlist should be part of the same source-integrity set as its Dockerfile;
+that local protection edit is held for the next grouped correction after
+the running CI head reports. No release hold is lifted.

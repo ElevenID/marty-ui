@@ -113,6 +113,7 @@ PROTECTED_FILES = (
     "docker-compose.profile.passport-premigrated-beta.yml",
     "docker-compose.ui-release.yml",
     "services/Dockerfile.migrations",
+    "services/Dockerfile.migrations.dockerignore",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
     "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",
