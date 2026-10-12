@@ -17187,3 +17187,15 @@ The production collector correctly requires all four roles. The local fixture
 now includes `openbao-didcomm`, and the file passes 67/67. The other hosted
 jobs remain in progress; retain the failed run as immutable evidence and
 batch any further findings before the next push.
+
+2026-10-12 grouped-push decision: the exact-head run `38217256389` has a
+terminal Release Contract failure from the five now-corrected synthetic
+manifest cases. All other completed jobs passed, including the plugin/Raft
+recovery, Rust contracts and service images; only the long Canvas public
+self-host image build is still live. The run cannot become green. The local
+fourth-image fixture correction, pinned OpenBao bundle project, 105 focused
+Python checks, 14 Rust package contracts, and extracted synthetic-digest
+ZIP/receipt proof are ready. Push this batch together now so pull-request
+concurrency can cancel the superseded run rather than spend more CI time on a
+known-failing head. Keep the stack release lock `hold` and require fresh
+exact-head hosted checks.
