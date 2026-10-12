@@ -3919,6 +3919,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-demo-vendor-seed"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "marty-deployment-catalog"
 version = "0.1.0"
 dependencies = [
@@ -4696,6 +4706,16 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "x509-cert",
+]
+
+[[package]]
+name = "marty-spruce-metadata-probe"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "url",
 ]
 
 [[package]]

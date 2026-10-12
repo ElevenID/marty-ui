@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -61,8 +60,8 @@ def test_provenance_uses_canonical_git_blob_bytes() -> None:
             assert hashlib.sha256(blob).hexdigest() == expected
 
 
-def test_live_seed_commands_start_without_marty_common() -> None:
-    for script in ("seed_canvas_real.py", "seed_demo_vendor_fixtures.py"):
+def test_live_seed_command_starts_without_marty_common() -> None:
+    for script in ("seed_canvas_real.py",):
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts" / script), "--help"],
             cwd=ROOT,
@@ -72,12 +71,3 @@ def test_live_seed_commands_start_without_marty_common() -> None:
         )
         assert result.returncode == 0, (script, result.stderr)
         assert "--env-file" in result.stdout
-
-
-def test_demo_vendor_seed_rejects_persistent_alias_without_database(monkeypatch, capsys) -> None:
-    seed = runpy.run_path(str(ROOT / "scripts" / "seed_demo_vendor_fixtures.py"))
-
-    monkeypatch.setenv("MARTY_MIGRATION_PROFILE", "selfhost_prod")
-    monkeypatch.setattr(sys, "argv", ["seed_demo_vendor_fixtures.py", "--env-file", "missing.env"])
-    assert seed["main"]() == 2
-    assert "selfhost-production" in capsys.readouterr().err
