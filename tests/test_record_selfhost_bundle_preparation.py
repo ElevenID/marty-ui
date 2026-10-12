@@ -29,6 +29,9 @@ class BundlePreparationTest(unittest.TestCase):
         self.transaction.write_text("{}")
         self.contents = {
             ".marty-selfhost-images.json": self.lock.read_bytes(),
+            "docker-compose.selfhost.openbao.yml": (
+                "services:\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
+                "\n  openbao-bootstrap:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 + "\n").encode(),
             "docker-compose.yml": f"services:\n  app:\n    image: {self.image}\n".encode(),
             "README.md": b"unqualified\n",
         }
@@ -93,6 +96,21 @@ class BundlePreparationTest(unittest.TestCase):
         self.contents["docker-compose.yml"] = b"services:\n  app:\n    image: other\n"
         self.write_archive()
         with self.assertRaisesRegex(ValueError, "Compose image closure"):
+            self.check()
+
+    def test_rejects_openbao_compose_image_mismatch(self):
+        self.contents["docker-compose.selfhost.openbao.yml"] = (
+            b"services:\n  openbao:\n    image: quay.io/openbao/openbao:latest\n"
+            b"  openbao-bootstrap:\n    image: quay.io/openbao/openbao:latest\n"
+        )
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
+            self.check()
+
+    def test_rejects_missing_openbao_compose(self):
+        del self.contents["docker-compose.selfhost.openbao.yml"]
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "omits pinned OpenBao Compose"):
             self.check()
 
     def test_rejects_owned_file_mutation(self):

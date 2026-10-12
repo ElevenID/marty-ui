@@ -5,6 +5,7 @@ This bundle is the image-based distribution for the open-source self-host stack.
 ## What is inside the bundle
 
 - `docker-compose.yml` as the generated image-based runtime compose file operators should run
+- `docker-compose.selfhost.openbao.yml` with the Go DIDComm plugin image for the separate OpenBao Raft project
 - `.env.selfhost.production.example` with the non-secret settings contract
 - `docker/secrets/selfhost.example` as the tracked placeholder secret set
 - `config/keycloak` for the realm import and theme assets
@@ -30,6 +31,11 @@ Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do n
 For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
 images no longer use `SELFHOST_IMAGE_TAG` or `MARTY_ISSUANCE_IMAGE`; the
 qualified image lock supplies those references instead.
+The same lock pins both services in `docker-compose.selfhost.openbao.yml` to
+its `openbao_didcomm_image` digest. Start this separate project with the same
+external state and secret directories when using the bundled OpenBao backend;
+the main Compose project does not start OpenBao for you. The release must
+qualify both projects together before this is a supported KMS-only install.
 
 Use the image artifacts and verification evidence from the release workflow, then
 stage this bundle with `make package-selfhost-bundle` (Rust 1.95.0 and Docker

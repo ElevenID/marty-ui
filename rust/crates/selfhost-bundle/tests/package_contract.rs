@@ -82,6 +82,28 @@ fn render(stage: &Path, args: &[String]) -> marty_selfhost_bundle::Result<String
 fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     let root = tempfile::tempdir().unwrap();
     let mut options = fixture(root.path());
+    let openbao_source = "services:\n  openbao:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao-bootstrap:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n";
+    fs::write(
+        options.repo.join("docker-compose.selfhost.openbao.yml"),
+        openbao_source,
+    )
+    .unwrap();
+    let manifest_path = options.repo.join("deploy-config/bundles/selfhost.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["assets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("docker-compose.selfhost.openbao.yml"));
+    manifest["render"] = json!({
+        "env_file": ".env.selfhost.production.example",
+        "compose_files": ["docker-compose.selfhost.prod.yml", "docker-compose.selfhost.bundle.override.yml"],
+        "output_file": "docker-compose.yml",
+        "openbao_compose_file": "docker-compose.selfhost.openbao.yml",
+        "strip_build_blocks": true,
+        "relativize_paths": true,
+        "no_interpolate": true
+    });
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
     let release_path = options.repo.join("release/stack-lock.json");
     fs::create_dir_all(release_path.parent().unwrap()).unwrap();
     fs::write(&release_path, r#"{"release":"marty-ui@1.2.3"}"#).unwrap();
@@ -108,6 +130,19 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
         .unwrap(),
         image_lock
     );
+    let openbao: serde_yaml::Value = serde_yaml::from_slice(
+        &fs::read(published.output.join("docker-compose.selfhost.openbao.yml")).unwrap(),
+    )
+    .unwrap();
+    let plugin = image_lock["openbao_didcomm_image"].as_str().unwrap();
+    assert_eq!(
+        openbao["services"]["openbao"]["image"].as_str(),
+        Some(plugin)
+    );
+    assert_eq!(
+        openbao["services"]["openbao-bootstrap"]["image"].as_str(),
+        Some(plugin)
+    );
 
     options.output = root.path().join("rejected-bundle");
     options.archive = None;
@@ -129,7 +164,6 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     assert!(!options.output.exists());
 
     fs::write(&lock_path, image_lock.to_string()).unwrap();
-    let manifest_path = options.repo.join("deploy-config/bundles/selfhost.json");
     let mut manifest: Value = serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
     manifest["render"] = json!({
         "env_file": ".env.selfhost.production.example",

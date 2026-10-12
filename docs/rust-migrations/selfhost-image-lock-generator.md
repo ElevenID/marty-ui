@@ -47,8 +47,10 @@ Rust `package-selfhost-bundle --image-lock` path expects. It binds every
 rendered Compose service to one digest and records `openbao_didcomm_image`
 from the same four-role stack transaction. The Rust packager requires that
 field; the preparation and consumer lanes verify and pull its exact digest.
-The separate OpenBao Compose project is not yet included in the customer ZIP,
-so this field is a release identity binding, not installed KMS qualification.
+The customer ZIP now includes the separate OpenBao Compose project and its
+bootstrap/config assets; the Rust packager pins both OpenBao services to this
+digest, and the downloaded-ZIP consumer checks that binding. This is still
+release preparation, not installed KMS qualification.
 A release producer must still verify
 provenance and anonymous pull for every image, qualify an extracted installed
 bundle, and sign/attest the eventual lock and archive before publication.

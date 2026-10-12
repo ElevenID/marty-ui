@@ -24,6 +24,9 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path, monke
     transaction.write_text("{}")
     files = {".marty-selfhost-images.json": lock.read_bytes(),
              "asset.txt": b"downloaded asset",
+             "docker-compose.selfhost.openbao.yml": (
+                 "services:\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
+                 "\n  openbao-bootstrap:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 + "\n").encode(),
              "docker-compose.yml": f"services:\n  app:\n    image: {image}\n".encode()}
     inventory = {"schema": "marty.selfhost-bundle-files/v1", "directories": [""],
                  "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}

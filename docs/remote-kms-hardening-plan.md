@@ -17161,11 +17161,29 @@ transaction and records it as `openbao_didcomm_image`. The Rust bundle packager
 rejects a lock without the exact plugin repository/digest, the product
 descriptor checks it against the stack transaction. The preparation lane
 checks its attestation and anonymous pull; the consumer anonymously pulls and
-inspects its Linux/amd64 digest alongside the main Compose images. This closes the release identity gap
-for the prepared lock; the ZIP still does not package the separate OpenBao
-Compose project or prove an installed KMS-only runtime. Local focused Python
-tests passed 92/92 and Rust package contracts passed 14/14; Rust formatting,
-Ruff, workflow YAML parsing and diff checks passed. The full Rust executable
-bundle suite had two Docker Compose renderer failures on Windows after its
-other tests passed; this is not an installed Linux proof. Do not push or claim
-acceptance until the prior hosted head resolves.
+inspects its Linux/amd64 digest alongside the main Compose images. This closes
+the release identity gap for the prepared lock. The bundle manifest now carries
+the separate OpenBao Compose
+project and its bootstrap/config assets. The Rust packager pins both OpenBao
+services to the lock digest; the ZIP receipt rejects a missing or mismatched
+plugin Compose image. The image-lock generator also checks the OpenBao Compose
+source against the exact claimed Git blob. Focused Python tests passed 105/105
+for the changed release, ZIP and Kubernetes paths, and Rust package
+contracts passed 14/14. A real local Rust packager run with the standalone
+Docker Compose executable rendered 31 main and two OpenBao services from an
+extracted synthetic-digest bundle, with both OpenBao images pinned to the
+same digest and both config/init assets present. The ZIP receipt verifier
+also accepted that synthetic-digest archive with all 31 main services and
+the pinned OpenBao Compose project. This is packaging and config evidence,
+not a signed-image KMS runtime deployment. The full Rust executable bundle
+suite had two default Docker Compose renderer failures on Windows;
+using the explicit standalone Compose executable succeeded for the local
+packager run. Hold this batch until the prior hosted head resolves.
+
+UI #1192 run `38217256389` then exposed five failing
+`test_passport_supported_kubernetes_model.py` cases in Release Contract Tests:
+their synthetic official manifest had only the prior three OCI artifacts.
+The production collector correctly requires all four roles. The local fixture
+now includes `openbao-didcomm`, and the file passes 67/67. The other hosted
+jobs remain in progress; retain the failed run as immutable evidence and
+batch any further findings before the next push.

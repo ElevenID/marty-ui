@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import yaml
+from build_selfhost_image_lock import EXACT_IMAGE
 
 
 def digest(data: bytes) -> str:
@@ -33,6 +34,10 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
     lock = json.loads(lock_bytes)
     if lock.get("schema") != "marty.selfhost-image-lock/v1":
         raise ValueError("unsupported image lock")
+    plugin = lock.get("openbao_didcomm_image")
+    if (not isinstance(plugin, str) or EXACT_IMAGE.fullmatch(plugin) is None
+            or not plugin.startswith("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@")):
+        raise ValueError("image lock lacks exact OpenBao DIDComm image")
     transaction_bytes = transaction.read_bytes()
     with zipfile.ZipFile(archive) as bundle, tempfile.TemporaryDirectory(prefix="selfhost-fresh-") as scratch:
         files = {}
@@ -97,6 +102,16 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
                   if "image" in service}
         if images != lock["services"]:
             raise ValueError("ZIP Compose image closure differs from lock")
+        openbao_path = extracted / root / "docker-compose.selfhost.openbao.yml"
+        if not openbao_path.is_file():
+            raise ValueError("ZIP omits pinned OpenBao Compose")
+        openbao_compose = yaml.safe_load(openbao_path.read_bytes())
+        openbao_services = openbao_compose.get("services") if isinstance(openbao_compose, dict) else None
+        if (not isinstance(openbao_services, dict)
+                or set(openbao_services) != {"openbao", "openbao-bootstrap"}
+                or any(not isinstance(service, dict) or service.get("image") != plugin
+                       or "build" in service for service in openbao_services.values())):
+            raise ValueError("ZIP OpenBao Compose image differs from lock")
     return {
         "schema": "marty.selfhost-bundle-preparation/v1",
         "qualification": "unqualified",

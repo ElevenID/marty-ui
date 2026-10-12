@@ -184,7 +184,8 @@ def build_lock(
     except release_transaction.ReleaseTransactionError as error:
         raise ImageLockError(str(error)) from error
     _verify_source_files(source_repo, source_sha,
-                         (stack_lock, base_compose, override_compose))
+                         (stack_lock, base_compose, override_compose,
+                          source_repo / "docker-compose.selfhost.openbao.yml"))
     _require(claim["images"] and claim["state"] in {
         "digests_recorded", "qualified", "promoting", "promoted", "published"
     }, "stack transaction has no recorded image digests")

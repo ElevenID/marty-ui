@@ -19,6 +19,7 @@ const IMAGE_LOCK_NAME: &str = ".marty-selfhost-images.json";
 const MANIFEST: &str = "deploy-config/bundles/selfhost.json";
 const DEFAULT_ASSETS: &[&str] = &[
     "docker-compose.selfhost.prod.yml",
+    "docker-compose.selfhost.openbao.yml",
     "docker-compose.selfhost.bundle.override.yml",
     ".env.selfhost.production.example",
     "SELFHOST_BUNDLE.md",
@@ -26,6 +27,9 @@ const DEFAULT_ASSETS: &[&str] = &[
     "docker/nginx-selfhost.prod.conf.template",
     "docker/tunnel-nginx-proxy.edge.conf",
     "docker/openbao-init.sh",
+    "docker/openbao-selfhost.hcl",
+    "docker/openbao-selfhost-init.sh",
+    "docker/openbao-haip-workload-policy.hcl",
     "docker/secrets/selfhost.example",
     "config/keycloak",
     "scripts/bootstrap-selfhost-vault.sh",
@@ -43,6 +47,8 @@ pub struct Render {
     pub env_file: String,
     pub compose_files: Vec<String>,
     pub output_file: String,
+    #[serde(default)]
+    pub openbao_compose_file: Option<String>,
     pub strip_build_blocks: bool,
     pub relativize_paths: bool,
     pub no_interpolate: bool,
@@ -56,6 +62,7 @@ impl Default for Render {
                 "docker-compose.selfhost.bundle.override.yml".into(),
             ],
             output_file: "docker-compose.yml".into(),
+            openbao_compose_file: None,
             strip_build_blocks: true,
             relativize_paths: true,
             no_interpolate: true,
@@ -345,6 +352,41 @@ pub fn render_arguments(render: &Render) -> Vec<String> {
     args.extend(["config".into(), "--no-interpolate".into()]);
     args
 }
+
+fn pin_openbao_compose(source: &str, image: &str) -> Result<String> {
+    const SOURCE_IMAGE: &str = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}";
+    let mut document: serde_yaml::Value =
+        serde_yaml::from_str(source).map_err(|_| "OpenBao Compose is invalid YAML")?;
+    let services = document
+        .get_mut("services")
+        .and_then(serde_yaml::Value::as_mapping_mut)
+        .ok_or("OpenBao Compose has no services")?;
+    if services.len() != 2 {
+        return Err("OpenBao Compose service set changed".into());
+    }
+    for name in ["openbao", "openbao-bootstrap"] {
+        let service = services
+            .get_mut(serde_yaml::Value::String(name.into()))
+            .and_then(serde_yaml::Value::as_mapping_mut)
+            .ok_or("OpenBao Compose service set changed")?;
+        if service.contains_key(serde_yaml::Value::String("build".into()))
+            || service
+                .get(serde_yaml::Value::String("image".into()))
+                .and_then(serde_yaml::Value::as_str)
+                != Some(SOURCE_IMAGE)
+        {
+            return Err("OpenBao Compose image source changed".into());
+        }
+        service.insert(
+            serde_yaml::Value::String("image".into()),
+            serde_yaml::Value::String(image.into()),
+        );
+    }
+    let pinned =
+        serde_yaml::to_string(&document).map_err(|_| "Cannot render pinned OpenBao Compose")?;
+    transform::validate_strict(&pinned)?;
+    Ok(pinned)
+}
 fn source_closure(stage: &Path, files: &[String]) -> Result<BTreeSet<PathBuf>> {
     let mut pending: Vec<_> = files.iter().map(|s| relative(s)).collect::<Result<_>>()?;
     let mut closure = BTreeSet::new();
@@ -612,6 +654,17 @@ fn package_with_publication(
         .iter()
         .map(|s| relative(s))
         .collect::<Result<_>>()?;
+    let openbao_compose = manifest
+        .render
+        .openbao_compose_file
+        .as_deref()
+        .map(relative)
+        .transpose()?;
+    if let Some(path) = &openbao_compose {
+        if !assets.contains(path) || path == &final_compose {
+            return Err("OpenBao Compose is not a distinct bundle asset".into());
+        }
+    }
     if image_lock_path.is_some()
         && assets
             .iter()
@@ -675,6 +728,13 @@ fn package_with_publication(
                 .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
         {
             return Err("Image lock has no exact OpenBao DIDComm image".into());
+        }
+        if let Some(path) = &openbao_compose {
+            let source = fs::read_to_string(stage.path().join(path))
+                .map_err(failure("Cannot read staged OpenBao Compose"))?;
+            let pinned_openbao = pin_openbao_compose(&source, &lock.openbao_didcomm_image)?;
+            fs::write(stage.path().join(path), pinned_openbao)
+                .map_err(failure("Cannot pin staged OpenBao Compose"))?;
         }
         let source_lock_path = repo.join("release/stack-lock.json");
         check_ancestors(&source_lock_path)?;

@@ -47,6 +47,9 @@ def inputs(tmp_path):
     claim_path = tmp_path / "transaction.json"
     write_json(claim_path, claim)
     files = {".marty-selfhost-images.json": lock.read_bytes(),
+             "docker-compose.selfhost.openbao.yml": (
+                 "services:\n  openbao:\n    image: " + images["openbao_didcomm"] +
+                 "\n  openbao-bootstrap:\n    image: " + images["openbao_didcomm"] + "\n").encode(),
              "docker-compose.yml": (f"services:\n  app:\n    image: {image}\n"
                                     f"  db-migrate:\n    image: {images['migrations']}\n").encode(),
              "README.md": b"experimental fixture\n"}
