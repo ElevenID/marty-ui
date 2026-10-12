@@ -1815,6 +1815,14 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
         },
     }
+    current_input_manifests = {
+        name
+        for name in inventory_consumers
+        if name.startswith("canvas-") and name.endswith("-current-inputs.json")
+    }
+    assert CI_PATH.read_text(encoding="utf-8").count(
+        "contracts/canvas-*-current-inputs.json"
+    ) == 1, "Review the bounded classifier alongside the manifest inventory"
     for manifest, expected in inventory_consumers.items():
         references = subprocess.run(
             ["git", "grep", "-l", "-F", "--", manifest],
@@ -1827,7 +1835,11 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             path
             for path in references.stdout.splitlines()
             if not path.endswith((".md", ".dockerignore"))
-        } == expected, f"Review new consumer of {manifest} before narrowing its gate"
+        } == (
+            expected - {".github/workflows/ci.yml"}
+            if manifest in current_input_manifests
+            else expected
+        ), f"Review new consumer of {manifest} before narrowing its gate"
     tracked = subprocess.run(
         ["git", "ls-files", "--", "*Dockerfile*"],
         cwd=ROOT,
@@ -1853,10 +1865,26 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     assert copying_contracts == set(image_contexts), (
         "Review every image context that copies contracts before narrowing this gate"
     )
+    current_input_pattern = "contracts/canvas-*-current-inputs.json"
+    assert {
+        path.name for path in (ROOT / "contracts").glob("canvas-*-current-inputs.json")
+    } == current_input_manifests, (
+        "Review every Canvas input record and its consumers before excluding it from images"
+    )
     for ignore_path in set(image_contexts.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        assert lines.count(current_input_pattern) == 1
+        assert not any(
+            line.startswith("!contracts")
+            for line in lines[lines.index(current_input_pattern) + 1 :]
+        ), f"Later rule re-includes Canvas input records in {ignore_path}"
         for manifest in inventory_consumers:
             exclusion = f"contracts/{manifest}"
+            if manifest in current_input_manifests:
+                assert exclusion not in lines, (
+                    f"Canvas input record should use the reviewed pattern in {ignore_path}"
+                )
+                continue
             assert lines.count(exclusion) == 1, (
                 f"Inventory manifest must be excluded from {ignore_path}"
             )
@@ -1931,6 +1959,23 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "verification": "false",
         "security": "false",
     }
+    assert _classify_changed_path(
+        "contracts/canvas-new-current-inputs.json", tmp_path
+    ) == {
+        "all": "false",
+        "ui": "false",
+        "python": "false",
+        "rust": "true",
+        "release": "true",
+        "verification": "false",
+        "security": "false",
+    }
+    assert all(
+        value == "true"
+        for value in _classify_changed_path(
+            "contracts/canvas-foo/bar-current-inputs.json", tmp_path
+        ).values()
+    ), "A nested lookalike must fall back to the complete matrix"
     # A new sibling test or changed corpus is not covered by this narrow rule.
     assert (
         _classify_changed_path(
