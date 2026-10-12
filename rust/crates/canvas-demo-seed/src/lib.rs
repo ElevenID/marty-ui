@@ -45,6 +45,7 @@ pub struct Operation {
     pub method: &'static str,
     pub url: String,
     pub payload: Option<Value>,
+    pub timeout_seconds: u64,
 }
 
 impl Operation {
@@ -53,6 +54,7 @@ impl Operation {
             method: "GET",
             url,
             payload: None,
+            timeout_seconds: 20,
         }
     }
 
@@ -61,6 +63,7 @@ impl Operation {
             method,
             url,
             payload: Some(payload),
+            timeout_seconds: 20,
         }
     }
 }
@@ -98,6 +101,7 @@ impl GatewayTransport for GatewayHttp {
         let mut request = self
             .client
             .request(method, &operation.url)
+            .timeout(Duration::from_secs(operation.timeout_seconds))
             .header("Accept", "application/json")
             .header("X-API-Key", &self.api_key);
         if let Some(payload) = operation.payload {
@@ -432,6 +436,7 @@ pub async fn refresh_platform_jwks<T: GatewayTransport + Sync>(
                 base(cfg)
             ),
             payload: None,
+            timeout_seconds: 20,
         })
         .await?;
     if !refreshed.get("platform").is_some_and(Value::is_object) {
@@ -554,4 +559,62 @@ pub async fn upsert_binding<T: GatewayTransport + Sync>(
         action,
         value: binding,
     })
+}
+
+pub async fn run_mirror_publish<T: GatewayTransport + Sync>(
+    transport: &T,
+    cfg: &GatewaySeedConfig,
+) -> Result<Value, String> {
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("organization_id", &cfg.organization_id)
+        .append_pair("limit", "25")
+        .append_pair("retry_failed", "true")
+        .finish();
+    let mut operation = Operation::json(
+        "POST",
+        format!(
+            "{}/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle?{query}",
+            base(cfg)
+        ),
+        json!({}),
+    );
+    operation.timeout_seconds = 60;
+    let response = transport.request(operation).await?;
+    if !response.is_object() {
+        return Err("Unexpected Canvas credential mirror publish response".into());
+    }
+    Ok(response)
+}
+
+/// Issuer context is optional demo metadata. Managed signing and issuer profile
+/// selection remain owned by the signing service; this never handles key material.
+pub async fn resolve_issuer_context<T: GatewayTransport + Sync>(
+    transport: &T,
+    organization_id: &str,
+    signing_keys_internal_base_url: &str,
+    signing_keys_internal_api_key: &str,
+) -> Option<Value> {
+    if signing_keys_internal_api_key.trim().is_empty() {
+        return None;
+    }
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("organization_id", organization_id)
+        .append_pair("credential_format", "sd_jwt_vc")
+        .append_pair("key_purpose", "vc_jwt_issuer")
+        .finish();
+    let response = transport
+        .request(Operation::get(format!(
+            "{}/issuer-context?{query}",
+            signing_keys_internal_base_url.trim_end_matches('/')
+        )))
+        .await
+        .ok()?;
+    let context = response.as_object()?;
+    Some(json!({
+        "issuer_profile_id": context.get("issuer_profile_id"),
+        "issuer_did": context.get("issuer_did"),
+        "signing_service_id": context.get("signing_service_id"),
+        "signing_key_reference": context.get("signing_key_reference"),
+        "verification_method_id": context.get("verification_method_id"),
+    }))
 }

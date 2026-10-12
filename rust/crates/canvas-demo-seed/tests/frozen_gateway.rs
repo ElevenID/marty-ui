@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use marty_canvas_demo_seed::{
     ags_score_payload, application_payload, application_template_payload,
-    credential_template_payload, demo_scope, remote_signing_config, signed_ags_wire,
-    upsert_binding, upsert_platform, DemoEvidenceConfig, GatewaySeedConfig, GatewayTransport,
-    Operation,
+    credential_template_payload, demo_scope, remote_signing_config, resolve_issuer_context,
+    run_mirror_publish, signed_ags_wire, upsert_binding, upsert_platform, DemoEvidenceConfig,
+    GatewaySeedConfig, GatewayTransport, Operation,
 };
 use serde_json::{json, Value};
 use std::{collections::VecDeque, sync::Mutex};
@@ -11,6 +11,94 @@ use std::{collections::VecDeque, sync::Mutex};
 struct Stub {
     responses: Mutex<VecDeque<Value>>,
     operations: Mutex<Vec<Value>>,
+}
+
+struct MirrorStub {
+    responses: Mutex<VecDeque<Result<Value, String>>>,
+    operations: Mutex<Vec<Operation>>,
+}
+
+#[async_trait]
+impl GatewayTransport for MirrorStub {
+    async fn request(&self, operation: Operation) -> Result<Value, String> {
+        self.operations.lock().unwrap().push(operation);
+        self.responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .ok_or_else(|| String::from("unexpected mirror operation"))?
+    }
+}
+
+#[tokio::test]
+async fn mirror_and_issuer_context_match_frozen_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-real-seed-behavior-v1.json"
+    ))
+    .unwrap();
+    let frozen = &contract["mirror_and_issuer_context"];
+    let stub = MirrorStub {
+        responses: Mutex::new(VecDeque::from(vec![
+            Ok(frozen["mirror"].clone()),
+            Ok(json!({
+                "issuer_profile_id": "profile-1",
+                "issuer_did": "did:web:marty.example",
+                "signing_service_id": "managed-openbao-transit",
+                "signing_key_reference": "key-ref",
+                "verification_method_id": "did:web:marty.example#key-ref",
+                "ignored": "never expose"
+            })),
+        ])),
+        operations: Mutex::new(Vec::new()),
+    };
+    assert_eq!(
+        run_mirror_publish(&stub, &config()).await.unwrap(),
+        frozen["mirror"]
+    );
+    assert_eq!(
+        resolve_issuer_context(
+            &stub,
+            "org-1",
+            "http://signing-keys:8000",
+            "test-signing-key"
+        )
+        .await
+        .unwrap(),
+        frozen["issuer_context"]
+    );
+    let operations = stub.operations.lock().unwrap();
+    for (operation, expected) in operations
+        .iter()
+        .zip(frozen["operations"].as_array().unwrap())
+    {
+        assert_eq!(operation.method, expected["method"]);
+        assert_eq!(operation.url, expected["url"]);
+        assert_eq!(
+            operation.payload.clone().unwrap_or(Value::Null),
+            expected["payload"]
+        );
+        assert_eq!(operation.timeout_seconds, expected["timeout"]);
+    }
+    assert_eq!(operations.len(), 2);
+}
+
+#[tokio::test]
+async fn optional_issuer_context_fails_closed_to_none() {
+    let stub = MirrorStub {
+        responses: Mutex::new(VecDeque::from(vec![Err("unavailable".into())])),
+        operations: Mutex::new(Vec::new()),
+    };
+    assert!(
+        resolve_issuer_context(&stub, "org-1", "http://signing-keys:8000", "")
+            .await
+            .is_none()
+    );
+    assert!(stub.operations.lock().unwrap().is_empty());
+    assert!(
+        resolve_issuer_context(&stub, "org-1", "http://signing-keys:8000", "key")
+            .await
+            .is_none()
+    );
 }
 
 #[test]
