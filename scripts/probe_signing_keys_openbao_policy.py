@@ -18,6 +18,17 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+if __package__:
+    from .qualify_selfhost_migrations import (
+        PRIVATE_KEY_CONTENT_QUERY,
+        PRIVATE_KEY_SCHEMA_QUERY,
+    )
+else:
+    from qualify_selfhost_migrations import (
+        PRIVATE_KEY_CONTENT_QUERY,
+        PRIVATE_KEY_SCHEMA_QUERY,
+    )
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "deploy-config/passport-supported-disposable-infra-images.json"
@@ -48,6 +59,27 @@ def require_docker(*args: str, timeout: int = 120) -> str:
 def ensure(condition: bool, operation: str) -> None:
     if not condition:
         raise RuntimeError(f"Scoped signing-keys policy failed: {operation}")
+
+
+def assert_holder_runtime_custody(postgres_name: str) -> tuple[int, int, int]:
+    """Audit persisted holder writes before the disposable database is removed."""
+
+    def psql(query: str) -> str:
+        return require_docker(
+            "exec", postgres_name, "psql", "-X", "-v", "ON_ERROR_STOP=1",
+            "-U", "postgres", "-d", "marty_holder_test", "-Atqc", query,
+        )
+
+    counts = tuple(map(int, psql(
+        "SELECT (SELECT count(*) FROM device_registration_service.device_registrations),"
+        "(SELECT count(*) FROM device_registration_service.device_holder_credentials),"
+        "(SELECT count(*) FROM device_registration_service.device_holder_keys)"
+    ).split("|")))
+    ensure(len(counts) == 3 and all(count > 0 for count in counts),
+           "holder runtime writes were not retained for custody audit")
+    ensure(not psql(PRIVATE_KEY_SCHEMA_QUERY), "holder runtime private-key schema")
+    psql(PRIVATE_KEY_CONTENT_QUERY)
+    return counts
 
 
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None:
@@ -920,6 +952,14 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(
                     f"Rust Gateway managed DSC ceremony failed:\n{detail[-2000:]}"
                 )
+            registrations, credentials, keys = assert_holder_runtime_custody(
+                postgres_name
+            )
+            print(
+                "Holder runtime custody scan passed after "
+                f"{registrations} registrations, {credentials} credentials "
+                f"and {keys} remote key records"
+            )
         print(
             "Scoped signing-keys policy passed against disposable OpenBao for six managed prefixes, isolated provider HMAC verification, and seven origin-bound signing-grant keys"
         )
