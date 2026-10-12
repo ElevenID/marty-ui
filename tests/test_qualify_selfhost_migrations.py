@@ -142,6 +142,8 @@ def verify_only_fixture(args: list[str]) -> subprocess.CompletedProcess[str] | N
     ("reachable", "could not reach disposable database"),
     ("unreachable", "accepted unreachable database"),
     ("credential", "exposed database credentials"),
+    ("malformed", "accepted malformed database URL"),
+    ("malformed_credential", "exposed malformed database URL"),
     ("write", "changed the database catalog"),
 ])
 def test_verify_only_rejects_incorrect_packaged_behavior(
@@ -157,8 +159,13 @@ def test_verify_only_rejects_incorrect_packaged_behavior(
             return result(args, "1\n" if failure == "write" and catalog_reads == 2
                           else "0\n")
         if args[-1] == "--verify-only":
-            return result(args, "verify-only-probe-secret" if failure == "credential"
-                          else "", 0 if failure == "unreachable" else 1)
+            is_malformed = "DATABASE_URL=not-a-postgres-url-" in " ".join(args)
+            leak = (failure == "credential" and not is_malformed) or (
+                failure == "malformed_credential" and is_malformed)
+            accepts = (failure == "unreachable" and not is_malformed) or (
+                failure == "malformed" and is_malformed)
+            return result(args, "verify-only-probe-secret" if leak else "",
+                          0 if accepts else 1)
         return result(args, status=1 if failure == "reachable" else 0)
 
     with pytest.raises(QualificationError, match=expected):
@@ -260,12 +267,12 @@ def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:
     assert report["runs"] == "2"
     assert report["private_key_storage"] == "absent"
     assert report["native_schemas"] == "verified"
-    assert report["verify_only_database"] == "reachable-unreachable-read-only"
+    assert report["verify_only_database"] == "reachable-unreachable-malformed-read-only"
     assert report["services_image"] == IMAGES["services"]
     assert report["notification_head"] == "20260808_0002"
     assert sum(args[-1:] == ["db-migrate"] for args in calls) == 2
     assert sum("psql" in args for args in calls) == 12
-    assert sum("--verify-only" in " ".join(args) for args in calls) == 2
+    assert sum("--verify-only" in " ".join(args) for args in calls) == 3
     assert sum(args[-1] == PRIVATE_KEY_CONTENT_QUERY for args in calls) == 2
     assert sum(args[-1:] == ["native-schema-migrate"] for args in calls) == 2
     assert sum("verify-owned-schema" in " ".join(args) for args in calls) == 2

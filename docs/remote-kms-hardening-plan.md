@@ -16986,3 +16986,8 @@ malformed URL containing a sentinel password failed in that actual image with
 the fixed diagnostic and no sentinel in process output. The new receipt is
 `artifacts/kms-rust-verify-redacted-assembled-probe-20261012.json`. The image
 is source-built local evidence; published-image qualification remains open.
+The shared release and exact-bundle probes now also require malformed URL
+failure without echoing the sentinel. Focused qualification tests passed 46
+cases with one platform skip, Ruff passed, and the updated full disposable
+assembled probe passed twice with the same inventory hash. The receipt above
+records `reachable-unreachable-malformed-read-only` for this final local run.

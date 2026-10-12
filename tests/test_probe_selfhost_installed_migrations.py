@@ -247,7 +247,7 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
     assert report["services_image"] == IMAGES["services"]
     assert report["native_schemas"] == "verified"
     assert report["private_key_storage"] == "absent"
-    assert report["verify_only_database"] == "reachable-unreachable-read-only"
+    assert report["verify_only_database"] == "reachable-unreachable-malformed-read-only"
     assert sum(args[-1] == "openbao-bootstrap" for args in calls) == 1
     assert sum(args[-1] == "db-migrate" for args in calls) == 2
     assert sum(args[-1] == "native-schema-migrate" for args in calls) == 2

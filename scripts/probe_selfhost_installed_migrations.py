@@ -344,7 +344,7 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                     "migrations_image": images["migrations"],
                     "services_image": images["services"], "openbao_image": images["openbao"],
                     "native_schemas": "verified", "private_key_storage": "absent",
-                    "verify_only_database": "reachable-unreachable-read-only",
+                    "verify_only_database": "reachable-unreachable-malformed-read-only",
                     "notification_head": ledger, "runs": 2}
             if after_migrations is not None:
                 report["runtime"] = after_migrations(compose, environment, secret_dir, run)

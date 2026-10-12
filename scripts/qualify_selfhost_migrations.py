@@ -343,16 +343,24 @@ def verify_rust_database_probe(
                  environment, 120),
              "Rust migration verify-only could not reach disposable database")
     sentinel = "verify-only-probe-secret"
-    disconnected = run([
-        *compose, "run", "--no-deps", "--rm", "--entrypoint",
-        "/usr/local/bin/marty-migration-bootstrap", "--env",
-        f"DATABASE_URL=postgresql://marty:{sentinel}@127.0.0.1:1/marty",
-        "db-migrate", "--verify-only",
-    ], environment, 120)
+    def invalid_database(url: str) -> subprocess.CompletedProcess[str]:
+        return run([
+            *compose, "run", "--no-deps", "--rm", "--entrypoint",
+            "/usr/local/bin/marty-migration-bootstrap", "--env",
+            f"DATABASE_URL={url}", "db-migrate", "--verify-only",
+        ], environment, 120)
+
+    disconnected = invalid_database(
+        f"postgresql://marty:{sentinel}@127.0.0.1:1/marty")
     require(disconnected.returncode != 0,
             "Rust migration verify-only accepted unreachable database")
     require(sentinel not in disconnected.stdout + disconnected.stderr,
             "Rust migration verify-only exposed database credentials")
+    malformed = invalid_database(f"not-a-postgres-url-{sentinel}")
+    require(malformed.returncode != 0,
+            "Rust migration verify-only accepted malformed database URL")
+    require(sentinel not in malformed.stdout + malformed.stderr,
+            "Rust migration verify-only exposed malformed database URL")
     after = _checked(run(catalog, environment),
                      "Verify-only catalog postflight failed").strip()
     require(after == before, "Rust migration verify-only changed the database catalog")
@@ -486,7 +494,7 @@ def qualify(images: dict[str, str], *,
                     "native_schemas": "verified",
                     "notification_head": ledger,
                     "private_key_storage": "absent",
-                    "verify_only_database": "reachable-unreachable-read-only",
+                    "verify_only_database": "reachable-unreachable-malformed-read-only",
                     "table_columns": inventory,
                     "profile": "selfhost-production", "runs": "2"}
         finally:

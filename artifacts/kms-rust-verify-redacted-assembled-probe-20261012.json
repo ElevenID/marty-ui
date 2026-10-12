@@ -4891,5 +4891,5 @@
     }
   ],
   "table_count": 61,
-  "verify_only_database": "reachable-unreachable-read-only"
+  "verify_only_database": "reachable-unreachable-malformed-read-only"
 }
