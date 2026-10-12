@@ -16840,3 +16840,25 @@ security, policy, and CodeQL workflows also passed on this head. The local
 beta-fence/context protection and assembled-schema receipt commits follow
 that tested head and require their own exact-head CI after one grouped push;
 the stack release hold and artifact/cutover gates remain.
+
+That grouped follow-up was pushed as UI #1192 head
+`7b045d5b52b93caeb27fe54f0dd0a45c668627b7` and exact-head
+[CI 38200187110](https://github.com/ElevenID/marty-ui/actions/runs/38200187110)
+completed successfully: all 22 jobs and the aggregate CI Gate passed again.
+The associated policy, Organization Quality, CodeQL Actions and CodeQL Rust
+workflows also passed. The PR remains draft and the stack release hold remains.
+
+K10 runtime-write follow-up: the local disposable
+`probe_signing_keys_openbao_policy.py --rust-adapter` now runs the shared
+private-key catalog and JSON/text content queries after its real holder
+service/database/OpenBao lifecycle, credential durability, pairing and Gateway
+managed-signing cases. It requires persisted writes before scanning; the
+successful run retained five device registrations, six holder credentials and
+seven remote holder-key records. Both scans passed, and verified teardown left
+zero labeled disposable containers. The exact probe source, pinned disposable
+PostgreSQL/Redis/OpenBao images, counts and limits are in
+`artifacts/kms-holder-runtime-write-custody-20261012.json`. Two earlier Windows
+attempts stopped before the scan on OneDrive linker and cold-cache ten-minute
+compile limits; prebuilding the test binaries on D: let the full live probe
+complete. This is source-built holder-path evidence, not a scan of signed UI
+images or every later product write; retain the K10 release gate.
