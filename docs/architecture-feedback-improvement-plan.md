@@ -507,7 +507,7 @@ producer has a separate exact closure guard, and the still-active timeout
 producers retain the timeout overlay with its hash updated for the Rust-only
 schema preparer. Native Rust replay and release qualification remain required.
 
-Provider-recovery current-input follow-up (2026-10-12 local integration): eight
+Provider-recovery current-input follow-up (2026-10-12 merged [UI #1292](https://github.com/ElevenID/marty-ui/pull/1292), reconciled for remote KMS): eight
 direct provider/reclaimer runners are treated as one family because the
 recovery runner can select sibling scenarios. A single overlay inherits the
 native REST current inputs and pins 21 additional scripts/scenario files. Tests
@@ -517,7 +517,27 @@ in the existing CI classifier. This is current capture-input evidence only,
 not historical corpus attestation, a qualification skip, or a runtime change.
 The Python OAuth revocation overlay is absent because its runner was retired;
 the native Issuance replay remains the supported coverage. Local and hosted
-validation of this reconciled branch remain required.
+validation of this reconciled branch remain required. The original #1292
+candidate had 17 additional pins; the active Rust-only family has 21.
+Independent review, 212 local tests, exact-head CI, and [protected
+combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38242078139)
+passed before merge. The protected Canvas job took 28m37s, including 443s
+compiling test executables, 422s building the public image, and 618s in
+isolated database contracts. The prior protected run's corresponding values
+were 28m31s, 467s, 388s, and 639s. These two different candidates do not
+prove any speed change from the guard.
+
+A6 Python-owned input-record candidate (2026-10-12): on the Rust-only branch,
+only the provider-recovery overlay has Python release-test consumers and no
+Rust reader; the OAuth overlay and its runner are retired. The inventory test
+checks every literal consumer, and all service Docker contexts exclude the
+remaining record. Assign an exact edit to that record to Release Contract
+Tests on PRs. Its inherited REST record, capture
+scripts/scenarios, other current-input records, mixed or unknown edits, and
+protected merge groups retain the existing broader checks. This changes PR
+feedback selection only, not qualification or a production image. A hosted
+feedback saving remains unmeasured until an eligible record-only candidate
+runs after the change.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
