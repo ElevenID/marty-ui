@@ -3760,6 +3760,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-canvas-demo-seed"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "marty-canvas-sandbox"
 version = "0.1.0"
 dependencies = [
