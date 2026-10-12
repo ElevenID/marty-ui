@@ -6,6 +6,7 @@
 !proto/**
 !contracts/
 !contracts/python-text-semantics.json
+!contracts/demo-seed-reference-v1.json
 !scripts/
 !scripts/load-secrets-env.sh
 !scripts/run-migrations-with-secrets.sh
