@@ -1313,7 +1313,7 @@ jobs:
             --output validated-transaction.json
           jq -e '
             (.state == "qualified" or .state == "promoting" or .state == "promoted")
-            and (.gates | length == 2)
+            and (.gates | length == 4)
           ' validated-transaction.json >/dev/null
           printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
             if type == "object" and length > 0
@@ -1465,7 +1465,7 @@ jobs:
           jq -e '
             (.state == "qualified" or .state == "promoting" or
              .state == "promoted") and
-            (.gates | length == 2)
+            (.gates | length == 4)
           ' "$RUNNER_TEMP/selfhost-consumer-transaction.json" >/dev/null
           python scripts/check_prepared_selfhost_consumer.py \
             --archive prepared/prepared-selfhost-bundle.zip \

@@ -17122,3 +17122,17 @@ all four UI-owned image artifacts. Focused release tests passed locally; this
 candidate is not pushed, hosted-qualified or an installed-stack proof yet.
 The self-host bundle still needs a reviewed binding for its OpenBao sidecar
 or a separately supplied exact plugin image at cutover.
+
+2026-10-12 release self-review follow-up: the existing opt-in self-host
+preparation lane and its separate artifact consumer still asserted exactly two
+stack qualification gates. The current release transaction requires four
+(`public_stack`, `verifier_differential`, `native_schema`, `didcomm_plugin`),
+so the self-host path would reject a qualified transaction before packaging.
+The local correction updates all three workflow checks and their contract
+assertions. Focused release/transaction/self-host tests passed 83/83; both
+workflow YAML files parse, and `git diff --check` is clean. This correction
+remains local with the fourth-image release batch. The self-host image lock
+still covers only its main Compose project, while the separate OpenBao Compose
+project takes a plugin digest from the environment. A future installed-bundle
+gate must bind that digest to the same signed stack manifest and exercise the
+extracted KMS-only deployment; this preparatory lane is not that proof.

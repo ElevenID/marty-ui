@@ -56,9 +56,9 @@ profiles from the exact claimed checkout, takes the issuance digest from the
 source stack lock, requires `selfhost_external_images_json` to name every
 independent service by exact digest, verifies Marty's image attestations and
 anonymous pull of every locked image, then uploads only a 30-day
-`selfhost-lock-preparation-unqualified-*` artifact. It never adds a fourth
-role to the three-role stack transaction, promotes a self-host tag, blocks or
-weakens the existing stack publication gates, or publishes a customer bundle.
+`selfhost-lock-preparation-unqualified-*` artifact. It adds no self-host-specific
+role to the four-role stack transaction, promotes no self-host tag, and neither
+weakens the existing stack publication gates nor publishes a customer bundle.
 
 This lane is **not** self-host qualification. The input's third-party
 infrastructure digests have exact repository/anonymous-pull checks but no
