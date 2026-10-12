@@ -17136,3 +17136,9 @@ still covers only its main Compose project, while the separate OpenBao Compose
 project takes a plugin digest from the environment. A future installed-bundle
 gate must bind that digest to the same signed stack manifest and exercise the
 extracted KMS-only deployment; this preparatory lane is not that proof.
+
+UI #1192 exact-head CI run `38213591972` completed successfully on pushed
+`36187d537b00a32ce127b7fa777391610812cb94`: all 21 CI jobs passed,
+including Canvas, plugin image, release contracts, Rust service images and
+security checks. The local fourth-image release transaction and four-gate
+self-host correction follow that head and require their own hosted checks.
