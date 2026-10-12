@@ -17436,3 +17436,17 @@ remains the immutable HTTP 504 incident evidence. This proves pushed
 `2d0c78ef4`, not the newer protected-main merge in the local branch.
 Push the grouped reconciliation once reviewed, then require fresh exact-head
 CI. Do not lift the release hold on the basis of source CI alone.
+
+2026-10-12 protected queue result on pushed `72de77de6`: UI CI
+`38253447904` passed all 22 exact-head jobs, including the OpenBao plugin
+with coordinated PostgreSQL/Raft recovery, Rust contracts, Canvas, service
+images and CI Gate. CodeQL, policy and organization quality passed on the
+same head. Protected auto-merge placed #1192 in the queue at position 2,
+behind #1294 (CSCA fixture isolation), and GitHub marked it `UNMERGEABLE`.
+A read-only merge tree against #1294 head `9af6bb9c2` identifies conflicts
+in `.github/workflows/ci.yml`, `rust/Cargo.lock`, the Signing Keys manifest
+and two CSCA lifecycle test files. The #1294 source checks passed; wait for
+its protected combined-head result and exact `main` commit before resolving
+this branch, or let #1192 advance if #1294 leaves the queue. Do not bypass
+merge protection or rerun CI on a speculative source merge. Release state
+remains `hold`.
