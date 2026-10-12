@@ -1,0 +1,314 @@
+{
+  "schema_version": 1,
+  "source": "Python deployment catalog on protected main 62607e860",
+  "cases": [
+    {
+      "args": [
+        "validate"
+      ],
+      "exit_code": 0,
+      "stdout": "Deployment catalog validation passed.\nstacks=6 services=32 secrets=66 bundles=1\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "selfhost-production",
+        "--json"
+      ],
+      "exit_code": 0,
+      "stdout": "{\n  \"artifact_profile\": \"oss-release\",\n  \"compose_files\": [\n    \"docker-compose.selfhost.prod.yml\"\n  ],\n  \"compose_profiles\": [],\n  \"deployment_targets\": [\n    \"docker-compose\",\n    \"customer-bundle\"\n  ],\n  \"description\": \"Open-source self-host production stack served through the configured edge and tunnel.\",\n  \"domains\": [\n    \"elevenidllc.com\"\n  ],\n  \"env_file\": \".env.selfhost.production.local\",\n  \"name\": \"selfhost-production\",\n  \"required_secret_names\": [\n    \"postgres_password\",\n    \"keycloak_db_password\",\n    \"marty_db_password\",\n    \"keycloak_admin_password\",\n    \"marty_api_client_secret\",\n    \"issuance_api_key\",\n    \"signing_keys_issuer_sign_key\",\n    \"signing_keys_integration_secret_key\",\n    \"signing_keys_service_sign_gateway_key\",\n    \"grpc_service_token\",\n    \"device_registration_gateway_key\",\n    \"device_registration_signing_keys_key\",\n    \"flow_webhook_secret\",\n    \"notification_webhook_secret\",\n    \"notification_applicant_event_token\",\n    \"workload_identity_ca_cert\",\n    \"pp_workload_server_cert\",\n    \"pp_workload_server_key\",\n    \"flow_workload_client_cert\",\n    \"flow_workload_client_key\",\n    \"flow_workload_server_cert\",\n    \"flow_workload_server_key\",\n    \"auth_workload_client_cert\",\n    \"auth_workload_client_key\",\n    \"applicant_workload_client_cert\",\n    \"applicant_workload_client_key\",\n    \"verification_workload_client_cert\",\n    \"verification_workload_client_key\",\n    \"deployment_profile_workload_client_cert\",\n    \"deployment_profile_workload_client_key\",\n    \"compliance_profile_workload_client_cert\",\n    \"compliance_profile_workload_client_key\",\n    \"flow_application_event_hmac_key\",\n    \"token_hmac_key\",\n    \"openbao_service_token\",\n    \"signing_keys_openbao_token\",\n    \"didcomm_issuance_openbao_token\",\n    \"notification_openbao_token\",\n    \"sign_grant_verify_token\",\n    \"sign_grant_mint_flow_wallet_token\",\n    \"sign_grant_mint_gateway_service_token\",\n    \"sign_grant_mint_gateway_issuer_did_token\",\n    \"sign_grant_mint_issuance_credential_token\",\n    \"sign_grant_mint_issuance_canvas_token\",\n    \"sign_grant_mint_issuance_readiness_token\",\n    \"sign_grant_mint_issuance_passport_token\",\n    \"haip_kms_token\",\n    \"signing_keys_workload_server_cert\",\n    \"signing_keys_workload_server_key\",\n    \"cloudflare_tunnel_token\"\n  ],\n  \"required_services\": [\n    \"postgres\",\n    \"redis\",\n    \"keycloak\",\n    \"db-migrate\",\n    \"issuance-migrations\",\n    \"keycloak-configurator\",\n    \"ui\",\n    \"edge\",\n    \"cloudflared\",\n    \"gateway\",\n    \"auth\",\n    \"organization\",\n    \"credential-template\",\n    \"trust-profile\",\n    \"issuance\",\n    \"canvas-sync-worker\",\n    \"applicant\",\n    \"notification\",\n    \"compliance-profile\",\n    \"presentation-policy\",\n    \"deployment-profile\",\n    \"flow\",\n    \"verification\",\n    \"revocation-profile\",\n    \"event-stream\"\n  ],\n  \"running_services\": [\n    \"postgres\",\n    \"redis\",\n    \"keycloak\",\n    \"ui\",\n    \"edge\",\n    \"cloudflared\",\n    \"gateway\",\n    \"auth\",\n    \"organization\",\n    \"credential-template\",\n    \"trust-profile\",\n    \"issuance\",\n    \"canvas-sync-worker\",\n    \"applicant\",\n    \"notification\",\n    \"compliance-profile\",\n    \"presentation-policy\",\n    \"deployment-profile\",\n    \"flow\",\n    \"verification\",\n    \"revocation-profile\",\n    \"event-stream\"\n  ]\n}\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "tunnel-beta-experiments"
+      ],
+      "exit_code": 0,
+      "stdout": "Stack: tunnel-beta-experiments\nDescription: Reset-friendly beta.elevenidllc.com experiments stack with real Canvas LMS enabled for production-like Canvas/LTI demos.\nEnv file: .env.tunnel.beta.local\nCompose files: docker-compose.base.yml, docker-compose.profile.dev.yml, docker-compose.profile.tunnel.yml, docker-compose.profile.canvas-real.yml, docker-compose.profile.canvas-sandbox.yml\nCompose profiles: <none>\nDomains: beta.elevenidllc.com, canvas-test.elevenidllc.com, canvas-sandbox.elevenidllc.com\nArtifact profile: oss-release\nDeployment targets: docker-compose\nRequired services:\n  - postgres\n  - redis\n  - keycloak\n  - gateway\n  - auth\n  - organization\n  - credential-template\n  - trust-profile\n  - issuance\n  - canvas-sync-worker\n  - applicant\n  - notification\n  - compliance-profile\n  - presentation-policy\n  - deployment-profile\n  - flow\n  - verification\n  - revocation-profile\n  - device-registration\n  - event-stream\n  - canvas-real\n  - issuance-canvas-localhost-bridge\n  - canvas-sandbox\n  - tunnel-nginx-proxy\n  - cloudflared\nRunning services checked for health:\n  - postgres\n  - redis\n  - keycloak\n  - gateway\n  - auth\n  - organization\n  - credential-template\n  - trust-profile\n  - issuance\n  - canvas-sync-worker\n  - applicant\n  - notification\n  - compliance-profile\n  - presentation-policy\n  - deployment-profile\n  - flow\n  - verification\n  - revocation-profile\n  - device-registration\n  - event-stream\n  - canvas-real\n  - issuance-canvas-localhost-bridge\n  - canvas-sandbox\n  - tunnel-nginx-proxy\n  - cloudflared\nRequired secret names (values redacted):\n  - cloudflare_tunnel_token\n  - canvas_credentials_shared_secret\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production"
+      ],
+      "exit_code": 0,
+      "stdout": "postgres\nredis\nkeycloak\ndb-migrate\nissuance-migrations\nkeycloak-configurator\nui\nedge\ncloudflared\ngateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production",
+        "--running-only"
+      ],
+      "exit_code": 0,
+      "stdout": "postgres\nredis\nkeycloak\nui\nedge\ncloudflared\ngateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production",
+        "--include-optional"
+      ],
+      "exit_code": 0,
+      "stdout": "postgres\nredis\nkeycloak\ndb-migrate\nissuance-migrations\nkeycloak-configurator\nui\nedge\ncloudflared\ngateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\ndevice-registration\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "--group",
+        "app",
+        "--field",
+        "k8s_deployment"
+      ],
+      "exit_code": 0,
+      "stdout": "gateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\ndevice-registration\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "--group",
+        "missing"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Unknown service group: missing\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field",
+        "env"
+      ],
+      "exit_code": 0,
+      "stdout": "POSTGRES_PASSWORD\nKEYCLOAK_DB_PASSWORD\nMARTY_DB_PASSWORD\nKEYCLOAK_ADMIN_PASSWORD\nMARTY_API_CLIENT_SECRET\nISSUANCE_API_KEY\nSIGNING_KEYS_ISSUER_SIGN_KEY\nSIGNING_KEYS_INTEGRATION_SECRET_KEY\nSIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY\nGRPC_SERVICE_TOKEN\nDEVICE_REGISTRATION_GATEWAY_KEY\nDEVICE_REGISTRATION_SIGNING_KEYS_KEY\nFLOW_WEBHOOK_SECRET\nNOTIFICATION_WEBHOOK_SECRET\nNOTIFICATION_APPLICANT_EVENT_TOKEN\nMARTY_WORKLOAD_IDENTITY_CA_CERT\nPP_WORKLOAD_SERVER_CERT\nPP_WORKLOAD_SERVER_KEY\nFLOW_WORKLOAD_CLIENT_CERT\nFLOW_WORKLOAD_CLIENT_KEY\nFLOW_WORKLOAD_SERVER_CERT\nFLOW_WORKLOAD_SERVER_KEY\nAUTH_WORKLOAD_CLIENT_CERT\nAUTH_WORKLOAD_CLIENT_KEY\nAPPLICANT_WORKLOAD_CLIENT_CERT\nAPPLICANT_WORKLOAD_CLIENT_KEY\nVERIFICATION_WORKLOAD_CLIENT_CERT\nVERIFICATION_WORKLOAD_CLIENT_KEY\nDEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT\nDEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY\nCOMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT\nCOMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY\nFLOW_APPLICATION_EVENT_HMAC_KEY\nTOKEN_HMAC_KEY\nOPENBAO_SERVICE_TOKEN\nSIGNING_KEYS_OPENBAO_TOKEN\nDIDCOMM_ISSUANCE_OPENBAO_TOKEN\nNOTIFICATION_OPENBAO_TOKEN\n\n\n\n\n\n\n\n\n\n\n\nCLOUDFLARE_TUNNEL_TOKEN\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field",
+        "required_for"
+      ],
+      "exit_code": 0,
+      "stdout": "selfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\nselfhost-production\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "config",
+        "--json"
+      ],
+      "exit_code": 0,
+      "stdout": "[\n  \"docker\",\n  \"compose\",\n  \"--env-file\",\n  \".env.selfhost.production.local\",\n  \"-f\",\n  \"docker-compose.selfhost.prod.yml\",\n  \"config\"\n]\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "config"
+      ],
+      "exit_code": 0,
+      "stdout": "docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml config\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "no-such-operation"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Stack 'selfhost-production' does not define operation 'no-such-operation'; available: config, down, logs, ps, up\n"
+    },
+    {
+      "args": [
+        "bundle-assets",
+        "selfhost"
+      ],
+      "exit_code": 0,
+      "stdout": "$REPO_ROOT\\docker-compose.selfhost.prod.yml\n$REPO_ROOT\\docker-compose.selfhost.openbao.yml\n$REPO_ROOT\\docker-compose.selfhost.bundle.override.yml\n$REPO_ROOT\\docker-compose.selfhost.no-canvas.yml\n$REPO_ROOT\\docker-compose.service.issuance-native-runtime.yml\n$REPO_ROOT\\.env.selfhost.production.example\n$REPO_ROOT\\SELFHOST_BUNDLE.md\n$REPO_ROOT\\docker\\init-databases.sh\n$REPO_ROOT\\docker\\nginx-selfhost.prod.conf.template\n$REPO_ROOT\\docker\\tunnel-nginx-proxy.edge.conf\n$REPO_ROOT\\docker\\openbao-init.sh\n$REPO_ROOT\\docker\\openbao-selfhost.hcl\n$REPO_ROOT\\docker\\openbao-selfhost-init.sh\n$REPO_ROOT\\docker\\openbao-haip-workload-policy.hcl\n$REPO_ROOT\\docker\\secrets\\selfhost.example\n$REPO_ROOT\\config\\keycloak\n$REPO_ROOT\\scripts\\bootstrap-selfhost-vault.sh\n$REPO_ROOT\\scripts\\cloudflared-selfhost.sh\n$REPO_ROOT\\scripts\\keycloak-selfhost-start.sh\n$REPO_ROOT\\scripts\\load-openbao-token-and-start.sh\n$REPO_ROOT\\scripts\\load-secrets-env.sh\n$REPO_ROOT\\scripts\\nginx-entrypoint-selfhost.sh\n$REPO_ROOT\\scripts\\setup-keycloak-selfhost-production.sh\n$REPO_ROOT\\scripts\\setup-keycloak.sh\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "missing-stack"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Unknown stack: missing-stack\n"
+    },
+    {
+      "args": [
+        "services"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "services requires either a stack argument or --group.\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "missing-stack"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Unknown stack: missing-stack\n"
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production",
+        "--field",
+        "bogus"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py services [-h] [--group GROUP] [--running-only]\n                                [--include-optional]\n                                [--field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}]\n                                [stack]\nmarty-deploy.py services: error: argument --field: invalid choice: 'bogus' (choose from id, compose_service, k8s_deployment, image_name, service_name_env, group, lifecycle)\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field",
+        "bogus"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\nmarty-deploy.py secrets: error: argument --field: invalid choice: 'bogus' (choose from id, env, file_env, compose_secret, no_log, allow_empty, required_for)\n"
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "config",
+        "--unexpected"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
+    },
+    {
+      "args": [
+        "plan",
+        "selfhost-production",
+        "--unexpected"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
+    },
+    {
+      "args": [
+        "bundle-assets",
+        "selfhost",
+        "--unexpected"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\nmarty-deploy.py secrets: error: argument --field: expected one argument\n"
+    },
+    {
+      "args": [
+        "validate",
+        "extra"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: extra\n"
+    },
+    {
+      "args": [
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\n\nInspect Marty deployment metadata without executing deployment commands.\n\npositional arguments:\n  {validate,plan,services,secrets,compose-command,bundle-assets}\n    validate            Validate deployment catalogs, stacks, and bundle\n                        manifests.\n    plan                Render a redacted deployment plan for a stack.\n    services            List service metadata from a stack or group.\n    secrets             List required secret metadata for a stack.\n    compose-command     Preview the docker compose command for a stack\n                        operation.\n    bundle-assets       List resolved asset paths for a bundle manifest.\n\noptions:\n  -h, --help            show this help message and exit\n  --repo-root REPO_ROOT\n                        Path to the marty-ui repository root.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "-h"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\n\nInspect Marty deployment metadata without executing deployment commands.\n\npositional arguments:\n  {validate,plan,services,secrets,compose-command,bundle-assets}\n    validate            Validate deployment catalogs, stacks, and bundle\n                        manifests.\n    plan                Render a redacted deployment plan for a stack.\n    services            List service metadata from a stack or group.\n    secrets             List required secret metadata for a stack.\n    compose-command     Preview the docker compose command for a stack\n                        operation.\n    bundle-assets       List resolved asset paths for a bundle manifest.\n\noptions:\n  -h, --help            show this help message and exit\n  --repo-root REPO_ROOT\n                        Path to the marty-ui repository root.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "validate",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py validate [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py plan [-h] [--json] stack\n\npositional arguments:\n  stack       Stack profile name, for example selfhost-production.\n\noptions:\n  -h, --help  show this help message and exit\n  --json      Emit JSON instead of text.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py services [-h] [--group GROUP] [--running-only]\n                                [--include-optional]\n                                [--field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}]\n                                [stack]\n\npositional arguments:\n  stack                 Stack profile name.\n\noptions:\n  -h, --help            show this help message and exit\n  --group GROUP         Service group name to list instead of a stack.\n  --running-only        Only include services with lifecycle=running when\n                        listing a stack.\n  --include-optional    Include stack optional services.\n  --field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}\n                        Service field to print.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "secrets",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\n\npositional arguments:\n  stack                 Stack profile name.\n\noptions:\n  -h, --help            show this help message and exit\n  --field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}\n                        Secret field to print. Values are never resolved or\n                        printed.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py compose-command [-h] [--json] stack operation\n\npositional arguments:\n  stack       Stack profile name.\n  operation   Operation name from the stack manifest, such as config, up, ps,\n              or logs.\n\noptions:\n  -h, --help  show this help message and exit\n  --json      Emit JSON argv instead of shell-quoted text.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "bundle-assets",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py bundle-assets [-h] bundle\n\npositional arguments:\n  bundle      Bundle manifest name, for example selfhost.\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "stderr": ""
+    }
+  ]
+}

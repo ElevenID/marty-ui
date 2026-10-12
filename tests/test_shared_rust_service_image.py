@@ -309,7 +309,7 @@ def test_deleted_python_service_directories_do_not_return() -> None:
 def test_registry_builder_has_no_python_wheel_inputs_for_rust_migrations() -> None:
     script = (ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
     service_args = script.split('"services/Dockerfile"', maxsplit=1)[1].split(
-        "done < <(catalog_services app)", maxsplit=1
+        'done <<< "$catalog_app_services"', maxsplit=1
     )[0]
     migration_args = script.split('"services/Dockerfile.migrations"', maxsplit=1)[
         1

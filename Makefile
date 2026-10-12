@@ -115,7 +115,7 @@ beta-env-init: ## Initialize the dedicated beta env file from .env when missing
 	fi
 
 beta-experiments-plan: ## Render the beta Canvas experiments deployment plan
-	@python scripts/marty-deploy.py plan tunnel-beta-experiments
+	@sh scripts/marty-deploy.sh plan tunnel-beta-experiments
 
 beta-experiments-config: ## Validate beta experiments compose files
 	@echo "$(BLUE)Validating beta experiments compose files...$(NC)"
@@ -156,20 +156,20 @@ package-selfhost-bundle: ## Stage the image-based open-source self-host bundle i
 	@echo "$(GREEN)✓ Open-source self-host bundle staged$(NC)"
 
 deploy-catalog-validate: ## Validate deployment metadata catalogs, stacks, and bundles
-	@python scripts/marty-deploy.py validate
+	@sh scripts/marty-deploy.sh validate
 
 deploy-stack-plan: ## Render a redacted deployment plan (STACK=<name>)
 	@if [ -z "$(STACK)" ]; then \
 		echo "$(RED)❌ Error: STACK is required (example: make deploy-stack-plan STACK=selfhost-production)$(NC)"; \
 		exit 1; \
 	fi
-	@python scripts/marty-deploy.py plan "$(STACK)"
+	@sh scripts/marty-deploy.sh plan "$(STACK)"
 
 selfhost-prod-plan: ## Render the self-host production deployment plan
-	@python scripts/marty-deploy.py plan selfhost-production
+	@sh scripts/marty-deploy.sh plan selfhost-production
 
 selfhost-prod-beta-tunnel-plan: ## Render the self-host beta tunnel deployment plan
-	@python scripts/marty-deploy.py plan selfhost-beta-tunnel
+	@sh scripts/marty-deploy.sh plan selfhost-beta-tunnel
 
 selfhost-prod-openbao-up: ## Start the standalone self-host OpenBao deployment
 	@echo "$(BLUE)Starting self-host OpenBao...$(NC)"

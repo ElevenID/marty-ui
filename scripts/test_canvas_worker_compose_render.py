@@ -341,13 +341,22 @@ def conformance_cases():
 
 
 def catalog_cases():
-    owner = runpy.run_path(str(ROOT / "packages/marty_devops/catalog.py"))
-    catalog = owner["DeploymentCatalog"].load(ROOT)
+    stacks = {
+        payload["name"]: payload
+        for path in (ROOT / "deploy-config/stacks").glob("*.json")
+        if (payload := json.loads(path.read_text(encoding="utf-8")))
+    }
     cases = []
-    for name, stack in sorted(catalog.stacks.items()):
+    for name, stack in sorted(stacks.items()):
         if not stack.get("compose_files"):
             continue
-        required = WORKER in catalog.running_services_for_stack(name)
+        result = subprocess.run(
+            ["cargo", "+1.95.0", "run", "--quiet", "--locked", "--manifest-path", str(ROOT / "rust/Cargo.toml"),
+             "-p", "marty-deployment-catalog", "--bin", "marty-deploy", "--", "--repo-root", str(ROOT),
+             "services", name, "--running-only"],
+            check=True, capture_output=True, text=True, cwd=ROOT,
+        )
+        required = WORKER in result.stdout.splitlines()
         if not required and name != "selfhost-beta-tunnel":
             continue
         if name == "selfhost-beta-tunnel":

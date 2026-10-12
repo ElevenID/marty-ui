@@ -1,33 +1,50 @@
+import json
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
-
-from marty_devops import DeploymentCatalog
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _catalog() -> tuple[dict, dict, dict, dict]:
+    config = REPO_ROOT / "deploy-config"
+    services = json.loads((config / "catalog/services.json").read_text(encoding="utf-8"))["services"]
+    secrets = json.loads((config / "catalog/secrets.json").read_text(encoding="utf-8"))["secrets"]
+    artifacts = json.loads((config / "catalog/artifacts.json").read_text(encoding="utf-8"))["artifacts"]
+    stacks = {payload["name"]: payload for path in (config / "stacks").glob("*.json") if (payload := json.loads(path.read_text(encoding="utf-8")))}
+    return services, secrets, artifacts, stacks
+
+
+def _rust_catalog(*args: str) -> str:
+    return subprocess.run(
+        ["cargo", "+1.95.0", "run", "--quiet", "--locked", "--manifest-path", str(REPO_ROOT / "rust/Cargo.toml"),
+         "-p", "marty-deployment-catalog", "--bin", "marty-deploy", "--", "--repo-root", str(REPO_ROOT), *args],
+        check=True, capture_output=True, text=True, cwd=REPO_ROOT,
+    ).stdout
+
+
 def test_public_deployment_catalog_loads_without_commerce_metadata():
-    catalog = DeploymentCatalog.load(REPO_ROOT)
-    assert "oss-release" in catalog.artifacts
-    assert "selfhost-production" in catalog.stacks
-    assert "license_key" not in catalog.secrets
-    assert catalog.redacted_stack_plan("selfhost-production")["artifact_profile"] == "oss-release"
+    _services, secrets, artifacts, stacks = _catalog()
+    assert "Deployment catalog validation passed." in _rust_catalog("validate")
+    assert "oss-release" in artifacts
+    assert "selfhost-production" in stacks
+    assert "license_key" not in secrets
+    assert json.loads(_rust_catalog("plan", "selfhost-production", "--json"))["artifact_profile"] == "oss-release"
 
 
 def test_catalog_uses_repository_local_or_released_artifacts():
-    catalog = DeploymentCatalog.load(REPO_ROOT)
-    for service in catalog.services.values():
+    services, _secrets, _artifacts, _stacks = _catalog()
+    for service in services.values():
         context = str(service.get("context", ""))
         assert not context.startswith("..")
         assert not str(service.get("dockerfile", "")).startswith("marty-")
 
 
 def test_selfhost_bundle_assets_exist():
-    catalog = DeploymentCatalog.load(REPO_ROOT)
-    assert all(asset.exists() for asset in catalog.bundle_assets("selfhost"))
+    assert all(Path(asset).exists() for asset in _rust_catalog("bundle-assets", "selfhost").splitlines())
 
 
 def test_selfhost_secret_templates_cover_compose_references():
@@ -44,8 +61,8 @@ def test_selfhost_secret_templates_cover_compose_references():
     template_dir = REPO_ROOT / "docker/secrets/selfhost.example"
     assert not names - {path.name for path in template_dir.iterdir() if path.is_file()}
 
-    catalog = DeploymentCatalog.load(REPO_ROOT)
-    required = set(catalog.stacks["selfhost-production"]["required_secrets"])
+    _services, _secrets, _artifacts, stacks = _catalog()
+    required = set(stacks["selfhost-production"]["required_secrets"])
     assert required <= names
     for name in required:
         placeholder = (template_dir / name).read_text(encoding="utf-8").strip()

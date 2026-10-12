@@ -26,7 +26,7 @@ def test_only_explicit_official_dispatch_can_prepare_selfhost_lock() -> None:
     assert "qualify-release" in jobs["prepare-selfhost-image-lock"]["needs"]
     assert jobs["publish-manifest"]["needs"] == [
         "resolve-transaction", "validate-stack", "build-ui",
-        "build-services", "build-openbao-didcomm", "qualify-release",
+        "build-services", "build-openbao-didcomm", "qualify-release", "build-operator-catalog",
     ]
 
 

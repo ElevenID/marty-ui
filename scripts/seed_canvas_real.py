@@ -31,16 +31,26 @@ from urllib.parse import quote, urlencode, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
 
-# Stable public fixture IDs from the former marty-common system catalog.
-MARTY_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001"
-MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID = "50000000-0000-0000-0000-000000000040"
-MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID = "50000000-0000-0000-0000-000000000041"
-MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID = (
-    "0ab66d45-0d84-5fbd-837f-25788d32279e"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+_seed_reference = json.loads(
+    (REPO_ROOT / "contracts/demo-seed-reference-v1.json").read_text(encoding="utf-8")
 )
-MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID = (
-    "0ab66d45-0d84-5fbd-837f-25788d3227a1"
-)
+if _seed_reference.get("schema") != "marty.demo-seed-reference/v1":
+    raise ValueError("Unexpected demo seed reference schema")
+_system_ids = _seed_reference["canvas_system_ids"]
+MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID = _system_ids[
+    "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID"
+]
+MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID = _system_ids[
+    "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID"
+]
+MARTY_DEFAULT_ORG_ID = _system_ids["MARTY_DEFAULT_ORG_ID"]
+MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID = _system_ids[
+    "MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID"
+]
+MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID = _system_ids[
+    "MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID"
+]
 
 if __package__:
     from .operator_gateway import GatewayActorConfigurationError, resolve_gateway_actor

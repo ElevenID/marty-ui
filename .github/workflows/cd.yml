@@ -1515,7 +1515,7 @@ jobs:
 
   notify-release-approval:
     # This is a parallel handoff, never a prerequisite for publication.
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, qualify-release]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, qualify-release, build-operator-catalog]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -1573,8 +1573,82 @@ jobs:
 
           This issue comment is only a notification. Approval must happen in the GitHub Actions deployment review."
 
+  build-operator-catalog:
+    needs: [resolve-transaction, validate-stack]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            elf_machine: 'Advanced Micro Devices X86-64'
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            elf_machine: AArch64
+            target: aarch64-unknown-linux-musl
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require the exact qualified protected-main source
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+      - name: Build and test the native operator binary
+        env:
+          MARTY_DEPLOY_SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          MARTY_DEPLOY_RELEASE_TAG: ${{ needs.resolve-transaction.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
+          ELF_MACHINE: ${{ matrix.elf_machine }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools
+          cargo test --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog
+          cargo build --locked --release --target "$TARGET" --manifest-path rust/Cargo.toml \
+            -p marty-deployment-catalog --bin marty-deploy
+          asset="marty-deploy-linux-$ARCH"
+          cp "rust/target/$TARGET/release/marty-deploy" "$asset"
+          chmod 755 "$asset"
+          test "$(readelf -h "$asset" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')" = "$ELF_MACHINE"
+          if readelf -l "$asset" | grep -q INTERP; then
+            echo "Operator binary unexpectedly requires a dynamic loader" >&2
+            exit 1
+          fi
+          test "$(./"$asset" --build-identity)" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG"
+          ./"$asset" --repo-root . validate
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-path: marty-deploy-linux-${{ matrix.arch }}
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: operator-catalog-${{ matrix.arch }}-${{ github.run_id }}
+          path: marty-deploy-linux-${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 90
+
   publish-manifest:
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, qualify-release]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, qualify-release, build-operator-catalog]
     runs-on: ubuntu-latest
     environment: stack-release
     env:
@@ -1599,6 +1673,35 @@ jobs:
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: operator-catalog-amd64-${{ github.run_id }}
+          path: .
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: operator-catalog-arm64-${{ github.run_id }}
+          path: .
+      - name: Verify exact operator binary provenance before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          RELEASE_TAG: ${{ needs.resolve-transaction.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arch in amd64 arm64; do
+            asset="marty-deploy-linux-$arch"
+            test -f "$asset"
+            chmod 755 "$asset"
+            # The publisher is amd64; inspect the arm64 ELF without executing it.
+            strings -a "$asset" | grep -Fx -- "$SOURCE_SHA:$RELEASE_TAG" >/dev/null
+            if [ "$arch" = amd64 ]; then
+              test "$(./"$asset" --build-identity)" = "$SOURCE_SHA:$RELEASE_TAG"
+            fi
+            gh attestation verify "$asset" --repo "$GITHUB_REPOSITORY" \
+              --source-digest "$SOURCE_SHA" --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+          done
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
         with:
@@ -1783,7 +1886,9 @@ jobs:
       - name: Sign and checksum manifest evidence
         shell: bash
         run: |
-          for file in stack-manifest.json release-transaction.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json marty-ui-openbao-didcomm-sbom.cdx.json; do
+          set -euo pipefail
+          source scripts/operator-release-assets.sh
+          for file in "${OPERATOR_SIGNED_INPUTS[@]}"; do
             signed=false
             for attempt in 1 2 3 4; do
               rm -f "${file}.sigstore.json"
@@ -1800,7 +1905,8 @@ jobs:
               exit 1
             fi
           done
-          sha256sum stack-manifest.json release-transaction.json ./*.cdx.json ./*.sigstore.json > SHA256SUMS
+          sha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS
+          operator_release_require_local_assets
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: |
@@ -1809,6 +1915,8 @@ jobs:
             marty-ui-sbom.cdx.json
             marty-ui-services-sbom.cdx.json
             marty-ui-migrations-sbom.cdx.json
+            marty-deploy-linux-amd64
+            marty-deploy-linux-arm64
             marty-ui-openbao-didcomm-sbom.cdx.json
       - name: Create or verify the late annotated source tag
         env:
@@ -1865,11 +1973,14 @@ jobs:
             200)
               test "$(jq -er .tag_name release-response.json)" = "$TAG"
               test "$(jq -er .draft release-response.json)" = false
+              source scripts/operator-release-assets.sh
+              operator_release_require_local_assets
+              operator_release_require_remote_allowlist release-response.json
               mkdir existing-release
-              gh release download "$TAG" --pattern release-transaction.json \
-                --pattern stack-manifest.json --dir existing-release
-              cmp --silent release-transaction.json existing-release/release-transaction.json
+              gh release download "$TAG" --dir existing-release
+              operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY"
               cmp --silent stack-manifest.json existing-release/stack-manifest.json
+              cmp --silent release-transaction.json existing-release/release-transaction.json
               {
                 echo "exists=true"
                 echo "release_id=$(jq -er .id release-response.json)"
@@ -1892,14 +2003,15 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
-          assets=(stack-manifest.json release-transaction.json ./*.cdx.json ./*.sigstore.json SHA256SUMS)
-          for asset in "${assets[@]}"; do
-            test -f "$asset"
-          done
-          gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"
+          source scripts/operator-release-assets.sh
+          operator_release_require_local_assets
+          gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"
           release_id="$(gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" --jq .id)"
           [[ "$release_id" =~ ^[1-9][0-9]*$ ]]
+          gh api -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > published-release.json
+          operator_release_require_remote_allowlist published-release.json
           echo "id=$release_id" >> "$GITHUB_OUTPUT"
       - name: Seal the published terminal transaction
         env:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from copy import deepcopy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,8 @@ import tomllib
 
 import pytest
 import yaml
-from marty_devops import DeploymentCatalog
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from packages.catalog_test_support import CatalogView
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -505,7 +507,7 @@ def test_consumer_matrix_derives_all_conformance_switches_from_real_owner(
 def test_consumer_matrix_uses_catalog_groups_files_and_profiles_without_claiming_tunnel_worker_start(
     compose_worker_gate,
 ):
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
     cases = {case["name"]: case for case in compose_worker_gate["catalog_cases"]()}
     required = {
         name
@@ -885,7 +887,7 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
 
 
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
 
     for stack in ("selfhost-production", "kubernetes-production"):
         assert "canvas-sync-worker" in catalog.running_services_for_stack(stack)
@@ -956,6 +958,96 @@ def selfhost_canvas_environment():
         ),
         "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "600",
     }
+
+
+def test_selfhost_preflight_uses_native_profile_and_seeded_login_policy() -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    assert namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": "selfhost-production"}) == "profile=selfhost-production"
+    for alias in ("selfhost-prod", "selfhost_prod", "selfhostproduction", "selfhost_production"):
+        with pytest.raises(namespace["CheckError"], match=f"current={alias}"):
+            namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": alias})
+    with pytest.raises(namespace["CheckError"], match="current=$"):
+        namespace["validate_migration_profile"]({})
+    assert namespace["OPEN_BADGE_LOGIN_POLICY_ID"] == "50000000-0000-0000-0000-000000000004"
+
+
+def test_selfhost_preflight_rejects_the_shipped_uppercase_secret_placeholder(tmp_path) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    token = tmp_path / "notification_openbao_token"
+    token.write_text("CHANGE_ME_notification_webhook_openbao_token\n", encoding="utf-8")
+    with pytest.raises(namespace["CheckError"], match="placeholder value"):
+        namespace["read_required_secret"](token, "notification token")
+
+
+def test_selfhost_catalog_rejects_unpinned_operator_binary(tmp_path, monkeypatch) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(b"untrusted operator binary")
+    monkeypatch.setenv("MARTY_DEPLOY_BIN", str(binary))
+    monkeypatch.delenv("MARTY_DEPLOY_BIN_SHA256", raising=False)
+    with pytest.raises(namespace["CheckError"], match="SHA256 is required"):
+        namespace["catalog_lines"]("validate")
+    monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", "0" * 64)
+    monkeypatch.setenv("MARTY_DEPLOY_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("MARTY_DEPLOY_RELEASE_TAG", "v1.1.246")
+    with pytest.raises(namespace["CheckError"], match="digest mismatch"):
+        namespace["catalog_lines"]("validate")
+
+
+def test_selfhost_catalog_rejects_binary_from_another_checkout(tmp_path, monkeypatch) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(b"fixture binary")
+    source_sha = "a" * 40
+    monkeypatch.setenv("MARTY_DEPLOY_BIN", str(binary))
+    monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest())
+    monkeypatch.setenv("MARTY_DEPLOY_SOURCE_SHA", source_sha)
+    monkeypatch.setenv("MARTY_DEPLOY_RELEASE_TAG", "v1.1.246")
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "--build-identity" in command:
+            return subprocess.CompletedProcess(command, 0, f"{source_sha}:v1.1.246\n", "")
+        if command[0] == "git":
+            return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n", "")
+        raise AssertionError("The catalog command must not run after a source mismatch")
+
+    monkeypatch.setattr(namespace["subprocess"], "run", fake_run)
+    with pytest.raises(namespace["CheckError"], match="differs from checkout HEAD"):
+        namespace["catalog_lines"]("validate")
+    assert len(calls) == 2
+
+
+def test_operator_wrapper_rejects_binary_from_another_checkout(tmp_path) -> None:
+    if os.name == "nt":
+        git = subprocess.run(
+            ["where.exe", "git"], check=True, capture_output=True, text=True,
+        ).stdout.splitlines()[0]
+        bash = str(Path(git).resolve().parents[1] / "bin" / "bash.exe")
+    else:
+        bash = "bash"
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(
+        b'#!/bin/sh\nif [ "$1" = --build-identity ]; then '
+        b'printf "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:v1.1.246\\n"; '
+        b'else echo "catalog command ran"; fi\n'
+    )
+    binary.chmod(0o755)
+    env = {
+        **os.environ,
+        "MARTY_DEPLOY_BIN": str(binary),
+        "MARTY_DEPLOY_BIN_SHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "MARTY_DEPLOY_SOURCE_SHA": "a" * 40,
+        "MARTY_DEPLOY_RELEASE_TAG": "v1.1.246",
+    }
+    result = subprocess.run(
+        [bash, str(ROOT / "scripts/marty-deploy.sh"), "validate"],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "differs from checkout HEAD" in result.stderr
+    assert "catalog command ran" not in result.stdout
 
 
 def test_production_preflight_requires_a_configured_canvas_worker_processor() -> None:

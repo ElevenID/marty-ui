@@ -204,7 +204,7 @@ def extracted_update():
     return "\n".join(result)
 
 
-@pytest.mark.parametrize("case", ["native", "legacy", "missing", "get-failed"])
+@pytest.mark.parametrize("case", ["native", "legacy", "missing", "get-failed", "catalog-failed", "catalog-empty"])
 def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
     bash = shutil.which("bash")
     if os.name == "nt":
@@ -228,6 +228,8 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         "FIXTURE_JSON": raw,
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
+        "TEST_CATALOG_FAIL": "1" if case == "catalog-failed" else "0",
+        "TEST_CATALOG_EMPTY": "1" if case == "catalog-empty" else "0",
         # This test isolates the Canvas cutover guard; the native issuance
         # selection and its image-update guard have separate contract tests.
         "K8S_ISSUANCE_NATIVE_ENABLED": "true",
@@ -243,7 +245,11 @@ step() { :; }
 success() { :; }
 warn() { :; }
 error() { printf '%s\n' "$*" >&2; exit 1; }
-catalog_services() { printf '%s\n' gateway canvas-sync-worker issuance; }
+catalog_services() {
+  [[ "$TEST_CATALOG_FAIL" != 1 ]] || return 97
+  [[ "$TEST_CATALOG_EMPTY" != 1 ]] || return 0
+  printf '%s\n' gateway canvas-sync-worker issuance
+}
 command_not_found_handle() { return 91; }
 native_check() {
   [[ "$1" == check-update && "$2" == --repo-root ]] || return 97
@@ -312,4 +318,7 @@ native_check() {
     else:
         assert result.returncode != 0
         assert result.stdout == ""
-        assert "full-manifest cutover first" in result.stderr
+        if case.startswith("catalog-"):
+            assert "Deployment catalog" in result.stderr
+        else:
+            assert "full-manifest cutover first" in result.stderr

@@ -1,12 +1,9 @@
-"""Actual extracted secret helpers with synthetic inputs; never run a deployment.
-
-Every kubectl call is a closed shell double. Namespace/pull-secret calls precede
-validation in the existing source, so rejected inputs do NOT prove zero mutation.
-"""
+"""Actual secret helpers with synthetic inputs and closed kubectl doubles."""
 
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -77,11 +74,23 @@ def harness(tmp_path):
     assert bash and Path(bash).is_file()
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
+    operator_root = tmp_path / "operator"
+    operator_scripts = operator_root / "scripts"
+    operator_scripts.mkdir(parents=True)
+    catalog_double = operator_scripts / "marty-deploy.sh"
+    catalog_double.write_bytes(
+        b'#!/bin/sh\n'
+        b'[ "$1" = secrets ] && [ "$3" = --field ] && [ "$4" = env ] || exit 96\n'
+        b'[ "${TEST_CATALOG_FAIL:-}" != 1 ] || exit 97\n'
+        b'[ "${TEST_CATALOG_EMPTY:-}" != 1 ] || exit 0\n'
+        b'printf "%s\\n" "$TEST_REQUIRED_SECRET_ENVS"\n'
+    )
+    catalog_double.chmod(0o755)
     env = {
         "PATH": empty_path.as_posix(),
         "PYTHON_BIN": "catalog_python",
         "TEST_PYTHON": sys.executable.replace("\\", "/"),
-        "REPO_ROOT": ROOT.as_posix(),
+        "REPO_ROOT": operator_root.as_posix(),
         "TEST_ROOT": tmp_path.as_posix(),
         "NAMESPACE": "synthetic-owned-namespace",
         "K8S_STACK_NAME": "kubernetes-production",
@@ -93,6 +102,10 @@ def harness(tmp_path):
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT": "synthetic-signing-keys-server-certificate",
         "SIGNING_KEYS_WORKLOAD_SERVER_KEY": "synthetic-signing-keys-server-private-key",
         "PYTHONPATH": str(ROOT / "packages"),
+        "TEST_REQUIRED_SECRET_ENVS": "\n".join(
+            entry["env"] for entry in token_catalog().values()
+            if "kubernetes-production" in entry.get("required_for", [])
+        ),
     }
     if os.name == "nt":
         env["SystemRoot"] = os.environ["SystemRoot"]
@@ -148,12 +161,7 @@ tr() {
     fi
   fi
 }
-# Execute the actual read-only catalog CLI. Windows Python otherwise emits
-# CRLF into Bash's read loop; model the deployment's POSIX stdout without
-# changing the catalog values, resolver or extracted setup function.
-catalog_python() {
-  "$TEST_PYTHON" -c 'import runpy,sys; sys.stdout.reconfigure(newline="\n"); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name="__main__")' "$@"
-}
+# The test-owned script models the Rust CLI output and failure status.
 command_not_found_handle() { printf 'Unexpected external command\n' >&2; return 91; }
 kubectl() {
   case "$1:$2:${3:-}" in
@@ -401,3 +409,102 @@ def test_second_valid_file_read_cannot_replace_validated_captured_key(
     assert selected == {"issuance": TOKEN, "canvas-sync-worker": TOKEN}
     assert TOKEN not in result.stdout + result.stderr
     assert later not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failure", ["exit", "empty"])
+def test_catalog_failure_blocks_every_secret_mutation(harness, failure):
+    flag = "TEST_CATALOG_FAIL" if failure == "exit" else "TEST_CATALOG_EMPTY"
+    result, calls = harness({flag: "1"}, file_bytes=(TOKEN + "\n").encode())
+    assert result.returncode != 0
+    assert "Deployment catalog" in result.stderr
+    assert calls == []
+
+
+def test_setup_secrets_dispatch_rejects_catalog_failure_before_kubectl_write(tmp_path):
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git
+        bash = str(Path(git).resolve().parents[1] / "bin/bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash
+    source_sha = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(
+        ("#!/bin/sh\n"
+         "if [ \"$1\" = --build-identity ]; then\n"
+         f"  printf '%s\\n' '{source_sha}:v1.1.246'\n"
+         "elif [ \"$3\" = validate ]; then\n"
+         "  printf 'catalog valid\\n'\n"
+         "else\n"
+         "  exit 97\n"
+         "fi\n").encode()
+    )
+    binary.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    kubectl = bin_dir / "kubectl"
+    kubectl.write_bytes(
+        b'#!/bin/sh\n'
+        b'case "$1" in\n'
+        b'  cluster-info) exit 0 ;;\n'
+        b'  config) printf "synthetic-context\\n" ;;\n'
+        b'  *) printf "WRITE:%s\\n" "$1" >> "$KUBECTL_WRITES"; exit 98 ;;\n'
+        b'esac\n'
+    )
+    kubectl.chmod(0o755)
+    env_file = tmp_path / "operator.env"
+    env_file.write_bytes(b"IMAGE_REGISTRY=synthetic.invalid/owned\n")
+    writes = tmp_path / "writes.log"
+    result = subprocess.run(
+        [bash, str(ROOT / "scripts/deploy-kubernetes.sh"), "setup-secrets",
+         "--env-file", str(env_file)],
+        env={**os.environ,
+             "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+             "MARTY_DEPLOY_BIN": str(binary),
+             "MARTY_DEPLOY_BIN_SHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+             "MARTY_DEPLOY_SOURCE_SHA": source_sha,
+             "MARTY_DEPLOY_RELEASE_TAG": "v1.1.246",
+             "KUBECTL_WRITES": str(writes)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Deployment catalog secret lookup failed" in result.stderr + result.stdout
+    assert not writes.exists()
+
+
+@pytest.mark.parametrize("failure", ["exit", "empty"])
+def test_full_deploy_rejects_catalog_failure_before_first_manifest(tmp_path, failure):
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git
+        bash = str(Path(git).resolve().parents[1] / "bin/bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash
+    source = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    function = re.findall(r"^cmd_deploy\(\) \{\n.*?^\}", source, re.M | re.S)
+    assert len(function) == 1
+    failure_script = "return 97" if failure == "exit" else "return 0"
+    harness = (
+        "set -euo pipefail\n"
+        "K8S_STACK_NAME=kubernetes-production\n"
+        "K8S_DIR=/synthetic/manifests\n"
+        "prepare_kubernetes_native_issuance() { :; }\n"
+        "require_kubernetes_passport_selection() { :; }\n"
+        f"catalog_required_secret_envs() {{ {failure_script}; }}\n"
+        "apply_manifest() { printf 'APPLY:%s\\n' \"$1\"; }\n"
+        "cmd_setup_secrets() { printf 'SECRET-WRITE\\n'; }\n"
+        "error() { printf '%s\\n' \"$*\" >&2; return 1; }\n"
+        + function[0] + "\ncmd_deploy\n"
+    )
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-s"], input=harness,
+        text=True, encoding="utf-8", capture_output=True, cwd=tmp_path, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Deployment catalog" in result.stderr
+    assert "APPLY:" not in result.stdout
+    assert "SECRET-WRITE" not in result.stdout

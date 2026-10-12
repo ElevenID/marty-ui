@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -23,7 +24,6 @@ sys.path.insert(0, str(REPO_ROOT / "packages"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from canvas_worker_runtime import classify_worker_launch  # noqa: E402
-from marty_devops import DeploymentCatalog  # noqa: E402
 
 
 class CheckError(RuntimeError):
@@ -32,7 +32,11 @@ class CheckError(RuntimeError):
 
 def is_placeholder_value(value: str) -> bool:
     normalized = value.strip().lower()
-    return not normalized or normalized.startswith("change-me") or normalized in {"changeme", "placeholder"}
+    return (
+        not normalized
+        or normalized.startswith(("change-me", "change_me", "changeme", "replace-me", "replace_me"))
+        or normalized == "placeholder"
+    )
 
 
 def validate_openbao_plugin_image(env_values: dict[str, str]) -> str:
@@ -49,7 +53,11 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OPEN_BADGE_LOGIN_POLICY_ID = "50000000-0000-0000-0000-000000000004"
+OPEN_BADGE_LOGIN_POLICY_ID = next(
+    line.partition("=")[2].strip()
+    for line in (REPO_ROOT / ".env.selfhost.production.example").read_text(encoding="utf-8").splitlines()
+    if line.startswith("CREDENTIAL_LOGIN_POLICY_ID=")
+)
 TEXT_BUNDLE_SUFFIXES = {".css", ".html", ".js", ".json", ".map", ".txt"}
 ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d+)?")
 
@@ -142,11 +150,63 @@ def get_compose_services(env_file: Path, compose_file: Path) -> list[dict[str, A
     return parse_compose_ps_output(result.stdout)
 
 
-def validate_required_secret_files(secret_dir: Path, catalog: DeploymentCatalog, stack_name: str) -> str:
+def catalog_lines(*args: str) -> list[str]:
+    binary = os.environ.get("MARTY_DEPLOY_BIN", "").strip()
+    if binary:
+        expected_sha = os.environ.get("MARTY_DEPLOY_BIN_SHA256", "").strip().lower()
+        source_sha = os.environ.get("MARTY_DEPLOY_SOURCE_SHA", "").strip()
+        release_tag = os.environ.get("MARTY_DEPLOY_RELEASE_TAG", "").strip()
+        if not expected_sha:
+            raise CheckError("MARTY_DEPLOY_BIN_SHA256 is required")
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+            raise CheckError("MARTY_DEPLOY_BIN_SHA256 is invalid")
+        if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
+            raise CheckError("MARTY_DEPLOY_SOURCE_SHA is required and must be valid")
+        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag):
+            raise CheckError("MARTY_DEPLOY_RELEASE_TAG is required and must be valid")
+        binary_path = Path(binary)
+        if not binary_path.is_file():
+            raise CheckError("MARTY_DEPLOY_BIN is not a file")
+        with binary_path.open("rb") as handle:
+            actual_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+        if actual_sha != expected_sha:
+            raise CheckError("MARTY_DEPLOY_BIN digest mismatch")
+        identity = subprocess.run(
+            [str(binary_path), "--build-identity"],
+            check=False, capture_output=True, text=True,
+        )
+        if identity.returncode != 0 or identity.stdout.strip() != f"{source_sha}:{release_tag}":
+            raise CheckError("MARTY_DEPLOY_BIN source or tag mismatch")
+        if (REPO_ROOT / ".git").exists():
+            checkout = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
+                check=False, capture_output=True, text=True,
+            )
+            if checkout.returncode != 0 or checkout.stdout.strip() != source_sha:
+                raise CheckError("MARTY_DEPLOY_BIN source differs from checkout HEAD")
+        command = [str(binary_path), "--repo-root", str(REPO_ROOT), *args]
+    else:
+        command = [
+            "cargo", "+1.95.0", "run", "--quiet", "--locked",
+            "--manifest-path", str(REPO_ROOT / "rust/Cargo.toml"),
+            "-p", "marty-deployment-catalog", "--bin", "marty-deploy",
+            "--", "--repo-root", str(REPO_ROOT), *args,
+        ]
+    result = subprocess.run(
+        command,
+        check=False, capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    if result.returncode != 0:
+        raise CheckError(result.stderr.strip() or "Deployment catalog command failed.")
+    return result.stdout.splitlines()
+
+
+def validate_required_secret_files(secret_dir: Path, stack_name: str) -> str:
     checked: list[str] = []
-    for secret in catalog.required_secret_specs_for_stack(stack_name):
-        secret_id = str(secret["id"])
-        file_name = str(secret.get("compose_secret") or secret_id)
+    ids = catalog_lines("secrets", stack_name)
+    file_names = catalog_lines("secrets", stack_name, "--field", "compose_secret")
+    for secret_id, compose_secret in zip(ids, file_names, strict=True):
+        file_name = compose_secret or secret_id
         read_required_secret(secret_dir / file_name, secret_id)
         checked.append(secret_id)
 
@@ -1211,15 +1271,15 @@ def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Pat
     return f"state={openbao_service.get('State')} health={openbao_service.get('Health') or 'n/a'} port={host_port}"
 
 
-def validate_main_stack(env_file: Path, compose_file: Path, catalog: DeploymentCatalog | None = None) -> str:
+def validate_main_stack(env_file: Path, compose_file: Path, use_catalog: bool = False) -> str:
     services = get_compose_services(env_file, compose_file)
     if not services:
         raise CheckError("Main self-host production stack is not running.")
 
     service_map = {entry.get("Service"): entry for entry in services}
     required_services = tuple(
-        catalog.running_services_for_stack("selfhost-production")
-        if catalog is not None
+        catalog_lines("services", "selfhost-production", "--running-only")
+        if use_catalog
         else (
             "postgres",
             "redis",
@@ -1297,7 +1357,7 @@ def main() -> int:
     if not secret_dir_value:
         raise SystemExit("SELFHOST_SECRET_DIR is missing from the self-host env file.")
     secret_dir = Path(secret_dir_value).expanduser().resolve()
-    catalog = DeploymentCatalog.load(REPO_ROOT)
+    catalog_lines("validate")
 
     compose_config_results = [
         run_check("openbao-plugin-image", lambda: validate_openbao_plugin_image(env_values)),
@@ -1305,7 +1365,7 @@ def main() -> int:
         run_check("prod-compose-config", lambda: (ensure_compose_config(env_file, prod_compose_file) or prod_compose_file.name)),
     ]
     validation_results = [
-        run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, catalog, "selfhost-production")),
+        run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, "selfhost-production")),
         run_check("holder-service-credential", lambda: validate_holder_service_credential(secret_dir)),
         run_check("service-sign-gateway-credential", lambda: validate_service_sign_gateway_credential(secret_dir)),
         run_check("issuer-sign-credential", lambda: validate_issuer_sign_credential(secret_dir)),
@@ -1333,7 +1393,7 @@ def main() -> int:
         run_check("marty-issuer-did-document", lambda: validate_marty_issuer_did_document(env_values)),
         run_check("protocol-no-spa-fallback", lambda: validate_protocol_routes_do_not_spa_fallback(env_values)),
         run_check("openbao", lambda: validate_openbao(env_values, secret_dir, env_file, openbao_compose_file)),
-        run_check("prod-compose-health", lambda: validate_main_stack(env_file, prod_compose_file, catalog)),
+        run_check("prod-compose-health", lambda: validate_main_stack(env_file, prod_compose_file, True)),
     ]
 
     results = compose_config_results + validation_results
