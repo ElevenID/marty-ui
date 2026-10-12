@@ -352,6 +352,122 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertEqual(gateway["PASSPORT_NATIVE_GATEWAY_ENABLED"], "true")
         self.assertEqual(gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"], "false")
 
+    def test_beta_passport_gateway_issuance_selectors_have_distinct_witnesses(
+        self,
+    ) -> None:
+        """Inventory native and physical-provider routing without narrowing CI."""
+        metadata = planner.cargo_metadata()
+        result = planner.plan(["rust/services/issuance/src/main.rs"], metadata, ROOT)
+        self.assertTrue(result["all"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-issuance-service"
+            and edge["package"] == "marty-gateway"
+            and edge.get("conditional")
+            in {
+                "beta passport native Gateway routes only",
+                "physical-provider beta signed webhook only",
+            }
+        ]
+        self.assertEqual(len(edges), 2)
+        witnesses = {edge["conditional"]: edge for edge in edges}
+        self.assertEqual(len(witnesses), 2)
+        for name, witness in witnesses.items():
+            with self.subTest(name=name):
+                for marker, evidence in (
+                    ("binding", "config_evidence"),
+                    ("url_binding", "config_evidence"),
+                    ("dispatch_marker", "dispatch_evidence"),
+                    ("route_marker", "route_evidence"),
+                    ("owner_marker", "route_evidence"),
+                    ("route_test_marker", "route_evidence"),
+                    ("provider_marker", "provider_evidence"),
+                    ("provider_path_marker", "provider_evidence"),
+                ):
+                    self.assertIn(
+                        witness[marker],
+                        (ROOT / witness[evidence]).read_text(encoding="utf-8"),
+                    )
+                profile = yaml.safe_load(
+                    (ROOT / witness["profile_evidence"]).read_text(encoding="utf-8")
+                )
+                gateway = profile["services"][witness["profile_gateway_service"]][
+                    "environment"
+                ]
+                self.assertEqual(gateway["PASSPORT_NATIVE_GATEWAY_ENABLED"], "true")
+                if name == "physical-provider beta signed webhook only":
+                    self.assertEqual(
+                        gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"], "true"
+                    )
+                    self.assertEqual(
+                        gateway["PASSPORT_PROVIDER_INGRESS_SERVICE_URL"],
+                        "http://passport-provider-ingress:8021",
+                    )
+                    self.assertIn(
+                        witness["profile_provider_service"], profile["services"]
+                    )
+                else:
+                    self.assertEqual(
+                        gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"], "false"
+                    )
+
+    def test_physical_provider_ingress_has_a_callback_signer_witness(self) -> None:
+        """Retain the isolated signer obligation without selecting fewer checks."""
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["rust/services/signing-keys/src/passport_callback_hmac.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-signing-keys"
+            and edge["package"] == "marty-issuance-service"
+            and edge.get("conditional")
+            == "physical-provider ingress callback signing only"
+        ]
+        self.assertEqual(len(edges), 1)
+        witness = edges[0]
+        for marker, evidence in (
+            ("binding", "consumer_evidence"),
+            ("callback_binding", "consumer_evidence"),
+            ("handoff_marker", "handoff_evidence"),
+            ("callback_marker", "handoff_evidence"),
+            ("request_marker", "request_evidence"),
+            ("body_marker", "request_evidence"),
+            ("delivery_marker", "request_evidence"),
+            ("provider_route_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_registration_marker", "provider_registration_evidence"),
+            ("provider_binary_marker", "provider_manifest_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    witness[marker],
+                    (ROOT / witness[evidence]).read_text(encoding="utf-8"),
+                )
+        profile = yaml.safe_load(
+            (ROOT / witness["profile_evidence"]).read_text(encoding="utf-8")
+        )
+        ingress = profile["services"][witness["profile_consumer_service"]]
+        signer = profile["services"][witness["profile_provider_service"]]
+        self.assertEqual(ingress["environment"]["PASSPORT_PROVIDER_INGRESS_ENABLED"], "true")
+        self.assertEqual(
+            ingress["environment"]["PASSPORT_PROVIDER_SIGNER_URL"],
+            witness["profile_signer_url"],
+        )
+        self.assertEqual(
+            ingress["environment"]["PASSPORT_PROVIDER_NATIVE_CALLBACK_URL"],
+            witness["profile_callback_url"],
+        )
+        self.assertEqual(
+            signer["environment"]["SERVICE_NAME"], "passport_callback_signer_supported"
+        )
+        self.assertIn(
+            witness["profile_provider_service"], ingress["depends_on"]
+        )
+
     def test_credential_template_control_plane_consumers_are_shadow_only(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
@@ -1319,6 +1435,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     for edge in result["observed_non_cargo_consumers"]
                     if edge["producer"] == producer
                     and edge["package"] == "marty-gateway"
+                    and edge.get("route_contract") == "contracts/gateway-routes.json"
                 ]
                 self.assertEqual(len(edges), 1)
                 edge = edges[0]
@@ -2519,6 +2636,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     for edge in result["observed_non_cargo_consumers"]
                     if edge["producer"] == "marty-signing-keys"
                     and edge["package"] == consumer
+                    and "gateway_route_marker" in edge
                 ]
                 self.assertEqual(len(edges), 1)
                 edge = edges[0]
