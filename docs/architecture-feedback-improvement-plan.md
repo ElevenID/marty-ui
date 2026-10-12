@@ -427,7 +427,7 @@ and 602 successful Canvas timing rows in each run, then merged as
 `2300a8582d`. Its exact preflight-test source selector has no measured
 scoped-PR saving yet.
 
-Facts/retry current-input follow-up (2026-10-12 candidate): the two thin
+Facts/retry current-input follow-up (2026-10-12 merged): the two thin
 `run_canvas_worker_{facts,retry}_oracle.py` producers inherit the independently
 guarded REST capture inputs and add only their two scripts and two scenario
 files. One overlay pins those four normalized source hashes; its test first
@@ -436,8 +436,11 @@ the exact union of both computed wrapper import, child, and transitive
 scenario closures plus the mounted preparer/trust inputs. Focused local
 tests and independent review cleared the candidate. This is current-source
 drift detection, not historical capture-source attestation, complete image
-or runtime closure, or permission to skip reference qualification. Protected
-CI and main merge remain pending.
+or runtime closure, or permission to skip reference qualification.
+[UI #1282](https://github.com/ElevenID/marty-ui/pull/1282) passed full PR
+and [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38209022385),
+including the Canvas service and release-contract gates, then merged as
+`eb7cdd0bb`.
 
 REST-dependent current-input follow-up (2026-10-12 local candidate): the
 provider-signals, roster-failure, and validation producers share the REST and
@@ -446,7 +449,8 @@ seven additional current inputs, including the shared retry scenario. Its test
 requires the exact union of all three producers' static script and transitive
 scenario closures plus mounted preparer/trust inputs. It does not attest their
 historical observations, qualify an image or runtime, or reduce live oracle
-coverage. Local review and protected CI remain pending.
+coverage. The rebased local candidate passed 216 focused tests and independent
+review; protected CI remains pending.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
