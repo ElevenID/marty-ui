@@ -3722,6 +3722,16 @@ test witnesses. It is not a new package relationship or proof that the HTTP
 runtime graph is complete. Service changes still select all Rust packages;
 required PR, protected merge, and release checks remain unchanged.
 
+October 12 A0 beta callback-signer input: the beta passport bureau also sends
+an authenticated signing request to the isolated Signing Keys callback-signer
+binary before delivering that Gateway webhook. This is separate from the
+physical-provider ingress signer, though both reuse the same Rust signing
+handoff and Signing Keys route. The beta-only URL guard, binary declaration,
+Compose service/network binding, and database-gated synthetic signer test
+support a distinct shadow witness on the existing Issuance/Signing Keys
+package relationship. The HTTP runtime graph is still incomplete; Rust
+service changes retain full-workspace selection and all protected gates.
+
 A4 JSON-depth route-matrix audit (2026-10-11):
 `status_runtime_matches_json_depth_full_credential_routes` runs 64 frozen
 shape/depth/status provider cases through three primary credential actions,
