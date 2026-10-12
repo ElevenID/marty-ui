@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import hashlib
+import io
 from dataclasses import asdict
 import json
 import sys
@@ -449,6 +451,24 @@ def capture_canvas_secret_fallback(monkeypatch) -> dict:
 def test_frozen_canvas_secret_fallback(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_canvas_secret_fallback(monkeypatch) == contract["canvas_secret_fallback"]
+
+
+def capture_canvas_transition_print(monkeypatch) -> dict:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    summary = json.loads(json.dumps(contract["canvas_transition"]["summary"]))
+    summary["issued_credential"]["status_list_entries"] = [{"index": 5, "status_list_uri": "https://status.example/list/1"}]
+    summary["delivery_records"][0]["metadata"]["credential_url"] = "https://canvas.example/credentials/badge-1"
+    monkeypatch.setattr(seed, "_lookup_canvas_demo_transition", lambda _app_id: summary)
+    monkeypatch.setattr(seed.os, "environ", {"PUBLIC_API_URL": "https://marty.example", "CANVAS_CREDENTIALS_PUBLIC_BASE_URL": "https://canvas.example"})
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        seed._print_canvas_demo_transition_summary(config(), "application-1")
+    return {"summary": summary, "lines": output.getvalue().splitlines()}
+
+
+def test_frozen_canvas_transition_print(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_transition_print(monkeypatch) == contract["canvas_transition_print"]
 
 
 def capture(monkeypatch) -> dict:

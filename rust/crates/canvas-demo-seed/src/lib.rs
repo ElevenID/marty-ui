@@ -34,7 +34,7 @@ pub use demo_evidence::{
 };
 pub use lms::{seed_canvas_lms_objects, CanvasLmsSeedResult};
 pub use run::run_seed;
-pub use transition::{lookup_transition, transition_summary};
+pub use transition::{lookup_transition, transition_display_lines, transition_summary};
 pub use wallet::{
     claim_wallet_credential, CanonicalWalletProof, WalletHttp, WalletOperation, WalletProof,
     WalletTransport,

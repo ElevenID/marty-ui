@@ -1,4 +1,4 @@
-use marty_canvas_demo_seed::{build_run_config, run_seed};
+use marty_canvas_demo_seed::{build_run_config, run_seed, transition_display_lines};
 use std::{collections::HashMap, env, fs, path::Path};
 
 fn load_env_file(path: &Path) -> Result<(), String> {
@@ -96,6 +96,13 @@ async fn main() {
                     "Canvas mirror cycle: {} processed",
                     report["mirror"]["processed_count"]
                 );
+            }
+            if report["transition"].is_object() {
+                for line in
+                    transition_display_lines(&report["transition"], &config.connector, &variables)
+                {
+                    println!("{line}");
+                }
             }
             if let Some(warnings) = report["warnings"].as_array() {
                 for warning in warnings {

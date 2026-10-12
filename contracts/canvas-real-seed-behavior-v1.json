@@ -200,8 +200,8 @@
     "signing_service_id": "managed-openbao-transit"
   },
   "unfrozen_groups": [
-    "canvas_lms_http_and_rails",
-    "transition_summary"
+    "cli_printed_summary",
+    "live_canvas_demo_journey"
   ],
   "database_seed": {
     "modern_schema": {
@@ -1990,5 +1990,96 @@
       }
     ],
     "secret": "test-shared-secret"
+  },
+  "canvas_transition_print": {
+    "summary": {
+      "application": {
+        "application_id": "application-1",
+        "application_status": "approved",
+        "issuance_transaction_id": "tx-1",
+        "credential_type": "OpenBadgeCredential",
+        "credential_template_id": "ct-1",
+        "transaction_status": "issued",
+        "issuer_profile_id": "profile-1",
+        "issuer_mode": "org_managed",
+        "issuer_did_override": "did:web:marty.example",
+        "signing_service_id": "managed-openbao-transit",
+        "delivery_mode": "wallet_plus_canvas_mirror",
+        "credential_payload_format": "vc+sd-jwt",
+        "has_pre_auth_code": true
+      },
+      "latest_fact": {
+        "provider": "canvas",
+        "fact_type": "canvas.quiz_score",
+        "scope": {},
+        "assertion": {
+          "score_percent": 92
+        },
+        "verification": {
+          "status": "verified"
+        },
+        "created_at": "2025-04-05T00:00:00Z"
+      },
+      "issued_credential": {
+        "id": "credential-1",
+        "subject_did": "did:example:learner",
+        "issuer_did": "did:web:marty.example",
+        "revocation_profile_id": "rev-1",
+        "status_list_entries": [
+          {
+            "index": 5,
+            "status_list_uri": "https://status.example/list/1"
+          }
+        ],
+        "status": "active",
+        "issued_at": "2025-04-05T00:00:00Z",
+        "expires_at": null
+      },
+      "delivery_records": [
+        {
+          "id": "delivery-1",
+          "delivery_target": "canvas_credentials",
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "status": "delivered",
+          "external_credential_id": "badge-1",
+          "external_issuer_id": null,
+          "last_error": null,
+          "metadata": {
+            "provider": "canvas_credentials_api",
+            "credential_url": "https://canvas.example/credentials/badge-1"
+          },
+          "updated_at": "2025-04-05T00:00:00Z"
+        }
+      ],
+      "canvas_mirror_delivery_records": 1
+    },
+    "lines": [
+      "  OK MIP transition verified",
+      "    evidence_provider:   canvas",
+      "    evidence_fact_type:  canvas.quiz_score",
+      "    evidence_status:     verified via None",
+      "    score_percent:       92",
+      "    application_status:  approved",
+      "    transaction_id:      tx-1",
+      "    transaction_status:  issued",
+      "    credential_type:     OpenBadgeCredential",
+      "    issuer_profile_id:   profile-1",
+      "    issuer_did:          did:web:marty.example",
+      "    signing_service_id:  managed-openbao-transit",
+      "    delivery_mode:       wallet_plus_canvas_mirror",
+      "    canvas_platform_id:  None",
+      "    canvas_binding_id:   None",
+      "    mirror_records:      1",
+      "    issued_credential:   credential-1",
+      "    credential_status:   active",
+      "    revocation_profile:  rev-1",
+      "    status_list_index:   5",
+      "    status_list_uri:     https://status.example/list/1",
+      "    subject_did:         did:example:learner",
+      "    delivery_record:    canvas_credentials status=delivered external=badge-1",
+      "      canvas_display:   https://canvas.example/credentials/badge-1",
+      "      console_provenance: https://marty.example/console/org/operate/verify?external_credential_id=badge-1&canvas_account_id=account-1&organization_id=org-1",
+      "    offer_endpoint:      https://marty.example/v1/issuance/offers/tx-1"
+    ]
   }
 }
