@@ -343,6 +343,70 @@ def test_frozen_canvas_cli_config(monkeypatch, capsys) -> None:
     capsys.readouterr()
 
 
+def capture_canvas_transition(monkeypatch) -> dict:
+    queries = []
+    application = {"application_id": "application-1", "application_status": "approved", "issuance_transaction_id": "tx-1", "credential_type": "OpenBadgeCredential", "credential_template_id": "ct-1", "transaction_status": "issued", "issuer_profile_id": "profile-1", "issuer_mode": "org_managed", "issuer_did_override": "did:web:marty.example", "signing_service_id": "managed-openbao-transit", "delivery_mode": "wallet_plus_canvas_mirror", "credential_payload_format": "vc+sd-jwt", "has_pre_auth_code": True}
+    fact = {"provider": "canvas", "fact_type": "canvas.quiz_score", "scope": {}, "assertion": {"score_percent": 92}, "verification": {"status": "verified"}, "created_at": "2025-04-05T00:00:00Z"}
+    issued = {"id": "credential-1", "subject_did": "did:example:learner", "issuer_did": "did:web:marty.example", "revocation_profile_id": "rev-1", "status_list_entries": [], "status": "active", "issued_at": "2025-04-05T00:00:00Z", "expires_at": None}
+    delivery = {"id": "delivery-1", "delivery_target": "canvas_credentials", "delivery_mode": "wallet_plus_canvas_mirror", "status": "delivered", "external_credential_id": "badge-1", "external_issuer_id": None, "last_error": None, "metadata": {"provider": "canvas_credentials_api"}, "updated_at": "2025-04-05T00:00:00Z"}
+
+    class Result:
+        def __init__(self, value):
+            self.value = value
+        def mappings(self):
+            return self
+        def first(self):
+            return self.value
+        def all(self):
+            return self.value
+
+    class Connection:
+        async def execute(self, query, params):
+            sql = str(query)
+            queries.append({"query": " ".join(sql.split()), "params": params})
+            if "FROM issuance_service.applications a" in sql:
+                return Result(application)
+            if "FROM issuance_service.evidence_facts" in sql:
+                return Result(fact)
+            if "FROM issuance_service.issued_credentials" in sql:
+                return Result(issued)
+            if "FROM issuance_service.credential_delivery_records" in sql:
+                return Result([delivery])
+            raise AssertionError(sql)
+        async def scalar(self, query, params):
+            queries.append({"query": " ".join(str(query).split()), "params": params})
+            return 1
+
+    class Transaction:
+        async def __aenter__(self):
+            return Connection()
+        async def __aexit__(self, *_args):
+            return None
+
+    class Engine:
+        def begin(self):
+            return Transaction()
+        async def dispose(self):
+            return None
+
+    sqlalchemy = types.ModuleType("sqlalchemy")
+    sqlalchemy.text = lambda sql: sql
+    ext = types.ModuleType("sqlalchemy.ext")
+    ext_asyncio = types.ModuleType("sqlalchemy.ext.asyncio")
+    ext_asyncio.create_async_engine = lambda *_args, **_kwargs: Engine()
+    monkeypatch.setitem(sys.modules, "sqlalchemy", sqlalchemy)
+    monkeypatch.setitem(sys.modules, "sqlalchemy.ext", ext)
+    monkeypatch.setitem(sys.modules, "sqlalchemy.ext.asyncio", ext_asyncio)
+    monkeypatch.setattr(seed, "_resolve_database_url", lambda: "postgresql+asyncpg://localhost/test")
+    summary = asyncio.run(seed._lookup_canvas_demo_transition_async("application-1"))
+    return {"summary": summary, "queries": queries}
+
+
+def test_frozen_canvas_transition(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_transition(monkeypatch) == contract["canvas_transition"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []

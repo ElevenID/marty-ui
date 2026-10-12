@@ -11,6 +11,7 @@ mod canvas_rest;
 mod cli_config;
 mod database;
 mod demo_evidence;
+mod transition;
 mod wallet;
 pub use canvas_rails::{
     canvas_admin_exists, ensure_canvas_developer_key, ensure_canvas_external_tool,
@@ -29,6 +30,7 @@ pub use demo_evidence::{
     ags_score_payload, application_payload, send_signed_ags, signed_ags_wire, DemoEvidenceConfig,
     SignedAgsWire,
 };
+pub use transition::{lookup_transition, transition_summary};
 pub use wallet::{
     claim_wallet_credential, CanonicalWalletProof, WalletHttp, WalletOperation, WalletProof,
     WalletTransport,
