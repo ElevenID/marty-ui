@@ -529,10 +529,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
-          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
-          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
-          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           bun install
@@ -607,10 +604,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
-          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
-          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
-          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           bun install
@@ -679,10 +673,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
-          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
-          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
-          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
       - run: bun install
@@ -3042,10 +3033,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          curl --fail --location --silent --show-error "$MARTY_API_CORE_URI" --output "$RUNNER_TEMP/marty-api-core.tgz"
-          curl --fail --location --silent --show-error "$MARTY_BLOG_URI" --output "$RUNNER_TEMP/marty-blog.tgz"
-          echo "${MARTY_API_CORE_DIGEST#sha256:}  $RUNNER_TEMP/marty-api-core.tgz" | sha256sum --check --strict
-          echo "${MARTY_BLOG_DIGEST#sha256:}  $RUNNER_TEMP/marty-blog.tgz" | sha256sum --check --strict
+          bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
           bun install
