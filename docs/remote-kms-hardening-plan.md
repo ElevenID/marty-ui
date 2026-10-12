@@ -17142,3 +17142,14 @@ UI #1192 exact-head CI run `38213591972` completed successfully on pushed
 including Canvas, plugin image, release contracts, Rust service images and
 security checks. The local fourth-image release transaction and four-gate
 self-host correction follow that head and require their own hosted checks.
+
+2026-10-12 UI #1192 main reconciliation after grouped fourth-image push:
+main advanced by `8f3cf2c1b` and `94e5640bb`. The first selected an eligible
+beta release with old Core 0.1.61 wheels; this KMS branch must keep Core 0.2.2
+and `release_state: hold`. The second added REST-dependent evidence for Python
+Canvas oracle wrappers removed by the Rust migration. Git's ordinary merge
+reported eight conflicts in release lock, CI/Dockerignore, documentation and
+tests. Merge commit `2979cd480` records both upstream commits as ancestry
+with an identical first-parent tree, preserving the hardened Rust-only graph
+and release hold. Focused release/CI contracts passed 231/231 after the merge;
+the grouped head still needs exact-head hosted checks.
