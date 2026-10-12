@@ -844,6 +844,23 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-trust-profile": [
         {
+            # Device Registration fetches a scoped wallet-issuer trust snapshot
+            # over HTTP; its shared policy crate is not this service dependency.
+            "package": "marty-device-registration",
+            "evidence": "rust/services/device-registration/src/main.rs",
+            "binding": 'env_value("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004")',
+            "runtime_evidence": "rust/services/device-registration/src/main.rs",
+            "runtime_marker": "WalletIssuerTrustClient::new(",
+            "request_evidence": "rust/services/device-registration/src/wallet_issuer_trust.rs",
+            "request_marker": '"{}/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",',
+            "request_auth_marker": '.header("x-service-token", &self.service_token)',
+            "provider_evidence": "rust/services/trust-profile/src/http_service.rs",
+            "provider_marker": '"/internal/v1/trust-profiles/{profile_id}/wallet-issuer-keys",',
+            "provider_handler_marker": "get(wallet_issuer_keys)",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_marker": "TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004",
+        },
+        {
             "package": "marty-flow",
             "evidence": "rust/services/flow/src/config.rs",
             "binding": '"TRUST_PROFILE_SERVICE_URL"',
