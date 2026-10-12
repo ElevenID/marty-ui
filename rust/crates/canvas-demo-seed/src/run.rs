@@ -22,6 +22,10 @@ fn value_id(value: &Value) -> Option<String> {
     }
 }
 
+fn has_ags_evidence_response(value: &Value) -> bool {
+    value.as_object().is_some_and(|fields| !fields.is_empty())
+}
+
 fn env_first(env: &HashMap<String, String>, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
         env.get(*name)
@@ -285,7 +289,7 @@ pub async fn run_seed(
                         );
                         match send_signed_ags(&url, &payload, &secret, Utc::now().timestamp()).await
                         {
-                            Ok(result) => {
+                            Ok(result) if has_ags_evidence_response(&result) => {
                                 evidence = Some(result);
                                 match lookup_transition(database_url, &application_id).await {
                                     Ok(found) => transition = found,
@@ -335,6 +339,7 @@ pub async fn run_seed(
                                     }
                                 }
                             }
+                            Ok(_) => {}
                             Err(error) => {
                                 warnings.push(format!("Canvas demo AGS event failed: {error}"))
                             }
@@ -347,6 +352,7 @@ pub async fn run_seed(
     }
     Ok(json!({
         "platform": platform,
+        "jwks_refreshed": refreshed["refreshed"],
         "canvas_lms": canvas_seed,
         "canvas_scope": scope,
         "binding": binding,
@@ -358,4 +364,19 @@ pub async fn run_seed(
         "transition": transition,
         "warnings": warnings,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_ags_evidence_response;
+    use serde_json::json;
+
+    #[test]
+    fn empty_ags_response_does_not_start_transition_or_wallet_followup() {
+        assert!(!has_ags_evidence_response(&serde_json::Value::Null));
+        assert!(!has_ags_evidence_response(&json!({})));
+        assert!(has_ags_evidence_response(
+            &json!({"application_status": "approved"})
+        ));
+    }
 }

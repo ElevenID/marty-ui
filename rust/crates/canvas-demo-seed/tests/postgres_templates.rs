@@ -181,6 +181,11 @@ async fn run_case(url: &Url) {
 #[tokio::test]
 async fn current_and_legacy_schema_upsert_and_rollback() {
     let Ok(value) = env::var("MARTY_CANVAS_SEED_TEST_DATABASE_URL") else {
+        assert_ne!(
+            env::var("MARTY_CANVAS_SEED_REQUIRE_DATABASE_TEST").as_deref(),
+            Ok("1"),
+            "MARTY_CANVAS_SEED_TEST_DATABASE_URL is required for Canvas database contract tests"
+        );
         eprintln!("set MARTY_CANVAS_SEED_TEST_DATABASE_URL for disposable Postgres coverage");
         return;
     };
