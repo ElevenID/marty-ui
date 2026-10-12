@@ -35,6 +35,8 @@
     "jwt_expiry_seconds": 3600,
     "deployment_id": "test-deployment-sandbox",
     "webhook_signature": "HMAC-SHA256(timestamp + '.' + raw JSON body)",
+    "webhook_follows_redirects": false,
+    "malformed_upstream_json_below_500_status": 500,
     "canonical_payload_hash_sha256": "78d48859c3252943aab7306f76c80f3f07783582e05ab8f944ce0696f2dbfc67"
   }
 }

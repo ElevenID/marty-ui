@@ -111,6 +111,7 @@ impl AppState {
             status_events: RwLock::new(Vec::new()),
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("HTTP client"),
         }
@@ -485,7 +486,15 @@ async fn send_webhook(
         Ok(response) => {
             let status = response.status();
             let body = if status.as_u16() < 500 {
-                response.json::<Value>().await.ok()
+                match response.json::<Value>().await {
+                    Ok(body) => Some(body),
+                    // The Python runtime raised here, yielding HTTP 500. Do not
+                    // report malformed upstream success as a sent event.
+                    Err(_) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error")
+                            .into_response()
+                    }
+                }
             } else {
                 None
             };
@@ -849,6 +858,11 @@ mod tests {
 
     #[tokio::test]
     async fn oidc_discovery_jwks_and_signed_lti_launch_match_contract() {
+        let corpus: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-sandbox-runtime-v1.json"
+        ))
+        .unwrap();
+        let crypto = &corpus["crypto"];
         let state = test_state();
         let router = app(state.clone());
         let discovery = json_body(
@@ -879,6 +893,7 @@ mod tests {
         )
         .await;
         assert_eq!(jwks["keys"][0]["kid"], state.kid);
+        assert_eq!(jwks["keys"][0]["alg"], crypto["jwt_algorithm"]);
         assert_eq!(
             jwks["keys"][0]["x"],
             URL_SAFE_NO_PAD.encode(state.key.verifying_key().as_bytes())
@@ -909,11 +924,11 @@ mod tests {
         assert_eq!(parts.len(), 3);
         let claims: Value =
             serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
-        assert_eq!(claims["nonce"], "nonce-1");
-        assert_eq!(claims["aud"], json!(["client-1"]));
+        assert_eq!(claims["nonce"], crypto["jwt_nonce"]);
+        assert_eq!(claims["aud"], crypto["jwt_audience"]);
         assert_eq!(
             claims["https://purl.imsglobal.org/spec/lti/claim/deployment_id"],
-            "test-deployment-sandbox"
+            crypto["deployment_id"]
         );
         assert_eq!(
             claims["https://purl.imsglobal.org/spec/lti/claim/lti_message_hint"],
@@ -921,7 +936,7 @@ mod tests {
         );
         assert_eq!(
             claims["exp"].as_i64().unwrap() - claims["iat"].as_i64().unwrap(),
-            3600
+            crypto["jwt_expiry_seconds"].as_i64().unwrap()
         );
         let signature = Signature::from_slice(&URL_SAFE_NO_PAD.decode(parts[2]).unwrap()).unwrap();
         state
@@ -1099,6 +1114,82 @@ mod tests {
         assert_eq!(event["evidence_type"], "canvas.course_completion");
         assert!(event["completion_at"].as_str().unwrap().ends_with('Z'));
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn malformed_upstream_success_fails_webhook_instead_of_reporting_sent() {
+        let upstream = Router::new().route(
+            "/v1/integrations/canvas/evidence-events",
+            post(|| async { (StatusCode::CREATED, "not-json") }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let mut config = test_config();
+        config.issuer_base = format!("http://{address}");
+        let response = request(
+            app(Arc::new(AppState::new(config))),
+            "POST",
+            "/api/lti/credentials/webhook",
+            json!({"canvas_event_id":"event-1"}),
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(body.as_ref(), b"Internal Server Error");
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn webhook_does_not_replay_signed_body_to_redirect_target() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<Bytes>(1);
+        let target = Router::new().route(
+            "/capture",
+            post(move |body: Bytes| {
+                let sender = sender.clone();
+                async move {
+                    sender.send(body).await.unwrap();
+                    StatusCode::OK
+                }
+            }),
+        );
+        let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_address = target_listener.local_addr().unwrap();
+        let target_server =
+            tokio::spawn(async move { axum::serve(target_listener, target).await.unwrap() });
+        let upstream = Router::new().route(
+            "/v1/integrations/canvas/evidence-events",
+            post(move || async move {
+                (
+                    StatusCode::TEMPORARY_REDIRECT,
+                    [(header::LOCATION, format!("http://{target_address}/capture"))],
+                    Json(json!({"redirect":true})),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let upstream_server =
+            tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let mut config = test_config();
+        config.issuer_base = format!("http://{address}");
+        let response = request(
+            app(Arc::new(AppState::new(config))),
+            "POST",
+            "/api/lti/credentials/webhook",
+            json!({"canvas_event_id":"event-1"}),
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(
+            json_body(response).await["issuance_response"],
+            json!({"redirect":true})
+        );
+        assert!(receiver.try_recv().is_err());
+        upstream_server.abort();
+        target_server.abort();
     }
 
     #[test]
