@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use marty_canvas_demo_seed::{
-    application_template_payload, credential_template_payload, demo_scope, remote_signing_config,
-    upsert_binding, upsert_platform, GatewaySeedConfig, GatewayTransport, Operation,
+    ags_score_payload, application_payload, application_template_payload,
+    credential_template_payload, demo_scope, remote_signing_config, signed_ags_wire,
+    upsert_binding, upsert_platform, DemoEvidenceConfig, GatewaySeedConfig, GatewayTransport,
+    Operation,
 };
 use serde_json::{json, Value};
 use std::{collections::VecDeque, sync::Mutex};
@@ -32,6 +34,59 @@ fn badge_template_payloads_match_frozen_python_contract() {
             writes[1]["payload"]
         );
     }
+}
+
+#[test]
+fn demo_application_and_ags_payloads_match_frozen_python_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-real-seed-behavior-v1.json"
+    ))
+    .unwrap();
+    let demo = DemoEvidenceConfig {
+        learner_name: "First Last".into(),
+        learner_email: "learner@example.com".into(),
+        course_name: "Fallback Course".into(),
+        quiz_title: "Fallback Quiz".into(),
+        quiz_passing_score_percent: 92,
+        quiz_points_possible: 100,
+    };
+    let canvas_seed = json!({
+        "course": {"id": 42, "name": "Canvas Course"},
+        "quiz": {"id": 9, "title": "Canvas Quiz"},
+        "learner": {"id": 77},
+        "enrollment": {"id": 88}
+    });
+    let cfg = config();
+    let expected = &contract["demo_evidence"]["operations"];
+    assert_eq!(
+        application_payload(&cfg, &demo, &canvas_seed, "2025-04-05"),
+        expected[0]["payload"]
+    );
+    assert_eq!(
+        ags_score_payload(
+            &cfg,
+            &demo,
+            &canvas_seed,
+            "application-1",
+            "2025-04-05",
+            "abc12345"
+        ),
+        expected[1]["payload"]
+    );
+}
+
+#[test]
+fn signed_ags_body_and_hmac_match_frozen_python_wire() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-real-seed-behavior-v1.json"
+    ))
+    .unwrap();
+    let wire = &contract["signed_ags_wire"];
+    let payload = json!({"z": 2, "a": {"y": 2, "x": 1}});
+    let signed = signed_ags_wire(&payload, "test-shared-secret", 1743811200).unwrap();
+    assert_eq!(signed.body, wire["body"]);
+    assert_eq!(signed.timestamp, wire["headers"]["x-canvas-timestamp"]);
+    assert_eq!(signed.signature, wire["headers"]["x-canvas-signature-256"]);
 }
 
 #[async_trait]

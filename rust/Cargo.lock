@@ -3764,8 +3764,11 @@ name = "marty-canvas-demo-seed"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "hex",
+ "hmac 0.12.1",
  "reqwest",
  "serde_json",
+ "sha2 0.10.9",
  "sqlx",
  "tokio",
  "url",

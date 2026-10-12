@@ -7,7 +7,12 @@ use std::time::Duration;
 use url::form_urlencoded;
 
 mod database;
+mod demo_evidence;
 pub use database::seed_open_badge_templates;
+pub use demo_evidence::{
+    ags_score_payload, application_payload, send_signed_ags, signed_ags_wire, DemoEvidenceConfig,
+    SignedAgsWire,
+};
 
 #[derive(Clone, Debug)]
 pub struct GatewaySeedConfig {
