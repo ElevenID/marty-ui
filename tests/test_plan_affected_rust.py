@@ -2223,6 +2223,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-auth",
                 "marty-gateway",
                 "marty-applicant",
+                "marty-device-registration",
             },
             "marty-revocation-profile": {
                 "marty-revocation-profile",
@@ -2235,6 +2236,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-auth",
                 "marty-gateway",
                 "marty-applicant",
+                "marty-device-registration",
             },
         }
         for producer, expected in expected_observed_closure.items():
@@ -2682,6 +2684,51 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "marty-applicant",
             },
         )
+
+    def test_device_registration_trust_profile_edge_is_source_backed_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        device_dependencies = {
+            dep["name"] for dep in packages["marty-device-registration"]["dependencies"]
+        }
+        compose = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
+        device_environment = compose["services"]["device-registration"]["environment"]
+        producer = "marty-trust-profile"
+        result = planner.plan(
+            [Path(packages[producer]["manifest_path"]).relative_to(ROOT).as_posix()],
+            metadata,
+            ROOT,
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == producer
+            and edge["package"] == "marty-device-registration"
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertNotIn(producer, device_dependencies)
+        self.assertEqual(
+            device_environment["TRUST_PROFILE_SERVICE_URL"],
+            "http://trust-profile:8004",
+        )
+        for marker, source in (
+            ("binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("request_auth_marker", "request_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                text = (ROOT / edge[source]).read_text(encoding="utf-8")
+                self.assertIn(edge[marker], text)
 
     def test_signing_keys_issuer_resolution_consumers_are_observed_only(self) -> None:
         metadata = planner.cargo_metadata()
