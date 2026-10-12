@@ -1226,9 +1226,9 @@ assembled Core matrix is still due.
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
 | K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core #355 is merged and signed v0.2.2 wheels are qualified. UI #1192 head `f6e434a30` and Credentials #313 head `7370b33` pin the merged Core revision; Credentials exact-head CI passed. The reconciled Rust-only UI bootstrap and source-built images passed fresh assembled-schema qualification. Current UI exact-head CI and published-image proof remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed. Provider adapters pin AWS/Azure/GCP key versions and check provider response identities; real cloud key/certificate acceptance remains. Seven origin-specific non-exportable HMAC keys, scoped grant mint/verify policies, one-use Redis consumption and Gateway/Flow/Issuance producers are implemented. Signing Keys binds the consumed grant to the selected remote key and exact bytes before KMS use. Exact-head CI, installed-image qualification and real-provider acceptance remain. |
-| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required, and Python gRPC runtime is disabled. Draft Credentials #313 head `7370b33` removes the unused marty-common harness and old wheel installer, pins merged Core 0.2.2 `f0819fa`, and passed local Python/native/WASM graph checks plus exact-head CI `38189186584`. Published artifact inspection and native UI cutover remain. |
+| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required, and Python gRPC runtime is disabled. Credentials #313 head `7370b33` removes the unused marty-common harness and old wheel installer, pins merged Core 0.2.2 `f0819fa`, and passed local Python/native/WASM graph checks plus exact-head CI `38189186584`; it is ready for review, with one approval required by main protection. Published artifact inspection and native UI cutover remain release gates. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 head `f6e434a30` passed exact-head CI `38205991904` with all 22 jobs successful, including Canvas, OpenBao plugin/recovery and service images. A local Rust verify-only connectivity correction and shared release-probe gate passed focused tests and a fresh disposable assembled-stack run; these await the next grouped push and exact-head CI. Published artifacts, real cloud, physical device and final cross-PR review remain. |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203 and Core #355 are merged. Core v0.2.2 release signatures, attestations and installation are qualified. Credentials #313 passed exact-head CI and remains draft; UI #1192 remains draft after all 22 exact-head CI jobs passed at `f6e434a30`. The locally qualified Rust bootstrap correction is held for one grouped push after that run. Final UI CI, both consumer merges, installed stack, real providers, physical device, clean cutover and recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203 and Core #355 are merged. Core v0.2.2 release signatures, attestations and installation are qualified. Credentials #313 passed exact-head CI and is ready for protected review; UI #1192 remains draft at `dbdd664d5`; the prior head `f6e434a30` passed all 22 CI jobs and current-head run `38209421840` is active. The grouped Rust bootstrap correction is pushed with local source-built proof. Final UI CI, both consumer merges, installed stack, real providers, physical device, clean cutover and recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. A source-built Rust verify-only probe also passed reachable, unreachable and unchanged-catalog cases. Exact signed-image execution, final representative writes and supported cutover remain. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
@@ -17031,17 +17031,29 @@ beta/self-host stack was changed for this review.
 K7 feature-loss self-review of Credentials #313 head `7370b33`: its retired
 private-key-driven Behave files contain 67 scenarios across credential
 issuance/verification, SD-JWT disclosures, W3C VC structure, Open Badges,
-OID4VP, ZK proofs, revocation and lifecycle behavior. These manual scenarios
-were outside current Credentials CI, but deletion still requires assertion
-coverage review. Exact merged Core `f0819fa` contains candidate public-only
+OID4VP, ZK proofs, revocation and lifecycle behavior. The exact Credentials
+main tree has only those five `.feature` files under `tests/features` and no
+Behave step definitions, so the 67 scenarios were inert specification text
+rather than executable regression coverage. Their deletion still merits a
+supported-feature review. Exact merged Core `f0819fa` contains candidate public-only
 replacements: `ietf_selective_disclosure_hides_claims_and_binds_each_hash`
 and `verified_presentation_rejects_invalid_issuer_signature` in
 `marty-oid4vci`, VC-JWT public-key/tamper checks in `marty-verification::vcdm`,
 signed OB3 structure/verification vectors in `open_badges_conformance`, and
 `round_trip_age_over_18`/`verify_rejects_wrong_transcript` in `marty-zkp`.
 Those named tests exist at the exact Core release commit; their presence is
-not a complete 67-scenario equivalence proof. Before Credentials #313 leaves
-draft, finish the scenario-to-native-test map, especially cross-format
-interoperability, revocation/lifecycle and issuer-side Open Badge/SD-JWT
-assertions, and run any missing cases through remote KMS or public vectors.
+not a complete supported-feature proof. Continue the scenario-to-native-test
+review for cross-format interoperability, revocation/lifecycle and issuer-side
+Open Badge/SD-JWT assertions in the UI release gate; run missing executable
+cases through remote KMS or public vectors. The inert Behave files themselves
+need not block the protected Credentials code merge after its green exact-head
+checks and final PR review.
 Do not restore local private-key fixtures to make the old Behave suite run.
+
+Credentials #313 was marked ready for protected review at exact head
+`7370b332ea69fa414ee5c1d3d022947f753c9c91` after its 11/11 green CI run,
+green required dependency/policy/workflow checks, clean diff, current-main
+ancestry, and the inert-Behave self-review above. Its PR description now
+separates merge readiness from signed-artifact and native-UI release gates.
+Credentials main requires one approving review, which has not been recorded;
+do not bypass that protection. The UI stack release lock remains `hold`.
