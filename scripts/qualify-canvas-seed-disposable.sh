@@ -50,6 +50,12 @@ validate_disposable_endpoints() {
     [[ "$(env_value CANVAS_INTEROPERABILITY_BADGE_VCT)" == "http://localhost:5173/credentials/canvas-interoperability-foundations-badge" ]] || {
       echo "Open Badge VCT must target the disposable local UI" >&2; exit 2;
     }
+    [[ "$(env_value KC_HOSTNAME_PORT)" == "18180" && "$(env_value OIDC_ISSUER_URL_EXTERNAL)" == "http://localhost:18180/realms/11id" ]] || {
+      echo "OIDC issuer must target the disposable local Keycloak" >&2; exit 2;
+    }
+    [[ "$(env_value OIDC_REDIRECT_URI)" == "http://localhost:5173/v1/auth/callback" && "$(env_value OIDC_POST_LOGOUT_REDIRECT_URI)" == "http://localhost:5173/" ]] || {
+      echo "OIDC redirect URIs must target the disposable local UI" >&2; exit 2;
+    }
     [[ "$(env_value PUBLIC_API_URL)" == "http://gateway:8000" ]] || {
       echo "PUBLIC_API_URL must be http://gateway:8000" >&2; exit 2;
     }
@@ -68,6 +74,19 @@ validate_disposable_endpoints() {
     fi
 }
 
+require_dedicated_daemon() {
+  local container_id owner
+  local containers
+  containers="$(docker ps -q)"
+  for container_id in $containers; do
+    owner="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$container_id")"
+    [[ "$owner" == "$project" ]] || {
+      echo "Refusing to start Canvas on a Docker daemon with another running project" >&2
+      exit 2
+    }
+  done
+}
+
 case "$action" in
   config)
     "${compose[@]}" config --quiet
@@ -76,6 +95,7 @@ case "$action" in
   up)
     validate_disposable_endpoints
     "${compose[@]}" config --quiet
+    require_dedicated_daemon
     "${compose[@]}" up --build -d gateway issuance signing-keys canvas-real canvas-sandbox issuance-canvas-localhost-bridge
     ;;
   seed)
