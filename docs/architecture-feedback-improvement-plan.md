@@ -427,6 +427,18 @@ and 602 successful Canvas timing rows in each run, then merged as
 `2300a8582d`. Its exact preflight-test source selector has no measured
 scoped-PR saving yet.
 
+Facts/retry current-input follow-up (2026-10-12 candidate): the two thin
+`run_canvas_worker_{facts,retry}_oracle.py` producers inherit the independently
+guarded REST capture inputs and add only their two scripts and two scenario
+files. One overlay pins those four normalized source hashes; its test first
+validates the inherited REST evidence against current source, then requires
+the exact union of both computed wrapper import, child, and transitive
+scenario closures plus the mounted preparer/trust inputs. Focused local
+tests and independent review cleared the candidate. This is current-source
+drift detection, not historical capture-source attestation, complete image
+or runtime closure, or permission to skip reference qualification. Protected
+CI and main merge remain pending.
+
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
 ### A6-A7: rollout and fast feedback
