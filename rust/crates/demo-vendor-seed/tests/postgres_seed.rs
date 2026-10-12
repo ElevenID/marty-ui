@@ -67,9 +67,14 @@ async fn case(
     exec(&mut admin, &format!("CREATE DATABASE {name}")).await;
     let mut url = base.clone();
     url.set_path(&format!("/{name}"));
-    let result = run_case(&url, optional_tables, optional_columns, rollback).await;
+    // A task panic is reported only after the disposable database has been removed.
+    let result =
+        tokio::spawn(
+            async move { run_case(&url, optional_tables, optional_columns, rollback).await },
+        )
+        .await;
     exec(&mut admin, &format!("DROP DATABASE {name} WITH (FORCE)")).await;
-    result.unwrap();
+    result.unwrap().unwrap();
 }
 
 async fn run_case(
@@ -209,6 +214,11 @@ async fn run_case(
 #[tokio::test]
 async fn postgres_first_second_optional_and_rollback() {
     let Some(base) = test_url() else {
+        assert_ne!(
+            env::var("MARTY_DEMO_SEED_TEST_DATABASE_REQUIRED").as_deref(),
+            Ok("1"),
+            "CI requires MARTY_DEMO_SEED_TEST_DATABASE_URL"
+        );
         eprintln!("set MARTY_DEMO_SEED_TEST_DATABASE_URL to run disposable PostgreSQL coverage");
         return;
     };
