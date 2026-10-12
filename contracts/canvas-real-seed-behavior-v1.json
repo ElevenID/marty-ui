@@ -204,5 +204,649 @@
     "demo_application_and_ags",
     "wallet_claim_and_mirror",
     "transition_summary"
-  ]
+  ],
+  "database_seed": {
+    "modern_schema": {
+      "writes": [
+        {
+          "table": "credential_templates",
+          "has_remote_signing_columns": false,
+          "payload": {
+            "id": "ct-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Badge",
+            "description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+            "status": "active",
+            "credential_type": "OpenBadgeCredential",
+            "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "doctype": "org.openbadges.v3",
+            "claims": [
+              {
+                "name": "email",
+                "display_name": "Learner email",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "given_name",
+                "display_name": "Given name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "family_name",
+                "display_name": "Family name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_id",
+                "display_name": "Achievement ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement_name",
+                "display_name": "Achievement",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_description",
+                "display_name": "Achievement description",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_criteria",
+                "display_name": "Achievement criteria",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "badge_image_url",
+                "display_name": "Badge image",
+                "claim_type": "image",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "course_name",
+                "display_name": "Canvas course",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "quiz_name",
+                "display_name": "Canvas quiz",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "score_percent",
+                "display_name": "Score percent",
+                "claim_type": "number",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "completion_date",
+                "display_name": "Completion date",
+                "claim_type": "date",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "institution_name",
+                "display_name": "Institution",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "certificate_id",
+                "display_name": "Certificate ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "organization_id",
+                "display_name": "Issuer organization",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement",
+                "display_name": "Open Badge achievement",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "result",
+                "display_name": "Canvas quiz result",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "learning_context",
+                "display_name": "Canvas learning context",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              }
+            ],
+            "privacy_posture": "selective_disclosure",
+            "selective_disclosure_fields": [
+              "email",
+              "given_name",
+              "family_name",
+              "achievement_name",
+              "achievement_description",
+              "course_name",
+              "quiz_name",
+              "score_percent",
+              "completion_date",
+              "institution_name",
+              "certificate_id",
+              "result",
+              "learning_context"
+            ],
+            "zk_predicate_claims": [],
+            "derived_attributes": [],
+            "display_style": {
+              "background_color": "#0B5F7A",
+              "text_color": "#ffffff",
+              "icon": "award",
+              "logo_url": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg"
+            },
+            "validity_rules": {
+              "duration": "P1Y",
+              "renewal_required": false
+            },
+            "issuer_requirements": {
+              "allowed_issuer_dids": [
+                "did:web:beta.elevenidllc.com:orgs:marty"
+              ],
+              "trust_tier_required": "organization_managed_remote_signing",
+              "audit_level_required": "standard"
+            },
+            "supported_formats": [
+              "sd_jwt_vc"
+            ],
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "wallet_configs": [
+              {
+                "wallet_id": "waltid",
+                "deep_link_scheme": "openid-credential-offer://",
+                "format_variant": null
+              },
+              {
+                "wallet_id": "spruceid",
+                "deep_link_scheme": "spruceid://",
+                "format_variant": "dc+sd-jwt"
+              }
+            ],
+            "key_access_mode": "REMOTE_SIGNING",
+            "issuer_key_id": "cred-issuer-marty-es256",
+            "issuer_algorithm": "ES256",
+            "remote_signing_config": {
+              "provider": "gateway-signing-key-registry",
+              "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
+              "signing_service_id": "managed-openbao-transit",
+              "signing_key_reference": "cred-issuer-marty-es256",
+              "key_purpose": "vc_jwt_issuer",
+              "credential_formats": [
+                "sd_jwt_vc",
+                "jwt_vc_json"
+              ],
+              "secret_boundary": {
+                "issuer_private_key_location": "external_remote_key_store",
+                "beta_elevenidllc_com_private_key_material": "not_present",
+                "canvas_private_key_material": "not_present"
+              },
+              "resolver": {
+                "url": "http://signing-keys:8000/issuer-context",
+                "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
+              }
+            },
+            "version": 1
+          }
+        },
+        {
+          "table": "application_templates",
+          "has_remote_signing_columns": false,
+          "payload": {
+            "id": "at-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Application",
+            "description": "Canvas-started application workflow for the interoperability Open Badge demonstration.",
+            "credential_template_id": "ct-1",
+            "form_fields": [
+              {
+                "name": "email",
+                "label": "Email",
+                "type": "email",
+                "required": true
+              },
+              {
+                "name": "given_name",
+                "label": "Given name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "family_name",
+                "label": "Family name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "course_name",
+                "label": "Canvas course",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "quiz_name",
+                "label": "Canvas quiz",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "score_percent",
+                "label": "Score percent",
+                "type": "number",
+                "required": true
+              }
+            ],
+            "evidence_requirements": [
+              {
+                "id": "canvas-quiz-score",
+                "label": "Canvas quiz score",
+                "evidence_type": "EXTERNAL_FACT",
+                "provider": "canvas",
+                "fact_type": "canvas.quiz_score",
+                "verification_method": "SIGNED_AGS_SCORE",
+                "scope": {},
+                "pass_rule": {
+                  "path": "assertion.score_percent",
+                  "operator": ">=",
+                  "value": 80
+                },
+                "required": true,
+                "auto_issue_on_permit": true
+              }
+            ],
+            "claim_collection_rules": [],
+            "required_checks": [],
+            "approval_strategy": "policy",
+            "approval_policy_set_id": null,
+            "application_validity_days": 30,
+            "auto_approval_rules": [],
+            "ui_config": {
+              "scenario": "canvas_mip_quiz_open_badge",
+              "provider": "canvas",
+              "fact_type": "canvas.quiz_score",
+              "scope": {},
+              "delivery_mode": "wallet_plus_canvas_mirror",
+              "issuer_mode": "org_managed",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "open_badge": {
+                "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+                "name": "Interoperable Credentials Foundations Badge",
+                "image": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+                "criteria": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria"
+              }
+            },
+            "notification_config": {},
+            "status": "active"
+          }
+        }
+      ],
+      "transaction": {
+        "begun": true,
+        "committed": true,
+        "disposed": true
+      }
+    },
+    "legacy_remote_columns": {
+      "writes": [
+        {
+          "table": "credential_templates",
+          "has_remote_signing_columns": true,
+          "payload": {
+            "id": "ct-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Badge",
+            "description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+            "status": "active",
+            "credential_type": "OpenBadgeCredential",
+            "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "doctype": "org.openbadges.v3",
+            "claims": [
+              {
+                "name": "email",
+                "display_name": "Learner email",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "given_name",
+                "display_name": "Given name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "family_name",
+                "display_name": "Family name",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_id",
+                "display_name": "Achievement ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement_name",
+                "display_name": "Achievement",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_description",
+                "display_name": "Achievement description",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "achievement_criteria",
+                "display_name": "Achievement criteria",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "badge_image_url",
+                "display_name": "Badge image",
+                "claim_type": "image",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "course_name",
+                "display_name": "Canvas course",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "quiz_name",
+                "display_name": "Canvas quiz",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "score_percent",
+                "display_name": "Score percent",
+                "claim_type": "number",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "completion_date",
+                "display_name": "Completion date",
+                "claim_type": "date",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "institution_name",
+                "display_name": "Institution",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "certificate_id",
+                "display_name": "Certificate ID",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "organization_id",
+                "display_name": "Issuer organization",
+                "claim_type": "string",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "achievement",
+                "display_name": "Open Badge achievement",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": false
+              },
+              {
+                "name": "result",
+                "display_name": "Canvas quiz result",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              },
+              {
+                "name": "learning_context",
+                "display_name": "Canvas learning context",
+                "claim_type": "object",
+                "required": true,
+                "selectively_disclosable": true
+              }
+            ],
+            "privacy_posture": "selective_disclosure",
+            "selective_disclosure_fields": [
+              "email",
+              "given_name",
+              "family_name",
+              "achievement_name",
+              "achievement_description",
+              "course_name",
+              "quiz_name",
+              "score_percent",
+              "completion_date",
+              "institution_name",
+              "certificate_id",
+              "result",
+              "learning_context"
+            ],
+            "zk_predicate_claims": [],
+            "derived_attributes": [],
+            "display_style": {
+              "background_color": "#0B5F7A",
+              "text_color": "#ffffff",
+              "icon": "award",
+              "logo_url": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg"
+            },
+            "validity_rules": {
+              "duration": "P1Y",
+              "renewal_required": false
+            },
+            "issuer_requirements": {
+              "allowed_issuer_dids": [
+                "did:web:beta.elevenidllc.com:orgs:marty"
+              ],
+              "trust_tier_required": "organization_managed_remote_signing",
+              "audit_level_required": "standard"
+            },
+            "supported_formats": [
+              "sd_jwt_vc"
+            ],
+            "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+            "wallet_configs": [
+              {
+                "wallet_id": "waltid",
+                "deep_link_scheme": "openid-credential-offer://",
+                "format_variant": null
+              },
+              {
+                "wallet_id": "spruceid",
+                "deep_link_scheme": "spruceid://",
+                "format_variant": "dc+sd-jwt"
+              }
+            ],
+            "key_access_mode": "REMOTE_SIGNING",
+            "issuer_key_id": "cred-issuer-marty-es256",
+            "issuer_algorithm": "ES256",
+            "remote_signing_config": {
+              "provider": "gateway-signing-key-registry",
+              "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
+              "signing_service_id": "managed-openbao-transit",
+              "signing_key_reference": "cred-issuer-marty-es256",
+              "key_purpose": "vc_jwt_issuer",
+              "credential_formats": [
+                "sd_jwt_vc",
+                "jwt_vc_json"
+              ],
+              "secret_boundary": {
+                "issuer_private_key_location": "external_remote_key_store",
+                "beta_elevenidllc_com_private_key_material": "not_present",
+                "canvas_private_key_material": "not_present"
+              },
+              "resolver": {
+                "url": "http://signing-keys:8000/issuer-context",
+                "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
+              }
+            },
+            "version": 1
+          }
+        },
+        {
+          "table": "application_templates",
+          "has_remote_signing_columns": false,
+          "payload": {
+            "id": "at-1",
+            "organization_id": "org-1",
+            "name": "Interoperable Credentials Foundations Application",
+            "description": "Canvas-started application workflow for the interoperability Open Badge demonstration.",
+            "credential_template_id": "ct-1",
+            "form_fields": [
+              {
+                "name": "email",
+                "label": "Email",
+                "type": "email",
+                "required": true
+              },
+              {
+                "name": "given_name",
+                "label": "Given name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "family_name",
+                "label": "Family name",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "course_name",
+                "label": "Canvas course",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "quiz_name",
+                "label": "Canvas quiz",
+                "type": "text",
+                "required": true
+              },
+              {
+                "name": "score_percent",
+                "label": "Score percent",
+                "type": "number",
+                "required": true
+              }
+            ],
+            "evidence_requirements": [
+              {
+                "id": "canvas-quiz-score",
+                "label": "Canvas quiz score",
+                "evidence_type": "EXTERNAL_FACT",
+                "provider": "canvas",
+                "fact_type": "canvas.quiz_score",
+                "verification_method": "SIGNED_AGS_SCORE",
+                "scope": {
+                  "course_id": "42",
+                  "quiz_id": "9"
+                },
+                "pass_rule": {
+                  "path": "assertion.score_percent",
+                  "operator": ">=",
+                  "value": 80
+                },
+                "required": true,
+                "auto_issue_on_permit": true
+              }
+            ],
+            "claim_collection_rules": [],
+            "required_checks": [],
+            "approval_strategy": "policy",
+            "approval_policy_set_id": null,
+            "application_validity_days": 30,
+            "auto_approval_rules": [],
+            "ui_config": {
+              "scenario": "canvas_mip_quiz_open_badge",
+              "provider": "canvas",
+              "fact_type": "canvas.quiz_score",
+              "scope": {
+                "course_id": "42",
+                "quiz_id": "9"
+              },
+              "delivery_mode": "wallet_plus_canvas_mirror",
+              "issuer_mode": "org_managed",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "open_badge": {
+                "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+                "name": "Interoperable Credentials Foundations Badge",
+                "image": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+                "criteria": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria"
+              }
+            },
+            "notification_config": {},
+            "status": "active"
+          }
+        }
+      ],
+      "transaction": {
+        "begun": true,
+        "committed": true,
+        "disposed": true
+      }
+    }
+  }
 }

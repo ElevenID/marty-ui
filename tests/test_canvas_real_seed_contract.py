@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,3 +88,66 @@ def capture(monkeypatch) -> dict:
 def test_frozen_gateway_seed_behavior(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture(monkeypatch) == contract["gateway_seed"]
+
+
+def capture_database(monkeypatch, *, remote_columns: bool, scope: dict) -> dict:
+    writes = []
+    transaction = {"begun": False, "committed": False, "disposed": False}
+
+    class Connection:
+        async def scalar(self, query, params):
+            if "to_regclass" in query:
+                return True
+            assert "information_schema.columns" in query
+            return remote_columns
+
+        async def execute(self, query, params):
+            assert "ON CONFLICT (id) DO UPDATE" in query
+            values = dict(params)
+            for key in (
+                "claims", "selective_disclosure_fields", "zk_predicate_claims",
+                "derived_attributes", "display_style", "validity_rules",
+                "issuer_requirements", "supported_formats", "wallet_configs",
+                "remote_signing_config", "form_fields", "evidence_requirements",
+                "claim_collection_rules", "required_checks", "auto_approval_rules",
+                "ui_config", "notification_config",
+            ):
+                if key in values:
+                    values[key] = json.loads(values[key])
+            writes.append({
+                "table": "credential_templates" if "credential_template_service.credential_templates" in query else "application_templates",
+                "has_remote_signing_columns": "remote_signing_config, version" in query,
+                "payload": values,
+            })
+
+    class Transaction:
+        async def __aenter__(self):
+            transaction["begun"] = True
+            return Connection()
+
+        async def __aexit__(self, error_type, _error, _traceback):
+            transaction["committed"] = error_type is None
+
+    class Engine:
+        def begin(self):
+            return Transaction()
+
+        async def dispose(self):
+            transaction["disposed"] = True
+
+    sqlalchemy = types.ModuleType("sqlalchemy")
+    sqlalchemy.text = lambda sql: sql
+    ext = types.ModuleType("sqlalchemy.ext")
+    ext_asyncio = types.ModuleType("sqlalchemy.ext.asyncio")
+    ext_asyncio.create_async_engine = lambda *_args, **_kwargs: Engine()
+    monkeypatch.setitem(sys.modules, "sqlalchemy", sqlalchemy)
+    monkeypatch.setitem(sys.modules, "sqlalchemy.ext", ext)
+    monkeypatch.setitem(sys.modules, "sqlalchemy.ext.asyncio", ext_asyncio)
+    asyncio.run(seed._seed_canvas_open_badge_templates_async(config(), canvas_scope=scope))
+    return {"writes": writes, "transaction": transaction}
+
+
+def test_frozen_badge_template_database_behavior(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_database(monkeypatch, remote_columns=False, scope={}) == contract["database_seed"]["modern_schema"]
+    assert capture_database(monkeypatch, remote_columns=True, scope={"course_id": "42", "quiz_id": "9"}) == contract["database_seed"]["legacy_remote_columns"]
