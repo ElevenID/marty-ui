@@ -14,9 +14,15 @@ services:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
-      - integration_secret_master_key
+      - signing_keys_issuer_sign_key
       - token_hmac_key
       - grpc_service_token
+      - didcomm_issuance_openbao_token
+      - sign_grant_mint_issuance_credential_token
+      - sign_grant_mint_issuance_canvas_token
+      - sign_grant_mint_issuance_readiness_token
+      - sign_grant_mint_issuance_passport_token
+      - workload_identity_ca_cert
   issuance-native:
     environment:
       CANVAS_PORTABLE_INTEGRATION_ENABLED: "false"
@@ -26,6 +32,13 @@ services:
     secrets: !override
       - marty_db_password
       - issuance_api_key
-      - integration_secret_master_key
+      - signing_keys_issuer_sign_key
+      - signing_keys_integration_secret_key
       - token_hmac_key
       - grpc_service_token
+      - didcomm_issuance_openbao_token
+      - sign_grant_mint_issuance_credential_token
+      - sign_grant_mint_issuance_canvas_token
+      - sign_grant_mint_issuance_readiness_token
+      - sign_grant_mint_issuance_passport_token
+      - workload_identity_ca_cert
