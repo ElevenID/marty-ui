@@ -670,13 +670,20 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
                for artifact in component["artifacts"])
 
 
-def test_verifier_release_lineage_is_held_until_core_wheels_are_hardened() -> None:
+def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.244"
-    assert lock["release_state"] == "hold"
-    with pytest.raises(stack_tag_gate.StackTagGateError, match="release_state"):
+    assert lock["release"] == "marty-ui@1.1.245"
+    assert lock["release_state"] == "eligible"
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.245")
+    release_tag = "v" + lock["release"].removeprefix("marty-ui@")
+    cutover_guide = _text("docs/rust-migrations/passport-postdeletion-beta-cutover.md")
+    assert (
+        f"gh workflow run passport-beta-rust-readiness.yml --ref {release_tag}"
+        in cutover_guide
+    )
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
     assert components["marty-integration-tests"]["version"] == "1.2.84"
@@ -1038,13 +1045,13 @@ def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     assert "actions: read" in workflow
 
 
-def test_stack_tag_and_release_require_explicit_eligibility() -> None:
+def test_stack_tag_and_release_require_the_reviewed_eligibility_lock() -> None:
     workflow = _text(".github/workflows/cd.yml")
     prepare = _text(".github/workflows/prepare-stack-tag.yml")
     lock = json.loads(_text("release/stack-lock.json"))
     example_lock = json.loads(_text("release/stack-lock.example.json"))
 
-    assert lock["release_state"] == "hold"
+    assert lock["release_state"] == "eligible"
     assert example_lock["release_state"] == "hold"
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "--repository ." in prepare
