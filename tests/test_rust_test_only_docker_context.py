@@ -83,6 +83,7 @@ DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
     "services/Dockerfile.migrations": ".dockerignore",
+    "docker/canvas-sandbox/Dockerfile": ".dockerignore",
     "rust/services/event-stream/Dockerfile": ".dockerignore",
     "rust/services/revocation-profile/Dockerfile": ".dockerignore",
     "rust/services/signing-keys/Dockerfile": ".dockerignore",
