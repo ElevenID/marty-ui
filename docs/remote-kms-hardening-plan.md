@@ -17337,3 +17337,45 @@ The full affected-Rust planner test file passed locally: 51 tests, 440
 subtests, one existing skip. The prior run is evidence for its old head only;
 the grouped merge requires fresh exact-head checks. The stack lock remains
 `hold`.
+
+2026-10-12 current-head local OpenBao check: while UI #1192 exact-head CI
+`38239823709` runs on `5053cfa32`, the disposable clean self-host Raft
+bootstrap probe passed again with local source-built plugin image
+`sha256:b6f7070d0bda9a00069239813d48dd6aba73efcbccbd89c6d5941bb00e689d07`.
+It initialized fresh Raft state, mounted the DIDComm plugin, exercised scoped
+secret custody and cleaned its containers and volumes. This is local image
+evidence only; signed published-image installation and cutover remain open.
+The superseded UI CI run `38237293806` was canceled after the current run
+was created. Credentials #313 has protected auto-merge enabled but still
+requires its approving review. Keep `release_state: hold`.
+
+2026-10-12 local recovery replay on the current UI source: the disposable
+`scripts/test_openbao_raft_recovery.ps1` completed its live Raft export,
+cold restore and fresh-cluster snapshot restore against the local plugin
+image above. This strengthens the local OpenBao recovery evidence but does
+not exercise the signed published image, coordinated PostgreSQL cutover or
+production recovery procedure. The current exact-head CI remains the merge
+gate; keep the stack release on hold.
+
+2026-10-12 local HA replay on the current UI source: the disposable
+three-voter OpenBao DIDComm probe passed active/standby forwarding,
+versioned rotation and leader failover with the same local plugin image.
+This verifies the source-built backend's HA behavior, not the eventual
+signed image or installed stack.
+
+2026-10-12 UI protected merge readiness: exact-head CI `38239823709`
+completed successfully on `5053cfa32` with all 22 jobs, including the
+plugin/coordinated recovery, Canvas, Rust image, contracts and CI Gate jobs.
+CodeQL Rust/Actions, organization quality and policy also passed on that
+exact head. The two automated wallet review threads were audited against
+the current loopback-origin and stale-scope guards plus their regression
+tests, then resolved. GitHub changed #1192 from `BLOCKED` to `CLEAN` and
+automatically placed it in the protected merge queue (position 2 at the
+observation). The source PR is not merged yet. Release lock stays `hold`.
+
+Queue follow-up: #1192 reports `UNMERGEABLE` behind #1292. A read-only
+`git merge-tree --write-tree` of #1292's head `2f84aac21` and the exact
+#1192 head identifies three content conflicts: the architecture feedback
+plan and two Canvas CI test files. Do not skip the queue. Reconcile the
+protected `main` result of #1292 once it lands, run focused local tests,
+then publish one grouped #1192 correction for fresh exact-head checks.
