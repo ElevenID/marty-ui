@@ -1717,6 +1717,16 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert not steps[name].get("continue-on-error", False)
     live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
     assert "csca_lifecycle_storage_contract:2" in live_signing
+    assert "managed_key_create_live_contract:5" in live_signing
+    assert "document_storage_contract:1" in live_signing
+    assert "service_rotation_live_contract" not in live_signing
+    assert "vdsnc_registration_live_contract" not in live_signing
+    live_openbao = steps[
+        "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
+    ]["run"]
+    for suite in ("service_rotation_live_contract", "vdsnc_registration_live_contract"):
+        assert f"--test {suite}" in live_openbao
+    assert "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE" in live_openbao
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
     ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"

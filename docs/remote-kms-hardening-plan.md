@@ -17486,3 +17486,21 @@ four failures from a missing migrations Docker exclusion; that exact
 exclusion was added and all four focused failures then passed. The disposable
 Redis container was stopped. Full exact-head hosted checks are still needed
 after one grouped push; stack release remains `hold`.
+
+2026-10-12 UI #1192 exact-head CI follow-up: run `38261847276` on
+`0caf2caa7` failed its Rust contracts job when the Redis-only Signing Keys
+step invoked `service_rotation_live_contract` before setting the disposable
+OpenBao URL, token, sentinel, and envelope key. Both cases failed at the
+required `MARTY_TEST_OPENBAO_URL` guard; the other CI jobs were still active
+at this observation. The later OpenBao-provisioned step already executes
+both rotation cases and both VDS-NC registration cases with a live sentinel
+and Transit envelope key. A local correction removes their duplicate early
+Redis-only invocation while retaining the three Redis-only suites and the
+four later OpenBao-backed cases; it also removes a redundant Redis URL
+assignment. Workflow assertions now pin this separation. All 148 workflow
+performance tests passed locally; YAML parsing, Ruff and diff checks passed.
+An owned disposable pinned Redis container then ran the exact early-loop
+suites: managed-key creation 5/5, CSCA lifecycle/storage 2/2, and document
+storage 1/1. The container was removed after the run.
+Preserve the failing run, inspect remaining jobs, then publish this grouped
+correction for fresh exact-head CI. The stack release remains `hold`.
