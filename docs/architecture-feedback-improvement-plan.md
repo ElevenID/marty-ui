@@ -442,15 +442,27 @@ and [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/ru
 including the Canvas service and release-contract gates, then merged as
 `eb7cdd0bb`.
 
-REST-dependent current-input follow-up (2026-10-12 local candidate): the
+REST-dependent current-input follow-up (2026-10-12): the
 provider-signals, roster-failure, and validation producers share the REST and
 startup graph. A single overlay inherits the ten guarded REST inputs and pins
 seven additional current inputs, including the shared retry scenario. Its test
 requires the exact union of all three producers' static script and transitive
 scenario closures plus mounted preparer/trust inputs. It does not attest their
 historical observations, qualify an image or runtime, or reduce live oracle
-coverage. The rebased local candidate passed 216 focused tests and independent
-review; protected CI remains pending.
+coverage. [UI #1285](https://github.com/ElevenID/marty-ui/pull/1285)
+passed 216 focused local tests, independent review, full PR CI and protected
+combined-head CI, then merged as `94e5640bb`. No CI speedup is attributed to
+the evidence guard.
+
+Timeout current-input follow-up (2026-10-12 local candidate): the delayed-header
+and body-inactivity historical producers now have one exact current-input
+record covering their static script/import and transitive scenario union, plus
+the mounted preparer and trust fixture. The release-owned test fails on source
+drift, a newly reached helper/scenario or a removed mounted input. It does not
+attest the historical corpora, prove runtime compatibility, or authorize any
+test skip. All routine and full timeout obligations remain unchanged. The 33
+focused input tests and 180 combined workflow-policy/input tests pass locally;
+hosted and protected CI remain pending, with no claimed runtime saving.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
