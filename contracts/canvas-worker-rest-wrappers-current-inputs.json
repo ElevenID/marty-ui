@@ -1,0 +1,12 @@
+{
+  "schema": "marty.canvas-worker-rest-wrappers-current-inputs/v1",
+  "purpose": "Guard current facts and retry REST-wrapper capture inputs only; do not attest historical facts or retry corpora or authorize qualification reuse.",
+  "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+  "inherited_inputs": "contracts/canvas-worker-rest-current-inputs.json",
+  "sha256": {
+    "contracts/canvas-worker-facts-scenarios.json": "0e5dc7b4a8335faa31f0c9b87eba87e4594814da49c862ef9ff47066efa70eca",
+    "contracts/canvas-worker-retry-scenarios.json": "77d186577a5ec9972f8b61747d9fed807280dd1e2825df5e8c6b222f01ac09c9",
+    "scripts/run_canvas_worker_facts_oracle.py": "b71515c6e7a640af94408bc7ebe9ee80656e6da873e9c89f0348253f43b8493e",
+    "scripts/run_canvas_worker_retry_oracle.py": "72f75ded63fbf1228a00d4ca370b3c28e9c2100442f6328fe5c275ccefb73ac3"
+  }
+}

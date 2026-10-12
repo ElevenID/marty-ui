@@ -1740,6 +1740,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
+            "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
             "tests/test_canvas_worker_startup_input_evidence.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
@@ -1747,9 +1748,16 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",
+            "contracts/canvas-worker-rest-wrappers-current-inputs.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
+            "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
+        },
+        "canvas-worker-rest-wrappers-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
+            "tests/test_ci_workflow_performance.py",
         },
         "canvas-json-depth-current-inputs.json": {
             ".github/workflows/ci.yml",
@@ -1845,6 +1853,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
+        "contracts/canvas-worker-rest-wrappers-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
@@ -1852,6 +1861,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
+        "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
         "tests/test_canvas_json_depth_current_inputs.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
@@ -1947,6 +1957,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     )
     paths = (
         "tests/test_canvas_worker_startup_input_evidence.py",
+        "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_validation_tier.py",
         "tests/test_python_value_fast_obligations.py",
@@ -1974,6 +1985,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     # inputs that the tests inspect; mixed/unknown edits also fail closed.
     for path in (
         "contracts/canvas-worker-startup-current-inputs.json",
+        "contracts/canvas-worker-rest-wrappers-current-inputs.json",
         "contracts/canvas-worker-retry-after-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
@@ -2015,6 +2027,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
         "tests/test_canvas_json_depth_current_inputs.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
+        "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
     }

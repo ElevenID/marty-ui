@@ -70,7 +70,7 @@ def assert_current_inputs(
     graph: dict,
     root: Path,
     *,
-    entrypoint: str,
+    entrypoint: str | tuple[str, ...],
     schema: str,
     label: str,
     disclaimer: str,
@@ -86,6 +86,13 @@ def assert_current_inputs(
         assert Path(name).as_posix() == name and ".." not in Path(name).parts
         assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
         assert normalized_sha256(root / name) == pinned, f"{label} input drift: {name}"
-    assert set(evidence["sha256"]) == (
-        expanded_inputs(graph, entrypoint, root) | additional_inputs
-    ), f"{label} script, local imports, children, and scenarios need input review"
+    entrypoints = (entrypoint,) if isinstance(entrypoint, str) else entrypoint
+    assert entrypoints and len(entrypoints) == len(set(entrypoints)), (
+        f"{label} producer entries need input review"
+    )
+    expected = set(additional_inputs)
+    for producer in entrypoints:
+        expected.update(expanded_inputs(graph, producer, root))
+    assert set(evidence["sha256"]) == expected, (
+        f"{label} script, local imports, children, and scenarios need input review"
+    )
