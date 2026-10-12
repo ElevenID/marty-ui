@@ -47,6 +47,33 @@ WORKER_TEST_FILES = (
     "support/canvas_startup_attestation.rs",
     "support/canvas_worker_roster_metadata.rs",
 )
+CANVAS_COMPOSITION_TEST_ROOT = "rust/crates/canvas-acceptance/tests/"
+CANVAS_COMPOSITION_TEST_FILES = (
+    "canvas_published_schema_contract.rs",
+    "support/base_runtime_canvas.rs",
+    "support/base_runtime_container.rs",
+    "support/base_runtime_didcomm.rs",
+    "support/base_runtime_gateway.rs",
+    "support/base_runtime_ordinary.rs",
+    "support/base_runtime_redis.rs",
+    "support/didcomm_composed_delivery.rs",
+    "support/didcomm_fresh_initiation.rs",
+    "support/didcomm_gateway_replay.rs",
+    "support/didcomm_renewal_canvas.rs",
+    "support/didcomm_renewal_composed.rs",
+    "support/didcomm_unkeyed_grpc_initiation.rs",
+    "support/owned_cleanup.rs",
+    "support/remote_didcomm_sender.rs",
+    "support/rendered_base_process.rs",
+    "support/renewal_binding_postgres.rs",
+    "support/renewal_canvas_binding.rs",
+    "support/renewal_fresh_main.rs",
+    "support/renewal_gateway_replay.rs",
+    "support/renewal_main_replay.rs",
+    "support/resolved_kubernetes_runtime.rs",
+    "support/resolved_runtime.rs",
+    "support/runtime_failure_diagnostics.rs",
+)
 FLOW_TEST_ROOT = "rust/crates/flow-acceptance/tests/"
 FLOW_TEST_FILES = (
     "flow_published_schema_contract.rs",
@@ -436,6 +463,104 @@ def test_worker_acceptance_test_tree_stays_out_of_all_release_rust_contexts() ->
     assert not _is_ignored(WORKER_TEST_ROOT + "support/unreviewed.rs", root_lines)
 
 
+def test_canvas_composition_test_tree_stays_out_of_release_rust_contexts() -> None:
+    paths = [
+        CANVAS_COMPOSITION_TEST_ROOT + name for name in CANVAS_COMPOSITION_TEST_FILES
+    ]
+    assert _tracked_paths(ROOT, CANVAS_COMPOSITION_TEST_ROOT) == paths
+    for path in paths:
+        assert (ROOT / path).is_file() and not (ROOT / path).is_symlink()
+        assert _tracked_regular_mode(ROOT, path)
+    manifest = tomllib.loads(
+        (ROOT / "rust/crates/canvas-acceptance/Cargo.toml").read_text(encoding="utf-8")
+    )
+    assert manifest["package"]["name"] == "marty-canvas-acceptance"
+    assert manifest["package"]["autotests"] is False
+    assert "build" not in manifest["package"]
+    assert manifest["test"] == [
+        {
+            "name": "canvas_published_schema_contract",
+            "path": "tests/canvas_published_schema_contract.rs",
+        }
+    ]
+    consumers = _ownership_sources(
+        ROOT, tuple(Path(name).name for name in CANVAS_COMPOSITION_TEST_FILES)
+    )
+    # Other acceptance targets may reference a shared test-only support leaf.
+    # A production source consumer must still force a context review.
+    assert all("/tests/" in path for path in consumers), (
+        f"Review a Canvas composition test source consumer: {sorted(consumers)}"
+    )
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for dockerfile in DOCKER_CONTEXTS:
+        recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
+        assert "--cfg test" not in recipe
+        assert "--all-targets" not in recipe
+        assert "cargo test" not in recipe
+    build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "cargo build --locked --release" in build_script
+    assert "--cfg test" not in build_script and "--all-targets" not in build_script
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for path in paths:
+            assert _is_ignored(path, lines), (
+                f"Docker COPY includes {ignore_path}: {path}"
+            )
+            if ignore_path in {
+                ".dockerignore",
+                "services/Dockerfile.migrations.dockerignore",
+            }:
+                assert lines.count(path) == 1
+        for production_path in PRODUCTION_INPUTS:
+            assert not _is_ignored(production_path, lines)
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(
+        CANVAS_COMPOSITION_TEST_ROOT + "support/unreviewed.rs", root_lines
+    )
+
+
+def test_canvas_composition_context_proof_rejects_reincluded_test(monkeypatch) -> None:
+    import pytest
+
+    original = Path.read_text
+    target = CANVAS_COMPOSITION_TEST_ROOT + CANVAS_COMPOSITION_TEST_FILES[0]
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+
+        def with_reincluded_test(path: Path, *args, **kwargs) -> str:
+            source = original(path, *args, **kwargs)
+            if path == ROOT / ignore_path:
+                return source + "\n!" + target + "\n"
+            return source
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", with_reincluded_test)
+            with pytest.raises(AssertionError, match="Docker COPY includes"):
+                test_canvas_composition_test_tree_stays_out_of_release_rust_contexts()
+
+
+def test_canvas_composition_context_proof_rejects_runtime_consumer(monkeypatch) -> None:
+    import pytest
+
+    original = _ownership_sources
+
+    def with_runtime_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
+        result = original(root, names)
+        if "canvas_published_schema_contract.rs" in names:
+            return {
+                **result,
+                "rust/services/issuance/src/lib.rs": 'include!("canvas_published_schema_contract.rs")',
+            }
+        return result
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "_ownership_sources", with_runtime_consumer
+    )
+    with pytest.raises(AssertionError, match="Canvas composition test source consumer"):
+        test_canvas_composition_test_tree_stays_out_of_release_rust_contexts()
+
+
 def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> None:
     assert _tracked_paths(ROOT, FLOW_TEST_ROOT) == [
         FLOW_TEST_ROOT + name for name in FLOW_TEST_FILES
@@ -450,9 +575,7 @@ def test_flow_acceptance_test_tree_stays_out_of_all_release_rust_contexts() -> N
             f"Flow test must have a regular Git index mode: {path}"
         )
     manifest = tomllib.loads(
-        (ROOT / "rust/crates/flow-acceptance/Cargo.toml").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "rust/crates/flow-acceptance/Cargo.toml").read_text(encoding="utf-8")
     )
     assert manifest["package"]["autotests"] is False
     assert "build" not in manifest["package"]
@@ -559,7 +682,9 @@ def test_selfhost_context_proof_rejects_reincluded_test(monkeypatch) -> None:
         def with_reincluded_test(path: Path, *args, **kwargs) -> str:
             source = original(path, *args, **kwargs)
             if path == ROOT / ignore_path:
-                return source + "\n!" + SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0] + "\n"
+                return (
+                    source + "\n!" + SELFHOST_TEST_ROOT + SELFHOST_TEST_FILES[0] + "\n"
+                )
             return source
 
         with monkeypatch.context() as patch:
@@ -597,13 +722,20 @@ def test_verified_selfhost_test_paths_require_six_context_proof() -> None:
         capture_output=True,
     )
     assert result.stderr == b""
-    assert result.stdout == b"\0".join(
-        (SELFHOST_TEST_ROOT + name).encode("utf-8") for name in SELFHOST_TEST_FILES
-    ) + b"\0"
+    assert (
+        result.stdout
+        == b"\0".join(
+            (SELFHOST_TEST_ROOT + name).encode("utf-8") for name in SELFHOST_TEST_FILES
+        )
+        + b"\0"
+    )
 
 
 def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
-    paths = [SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS]
+    paths = [
+        SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs"
+        for name in SERVICE_ACCEPTANCE_TARGETS
+    ]
     assert _tracked_paths(ROOT, SERVICE_ACCEPTANCE_TEST_ROOT) == sorted(paths)
     for path in paths:
         assert (ROOT / path).is_file() and not (ROOT / path).is_symlink()
@@ -618,9 +750,9 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
         {"name": name, "path": f"tests/{name}.rs"}
         for name in SERVICE_ACCEPTANCE_TARGETS
     ]
-    assert not _ownership_sources(ROOT, tuple(name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS)), (
-        "Review a Rust source include of a service-acceptance target"
-    )
+    assert not _ownership_sources(
+        ROOT, tuple(name + ".rs" for name in SERVICE_ACCEPTANCE_TARGETS)
+    ), "Review a Rust source include of a service-acceptance target"
     assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
     for dockerfile in DOCKER_CONTEXTS:
         recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
@@ -635,7 +767,9 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
     for ignore_path in set(DOCKER_CONTEXTS.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
         for path in paths:
-            assert _is_ignored(path, lines), f"Docker COPY includes {ignore_path}: {path}"
+            assert _is_ignored(path, lines), (
+                f"Docker COPY includes {ignore_path}: {path}"
+            )
             if ignore_path == ".dockerignore":
                 assert lines.count(path) == 1
         for path in PRODUCTION_INPUTS:
@@ -644,7 +778,9 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
     assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "unreviewed.rs", root_lines)
 
 
-def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context() -> None:
+def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context() -> (
+    None
+):
     paths = [SIGNING_CSCA_TEST_ROOT + name for name in SIGNING_CSCA_TEST_FILES]
     assert all(_tracked_regular_mode(ROOT, path) for path in paths)
     manifest = tomllib.loads(
@@ -670,7 +806,9 @@ def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
     for ignore_path in set(DOCKER_CONTEXTS.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
         for path in paths:
-            assert _is_ignored(path, lines), f"Docker COPY includes {ignore_path}: {path}"
+            assert _is_ignored(path, lines), (
+                f"Docker COPY includes {ignore_path}: {path}"
+            )
             if ignore_path == ".dockerignore":
                 assert lines.count(path) == 1
         for production_path in PRODUCTION_INPUTS:
@@ -703,10 +841,14 @@ def test_signing_csca_target_proof_rejects_production_consumer(monkeypatch) -> N
 
     def with_production_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
         if names == SIGNING_CSCA_TEST_FILES:
-            return {"rust/services/signing-keys/src/lib.rs": 'include!("csca_lifecycle_behavior.rs")'}
+            return {
+                "rust/services/signing-keys/src/lib.rs": 'include!("csca_lifecycle_behavior.rs")'
+            }
         return original(root, names)
 
-    monkeypatch.setattr(sys.modules[__name__], "_ownership_sources", with_production_consumer)
+    monkeypatch.setattr(
+        sys.modules[__name__], "_ownership_sources", with_production_consumer
+    )
     with pytest.raises(AssertionError, match="Rust source include"):
         test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
 
@@ -715,7 +857,10 @@ def _select_contract_test_sources(changed: bytes) -> bool:
     owned = {
         (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8")
         for name in SERVICE_ACCEPTANCE_TARGETS
-    } | {(SIGNING_CSCA_TEST_ROOT + name).encode("utf-8") for name in SIGNING_CSCA_TEST_FILES}
+    } | {
+        (SIGNING_CSCA_TEST_ROOT + name).encode("utf-8")
+        for name in SIGNING_CSCA_TEST_FILES
+    }
     if not changed.endswith(b"\0") or not changed[:-1]:
         return False
     paths = changed[:-1].split(b"\0")
@@ -727,7 +872,9 @@ def _select_contract_test_sources(changed: bytes) -> bool:
 
 
 def test_contract_test_selector_accepts_only_proved_sources() -> None:
-    service = (SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs").encode()
+    service = (
+        SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs"
+    ).encode()
     signing = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[0]).encode()
     storage = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[1]).encode()
     for changed, accepted in (
@@ -759,7 +906,9 @@ def test_service_acceptance_context_proof_rejects_reincluded_test(monkeypatch) -
     target = SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs"
     for ignore_path in set(DOCKER_CONTEXTS.values()):
 
-        def with_reincluded_test(path: Path, *args, _ignore_path=ignore_path, **kwargs) -> str:
+        def with_reincluded_test(
+            path: Path, *args, _ignore_path=ignore_path, **kwargs
+        ) -> str:
             source = original(path, *args, **kwargs)
             if path == ROOT / _ignore_path:
                 return source + "\n!" + target + "\n"
@@ -771,7 +920,9 @@ def test_service_acceptance_context_proof_rejects_reincluded_test(monkeypatch) -
                 test_service_acceptance_targets_stay_out_of_release_rust_contexts()
 
 
-def test_service_acceptance_context_proof_rejects_non_test_consumer(monkeypatch) -> None:
+def test_service_acceptance_context_proof_rejects_non_test_consumer(
+    monkeypatch,
+) -> None:
     import pytest
 
     monkeypatch.setattr(
@@ -1147,7 +1298,9 @@ if __name__ == "__main__":
                 (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8") + b"\0"
             )
         for name in SIGNING_CSCA_TEST_FILES:
-            sys.stdout.buffer.write((SIGNING_CSCA_TEST_ROOT + name).encode("utf-8") + b"\0")
+            sys.stdout.buffer.write(
+                (SIGNING_CSCA_TEST_ROOT + name).encode("utf-8") + b"\0"
+            )
     elif sys.argv == [sys.argv[0], "--emit-verified-selfhost-tests"]:
         test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
         for name in SELFHOST_TEST_FILES:
