@@ -484,7 +484,7 @@ workflow-policy tests, independent review, full PR CI, and [protected
 combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38227383325)
 before merge.
 
-OAuth-revocation current-input follow-up (2026-10-12 local candidate): the
+OAuth-revocation current-input follow-up (2026-10-12 merged [UI #1289](https://github.com/ElevenID/marty-ui/pull/1289)): the
 shared runner produces ten reviewed kinds, including nine variant corpora.
 One overlay inherits the guarded REST inputs and pins eleven additional
 current inputs (the runner and ten scenario matrices). Its release-owned test
@@ -506,6 +506,18 @@ overlays cannot qualify absent scripts. The still-active provider-signals
 producer has a separate exact closure guard, and the still-active timeout
 producers retain the timeout overlay with its hash updated for the Rust-only
 schema preparer. Native Rust replay and release qualification remain required.
+
+Provider-recovery current-input follow-up (2026-10-12 local integration): eight
+direct provider/reclaimer runners are treated as one family because the
+recovery runner can select sibling scenarios. A single overlay inherits the
+native REST current inputs and pins 21 additional scripts/scenario files. Tests
+reject a new producer, scenario selection, local helper, transitive JSON
+reference, or changed hash without review. The manifest is release-sensitive
+in the existing CI classifier. This is current capture-input evidence only,
+not historical corpus attestation, a qualification skip, or a runtime change.
+The Python OAuth revocation overlay is absent because its runner was retired;
+the native Issuance replay remains the supported coverage. Local and hosted
+validation of this reconciled branch remain required.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
