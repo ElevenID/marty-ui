@@ -7,7 +7,7 @@ component report. Run it only after a signed Stack release was dispatched with
 release must already identify the same source commit. Do not use production
 credentials, a real CSCA/DSC, or a customer organization.
 
-Use a host with at least 32 GiB RAM, enough free disk for all locked images and
+Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
 fresh database state, Docker Compose, Python 3.12 with the pinned integration
 test dependencies, OpenSSL, and anonymous registry access. The host must have
 no existing qualification project. Canvas qualification may use the same host
