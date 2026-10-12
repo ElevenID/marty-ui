@@ -6,10 +6,16 @@ use serde_json::{json, Map, Value};
 use std::time::Duration;
 use url::form_urlencoded;
 
+mod canvas_rails;
 mod canvas_rest;
 mod database;
 mod demo_evidence;
 mod wallet;
+pub use canvas_rails::{
+    ensure_canvas_developer_key, ensure_canvas_external_tool, ensure_canvas_public_domain,
+    CanvasDocker, CanvasDockerOperation, CanvasDockerOutput, CanvasDockerTransport,
+    CanvasRailsConfig, CANVAS_LTI_SETUP_SCRIPT,
+};
 pub use canvas_rest::{
     ensure_course, ensure_enrollment, ensure_external_tool_assignment, ensure_module,
     ensure_module_external_tool_item, ensure_module_quiz_item, ensure_quiz, ensure_user,

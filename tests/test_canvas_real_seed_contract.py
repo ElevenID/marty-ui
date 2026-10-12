@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
 import sys
 import types
@@ -215,6 +217,49 @@ def capture_canvas_module_item_retries(monkeypatch) -> dict:
 def test_frozen_canvas_module_item_retries(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_canvas_module_item_retries(monkeypatch) == contract["canvas_module_item_retries"]
+
+
+def capture_canvas_rails_lti(monkeypatch) -> dict:
+    operations = []
+    rails_scripts = []
+
+    def run(command, *, input=None, text=True, capture_output=True, check=False, timeout=None):
+        assert text and capture_output and not check
+        if command[:2] == ["docker", "ps"]:
+            return types.SimpleNamespace(returncode=0, stdout="stack_marty-canvas-real\n", stderr="")
+        assert command[:2] == ["docker", "exec"]
+        encoded_env = next((part for part in command if part.startswith("CANVAS_LTI_SETUP_B64=")), None)
+        if encoded_env:
+            payload = json.loads(base64.b64decode(encoded_env.split("=", 1)[1]))
+            rails_scripts.append(input)
+            operations.append({
+                "command": [part if not part.startswith("CANVAS_LTI_SETUP_B64=") else "CANVAS_LTI_SETUP_B64=<payload>" for part in command],
+                "payload": payload,
+                "script_sha256": hashlib.sha256(input.encode()).hexdigest(),
+                "timeout": timeout,
+            })
+            if "public_host" in payload:
+                output = {"public_domain": {"action": "updated", "host": payload["public_host"], "accounts": [{"id": 1}]}}
+            else:
+                output = {"developer_key": {"id": 5, "action": "created", "name": "client-1", "global_id": "client-1"}}
+                if "course_id" in payload:
+                    output["external_tool"] = {"id": 99, "action": "created", "name": "Canvas Demo"}
+            return types.SimpleNamespace(returncode=0, stdout=seed.CANVAS_RAILS_RESULT_PREFIX + json.dumps(output) + "\n", stderr="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(seed.subprocess, "run", run)
+    cfg = canvas_config()
+    connector = config()
+    key = seed._ensure_canvas_developer_key(cfg, connector, "platform-1")
+    domain = seed._ensure_canvas_public_domain(cfg)
+    tool = seed._ensure_canvas_external_tool(cfg, connector, "platform-1", 42, key["key"])
+    assert len(set(rails_scripts)) == 1
+    return {"operations": operations, "developer_key": key, "public_domain": domain, "external_tool": tool}
+
+
+def test_frozen_canvas_rails_lti(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_rails_lti(monkeypatch) == contract["canvas_rails_lti"]
 
 
 def capture(monkeypatch) -> dict:

@@ -3764,6 +3764,7 @@ name = "marty-canvas-demo-seed"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "hex",
  "hmac 0.12.1",
  "marty-oid4vci",

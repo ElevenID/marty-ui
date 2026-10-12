@@ -1449,5 +1449,104 @@
     "result": {
       "id": 13
     }
+  },
+  "canvas_rails_lti": {
+    "operations": [
+      {
+        "command": [
+          "docker",
+          "exec",
+          "-i",
+          "-e",
+          "CANVAS_LTI_SETUP_B64=<payload>",
+          "stack_marty-canvas-real",
+          "bash",
+          "-lc",
+          "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb"
+        ],
+        "payload": {
+          "account_id": "1",
+          "admin_email": "admin@example.com",
+          "client_id": "client-1",
+          "notes": "ElevenID LTI Integration - client-1",
+          "redirect_uri": "https://marty.example/v1/integrations/canvas/lti/platforms/platform-1/experience",
+          "scopes": [
+            "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
+            "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly",
+            "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly",
+            "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly"
+          ]
+        },
+        "script_sha256": "0b88b6d5ba5859125eafac85c1466f414a8a357c4694fd0750dcc9dfcd63e5a0",
+        "timeout": 180
+      },
+      {
+        "command": [
+          "docker",
+          "exec",
+          "-i",
+          "-e",
+          "CANVAS_LTI_SETUP_B64=<payload>",
+          "stack_marty-canvas-real",
+          "bash",
+          "-lc",
+          "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb"
+        ],
+        "payload": {
+          "public_host": "canvas.example"
+        },
+        "script_sha256": "0b88b6d5ba5859125eafac85c1466f414a8a357c4694fd0750dcc9dfcd63e5a0",
+        "timeout": 180
+      },
+      {
+        "command": [
+          "docker",
+          "exec",
+          "-i",
+          "-e",
+          "CANVAS_LTI_SETUP_B64=<payload>",
+          "stack_marty-canvas-real",
+          "bash",
+          "-lc",
+          "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb"
+        ],
+        "payload": {
+          "account_id": "1",
+          "course_id": "42",
+          "client_id": "client-1",
+          "display_name": "Canvas Demo",
+          "tool_domain": "marty.example",
+          "tool_url": "https://marty.example/v1/integrations/canvas/lti/platforms/platform-1/experience-login"
+        },
+        "script_sha256": "0b88b6d5ba5859125eafac85c1466f414a8a357c4694fd0750dcc9dfcd63e5a0",
+        "timeout": 180
+      }
+    ],
+    "developer_key": {
+      "action": "created",
+      "key": {
+        "id": 5,
+        "action": "created",
+        "name": "client-1",
+        "global_id": "client-1"
+      }
+    },
+    "public_domain": {
+      "action": "updated",
+      "domain": "canvas.example",
+      "accounts": [
+        {
+          "id": 1
+        }
+      ]
+    },
+    "external_tool": {
+      "action": "created",
+      "tool": {
+        "id": 99,
+        "action": "created",
+        "name": "Canvas Demo"
+      }
+    }
   }
 }
