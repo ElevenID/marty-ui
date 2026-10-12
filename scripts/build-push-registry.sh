@@ -105,6 +105,8 @@ if [[ -z "$REGISTRY_USERNAME" && -n "$OCIR_TENANCY_NAMESPACE" && -n "$OCI_USERNA
 fi
 
 export IMAGE_REGISTRY IMAGE_TAG
+catalog_app_services="$("$REPO_ROOT/scripts/marty-deploy.sh" services --group app --field id)" || error "Deployment catalog service lookup failed."
+[[ -n "$catalog_app_services" ]] || error "Deployment catalog returned no app services."
 
 echo ""
 info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -137,10 +139,6 @@ if [[ "$PLATFORM" == "linux/arm64" ]] && ! docker buildx inspect marty-builder &
   docker buildx inspect --bootstrap
 fi
 BUILDER_CMD="docker buildx build --platform ${PLATFORM} --load"
-
-catalog_services() {
-  "$REPO_ROOT/scripts/marty-deploy.sh" services --group "$1" --field id
-}
 
 build_and_push() {
   local service="$1"
@@ -186,7 +184,7 @@ while IFS= read -r svc; do
     "services/Dockerfile" \
     "." \
     "--build-arg SERVICE_NAME=${svc} --build-arg MARTY_RELEASE_VERSION=${IMAGE_TAG} --build-arg MARTY_UI_SHA=${SOURCE_SHA}"
-done < <(catalog_services app)
+done <<< "$catalog_app_services"
 
 build_and_push \
   "db-migrate" \

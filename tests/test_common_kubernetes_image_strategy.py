@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from packages.catalog_test_support import CatalogView
@@ -80,7 +86,8 @@ def test_kubernetes_update_script_updates_selfhost_image_variants():
         in text
     )
     assert 'services --group "$1" --field k8s_deployment' in text
-    assert "done < <(catalog_services app)" in text
+    assert 'app_services="$(catalog_services app)"' in text
+    assert 'done <<< "$app_services"' in text
     assert (
         'deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}"'
         in text
@@ -91,6 +98,69 @@ def test_kubernetes_update_script_updates_selfhost_image_variants():
         not in text
     )
     assert "IMAGE_TAG=v1.1" not in text
+
+
+@pytest.mark.parametrize("failure", ["exit", "empty"])
+def test_registry_builder_rejects_catalog_failure_before_docker(tmp_path, failure):
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git
+        bash = str(Path(git).resolve().parents[1] / "bin/bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash
+    source_sha = subprocess.check_output(
+        ["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"], text=True,
+    ).strip()
+    binary = tmp_path / "marty-deploy"
+    service_result = "exit 97" if failure == "exit" else "exit 0"
+    binary.write_bytes(
+        ("#!/bin/sh\n"
+         "if [ \"$1\" = --build-identity ]; then\n"
+         f"  printf '%s\\n' '{source_sha}:v1.1.246'\n"
+         "elif [ \"$3\" = validate ]; then\n"
+         "  printf 'catalog valid\\n'\n"
+         "elif [ \"$3\" = services ]; then\n"
+         f"  {service_result}\n"
+         "else\n"
+         "  exit 98\n"
+         "fi\n").encode()
+    )
+    binary.chmod(0o755)
+    release_version_double = tmp_path / "release-version-double"
+    release_version_double.write_bytes(b"#!/bin/sh\nprintf 'v1.1.246\\n'\n")
+    release_version_double.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_bytes(b'#!/bin/sh\nprintf "DOCKER:%s\\n" "$1" >> "$DOCKER_CALLS"\nexit 99\n')
+    docker.chmod(0o755)
+    calls = tmp_path / "docker-calls.log"
+    env = {
+        **os.environ,
+        "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+        "PYTHON_BIN": str(release_version_double),
+        "IMAGE_REGISTRY": "synthetic.invalid/owned",
+        "MARTY_DEPLOY_BIN": str(binary),
+        "MARTY_DEPLOY_BIN_SHA256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        "MARTY_DEPLOY_SOURCE_SHA": source_sha,
+        "MARTY_DEPLOY_RELEASE_TAG": "v1.1.246",
+        "MARTY_API_CORE_VERSION": "0.1.0",
+        "MARTY_API_CORE_URI": "synthetic-api-core.tgz",
+        "MARTY_API_CORE_DIGEST": "sha256:" + "a" * 64,
+        "MARTY_BLOG_VERSION": "0.1.0",
+        "MARTY_BLOG_URI": "synthetic-blog.tgz",
+        "MARTY_BLOG_DIGEST": "sha256:" + "b" * 64,
+        "DOCKER_CALLS": str(calls),
+    }
+    env.pop("MARTY_UI_SHA", None)
+    result = subprocess.run(
+        [bash, str(REPO_ROOT / "scripts/build-push-registry.sh")],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert "Deployment catalog" in result.stdout + result.stderr
+    assert not calls.exists()
 
 
 def test_kubernetes_worker_uses_catalog_native_per_service_image():

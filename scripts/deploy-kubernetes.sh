@@ -260,13 +260,19 @@ require_resolved_secret() {
 
 require_catalog_required_secrets() {
   local stack_name="$1"
+  local required_envs="${2-}"
   local var_name value
+
+  if [[ $# -lt 2 ]]; then
+    required_envs="$(catalog_required_secret_envs "$stack_name")" || return 1
+  fi
+  [[ -n "$required_envs" ]] || { error "Deployment catalog returned no required secrets."; return 1; }
 
   while IFS= read -r var_name; do
     [[ -z "$var_name" ]] && continue
     value="$(resolve_secret_input "$var_name")"
     require_resolved_secret "$var_name" "$value"
-  done < <(catalog_required_secret_envs "$stack_name")
+  done <<< "$required_envs"
 }
 
 create_image_pull_secret() {
@@ -288,6 +294,11 @@ create_image_pull_secret() {
 
 # ─── Sub-command: setup-secrets ───────────────────────────────────────────────
 cmd_setup_secrets() {
+  local catalog_secret_envs="${1-}"
+  if [[ $# -eq 0 ]]; then
+    catalog_secret_envs="$(catalog_required_secret_envs "$K8S_STACK_NAME")" || { error "Deployment catalog secret lookup failed."; return 1; }
+  fi
+  [[ -n "$catalog_secret_envs" ]] || { error "Deployment catalog returned no required secrets."; return 1; }
   step "Setting up Kubernetes Secrets and image pull secret"
 
   kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
@@ -359,7 +370,7 @@ cmd_setup_secrets() {
   if (( ${#flow_webhook_secret} < 32 )); then
     error "FLOW_WEBHOOK_SECRET must be at least 32 characters."
   fi
-  require_catalog_required_secrets "$K8S_STACK_NAME"
+  require_catalog_required_secrets "$K8S_STACK_NAME" "$catalog_secret_envs"
 
   kubectl create secret generic marty-secrets \
     --namespace="$NAMESPACE" \
@@ -489,6 +500,9 @@ cmd_update_images() {
     error "Canvas worker image update refused; apply the reviewed full-manifest cutover first."
     return 1
   fi
+  local app_services
+  app_services="$(catalog_services app)" || { error "Deployment catalog service lookup failed."; return 1; }
+  [[ -n "$app_services" ]] || { error "Deployment catalog returned no app services."; return 1; }
   step "Rolling image update — tag: ${IMAGE_TAG}"
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     kubectl set image deployment/signing-keys "signing-keys=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1
@@ -503,7 +517,7 @@ cmd_update_images() {
     [[ -z "$svc" || "$svc" == "issuance" ]] && continue
     kubectl set image deployment/"${svc}" "${svc}=${IMAGE_REGISTRY}/marty-ui/${svc}:${IMAGE_TAG}" \
       -n "$NAMESPACE" 2>/dev/null && success "Updated ${svc}" || warn "Deployment '${svc}' not found (skipped)"
-  done < <(catalog_services app)
+  done <<< "$app_services"
   kubectl set image deployment/ui "ui=${IMAGE_REGISTRY}/marty-ui/ui-selfhost:${IMAGE_TAG}" \
     -n "$NAMESPACE" 2>/dev/null && success "Updated ui" || warn "Deployment 'ui' not found (skipped)"
   kubectl set image deployment/cloudflared "cloudflared=${IMAGE_REGISTRY}/marty-ui/cloudflared-wrapper:${IMAGE_TAG}" \
@@ -518,10 +532,13 @@ cmd_deploy() {
   }
   prepare_kubernetes_native_issuance || return 1
   require_kubernetes_passport_selection || return 1
+  local catalog_secret_envs
+  catalog_secret_envs="$(catalog_required_secret_envs "$K8S_STACK_NAME")" || { error "Deployment catalog secret lookup failed."; return 1; }
+  [[ -n "$catalog_secret_envs" ]] || { error "Deployment catalog returned no required secrets."; return 1; }
   step "Full Kubernetes Deploy"
 
   apply_manifest "${K8S_DIR}/00-namespace.yaml"
-  cmd_setup_secrets
+  cmd_setup_secrets "$catalog_secret_envs"
   apply_manifest "${K8S_DIR}/01-configmap.yaml"
 
   KC_REALM_DIR="${REPO_ROOT}/config/keycloak"
