@@ -121,6 +121,24 @@ foreach ($path in @(
 . (Join-Path $PSScriptRoot 'beta-deployment-lock.ps1')
 . (Join-Path $PSScriptRoot 'beta-passport-fence-legacy-boundary.ps1')
 
+function Assert-NoRunningCanvasLocalhostBridge {
+    $byService = @(& docker ps `
+        --filter 'label=com.docker.compose.project=elevenid-beta' `
+        --filter 'label=com.docker.compose.service=issuance-canvas-localhost-bridge' `
+        --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect optional Canvas localhost bridge before aggregate beta mutation'
+    }
+    $byName = @(& docker ps --filter 'name=^/marty-issuance-canvas-localhost-bridge$' `
+        --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect optional Canvas localhost bridge before aggregate beta mutation'
+    }
+    if ($byService.Count -ne 0 -or $byName.Count -ne 0) {
+        throw 'Stop the optional Canvas localhost bridge before aggregate beta deployment; it is outside the signed Rust image set'
+    }
+}
+
 function Invoke-Plan {
     param([string[]]$Arguments)
     $previous = $ErrorActionPreference
@@ -436,6 +454,28 @@ function Wait-BetaHealthy {
         Start-Sleep -Seconds 3
     } while ([DateTime]::UtcNow -lt $deadline)
     throw 'Aggregate beta service health did not converge'
+}
+
+function Assert-RustCanvasSandbox {
+    $ids = @(& docker ps --filter 'label=com.docker.compose.project=elevenid-beta' `
+        --filter 'label=com.docker.compose.service=canvas-sandbox' --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $ids.Count -ne 1) {
+        throw 'Signed Rust Canvas sandbox container is absent or ambiguous'
+    }
+    $image = @(& docker inspect --format '{{.Config.Image}}' $ids[0] 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $image.Count -ne 1 -or
+        $image[0] -cne [string]$script:plan.services_image) {
+        throw 'Canvas sandbox does not use the signed Rust services image'
+    }
+    $runtime = @(& docker exec $ids[0] readlink /proc/1/exe 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $runtime.Count -ne 1 -or
+        $runtime[0] -cne '/usr/local/bin/marty-canvas-sandbox') {
+        throw 'Canvas sandbox is not running the Rust binary'
+    }
+    $health = @(& docker exec $ids[0] curl -fsS http://127.0.0.1:8017/health 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $health.Count -ne 1 -or $health[0] -cne 'ok') {
+        throw 'Signed Rust Canvas sandbox health route failed'
+    }
 }
 
 function Invoke-BetaPsql {
@@ -790,6 +830,7 @@ $script:productionRecoveryReady = $false
 $script:productionRecoveryDigest = $null
 $lock = Enter-BetaDeploymentLock -AllowPending
 try {
+    Assert-NoRunningCanvasLocalhostBridge
     if (-not (Test-Path -LiteralPath (Get-BetaPassportFenceMarkerPath)) -or
         -not (Test-Path -LiteralPath (Get-BetaMutationMarkerPath)) -or
         -not (Test-Path -LiteralPath $MaintenanceReceipt) -or
@@ -925,6 +966,7 @@ try {
         "SET marty.passport_beta_expected_native_migration_sha256 = '$($script:plan.migration_set_sha256)';`n"
     $sql = [Text.UTF8Encoding]::new($false, $true).GetString(
         [IO.File]::ReadAllBytes($enablePath))
+    Assert-NoRunningCanvasLocalhostBridge
     if ($loginBefore[0] -ceq 'f') {
         Invoke-BetaPsql -Sql ($session + $sql) | Out-Null
     }
@@ -949,6 +991,7 @@ try {
         $_ -notin @('passport-callback-signer', 'passport-beta-bureau') })
     Invoke-Compose -Services $applications
     Wait-BetaHealthy -Services $applications
+    Assert-RustCanvasSandbox
     $resumingAfterContinuity = Test-Path -LiteralPath $continuityPath
     Assert-ForwardGeneration -RequireIngressClosed:(-not $resumingAfterContinuity) |
         Out-Null
@@ -1322,6 +1365,7 @@ try {
         '--plan', $planPath, '--maintenance-intent', $intentPath,
         '--production-attachments-sha256',
         [string]$script:plan.production_attachments_sha256)
+    Assert-NoRunningCanvasLocalhostBridge
     if ($null -eq $runtime.beta_runtime -or
         $null -eq $runtime.beta_runtime.PSObject.Properties['issuance-native']) {
         throw 'Aggregate beta runtime has no signed native issuance process'

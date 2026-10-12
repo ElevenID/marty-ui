@@ -11,7 +11,7 @@ import uuid
 import pytest
 import yaml
 
-from services.passport_disposable_identity import issuer_did
+from scripts.passport_disposable_identity import issuer_did
 from scripts.passport_supported_certificate_rehearsal import (
     WORKFLOW_NAME, rehearse_certificates,
 )

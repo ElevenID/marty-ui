@@ -165,6 +165,31 @@ def test_runtime_requires_replaced_signed_generation(monkeypatch):
     assert "test-token" not in json.dumps(evidence)
 
 
+@pytest.mark.parametrize("location", ["intent", "old", "restart", "target"])
+def test_runtime_rejects_optional_bridge_in_saved_generation(monkeypatch, location):
+    plan, intent, _, runner = fixture(monkeypatch)
+    bridge = "issuance-canvas-localhost-bridge"
+    if location == "intent":
+        intent["beta_generation"].append({"service": bridge, "container_id": "f" * 64})
+    elif location == "old":
+        plan["old_container_ids_by_service"][bridge] = "f" * 64
+    elif location == "restart":
+        plan["restart_infrastructure"].append(bridge)
+    else:
+        plan["target_services"].append(bridge)
+    with pytest.raises(runtime.HostProbeError, match="bridge survived in signed beta plan"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
+
+
+def test_runtime_rejects_optional_bridge_in_live_beta_project(monkeypatch):
+    plan, intent, records, runner = fixture(monkeypatch)
+    bridge = "issuance-canvas-localhost-bridge"
+    records["f" * 64] = record("f" * 64, "elevenid-beta", bridge, "python:3.12-alpine")
+    with pytest.raises(runtime.HostProbeError,
+                       match="bridge survived aggregate beta deployment"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
+
+
 def test_production_only_checks_public_route(monkeypatch):
     plan, intent, _, runner = fixture(monkeypatch)
     report = runtime.verify_production(plan, intent, "f" * 64, runner)

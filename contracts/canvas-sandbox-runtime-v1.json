@@ -1,0 +1,42 @@
+{
+  "schema": "marty.canvas-sandbox-runtime/v1",
+  "source": "be17936d3:docker/canvas-sandbox/main.py",
+  "normalized_dynamic_fields": ["kid", "JWK x", "JWT signature", "timestamps", "request IDs", "status event IDs"],
+  "config": {
+    "public_base": "https://canvas-sandbox.example.test:8017",
+    "credentials_public_base": "https://canvas-sandbox.example.test",
+    "issuer_base": "https://issuer.example.test",
+    "api_token": "test-api-token",
+    "shared_secret": "test-shared-secret",
+    "credentials_issuer_id": "sandbox-issuer"
+  },
+  "cases": [
+    {"method":"GET","path":"/health","status":200,"text":"ok"},
+    {"method":"GET","path":"/","status":200,"json":{"service":"canvas-credentials-test-sandbox","issuer":"https://canvas-sandbox.example.test:8017","endpoints":{"credential_webhook":"/api/lti/credentials/webhook","mirror_publish":"/api/credentials/mirror/publish","mirror_status":"/api/credentials/mirror/status"}}},
+    {"method":"GET","path":"/.well-known/openid-configuration","status":200,"json":{"issuer":"https://canvas-sandbox.example.test:8017","authorization_endpoint":"https://canvas-sandbox.example.test:8017/login/oauth2/auth","token_endpoint":"https://canvas-sandbox.example.test:8017/login/oauth2/token","jwks_uri":"https://canvas-sandbox.example.test:8017/api/lti/security/jwks","registration_endpoint":"https://canvas-sandbox.example.test:8017/api/lti/registrations","id_token_signing_alg_values_supported":["EdDSA"]}},
+    {"method":"GET","path":"/api/lti/security/jwks","status":200,"json":{"keys":[{"kty":"OKP","crv":"Ed25519","alg":"EdDSA","use":"sig"}]}},
+    {"method":"GET","path":"/login/oauth2/auth?scope=openid&response_type=id_token&client_id=client-1&redirect_uri=https%3A%2F%2Ftool.example.test%2Flaunch&login_hint=hint&state=state-1&nonce=nonce-1&lti_message_hint=course-hint","status":200,"html_contains":["method=\"post\"","action=\"https://tool.example.test/launch\"","name=\"state\" value=\"state-1\""]},
+    {"method":"GET","path":"/login/oauth2/auth","status":422},
+    {"method":"POST","path":"/api/lti/credentials/webhook","body":{"canvas_event_id":"event-1"},"status":409,"json":{"error":"CANVAS_CREDENTIALS_SHARED_SECRET not configured in sandbox"},"requires_empty_shared_secret":true},
+    {"method":"POST","path":"/api/credentials/mirror/publish","body":{},"status":401,"json":{"error":"invalid_canvas_credentials_token"}},
+    {"method":"POST","path":"/api/credentials/mirror/publish","bearer":true,"body":[],"status":400,"json":{"error":"payload_must_be_object"}},
+    {"method":"POST","path":"/api/credentials/mirror/publish","bearer":true,"body":{},"status":422,"json":{"error":"credential.id is required"}},
+    {"method":"POST","path":"/api/credentials/mirror/publish","bearer":true,"body":{"credential":{"id":"urn:uuid:<x>","hash":"digest","issuer_did":"did:example:issuer"},"recipient":{"subject_did":"did:example:subject"},"source":{"delivery_record_id":"delivery-1"},"canvas_account_id":"account-1","organization_id":"org-1"},"status":200,"request_id_hex_bytes":12,"json":{"id":"canvas-sandbox-urn:uuid:<x>","credential_id":"canvas-sandbox-urn:uuid:<x>","issuer_id":"sandbox-issuer","status":"active","credential_url":"https://canvas-sandbox.example.test/credentials/canvas-sandbox-urn%3Auuid%3A%3Cx%3E","console_provenance_url":"https://issuer.example.test/console/org/operate/verify?external_credential_id=canvas-sandbox-urn%3Auuid%3A%3Cx%3E&canvas_account_id=account-1&organization_id=org-1"}},
+    {"method":"POST","path":"/api/credentials/mirror/status","bearer":true,"body":{"credential":{"external_credential_id":"canvas-sandbox-urn:uuid:<x>","status":"REVOKED","reason":"test"},"lifecycle_action":"revoke"},"status":200,"request_id_hex_bytes":12,"json":{"status":"synced","external_credential_id":"canvas-sandbox-urn:uuid:<x>"}},
+    {"method":"GET","path":"/api/credentials/mirror/canvas-sandbox-urn%3Auuid%3A%3Cx%3E","bearer":true,"status":200,"json":{"id":"canvas-sandbox-urn:uuid:<x>","canonical_credential_id":"urn:uuid:<x>","delivery_record_id":"delivery-1","subject_did":"did:example:subject","status":"revoked"}},
+    {"method":"GET","path":"/credentials/canvas-sandbox-urn%3Auuid%3A%3Cx%3E","status":200,"html_contains":["Sandbox Badge","REVOKED","&lt;x&gt;","Open Console Provenance"]},
+    {"method":"GET","path":"/api/credentials/mirror/missing","bearer":true,"status":404,"json":{"error":"credential_not_found"}},
+    {"method":"GET","path":"/credentials/missing","status":404,"html_contains":["Credential not found"]}
+  ],
+  "crypto": {
+    "jwt_algorithm": "EdDSA",
+    "jwt_audience": ["client-1"],
+    "jwt_nonce": "nonce-1",
+    "jwt_expiry_seconds": 3600,
+    "deployment_id": "test-deployment-sandbox",
+    "webhook_signature": "HMAC-SHA256(timestamp + '.' + raw JSON body)",
+    "webhook_follows_redirects": false,
+    "malformed_upstream_json_below_500_status": 500,
+    "canonical_payload_hash_sha256": "78d48859c3252943aab7306f76c80f3f07783582e05ab8f944ce0696f2dbfc67"
+  }
+}

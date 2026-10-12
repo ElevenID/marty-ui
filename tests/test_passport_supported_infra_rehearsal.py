@@ -16,7 +16,7 @@ from scripts.passport_supported_infra_rehearsal import (
     rehearse_infrastructure,
 )
 from scripts.passport_supported_infra_images import qualified_images
-from services.passport_disposable_identity import managed_key_reference
+from scripts.passport_disposable_identity import managed_key_reference
 from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError,
 )

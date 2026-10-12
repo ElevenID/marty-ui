@@ -77,7 +77,10 @@ else:
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
 
-from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+if __package__:
+    from .passport_disposable_identity import ORGANIZATION_ID, issuer_did
+else:
+    from passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 
 WORKFLOW_NAME = "Passport Supported Disposable Provisioning Producer"

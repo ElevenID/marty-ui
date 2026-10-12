@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from scripts.passport_supported_infra_images import qualified_images
-from services.passport_disposable_identity import managed_key_reference
+from scripts.passport_disposable_identity import managed_key_reference
 
 
 ROOT = Path(__file__).resolve().parents[1]

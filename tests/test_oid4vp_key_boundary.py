@@ -27,15 +27,14 @@ def test_marty_oid4vp_services_do_not_accept_private_signing_key_files() -> None
 
 
 def test_oid4vp_signing_and_flow_envelopes_have_dedicated_kms_keys() -> None:
-    migrations = (ROOT / "services" / "run_all_migrations.py").read_text(
-        encoding="utf-8"
-    )
+    migrations = (ROOT / "rust" / "services" / "signing-keys" / "src" / "bootstrap.rs").read_text(encoding="utf-8")
+    adapter = (ROOT / "rust" / "services" / "signing-keys" / "src" / "bootstrap_runtime.rs").read_text(encoding="utf-8")
 
     assert '"ip-marty-oid4vp-verifier"' in migrations
     assert '"oid4vp-verifier-marty-es256"' in migrations
     assert '"oid4vp_request_signing"' in migrations
     assert '"flow-response-envelope-marty-aes256"' in migrations
-    assert '"exportable": False' in migrations
+    assert '"exportable":false' in adapter
 
 
 def test_openbao_initializer_provisions_and_authorizes_purpose_bound_protocol_keys() -> None:
