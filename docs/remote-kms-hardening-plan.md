@@ -17326,3 +17326,14 @@ revocation replay. Two focused workflow inventory/helper cases and 30 Canvas
 closure/inventory cases passed locally; YAML and diff checks passed. This
 merged head still requires fresh hosted CI, and neither green source run
 qualifies signed release images or cutover. Keep `release_state: hold`.
+
+2026-10-12 conditional passport consumer reconciliation: while exact-head UI
+run `38237293806` was active (19 jobs passed, no failures at observation),
+protected `main` advanced to `dc3458920` with Gateway/Issuance and callback
+signer inventory witnesses. This Rust-only branch uses the hardened
+`isolated_supported_signer_router` name, so the merged planner witness was
+updated to that actual binary call without narrowing service selection.
+The full affected-Rust planner test file passed locally: 51 tests, 440
+subtests, one existing skip. The prior run is evidence for its old head only;
+the grouped merge requires fresh exact-head checks. The stack lock remains
+`hold`.

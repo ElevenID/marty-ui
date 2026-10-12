@@ -112,7 +112,7 @@ PASSPORT_PROVIDER_CALLBACK_SIGNER_WITNESS = {
     "provider_route_marker": '"/internal/documents/{organization_id}/passport-callbacks/sign"',
     "provider_handler_marker": "post(sign_callback)",
     "provider_registration_evidence": "rust/services/signing-keys/src/bin/passport_callback_signer_supported.rs",
-    "provider_registration_marker": "isolated_signer_router(provider, key)",
+    "provider_registration_marker": "isolated_supported_signer_router(provider, key)",
     "provider_manifest_evidence": "rust/services/signing-keys/Cargo.toml",
     "provider_binary_marker": 'path = "src/bin/passport_callback_signer_supported.rs"',
     "profile_evidence": "docker-compose.profile.passport-provider-base.yml",
