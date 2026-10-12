@@ -1,6 +1,6 @@
 use chrono::{Duration, Utc};
 use marty_crypto::cert_builder::{CertProfile, CertificateBuilderConfig, DistinguishedName};
-use marty_crypto::certificate::{der_to_pem, get_certificate_info, load_certificate_pem};
+use marty_crypto::certificate::{get_certificate_info, load_certificate_pem};
 use marty_crypto::jwk::certificate_pem_to_jwk;
 use marty_crypto::keygen::KeyType;
 use marty_signing_keys::csca_lifecycle::{
@@ -8,20 +8,17 @@ use marty_signing_keys::csca_lifecycle::{
     ExpiringCscaCertificatesRequest, ImportCscaCertificateRequest, ListCscaCertificatesQuery,
     ListCscaOutboxQuery, RenewCscaCertificateRequest,
 };
-use marty_verification::issuance::{CscaAuthority, CscaKeyAlgorithm};
 use serde_json::{json, Value};
 
+#[path = "support/csca_fixture.rs"]
+mod csca_fixture;
+
 fn csca_request(country: &str, label: &str) -> ImportCscaCertificateRequest {
-    let authority = CscaAuthority::new(country, label, 30).unwrap();
-    let cert_pem = authority.cert_pem().unwrap();
-    ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
-            .unwrap(),
-        cert_pem,
-        cert_chain_pem: String::new(),
-        key_reference: format!("hsm://csca/{}", country.to_lowercase()),
-        metadata: json!({"country": country}),
-    }
+    csca_fixture::request(
+        country,
+        label,
+        &format!("hsm://csca/{}", country.to_lowercase()),
+    )
 }
 
 fn csca_request_with_reusable_key(
@@ -43,7 +40,7 @@ fn csca_request_with_reusable_key(
         .key_type(KeyType::EcdsaP256);
     let (cert_der, private_key_pem) = config.build_self_signed().unwrap();
     (
-        request_from_der(cert_der, key_reference, country),
+        csca_fixture::request_from_der(cert_der, key_reference, country),
         private_key_pem,
     )
 }
@@ -68,23 +65,7 @@ fn renewed_csca_request_with_key(
         .key_type(KeyType::EcdsaP256)
         .build_self_signed_with_key(private_key_pem)
         .unwrap();
-    request_from_der(cert_der, key_reference, country)
-}
-
-fn request_from_der(
-    cert_der: Vec<u8>,
-    key_reference: &str,
-    country: &str,
-) -> ImportCscaCertificateRequest {
-    let cert_pem = der_to_pem(&cert_der).unwrap();
-    ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
-            .unwrap(),
-        cert_pem,
-        cert_chain_pem: String::new(),
-        key_reference: key_reference.to_string(),
-        metadata: json!({"country": country}),
-    }
+    csca_fixture::request_from_der(cert_der, key_reference, country)
 }
 
 fn certificate_not_before(request: &ImportCscaCertificateRequest) -> chrono::DateTime<Utc> {
@@ -112,19 +93,6 @@ fn trust_anchor_projection_excludes_private_routing_and_inactive_certificates() 
 
     document.revoke("csca-deu-1", "retired", now).unwrap();
     assert!(document.active_certificate_data(now).unwrap().is_empty());
-}
-
-#[test]
-fn creation_algorithms_match_the_language_neutral_contract() {
-    let contract: Value = serde_json::from_str(include_str!(
-        "../../../../contracts/csca-capability-behavior.json"
-    ))
-    .unwrap();
-    let supported = CscaKeyAlgorithm::ALL.map(CscaKeyAlgorithm::as_str);
-    assert_eq!(
-        json!(supported),
-        contract["supported_rust_surface"]["emrtd_issuance"]["creation_algorithms"]
-    );
 }
 
 #[test]

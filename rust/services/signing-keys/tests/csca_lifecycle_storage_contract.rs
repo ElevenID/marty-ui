@@ -3,7 +3,6 @@ use axum::{
     http::{Request, StatusCode},
 };
 use chrono::Utc;
-use marty_crypto::jwk::certificate_pem_to_jwk;
 use marty_signing_keys::{
     csca_lifecycle::{
         csca_lifecycle_storage_key, CscaLifecycleError, CscaLifecycleStore,
@@ -11,23 +10,18 @@ use marty_signing_keys::{
     },
     registry::RegistryStore,
 };
-use marty_verification::issuance::CscaAuthority;
 use redis::AsyncCommands;
 use serde_json::Value;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "support/csca_fixture.rs"]
+mod csca_fixture;
+
 fn request(label: &str) -> ImportCscaCertificateRequest {
-    let authority = CscaAuthority::new("USA", label, 30).unwrap();
-    let cert_pem = authority.cert_pem().unwrap();
-    ImportCscaCertificateRequest {
-        expected_public_jwk: serde_json::to_value(certificate_pem_to_jwk(&cert_pem).unwrap())
-            .unwrap(),
-        cert_pem,
-        cert_chain_pem: String::new(),
-        key_reference: "hsm://csca/usa".to_string(),
-        metadata: Value::Null,
-    }
+    let mut request = csca_fixture::request("USA", label, "hsm://csca/usa");
+    request.metadata = Value::Null;
+    request
 }
 
 #[tokio::test]

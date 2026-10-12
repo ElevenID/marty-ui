@@ -78,6 +78,7 @@ SERVICE_ACCEPTANCE_TARGETS = (
     "passport_managed_kms_chain",
     "passport_gateway_postgres",
     "gateway_signing_acceptance",
+    "csca_capability_contract",
 )
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
@@ -636,6 +637,22 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
             assert not _is_ignored(path, lines)
     root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "unreviewed.rs", root_lines)
+
+
+def test_signing_csca_fixture_is_test_only_and_excluded_from_release_contexts() -> None:
+    path = "rust/services/signing-keys/tests/support/csca_fixture.rs"
+    assert _tracked_regular_mode(ROOT, path)
+    assert set(_ownership_sources(ROOT, ("csca_fixture.rs",))) == {
+        "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
+        "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
+    }
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        assert _is_ignored(path, lines), f"Docker COPY includes {ignore_path}: {path}"
+        if ignore_path == ".dockerignore":
+            assert lines.count(path) == 1
+        for production_path in PRODUCTION_INPUTS:
+            assert not _is_ignored(production_path, lines)
 
 
 def test_verified_service_acceptance_paths_require_six_context_proof() -> None:
