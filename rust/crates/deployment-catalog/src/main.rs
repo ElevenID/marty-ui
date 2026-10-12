@@ -65,6 +65,81 @@ fn required<'a>(args: &'a [&str], position: usize, label: &str) -> Result<&'a st
         .ok_or_else(|| format!("{label} is required"))
 }
 
+const TOP_USAGE: &str = "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\n";
+const SERVICE_FIELDS: &[&str] = &[
+    "id",
+    "compose_service",
+    "k8s_deployment",
+    "image_name",
+    "service_name_env",
+    "group",
+    "lifecycle",
+];
+const SECRET_FIELDS: &[&str] = &[
+    "id",
+    "env",
+    "file_env",
+    "compose_secret",
+    "no_log",
+    "allow_empty",
+    "required_for",
+];
+
+fn usage_error(usage: &str, context: &str, message: &str) -> String {
+    format!("__USAGE__{usage}{context}: error: {message}\n")
+}
+
+fn check_options(command: &str, params: &[String]) -> Result<(), String> {
+    let (flags, valued): (&[&str], &[&str]) = match command {
+        "validate" | "bundle-assets" => (&[], &[]),
+        "plan" | "compose-command" => (&["--json"], &[]),
+        "services" => (
+            &["--running-only", "--include-optional"],
+            &["--group", "--field"],
+        ),
+        "secrets" => (&[], &["--field"]),
+        _ => (&[], &[]),
+    };
+    let mut unknown = Vec::new();
+    let mut index = 0;
+    while index < params.len() {
+        let arg = &params[index];
+        if valued.contains(&arg.as_str()) {
+            index += 2;
+            continue;
+        }
+        if arg.starts_with('-') && !flags.contains(&arg.as_str()) {
+            unknown.push(arg.clone());
+        }
+        index += 1;
+    }
+    if !unknown.is_empty() {
+        return Err(usage_error(
+            TOP_USAGE,
+            "marty-deploy.py",
+            &format!("unrecognized arguments: {}", unknown.join(" ")),
+        ));
+    }
+    if let Some(field) = option(params, "--field") {
+        let (choices, usage, context) = match command {
+            "services" => (SERVICE_FIELDS, "usage: marty-deploy.py services [-h] [--group GROUP] [--running-only]\n                                [--include-optional]\n                                [--field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}]\n                                [stack]\n", "marty-deploy.py services"),
+            "secrets" => (SECRET_FIELDS, "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\n", "marty-deploy.py secrets"),
+            _ => return Ok(()),
+        };
+        if !choices.contains(&field) {
+            return Err(usage_error(
+                usage,
+                context,
+                &format!(
+                    "argument --field: invalid choice: '{field}' (choose from {})",
+                    choices.join(", ")
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn print_plan(plan: &Value) {
     println!("Stack: {}", value_string(plan, "name"));
     if !value_string(plan, "description").is_empty() {
@@ -125,6 +200,7 @@ fn run() -> Result<(), String> {
         .map(String::as_str)
         .ok_or_else(|| "command is required".to_owned())?;
     let params = &args[1..];
+    check_options(command, params)?;
     let catalog = Catalog::load(root)?;
     match command {
         "validate" => {
@@ -231,6 +307,10 @@ fn run() -> Result<(), String> {
 
 fn main() {
     if let Err(error) = run() {
+        if let Some(usage) = error.strip_prefix("__USAGE__") {
+            eprint!("{usage}");
+            std::process::exit(2);
+        }
         eprintln!("{error}");
         std::process::exit(1);
     }

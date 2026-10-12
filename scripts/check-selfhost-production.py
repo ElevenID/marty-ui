@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import ipaddress
 import json
 import os
@@ -139,13 +140,28 @@ def get_compose_services(env_file: Path, compose_file: Path) -> list[dict[str, A
 
 
 def catalog_lines(*args: str) -> list[str]:
-    result = subprocess.run(
-        [
+    binary = os.environ.get("MARTY_DEPLOY_BIN", "").strip()
+    if binary:
+        expected_sha = os.environ.get("MARTY_DEPLOY_BIN_SHA256", "").strip().lower()
+        if not expected_sha:
+            raise CheckError("MARTY_DEPLOY_BIN_SHA256 is required")
+        binary_path = Path(binary)
+        if not binary_path.is_file():
+            raise CheckError("MARTY_DEPLOY_BIN is not a file")
+        with binary_path.open("rb") as handle:
+            actual_sha = hashlib.file_digest(handle, "sha256").hexdigest()
+        if actual_sha != expected_sha:
+            raise CheckError("MARTY_DEPLOY_BIN digest mismatch")
+        command = [str(binary_path), "--repo-root", str(REPO_ROOT), *args]
+    else:
+        command = [
             "cargo", "+1.95.0", "run", "--quiet", "--locked",
             "--manifest-path", str(REPO_ROOT / "rust/Cargo.toml"),
             "-p", "marty-deployment-catalog", "--bin", "marty-deploy",
             "--", "--repo-root", str(REPO_ROOT), *args,
-        ],
+        ]
+    result = subprocess.run(
+        command,
         check=False, capture_output=True, text=True, cwd=REPO_ROOT,
     )
     if result.returncode != 0:
@@ -215,8 +231,13 @@ def validate_google_social_login(env_values: dict[str, str], secret_dir: Path) -
 
 
 def validate_migration_profile(env_values: dict[str, str]) -> str:
-    # Native credential-template config accepts the canonical profile name.
     profile = (env_values.get("MARTY_MIGRATION_PROFILE") or "").strip().lower() or "dev"
+    profile = {
+        "selfhost-prod": "selfhost-production",
+        "selfhost_prod": "selfhost-production",
+        "selfhostproduction": "selfhost-production",
+        "selfhost_production": "selfhost-production",
+    }.get(profile, profile)
     if profile != "selfhost-production":
         raise CheckError(
             "MARTY_MIGRATION_PROFILE must resolve to selfhost-production for the self-host stack; "

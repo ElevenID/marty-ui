@@ -62,6 +62,10 @@ Useful commands:
 - `sh scripts/marty-deploy.sh compose-command selfhost-production config`
 - `sh scripts/marty-deploy.sh secrets kubernetes-production --field env`
 
+For an operator host without Rust, set `MARTY_DEPLOY_BIN` to the packaged
+`marty-deploy` executable and `MARTY_DEPLOY_BIN_SHA256` to its verified release
+digest. A source checkout uses Cargo when those variables are absent.
+
 Local image release commands:
 
 - `make selfhost-images-ghcr-setup`

@@ -12,7 +12,8 @@ import tomllib
 
 import pytest
 import yaml
-from catalog_test_support import CatalogView
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from packages.catalog_test_support import CatalogView
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -956,9 +957,24 @@ def selfhost_canvas_environment():
 def test_selfhost_preflight_uses_native_profile_and_seeded_login_policy() -> None:
     namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
     assert namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": "selfhost-production"}) == "profile=selfhost-production"
+    for alias in ("selfhost-prod", "selfhost_prod", "selfhostproduction", "selfhost_production"):
+        assert namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": alias}) == "profile=selfhost-production"
     with pytest.raises(namespace["CheckError"], match="current=dev"):
         namespace["validate_migration_profile"]({})
     assert namespace["OPEN_BADGE_LOGIN_POLICY_ID"] == "50000000-0000-0000-0000-000000000004"
+
+
+def test_selfhost_catalog_rejects_unpinned_operator_binary(tmp_path, monkeypatch) -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    binary = tmp_path / "marty-deploy"
+    binary.write_bytes(b"untrusted operator binary")
+    monkeypatch.setenv("MARTY_DEPLOY_BIN", str(binary))
+    monkeypatch.delenv("MARTY_DEPLOY_BIN_SHA256", raising=False)
+    with pytest.raises(namespace["CheckError"], match="SHA256 is required"):
+        namespace["catalog_lines"]("validate")
+    monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", "0" * 64)
+    with pytest.raises(namespace["CheckError"], match="digest mismatch"):
+        namespace["catalog_lines"]("validate")
 
 
 def test_production_preflight_requires_a_configured_canvas_worker_processor() -> None:
