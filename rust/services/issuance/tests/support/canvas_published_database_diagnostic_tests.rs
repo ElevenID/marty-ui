@@ -4,6 +4,40 @@ mod diagnostic_tests {
     use serde_json::json;
     use std::collections::BTreeSet;
 
+    #[test]
+    fn docker_create_errors_report_only_fixed_categories() {
+        for (stderr, expected) in [
+            (
+                "Error: No such image: private.example/image",
+                "image_unavailable",
+            ),
+            (
+                "Cannot connect to the Docker daemon at /var/run/docker.sock",
+                "daemon_unavailable",
+            ),
+            (
+                "failed to create: no space left on device",
+                "storage_exhausted",
+            ),
+            (
+                "failed to create: cannot allocate memory",
+                "runtime_capacity",
+            ),
+            (
+                "Bind for 127.0.0.1 failed: port is already allocated",
+                "port_conflict",
+            ),
+            ("daemon says permission denied", "permission_denied"),
+            ("unexpected detail with password=must-not-leak", "unknown"),
+        ] {
+            let category = docker_create_failure_category(stderr.as_bytes());
+            assert_eq!(category, expected);
+            assert!(!category.contains("password"));
+            assert!(!category.contains("private.example"));
+        }
+        assert_eq!(docker_create_failure_category(&[0xff, 0xfe]), "unknown");
+    }
+
     fn installed_revisions(postgres: &str) -> String {
         docker(&[
             "exec",
