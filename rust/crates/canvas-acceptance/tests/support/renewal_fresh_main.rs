@@ -465,14 +465,28 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         drop((http_listener, grpc_listener, gateway_reservation));
         let mut child = ChildGuard(command.spawn().unwrap());
         let client = bounded_http_client(Duration::from_secs(20));
+        // This packaged process shares a busy runner with the owned database,
+        // OpenBao and wallet cases. Keep the health requirement, but allow the
+        // already-bounded probe to cover a slow startup before failing.
+        let health_result = tokio::time::timeout(Duration::from_secs(20), async {
+            for _ in 0..3 {
+                if let Some(value) = wait_for_health_with_client(http_port, &client).await {
+                    return Some(value);
+                }
+                if child.0.try_wait().unwrap().is_some() {
+                    return None;
+                }
+            }
+            None
+        })
+        .await;
+        let timed_out = health_result.is_err();
+        let health = health_result.unwrap_or(None);
         assert_eq!(
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                wait_for_health_with_client(http_port, &client)
-            )
-            .await
-            .unwrap(),
-            Some(json!({"status":"healthy","service":"issuance-service"}))
+            health,
+            Some(json!({"status":"healthy","service":"issuance-service"})),
+            "{mode} packaged issuance startup timed out: {timed_out}; process status: {:?}",
+            child.0.try_wait().unwrap()
         );
         let startup_migration_not_after: chrono::DateTime<chrono::Utc> =
             sqlx::query_scalar("SELECT clock_timestamp()")
