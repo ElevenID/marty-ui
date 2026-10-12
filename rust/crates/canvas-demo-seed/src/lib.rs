@@ -12,6 +12,7 @@ mod cli_config;
 mod database;
 mod demo_evidence;
 mod lms;
+mod run;
 mod transition;
 mod wallet;
 pub use canvas_rails::{
@@ -32,6 +33,7 @@ pub use demo_evidence::{
     SignedAgsWire,
 };
 pub use lms::{seed_canvas_lms_objects, CanvasLmsSeedResult};
+pub use run::run_seed;
 pub use transition::{lookup_transition, transition_summary};
 pub use wallet::{
     claim_wallet_credential, CanonicalWalletProof, WalletHttp, WalletOperation, WalletProof,

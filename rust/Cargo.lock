@@ -3765,8 +3765,10 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
+ "chrono",
  "hex",
  "hmac 0.12.1",
+ "marty-demo-vendor-seed",
  "marty-oid4vci",
  "reqwest",
  "serde",
@@ -3775,6 +3777,7 @@ dependencies = [
  "sqlx",
  "tokio",
  "url",
+ "uuid",
 ]
 
 [[package]]
