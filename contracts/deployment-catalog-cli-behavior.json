@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "source": "Python deployment catalog on protected main 97778e0f8a8b1a4aaac4b965f925772685e1220c",
+  "cases": [
+    {
+      "args": [
+        "validate"
+      ],
+      "exit_code": 0,
+      "stdout": "Deployment catalog validation passed.\nstacks=6 services=32 secrets=45 bundles=1\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "selfhost-production",
+        "--json"
+      ],
+      "exit_code": 0,
+      "stdout": "{\n  \"artifact_profile\": \"oss-release\",\n  \"compose_files\": [\n    \"docker-compose.selfhost.prod.yml\"\n  ],\n  \"compose_profiles\": [],\n  \"deployment_targets\": [\n    \"docker-compose\",\n    \"customer-bundle\"\n  ],\n  \"description\": \"Open-source self-host production stack served through the configured edge and tunnel.\",\n  \"domains\": [\n    \"elevenidllc.com\"\n  ],\n  \"env_file\": \".env.selfhost.production.local\",\n  \"name\": \"selfhost-production\",\n  \"required_secret_names\": [\n    \"postgres_password\",\n    \"keycloak_db_password\",\n    \"marty_db_password\",\n    \"keycloak_admin_password\",\n    \"marty_api_client_secret\",\n    \"issuance_api_key\",\n    \"grpc_service_token\",\n    \"flow_webhook_secret\",\n    \"notification_webhook_secret\",\n    \"notification_applicant_event_token\",\n    \"workload_identity_ca_cert\",\n    \"pp_workload_server_cert\",\n    \"pp_workload_server_key\",\n    \"flow_workload_client_cert\",\n    \"flow_workload_client_key\",\n    \"flow_workload_server_cert\",\n    \"flow_workload_server_key\",\n    \"auth_workload_client_cert\",\n    \"auth_workload_client_key\",\n    \"applicant_workload_client_cert\",\n    \"applicant_workload_client_key\",\n    \"verification_workload_client_cert\",\n    \"verification_workload_client_key\",\n    \"deployment_profile_workload_client_cert\",\n    \"deployment_profile_workload_client_key\",\n    \"compliance_profile_workload_client_cert\",\n    \"compliance_profile_workload_client_key\",\n    \"flow_application_event_hmac_key\",\n    \"integration_secret_master_key\",\n    \"token_hmac_key\",\n    \"openbao_service_token\",\n    \"notification_openbao_token\",\n    \"cloudflare_tunnel_token\"\n  ],\n  \"required_services\": [\n    \"postgres\",\n    \"redis\",\n    \"keycloak\",\n    \"db-migrate\",\n    \"issuance-migrations\",\n    \"keycloak-configurator\",\n    \"ui\",\n    \"edge\",\n    \"cloudflared\",\n    \"gateway\",\n    \"auth\",\n    \"organization\",\n    \"credential-template\",\n    \"trust-profile\",\n    \"issuance\",\n    \"canvas-sync-worker\",\n    \"applicant\",\n    \"notification\",\n    \"compliance-profile\",\n    \"presentation-policy\",\n    \"deployment-profile\",\n    \"flow\",\n    \"verification\",\n    \"revocation-profile\",\n    \"event-stream\"\n  ],\n  \"running_services\": [\n    \"postgres\",\n    \"redis\",\n    \"keycloak\",\n    \"ui\",\n    \"edge\",\n    \"cloudflared\",\n    \"gateway\",\n    \"auth\",\n    \"organization\",\n    \"credential-template\",\n    \"trust-profile\",\n    \"issuance\",\n    \"canvas-sync-worker\",\n    \"applicant\",\n    \"notification\",\n    \"compliance-profile\",\n    \"presentation-policy\",\n    \"deployment-profile\",\n    \"flow\",\n    \"verification\",\n    \"revocation-profile\",\n    \"event-stream\"\n  ]\n}\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "tunnel-beta-experiments"
+      ],
+      "exit_code": 0,
+      "stdout": "Stack: tunnel-beta-experiments\nDescription: Reset-friendly beta.elevenidllc.com experiments stack with real Canvas LMS enabled for production-like Canvas/LTI demos.\nEnv file: .env.tunnel.beta.local\nCompose files: docker-compose.base.yml, docker-compose.profile.dev.yml, docker-compose.profile.tunnel.yml, docker-compose.profile.canvas-real.yml, docker-compose.profile.canvas-sandbox.yml\nCompose profiles: <none>\nDomains: beta.elevenidllc.com, canvas-test.elevenidllc.com, canvas-sandbox.elevenidllc.com\nArtifact profile: oss-release\nDeployment targets: docker-compose\nRequired services:\n  - postgres\n  - redis\n  - keycloak\n  - gateway\n  - auth\n  - organization\n  - credential-template\n  - trust-profile\n  - issuance\n  - canvas-sync-worker\n  - applicant\n  - notification\n  - compliance-profile\n  - presentation-policy\n  - deployment-profile\n  - flow\n  - verification\n  - revocation-profile\n  - device-registration\n  - event-stream\n  - canvas-real\n  - issuance-canvas-localhost-bridge\n  - canvas-sandbox\n  - tunnel-nginx-proxy\n  - cloudflared\nRunning services checked for health:\n  - postgres\n  - redis\n  - keycloak\n  - gateway\n  - auth\n  - organization\n  - credential-template\n  - trust-profile\n  - issuance\n  - canvas-sync-worker\n  - applicant\n  - notification\n  - compliance-profile\n  - presentation-policy\n  - deployment-profile\n  - flow\n  - verification\n  - revocation-profile\n  - device-registration\n  - event-stream\n  - canvas-real\n  - issuance-canvas-localhost-bridge\n  - canvas-sandbox\n  - tunnel-nginx-proxy\n  - cloudflared\nRequired secret names (values redacted):\n  - cloudflare_tunnel_token\n  - canvas_credentials_shared_secret\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production"
+      ],
+      "exit_code": 0,
+      "stdout": "postgres\nredis\nkeycloak\ndb-migrate\nissuance-migrations\nkeycloak-configurator\nui\nedge\ncloudflared\ngateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production",
+        "--running-only"
+      ],
+      "exit_code": 0,
+      "stdout": "postgres\nredis\nkeycloak\nui\nedge\ncloudflared\ngateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production",
+        "--include-optional"
+      ],
+      "exit_code": 0,
+      "stdout": "postgres\nredis\nkeycloak\ndb-migrate\nissuance-migrations\nkeycloak-configurator\nui\nedge\ncloudflared\ngateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\ndevice-registration\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "--group",
+        "app",
+        "--field",
+        "k8s_deployment"
+      ],
+      "exit_code": 0,
+      "stdout": "gateway\nauth\norganization\ncredential-template\ntrust-profile\nissuance\ncanvas-sync-worker\napplicant\nnotification\ncompliance-profile\npresentation-policy\ndeployment-profile\nflow\nverification\nrevocation-profile\ndevice-registration\nevent-stream\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "--group",
+        "missing"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Unknown service group: missing\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field",
+        "env"
+      ],
+      "exit_code": 0,
+      "stdout": "POSTGRES_PASSWORD\nKEYCLOAK_DB_PASSWORD\nMARTY_DB_PASSWORD\nKEYCLOAK_ADMIN_PASSWORD\nMARTY_API_CLIENT_SECRET\nISSUANCE_API_KEY\nGRPC_SERVICE_TOKEN\nFLOW_WEBHOOK_SECRET\nNOTIFICATION_WEBHOOK_SECRET\nNOTIFICATION_APPLICANT_EVENT_TOKEN\nMARTY_WORKLOAD_IDENTITY_CA_CERT\nPP_WORKLOAD_SERVER_CERT\nPP_WORKLOAD_SERVER_KEY\nFLOW_WORKLOAD_CLIENT_CERT\nFLOW_WORKLOAD_CLIENT_KEY\nFLOW_WORKLOAD_SERVER_CERT\nFLOW_WORKLOAD_SERVER_KEY\nAUTH_WORKLOAD_CLIENT_CERT\nAUTH_WORKLOAD_CLIENT_KEY\nAPPLICANT_WORKLOAD_CLIENT_CERT\nAPPLICANT_WORKLOAD_CLIENT_KEY\nVERIFICATION_WORKLOAD_CLIENT_CERT\nVERIFICATION_WORKLOAD_CLIENT_KEY\nDEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT\nDEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY\nCOMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT\nCOMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY\nFLOW_APPLICATION_EVENT_HMAC_KEY\nINTEGRATION_SECRET_MASTER_KEY\nTOKEN_HMAC_KEY\nOPENBAO_SERVICE_TOKEN\nNOTIFICATION_OPENBAO_TOKEN\nCLOUDFLARE_TUNNEL_TOKEN\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field",
+        "required_for"
+      ],
+      "exit_code": 0,
+      "stdout": "selfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production,kubernetes-production\nselfhost-production\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "config",
+        "--json"
+      ],
+      "exit_code": 0,
+      "stdout": "[\n  \"docker\",\n  \"compose\",\n  \"--env-file\",\n  \".env.selfhost.production.local\",\n  \"-f\",\n  \"docker-compose.selfhost.prod.yml\",\n  \"config\"\n]\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "config"
+      ],
+      "exit_code": 0,
+      "stdout": "docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml config\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "no-such-operation"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Stack 'selfhost-production' does not define operation 'no-such-operation'; available: config, down, logs, ps, up\n"
+    },
+    {
+      "args": [
+        "bundle-assets",
+        "selfhost"
+      ],
+      "exit_code": 0,
+      "stdout": "$REPO_ROOT\\docker-compose.selfhost.prod.yml\n$REPO_ROOT\\docker-compose.selfhost.bundle.override.yml\n$REPO_ROOT\\docker-compose.selfhost.no-canvas.yml\n$REPO_ROOT\\docker-compose.service.issuance-native-runtime.yml\n$REPO_ROOT\\.env.selfhost.production.example\n$REPO_ROOT\\SELFHOST_BUNDLE.md\n$REPO_ROOT\\docker\\init-databases.sh\n$REPO_ROOT\\docker\\nginx-selfhost.prod.conf.template\n$REPO_ROOT\\docker\\tunnel-nginx-proxy.edge.conf\n$REPO_ROOT\\docker\\openbao-init.sh\n$REPO_ROOT\\docker\\secrets\\selfhost.example\n$REPO_ROOT\\config\\keycloak\n$REPO_ROOT\\scripts\\bootstrap-selfhost-vault.sh\n$REPO_ROOT\\scripts\\cloudflared-selfhost.sh\n$REPO_ROOT\\scripts\\keycloak-selfhost-start.sh\n$REPO_ROOT\\scripts\\load-openbao-token-and-start.sh\n$REPO_ROOT\\scripts\\load-secrets-env.sh\n$REPO_ROOT\\scripts\\nginx-entrypoint-selfhost.sh\n$REPO_ROOT\\scripts\\setup-keycloak-selfhost-production.sh\n$REPO_ROOT\\scripts\\setup-keycloak.sh\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "missing-stack"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Unknown stack: missing-stack\n"
+    },
+    {
+      "args": [
+        "services"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "services requires either a stack argument or --group.\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "missing-stack"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "Unknown stack: missing-stack\n"
+    }
+  ]
+}
