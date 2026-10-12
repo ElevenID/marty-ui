@@ -3769,6 +3769,7 @@ dependencies = [
  "hmac 0.12.1",
  "marty-oid4vci",
  "reqwest",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "sqlx",

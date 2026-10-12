@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+from dataclasses import asdict
 import json
 import sys
 import types
@@ -304,6 +305,42 @@ def capture_canvas_admin_bootstrap(monkeypatch) -> dict:
 def test_frozen_canvas_admin_bootstrap(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_canvas_admin_bootstrap(monkeypatch) == contract["canvas_admin_bootstrap"]
+
+
+def capture_canvas_cli_config(monkeypatch) -> dict:
+    captured = {}
+    environment = {
+        "MARTY_API_KEY": "test-gateway-key",
+        "ISSUANCE_INTERNAL_API_BASE_URL": "http://issuance:8008",
+        "ISSUANCE_API_KEY": "test-issuance-key",
+    }
+    monkeypatch.setattr(seed.os, "environ", environment)
+    monkeypatch.setattr(seed, "_load_dotenv", lambda _path: None)
+    monkeypatch.setattr(seed.sys, "argv", ["seed_canvas_real.py", "--skip-canvas-lms-seed", "--probe-after-upsert"])
+    monkeypatch.setattr(seed, "_seed_canvas_open_badge_templates", lambda *_args, **_kwargs: None)
+
+    def upsert(cfg):
+        captured["connector"] = asdict(cfg)
+        return {"action": "created", "platform": {"id": "platform-1", "lti_client_id": cfg.lti_client_id, "lti_deployment_id": cfg.lti_deployment_id}}
+
+    def demo_application(_connector, canvas, *, canvas_seed):
+        captured["canvas"] = asdict(canvas)
+        assert canvas_seed is None
+        return {"id": "application-1", "status": "pending"}
+
+    monkeypatch.setattr(seed, "_upsert_canvas_platform", upsert)
+    monkeypatch.setattr(seed, "_refresh_canvas_platform_jwks", lambda *_args: {"platform": {"id": "platform-1", "lti_jwks_json": {"keys": []}}})
+    monkeypatch.setattr(seed, "_upsert_canvas_program_binding", lambda *_args, **_kwargs: {"action": "created", "binding": {"id": "binding-1"}})
+    monkeypatch.setattr(seed, "_resolve_issuer_context_summary", lambda *_args: None)
+    monkeypatch.setattr(seed, "_create_canvas_demo_application", demo_application)
+    assert seed.main() == 0
+    return captured
+
+
+def test_frozen_canvas_cli_config(monkeypatch, capsys) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_cli_config(monkeypatch) == contract["canvas_cli_config"]
+    capsys.readouterr()
 
 
 def capture(monkeypatch) -> dict:

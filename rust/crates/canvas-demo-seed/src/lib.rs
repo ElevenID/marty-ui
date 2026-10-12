@@ -8,6 +8,7 @@ use url::form_urlencoded;
 
 mod canvas_rails;
 mod canvas_rest;
+mod cli_config;
 mod database;
 mod demo_evidence;
 mod wallet;
@@ -22,6 +23,7 @@ pub use canvas_rest::{
     ensure_module_external_tool_item, ensure_module_quiz_item, ensure_quiz, ensure_user,
     CanvasOperation, CanvasRestConfig, CanvasRestError, CanvasRestHttp, CanvasRestTransport,
 };
+pub use cli_config::{build_run_config, CanvasRunConfig, ConnectorRunConfig, SeedRunConfig};
 pub use database::seed_open_badge_templates;
 pub use demo_evidence::{
     ags_score_payload, application_payload, send_signed_ags, signed_ags_wire, DemoEvidenceConfig,
