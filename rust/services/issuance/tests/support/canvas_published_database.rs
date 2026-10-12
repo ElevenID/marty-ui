@@ -773,7 +773,9 @@ impl PublishedDatabase {
     ) -> Result<Self, String> {
         let owned = Self::start_empty_postgres(scope).await?;
         let postgres = owned.postgres.as_deref().ok_or("Missing owned database")?;
-        let timing = PhaseTimer::start("migration_seed", "published_probe");
+        // Distinguish restoring the in-process base from running the pinned
+        // published migration probe. Both previously shared one timing name.
+        let timing = PhaseTimer::start("migration_seed", "published_base_restore");
         restore_published_base(postgres, base)?;
         timing.success();
         Ok(owned)
