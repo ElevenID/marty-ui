@@ -16928,3 +16928,28 @@ main then advanced one Canvas CI-only commit `2433b6c87`; it was merged into
 the same local PR branch, and its two focused Python test modules passed
 52/52. The grouped head is ready for one draft-PR push and exact-head CI;
 no stack release hold is lifted by these local results.
+
+Post-push Rust-bootstrap self-review found that `marty-migration-bootstrap
+--verify-only` returned success after checking only that `DATABASE_URL` was
+nonempty. The retired Python command actually connected and executed `SELECT
+1`, so the new behavior could falsely qualify an unreachable rehearsal or
+recovery database. A local Rust correction adds a read-only connection/query
+check through the shared bootstrap backend; simulated success and disconnect
+paths make no schema/KMS/Redis writes, and the focused bootstrap target passed
+8/8. The correction is held locally while UI #1192 exact-head run
+`38205991904` remains live. Packaged-image reachable/unreachable database
+evidence and current-head CI remain required before pushing the next grouped
+head.
+The corrected migration image `marty-kms-migrations:rust-verify-local`
+(`sha256:d9654904b7ca5b9f35735618ec49b06211addd93bd3eeafd7d7d0c7c5678fb2d`)
+built locally. Its actual `--verify-only` binary exited 0 against an isolated
+pinned PostgreSQL instance and nonzero against an unreachable address, with
+zero non-system schemas both before and after. The disposable container and
+network were removed. See `artifacts/kms-rust-verify-only-live-20261012.json`.
+An initial harness attempt queried PostgreSQL during its one-time init
+restart; it stopped and cleaned up before the stable-query rerun. This is a
+source-built image result, not signed release or supported beta cutover proof.
+Targeted Rust formatting and warnings-denied Clippy passed for the corrected
+Signing Keys library. The invalid-database output was also checked with a
+sentinel URL password and did not disclose it. The grouped fix remains local
+while the previously pushed PR head completes its required hosted run.
