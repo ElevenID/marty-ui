@@ -16718,3 +16718,15 @@ contracts and service-image lanes passed; the aggregate CI Gate failed only
 downstream of Canvas. Core's
 v0.2.2 release workflow remains in its test job, so signed-artifact and
 installed-image gates remain open.
+
+The owned Canvas asset fix and copied-source regression were pushed as UI
+`06b40c1eef6461d4feb19a834360944a62c1df8e`; exact-head [CI
+38192460057](https://github.com/ElevenID/marty-ui/actions/runs/38192460057)
+is queued/running. A follow-up source-protection review found that the beta
+fence's `PROTECTED_FILES` verified `prepare_official_beta_release.py` but not
+its new adjacent `kms_core_release.py` policy helper. The helper is now in that
+protected set locally; a tampered-helper regression and all 70 release/fence
+tests plus Ruff passed. Hold this
+correction for the next cohesive UI batch while the current run provides
+evidence. Core's v0.2.2 release workflow has passed its test job and is
+building platform artifacts; release publication is still pending.

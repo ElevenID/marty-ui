@@ -669,6 +669,19 @@ def test_hidden_worktree_change_cannot_replace_verifier(
                                   lambda image, commit, version: True)
 
 
+def test_hidden_worktree_change_cannot_replace_kms_release_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    (authority.ROOT / "scripts/kms_core_release.py").write_text(
+        "altered", encoding="utf-8"
+    )
+    with pytest.raises(HostProbeError, match="content differs"):
+        authority.check_authority(approval, manifest, values["baseline"], runner, lambda: target,
+                                  lambda path, digests, commit: True,
+                                  lambda image, commit, version: True)
+
+
 @pytest.mark.parametrize("field,value", [
     ("branch", "topic"), ("status", " M script.py"),
     ("protected", False),

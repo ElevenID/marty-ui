@@ -61,6 +61,7 @@ PROTECTED_FILES = (
     "scripts/collect_passport_beta_acceptance.py",
     "scripts/collect_passport_beta_aggregate_acceptance.py",
     "scripts/prepare_official_beta_release.py",
+    "scripts/kms_core_release.py",
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
