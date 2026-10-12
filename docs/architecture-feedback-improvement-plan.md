@@ -3933,6 +3933,8 @@ job took 25m38s and the protected job took 32m56s; these different runner
 conditions do not establish an attributable speedup. The split improves test
 ownership and early local rejection feedback while the pinned producer and all
 39 real-database success cases remain in the required Canvas lane.
+The precise case owners and inputs are recorded in
+`docs/architecture-test-obligations.md`.
 
 Next A5 current-input candidate (local, not yet qualified): a normalized-hash
 sidecar binds the operations-input producer, its 75-case scenario and frozen
@@ -3946,7 +3948,7 @@ producer. It changes no test tier, published-process gate, or runtime behavior.
 The candidate passed focused current-input tests plus Ruff and diff checks
 locally. Independent review and hosted qualification remain before promotion.
 
-October 12 A3 shadow-edge candidate (local, not yet merged): Device
+October 12 A3 shadow edge ([UI #1304](https://github.com/ElevenID/marty-ui/pull/1304), merged as `951a002a9`): Device
 Registration constructs a Trust Profile HTTP client from
 `TRUST_PROFILE_SERVICE_URL` and requests the scoped wallet-issuer key route;
 the Trust Profile service publishes that route, and base Compose binds the
@@ -3955,7 +3957,31 @@ tests. The hypothetical reachability inventory includes Device Registration
 for upstream Trust Profile changes. This remains diagnostic only: service
 changes still select the full Rust workspace, and the non-Cargo graph is not
 complete. All 53 local planner tests passed (465 subtests), and independent
-review found no P1-P3 issue. Hosted PR and protected checks remain pending.
+review found no P1-P3 issue. Exact-head PR and protected combined-head CI
+passed before merge. No narrower gate or speedup is claimed.
+
+October 12 A5 operations-input current-input guard
+([UI #1303](https://github.com/ElevenID/marty-ui/pull/1303), merged as
+`71464c433`): the frozen 75-case scenario/oracle pair remains qualified against
+the pinned historical producer. A guard checks that the current request recipe
+still corresponds to those frozen inputs. The reviewed head also retries the
+existing packaged Canvas owned-review readiness probe within its original
+ten-second deadline after an unrelated merge-group failure; it does not relax
+the health assertion. Exact-head PR CI and the [protected combined-head
+run](https://github.com/ElevenID/marty-ui/actions/runs/38317587976) passed,
+including Canvas and the final gate, before merge. This is not evidence of
+a feedback-time saving.
+
+October 12 A0/A6 Flow acceptance inventory follow-up (reviewed local
+candidate): the full Canvas runner and the narrow Flow-source PR runner now
+call the same exact nine-case `list-flow-acceptance-cases.sh` guard. The full
+runner still executes the Flow target, accounts for its status, and retains
+protected Canvas coverage; the shared guard fails on missing, extra, or
+substituted names. The A0 inventory records the five live parent cases, four
+helper/control cases, and runtime inputs. Focused local policy tests passed
+(nine owner/runner tests plus one missing-Flow negative); Ruff and shell
+syntax checks passed, and independent review found no P1-P3 issue. Hosted
+validation and any feedback-time measurement remain pending.
 
 ## Design references
 

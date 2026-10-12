@@ -132,7 +132,13 @@ def required_registrations():
     # it to exercise every current check without copying another long roster.
     names = re.findall(r"grep -Fx '([^']+): test'", SCRIPT.read_text(encoding="utf-8"))
     assert names and all(target in names for _, target in PREFLIGHTS)
-    flow_block = SCRIPT.read_text(encoding="utf-8").split(
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in SCRIPT.read_text(
+        encoding="utf-8"
+    )
+    flow_block = flow_inventory.split(
         "expected_flow_tests=$(printf '%s\\n' ", 1
     )[1].split(")\n[[", 1)[0]
     flow_exact = re.findall(r"'([^']+): test'", flow_block)
@@ -1887,6 +1893,7 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         "worker_provider_recovery_first_native_child",
         "operations_gateway_candidate_preserves_review_lifecycle",
         RENDERED_CONFIG,
+        FLOW_HISTORICAL_ROSTER[0],
     ],
 )
 def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, missing):
