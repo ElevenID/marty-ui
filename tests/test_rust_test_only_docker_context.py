@@ -80,6 +80,11 @@ SERVICE_ACCEPTANCE_TARGETS = (
     "gateway_signing_acceptance",
     "csca_capability_contract",
 )
+SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"
+SIGNING_CSCA_TEST_FILES = (
+    "csca_lifecycle_behavior.rs",
+    "csca_lifecycle_storage_contract.rs",
+)
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
@@ -639,33 +644,106 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
     assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "unreviewed.rs", root_lines)
 
 
-def test_verified_service_acceptance_paths_require_six_context_proof() -> None:
-    result = subprocess.run(
-        [sys.executable, __file__, "--emit-verified-service-acceptance-tests"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
+def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context() -> None:
+    paths = [SIGNING_CSCA_TEST_ROOT + name for name in SIGNING_CSCA_TEST_FILES]
+    assert all(_tracked_regular_mode(ROOT, path) for path in paths)
+    manifest = tomllib.loads(
+        (ROOT / "rust/services/signing-keys/Cargo.toml").read_text(encoding="utf-8")
     )
-    assert result.stderr == b""
-    assert result.stdout == b"".join(
-        (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8") + b"\0"
+    assert manifest["package"]["name"] == "marty-signing-keys"
+    assert manifest["package"].get("autotests", True) is True
+    assert not manifest.get("test", [])
+    assert not _ownership_sources(ROOT, SIGNING_CSCA_TEST_FILES), (
+        "Review a Rust source include of a Signing Keys test target"
+    )
+    assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
+    for dockerfile in DOCKER_CONTEXTS:
+        recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
+        assert "--cfg test" not in recipe
+        assert "--all-targets" not in recipe
+        assert "cargo test" not in recipe
+    build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "cargo build --locked --release" in build_script
+    assert "--cfg test" not in build_script and "--all-targets" not in build_script
+    for ignore_path in set(DOCKER_CONTEXTS.values()):
+        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for path in paths:
+            assert _is_ignored(path, lines), f"Docker COPY includes {ignore_path}: {path}"
+            if ignore_path == ".dockerignore":
+                assert lines.count(path) == 1
+        for production_path in PRODUCTION_INPUTS:
+            assert not _is_ignored(production_path, lines)
+    root_lines = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert not _is_ignored(SIGNING_CSCA_TEST_ROOT + "unreviewed.rs", root_lines)
+
+
+def test_signing_csca_target_proof_rejects_docker_reinclude(monkeypatch) -> None:
+    import pytest
+
+    original = Path.read_text
+    target = SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[0]
+
+    def with_reincluded_test(path: Path, *args, **kwargs) -> str:
+        source = original(path, *args, **kwargs)
+        if path == ROOT / ".dockerignore":
+            return source + "\n!" + target + "\n"
+        return source
+
+    monkeypatch.setattr(Path, "read_text", with_reincluded_test)
+    with pytest.raises(AssertionError, match="Docker COPY includes"):
+        test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
+
+
+def test_signing_csca_target_proof_rejects_production_consumer(monkeypatch) -> None:
+    import pytest
+
+    original = _ownership_sources
+
+    def with_production_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
+        if names == SIGNING_CSCA_TEST_FILES:
+            return {"rust/services/signing-keys/src/lib.rs": 'include!("csca_lifecycle_behavior.rs")'}
+        return original(root, names)
+
+    monkeypatch.setattr(sys.modules[__name__], "_ownership_sources", with_production_consumer)
+    with pytest.raises(AssertionError, match="Rust source include"):
+        test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
+
+
+def _select_contract_test_sources(changed: bytes) -> bool:
+    owned = {
+        (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8")
         for name in SERVICE_ACCEPTANCE_TARGETS
-    )
+    } | {(SIGNING_CSCA_TEST_ROOT + name).encode("utf-8") for name in SIGNING_CSCA_TEST_FILES}
+    if not changed.endswith(b"\0") or not changed[:-1]:
+        return False
+    paths = changed[:-1].split(b"\0")
+    if len(paths) != len(set(paths)) or not all(path in owned for path in paths):
+        return False
+    test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+    test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
+    return True
 
 
-def test_service_acceptance_selector_rejects_unowned_or_malformed_diffs() -> None:
-    owned = (
-        SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs"
-    ).encode()
+def test_contract_test_selector_accepts_only_proved_sources() -> None:
+    service = (SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs").encode()
+    signing = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[0]).encode()
+    storage = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[1]).encode()
     for changed, accepted in (
-        (owned + b"\0", True),
+        (service + b"\0", True),
+        (signing + b"\0", True),
+        (signing + b"\0" + storage + b"\0", True),
+        (service + b"\0" + signing + b"\0", True),
         (b"", False),
-        (owned, False),
-        (owned + b"\0docs/other.md\0", False),
-        (owned + b"\0\0", False),
+        (signing, False),
+        (signing + b"\0\0", False),
+        (signing + b"\0" + signing + b"\0", False),
+        (signing + b"\0docs/other.md\0", False),
+        (b"rust/services/signing-keys/tests/unreviewed.rs\0", False),
     ):
         result = subprocess.run(
-            [sys.executable, __file__, "--select-service-acceptance-tests"],
+            [sys.executable, __file__, "--select-contract-tests"],
             cwd=ROOT,
             input=changed,
             capture_output=True,
@@ -1056,25 +1134,20 @@ if __name__ == "__main__":
         if lane is None:
             raise SystemExit(1)
         sys.stdout.write(lane)
-    elif sys.argv == [sys.argv[0], "--select-service-acceptance-tests"]:
+    elif sys.argv == [sys.argv[0], "--select-contract-tests"]:
         # NUL-delimited paths are the exact git diff, not a filename-glob hint.
-        # Fail closed on an empty, malformed, or unowned change set.
-        changed = sys.stdin.buffer.read()
-        owned = {
-            (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8")
-            for name in SERVICE_ACCEPTANCE_TARGETS
-        }
-        if not changed.endswith(b"\0") or not changed[:-1]:
+        # Both source cohorts have the same required contracts lane.
+        if not _select_contract_test_sources(sys.stdin.buffer.read()):
             raise SystemExit(1)
-        if not all(path in owned for path in changed[:-1].split(b"\0")):
-            raise SystemExit(1)
+    elif sys.argv == [sys.argv[0], "--emit-verified-contract-tests"]:
         test_service_acceptance_targets_stay_out_of_release_rust_contexts()
-    elif sys.argv == [sys.argv[0], "--emit-verified-service-acceptance-tests"]:
-        test_service_acceptance_targets_stay_out_of_release_rust_contexts()
+        test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
         for name in SERVICE_ACCEPTANCE_TARGETS:
             sys.stdout.buffer.write(
                 (SERVICE_ACCEPTANCE_TEST_ROOT + name + ".rs").encode("utf-8") + b"\0"
             )
+        for name in SIGNING_CSCA_TEST_FILES:
+            sys.stdout.buffer.write((SIGNING_CSCA_TEST_ROOT + name).encode("utf-8") + b"\0")
     elif sys.argv == [sys.argv[0], "--emit-verified-selfhost-tests"]:
         test_selfhost_acceptance_test_tree_stays_out_of_all_release_rust_contexts()
         for name in SELFHOST_TEST_FILES:
@@ -1106,6 +1179,6 @@ if __name__ == "__main__":
             "Usage: test_rust_test_only_docker_context.py "
             "--emit-verified-leaves|--emit-verified-worker-tests|"
             "--emit-verified-flow-tests|--emit-verified-selfhost-tests"
-            "|--emit-verified-service-acceptance-tests"
-            "|--select-service-acceptance-tests|--select-acceptance-test-lane"
+            "|--emit-verified-contract-tests|--select-contract-tests"
+            "|--select-acceptance-test-lane"
         )

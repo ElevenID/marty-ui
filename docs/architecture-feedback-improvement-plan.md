@@ -721,6 +721,14 @@ Docker contexts exclude the acceptance source. This changes test ownership
 without changing runtime behavior or relaxing CI gates. The pre-KMS package
 count and two-case authority-issuance evidence from #1294 do not describe
 the reconciled KMS-only test graph; qualify that graph on its own head.
+[UI #1294](https://github.com/ElevenID/marty-ui/pull/1294) passed exact-head
+and protected combined-head CI before the remote-KMS reconciliation and
+merged as `c7d225b9` on October 12. Its then-current locked Signing Keys
+test graph dropped from 587 to 322 unique packages; this is historical
+compile-surface evidence, not a measured hosted duration or a claim about
+the later KMS-only graph. The first protected attempt failed before two UI
+shards could start because the pinned release asset endpoint returned HTTP
+500; the unchanged rerun and fresh queue candidate passed.
 
 A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull/1117), merged 2026-10-06): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup or narrower gate is claimed.
 
@@ -3829,6 +3837,31 @@ no test or gate is skipped. A Linux loopback test passed both a 500-then-200
 recovery and a wrong-digest rejection, 147 workflow-policy tests passed, and
 independent review found no P1-P3 issue. Hosted benefit and protected merge
 validation remain unproven until its own PR completes.
+[UI #1295](https://github.com/ElevenID/marty-ui/pull/1295) subsequently
+passed all exact-head checks and full protected
+[combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38261915179),
+then merged as `5297e214` on October 12. The bounded-retry branch was not
+exercised by a live GitHub asset outage, so no turnaround saving is claimed.
+
+Next A0/A6 bounded candidate: the two Signing Keys CSCA test targets are
+tracked test-only sources after remote-KMS reconciliation removed the old
+shared Rust fixture. The ordinary contracts
+lane runs the behavior target through the workspace test step and both
+ignored real-Redis storage cases through an exact-count step. The root
+Docker context still included the two test targets even though release
+builds do not compile tests; seven Rust-copying contexts are now checked
+before proposing exact exclusions, including the new migration-image context.
+A PR-only selector may assign a nonempty
+diff consisting solely of these two files and the four existing
+service-acceptance test targets to the contracts lane, provided the checked-out
+source, Cargo ownership, all seven Docker contexts, and CI execution owners
+still match. The production-focused CodeQL proof uses the same exact source
+set and retains analysis when proof or scope changes. Mixed, unknown,
+production, manifest, and proof-failed diffs, plus protected merge groups
+and main, retain full Rust validation. The pre-KMS exact-head #1296 CI passed;
+on the provisional KMS queue head, the affected local policy suite passed 178
+tests and independent review found no P1-P3 issue. The reconciled head still
+needs hosted and protected qualification. This is not yet a measured speedup.
 
 ## Design references
 

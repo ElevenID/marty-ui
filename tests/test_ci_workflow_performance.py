@@ -797,7 +797,7 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert on_main["rust_matrix"] == '["canvas","contracts"]'
 
 
-def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
+def test_verified_contract_test_sources_select_contracts_only_on_pr(
     tmp_path: Path,
 ) -> None:
     _, workflow = _workflow(CI_PATH)
@@ -809,26 +809,32 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
     # Keep headroom below GitHub's 21,000-character expression limit.
     assert len(classifier["run"].encode("utf-8")) < 20_500
     assert (
-        classifier["run"].index("rust/crates/service-acceptance/tests/*)")
-        < classifier["run"].index("--select-service-acceptance-tests")
+        classifier["run"].index("rust/crates/service-acceptance/tests/*|")
+        < classifier["run"].index("--select-contract-tests")
+    )
+    assert (
+        classifier["run"].index("rust/services/signing-keys/tests/*)")
+        < classifier["run"].index("--select-contract-tests")
     )
     verified = subprocess.run(
         [
             sys.executable,
             "tests/test_rust_test_only_docker_context.py",
-            "--emit-verified-service-acceptance-tests",
+            "--emit-verified-contract-tests",
         ],
         cwd=ROOT,
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 5
-    service_tests = [value.decode("utf-8") for value in verified[:-1]]
-    assert service_tests == [
+    assert verified[-1] == b"" and len(verified) == 7
+    contract_tests = [value.decode("utf-8") for value in verified[:-1]]
+    assert contract_tests == [
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
         "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
+        "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
+        "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
     ]
     expected = {
         "all": "false",
@@ -843,21 +849,23 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         "security": "false",
     }
     assert (
-        _classify_changed_paths(service_tests, tmp_path, include_rust_plan=True)
-        == [expected] * 4
+        _classify_changed_paths(contract_tests, tmp_path, include_rust_plan=True)
+        == [expected] * len(contract_tests)
     )
     assert _classify_changed_paths(
-        service_tests, tmp_path, combined=True, include_rust_plan=True
+        contract_tests, tmp_path, combined=True, include_rust_plan=True
     ) == [expected]
     for paths in (
-        [service_tests[0], "docs/architecture-feedback-improvement-plan.md"],
-        [service_tests[1], "rust/crates/service-acceptance/Cargo.toml"],
-        [service_tests[2], "rust/crates/service-acceptance/tests/unreviewed.rs"],
+        [contract_tests[0], "docs/architecture-feedback-improvement-plan.md"],
+        [contract_tests[1], "rust/crates/service-acceptance/Cargo.toml"],
+        [contract_tests[2], "rust/crates/service-acceptance/tests/unreviewed.rs"],
         [
-            service_tests[0],
+            contract_tests[0],
             "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs",
         ],
-        [service_tests[0] + "\nother"],
+        [contract_tests[0] + "\nother"],
+        [contract_tests[4], "rust/services/signing-keys/tests/unreviewed.rs"],
+        [contract_tests[5], "rust/services/signing-keys/Cargo.toml"],
     ):
         selected = _classify_changed_paths(
             paths, tmp_path, combined=True, include_rust_plan=True
@@ -865,22 +873,34 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         assert selected["rust_runtime"] == "true"
         assert selected["rust_matrix"] == '["canvas","contracts"]'
     unverified = _classify_changed_paths(
-        [service_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
+        [contract_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert unverified["rust_runtime"] == "true"
     assert unverified["rust_matrix"] == '["canvas","contracts"]'
     queued = _classify_changed_paths(
-        [service_tests[-1]], tmp_path, event="merge_group", include_rust_plan=True
+        [contract_tests[-1]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
     assert queued["rust_matrix"] == '["canvas","contracts"]'
     on_main = _classify_changed_paths(
-        [service_tests[-1]], tmp_path, event="push", include_rust_plan=True
+        [contract_tests[-1]], tmp_path, event="push", include_rust_plan=True
     )[0]
     assert on_main["rust_runtime"] == "true"
     assert on_main["rust_matrix"] == '["canvas","contracts"]'
     jobs = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
+    contract_steps = jobs["test-rust-services"]["steps"]
+    [workspace_owner] = [
+        step for step in contract_steps if step.get("name") == "Run safe Rust contract groups concurrently"
+    ]
+    assert "cargo test --locked --workspace" in workspace_owner["run"]
+    assert "--exclude marty-signing-keys" not in workspace_owner["run"]
+    [live_owner] = [
+        step for step in contract_steps
+        if step.get("name") == "Exercise live Signing Keys public contracts on disposable Redis"
+    ]
+    assert "csca_lifecycle_storage_contract:2" in live_owner["run"]
+    assert live_owner["if"] == "matrix.lane == 'contracts'"
     assert "test-rust-services" in jobs["ci-gate"]["needs"]
     assert (
         'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
@@ -4586,6 +4606,7 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
     )
     selfhost = "rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs"
     service_acceptance = "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
+    signing_csca = "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs"
     proofs = {
         "--emit-verified-worker-tests": {
             "status": 0,
@@ -4596,9 +4617,9 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
             "stdout": "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs\0",
         },
         "--emit-verified-selfhost-tests": {"status": 0, "stdout": selfhost + "\0"},
-        "--emit-verified-service-acceptance-tests": {
+        "--emit-verified-contract-tests": {
             "status": 0,
-            "stdout": service_acceptance + "\0",
+            "stdout": service_acceptance + "\0" + signing_csca + "\0",
         },
     }
     harness = r"""
@@ -4659,6 +4680,7 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
     exact = [{"filename": selfhost, "status": "modified"}]
     assert classify(exact)["skip"] == "true"
     assert classify([{"filename": service_acceptance, "status": "modified"}])["skip"] == "true"
+    assert classify([{"filename": signing_csca, "status": "modified"}])["skip"] == "true"
     assert classify([
         {"filename": service_acceptance, "status": "modified"},
         {"filename": selfhost, "status": "modified"},
@@ -4703,11 +4725,15 @@ def test_rust_codeql_test_only_scope_fails_closed() -> None:
         "status": 1, "stdout": "", "stderr": "proof failed"
     }}
     assert "skip" not in classify(exact, proof_results=failed_proofs)
-    failed_service_proof = {**proofs, "--emit-verified-service-acceptance-tests": {
+    failed_service_proof = {**proofs, "--emit-verified-contract-tests": {
         "status": 1, "stdout": "", "stderr": "proof failed"
     }}
     assert "skip" not in classify(
         [{"filename": service_acceptance, "status": "modified"}],
+        proof_results=failed_service_proof,
+    )
+    assert "skip" not in classify(
+        [{"filename": signing_csca, "status": "modified"}],
         proof_results=failed_service_proof,
     )
     assert classify(exact, event="merge_group")["analyze"] == "true"
