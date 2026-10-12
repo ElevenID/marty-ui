@@ -355,6 +355,9 @@ def test_aggregate_preflight_requires_no_running_optional_bridge(
     second_call = source.index("    Assert-NoRunningCanvasLocalhostBridge", first_call + 1)
     assert first_call < source.index("Write-DurableJson -Path $planPath")
     assert second_call < source.index("Invoke-BetaPsql -Sql ($session + $sql)")
+    final_call = source.index("    Assert-NoRunningCanvasLocalhostBridge", second_call + 1)
+    assert source.index("$runtime = Invoke-Plan", second_call) < final_call
+    assert final_call < source.index("$receipt = [ordered]@{", final_call)
     service_marker = "'synthetic-bridge-id'" if service_running else ""
     name_marker = "'synthetic-bridge-id'" if name_running else ""
     exit_code = 1 if inspect_failed else 0

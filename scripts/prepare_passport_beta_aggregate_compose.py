@@ -55,6 +55,7 @@ SIGNED_APPLICATIONS = frozenset({
 # remains stopped.
 INGRESS = frozenset({"cloudflared", "nginx-proxy", "envoy", "waltid-nginx"})
 NEW_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
+OPTIONAL_LOCALHOST_BRIDGE = "issuance-canvas-localhost-bridge"
 TRANSITION_SQL_FILES = {
     "transition_sql_sha256": "passport-beta-rust-owner-transition.sql",
     "rust_owner_verify_sql_sha256": "passport-beta-rust-owner-verify.sql",
@@ -405,6 +406,8 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
                 and item["service"] not in previous,
                 "Beta maintenance generation has ambiguous services")
         previous[item["service"]] = item["container_id"]
+    require(OPTIONAL_LOCALHOST_BRIDGE not in previous,
+            "Optional Canvas localhost bridge cannot enter signed aggregate beta generation")
     require("postgres" in previous
             and (SIGNED_APPLICATIONS - NEW_SERVICES | {"issuance"}).issubset(previous)
             and not (NEW_SERVICES & previous.keys()),

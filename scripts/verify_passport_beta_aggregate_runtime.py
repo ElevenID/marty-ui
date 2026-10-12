@@ -225,6 +225,19 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
     verify_production(plan, intent, expected_production_attachments_sha256, runner)
     old = plan.get("old_container_ids_by_service")
     targets = plan.get("target_services")
+    optional_bridge = "issuance-canvas-localhost-bridge"
+    generation = intent.get("beta_generation")
+    require(isinstance(generation, list)
+            and not any(isinstance(item, dict) and item.get("service") == optional_bridge
+                        for item in generation)
+            and isinstance(old, dict) and optional_bridge not in old
+            and isinstance(targets, list) and optional_bridge not in targets
+            and all(isinstance(plan.get(group), list)
+                    and optional_bridge not in plan[group] for group in (
+                "preserved_infrastructure", "restart_infrastructure",
+                "restart_ingress_last", "recreate_applications",
+                "recreate_ingress_last")),
+            "Optional Canvas localhost bridge survived in signed beta plan")
     require(isinstance(old, dict) and isinstance(targets, list)
             and old.get("postgres") == plan.get("postgres_container_id")
             and set(targets) == (set(old) - {"postgres"})
@@ -236,6 +249,8 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
         name = record["Config"]["Labels"]["com.docker.compose.service"]
         require(name not in observed, "Aggregate beta service is duplicated")
         observed[name] = record
+    require(optional_bridge not in observed,
+            "Optional Canvas localhost bridge survived aggregate beta deployment")
     require(set(observed) == set(targets) | {"postgres"}
             and observed["postgres"]["Id"] == old["postgres"],
             "Aggregate beta generation differs from signed plan")

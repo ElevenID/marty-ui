@@ -1365,6 +1365,7 @@ try {
         '--plan', $planPath, '--maintenance-intent', $intentPath,
         '--production-attachments-sha256',
         [string]$script:plan.production_attachments_sha256)
+    Assert-NoRunningCanvasLocalhostBridge
     if ($null -eq $runtime.beta_runtime -or
         $null -eq $runtime.beta_runtime.PSObject.Properties['issuance-native']) {
         throw 'Aggregate beta runtime has no signed native issuance process'

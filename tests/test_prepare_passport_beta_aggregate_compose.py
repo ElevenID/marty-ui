@@ -273,6 +273,18 @@ def test_signed_services_images_package_canvas_sandbox_binary():
     assert "target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox" in ci
 
 
+def test_stopped_optional_bridge_cannot_enter_signed_beta_generation():
+    handoff, intent, rendered, ui = candidate()
+    bridge = {"service": "issuance-canvas-localhost-bridge",
+              "container_id": "f" * 64}
+    intent["beta_generation"].append(bridge)
+    intent["stop_container_ids"].append(bridge["container_id"])
+    handoff["stopped_container_ids"].append(bridge["container_id"])
+    rendered["services"][bridge["service"]] = {}
+    with pytest.raises(ComposePlanError, match="cannot enter signed aggregate beta generation"):
+        prepare(handoff, intent, rendered, ui)
+
+
 def test_aggregate_rejects_a_separate_python_issuance_image():
     handoff, intent, rendered, ui = candidate()
     handoff["issuance_image"] = (
