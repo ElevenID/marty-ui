@@ -3796,6 +3796,18 @@ select the full Rust workspace. The local planner suite passed 51 tests
 inventory, not a complete runtime graph or a CI speedup. Independent review
 and protected CI remain required before merge.
 
+October 12 CI reliability follow-up: the protected #1294 merge-group run
+encountered HTTP 500 while fetching a pinned UI release asset before two UI
+test shards could begin. The same asset URLs subsequently returned HTTP 200;
+the other shards passed. This is an external-bootstrap failure, not evidence
+that the UI tests failed. A separate local candidate centralizes the four
+identical download-and-SHA-256 checks and adds bounded retries for transient
+HTTP/network failures. Digest mismatches still fail before package install;
+no test or gate is skipped. A Linux loopback test passed both a 500-then-200
+recovery and a wrong-digest rejection, 147 workflow-policy tests passed, and
+independent review found no P1-P3 issue. Hosted benefit and protected merge
+validation remain unproven until its own PR completes.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
