@@ -201,8 +201,7 @@
   },
   "unfrozen_groups": [
     "canvas_lms_http_and_rails",
-    "wallet_claim_and_mirror",
-    "transition_summary"
+    "mirror_and_transition_summary"
   ],
   "database_seed": {
     "modern_schema": {
@@ -998,5 +997,56 @@
       "x-canvas-signature-256": "sha256=0d18ba0e129f2b9b9485b22c45c71998f2f33c603119ad95b367582ceb387145"
     },
     "timeout": 20
+  },
+  "wallet_claim": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/issuance/offers/tx-1",
+        "payload": null,
+        "headers": null,
+        "timeout": 20
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/issuance/token",
+        "form": {
+          "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+          "pre-authorized_code": "offer-code"
+        },
+        "headers": null,
+        "timeout": 20
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/issuance/credential",
+        "payload": {
+          "format": "vc+sd-jwt",
+          "credential_configuration_id": "OpenBadgeCredential#sd-jwt",
+          "proofs": {
+            "jwt": [
+              "signed-proof"
+            ]
+          }
+        },
+        "headers": {
+          "Authorization": "Bearer test-access-token"
+        },
+        "timeout": 60
+      }
+    ],
+    "proofs": [
+      {
+        "audience": "https://marty.example/org/org-1",
+        "nonce": "test-nonce"
+      }
+    ],
+    "result": {
+      "transaction_id": "tx-1",
+      "credential_format": "vc+sd-jwt",
+      "credential_size": 24,
+      "credential_hash": "256d04db4e5e4ac308751ed0885b722b758630567c53a7125ed9fbd068e5c3f6",
+      "notification_id": "notify-1"
+    }
   }
 }

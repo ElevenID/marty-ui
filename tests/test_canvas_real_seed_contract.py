@@ -242,3 +242,41 @@ def capture_signed_ags_wire(monkeypatch) -> dict:
 def test_frozen_signed_ags_wire(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_signed_ags_wire(monkeypatch) == contract["signed_ags_wire"]
+
+
+def capture_wallet_claim(monkeypatch) -> dict:
+    operations = []
+    proofs = []
+    responses = [
+        {"grants": {"urn:ietf:params:oauth:grant-type:pre-authorized_code": {"pre-authorized_code": "offer-code"}}},
+        {"access_token": "test-access-token", "c_nonce": "test-nonce"},
+        {"credential": "header.payload.signature", "notification_id": "notify-1"},
+    ]
+
+    def json_request(method, url, *, payload=None, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": payload, "headers": headers, "timeout": timeout})
+        return responses.pop(0)
+
+    def form_request(method, url, *, form, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "form": form, "headers": headers, "timeout": timeout})
+        return responses.pop(0)
+
+    marty_rs = types.ModuleType("marty_rs")
+
+    def proof(audience, nonce):
+        proofs.append({"audience": audience, "nonce": nonce})
+        return "signed-proof"
+
+    marty_rs.oid4vci_create_proof_jwt = proof
+    monkeypatch.setitem(sys.modules, "marty_rs", marty_rs)
+    monkeypatch.setattr(seed, "_json_request", json_request)
+    monkeypatch.setattr(seed, "_form_request", form_request)
+    monkeypatch.setitem(seed.os.environ, "PUBLIC_API_URL", "https://marty.example/")
+    result = seed._claim_canvas_demo_wallet_credential(config(), transaction_id="tx-1")
+    assert not responses
+    return {"operations": operations, "proofs": proofs, "result": result}
+
+
+def test_frozen_wallet_claim(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_wallet_claim(monkeypatch) == contract["wallet_claim"]
