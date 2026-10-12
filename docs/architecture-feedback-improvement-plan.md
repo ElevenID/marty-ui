@@ -484,7 +484,7 @@ workflow-policy tests, independent review, full PR CI, and [protected
 combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38227383325)
 before merge.
 
-OAuth-revocation current-input follow-up (2026-10-12 local candidate): the
+OAuth-revocation current-input follow-up (2026-10-12 merged [UI #1289](https://github.com/ElevenID/marty-ui/pull/1289)): the
 shared runner produces ten reviewed kinds, including nine variant corpora.
 One overlay inherits the guarded REST inputs and pins eleven additional
 current inputs (the runner and ten scenario matrices). Its release-owned test
@@ -493,8 +493,35 @@ imports, nested JSON references, mounted helpers, and every normalized source
 hash. A new kind, helper, or scenario requires input review. This guards only
 current capture inputs; it does not attest historical OAuth observations,
 establish runtime compatibility, authorize qualification reuse, or alter any
-routine/full oracle execution. The reviewed candidate is now based on main
-after #1287 merged; its own PR and protected CI are still required.
+routine/full oracle execution. Exact-head and protected combined-head CI
+passed before merge.
+
+Provider-recovery current-input follow-up (2026-10-12 merged [UI #1292](https://github.com/ElevenID/marty-ui/pull/1292)): eight
+direct provider/reclaimer runners are treated as one family because the
+recovery runner can select sibling scenarios. A single overlay inherits the
+REST current inputs and pins 17 additional scripts/scenario files. Tests
+reject a new producer, scenario selection, local helper, transitive JSON
+reference, or changed hash without review. The manifest is release-sensitive
+in the existing CI classifier. This is current capture-input evidence only,
+not historical corpus attestation, a qualification skip, or a runtime change.
+Independent review, 212 local tests, exact-head CI, and [protected
+combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38242078139)
+passed before merge. The protected Canvas job took 28m37s, including 443s
+compiling test executables, 422s building the public image, and 618s in
+isolated database contracts. The prior protected run's corresponding values
+were 28m31s, 467s, 388s, and 639s. These two different candidates do not
+prove any speed change from the guard.
+
+A6 Python-owned input-record candidate (2026-10-12): only the OAuth and
+provider-recovery overlays have Python release-test consumers and no Rust
+reader; the inventory test checks every literal consumer, and all service
+Docker contexts exclude these records. Assign an exact edit to either record
+to Release Contract Tests on PRs. Their inherited REST record, capture
+scripts/scenarios, other current-input records, mixed or unknown edits, and
+protected merge groups retain the existing broader checks. This changes PR
+feedback selection only, not qualification or a production image. A hosted
+feedback saving remains unmeasured until an eligible record-only candidate
+runs after the change.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
@@ -672,6 +699,29 @@ A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072),
 [UI #1108](https://github.com/ElevenID/marty-ui/pull/1108) moved eleven self-host and base-runtime support modules used only by `canvas_published_schema_contract` into `marty-service-acceptance/tests/support`. Shared Canvas database/command helpers still used by issuance examples remain in their existing location. [#1111](https://github.com/ElevenID/marty-ui/pull/1111) then moved eighteen Flow, DIDComm, renewal, and Kubernetes-resolver support modules into the acceptance package as byte-identical renames. Module and Python ownership-guard paths changed; assertions, test names, target registration, process fixtures, CI triggers, and required gates did not. Both PRs passed protected CI and merged. No runtime saving is attributed to source ownership alone.
 
 Merged A1 service boundaries (2026-10-06 checkpoint): [#1118](https://github.com/ElevenID/marty-ui/pull/1118) moved the signed Gateway-to-Issuance webhook test to cross-service acceptance with its real PostgreSQL, signature, tenant-isolation, durable-state, and named CI checks. [#1121](https://github.com/ElevenID/marty-ui/pull/1121) moved six opt-in Gateway-to-Signing cases into `gateway_signing_acceptance`, retaining their exact named CI invocations and disposable Redis/OpenBao guards. Both service-to-service development edges are removed, and all six signing cases passed the protected contracts lane before #1121 merged. These ownership moves preserve production code and required acceptance runs.
+
+CSCA test-owner follow-up (2026-10-12 local candidate): the Signing Keys
+package still carried a Verification development dependency solely for two
+certificate-generating test helpers and one Core capability-vector assertion.
+Use a shared `marty-crypto` test fixture for the Signing Keys lifecycle and
+real Redis/HTTP cases, and put the unchanged capability assertion plus one
+representative Core-authority-certificate-to-Signing import proof in the
+existing cross-service acceptance package. This preserves the independent
+Core-to-Signing compatibility witness while removing Verification from the
+Signing Keys package-scoped test graph. The Redis tests remain ignored for
+ordinary local execution, but both are now required in the existing
+disposable-Redis contracts lane with an exact two-case execution assertion
+and a workflow-policy guard. Production Docker contexts exclude the new
+acceptance test source and shared test fixture. This candidate does not
+change runtime behavior or relax CI gates, and it does not claim a hosted
+speedup. Locked
+offline package-scoped Cargo-tree counts, normalized for display duplicates,
+are 587 to 322 for Signing Keys and 718 to 721 for the already broad service
+acceptance package. This is compile-surface evidence, not a measured build
+duration. Local Rust 1.95 validation passed seven lifecycle cases, both new
+acceptance cases, and both real Redis/HTTP cases against an owned disposable
+Redis container; 147 workflow-policy tests passed, and independent review
+found no P1-P3 issue.
 
 A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull/1117), merged 2026-10-06): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup or narrower gate is claimed.
 

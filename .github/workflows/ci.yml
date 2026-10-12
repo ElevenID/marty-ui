@@ -306,6 +306,12 @@ jobs:
                   python=true
                   security=true
                   ;;
+                contracts/canvas-worker-oauth-revocation-current-inputs.json|contracts/canvas-worker-provider-recovery-current-inputs.json)
+                  # These two overlays have only release-pytest consumers.
+                  # Their inherited REST record and every script/scenario
+                  # input retain their existing Rust/release or broad owner.
+                  release=true
+                  ;;
                 contracts/canvas-*-current-inputs.json)
                   # Only immediate-child CI input records use the reviewed
                   # Docker exclusion. A nested lookalike is unknown input.
@@ -1806,7 +1812,7 @@ jobs:
             grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
           done
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5; do
+          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5 csca_lifecycle_storage_contract:2; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \

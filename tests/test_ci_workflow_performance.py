@@ -805,12 +805,13 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 4
+    assert verified[-1] == b"" and len(verified) == 5
     service_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert service_tests == [
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
+        "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
     ]
     expected = {
         "all": "false",
@@ -825,7 +826,7 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
     }
     assert (
         _classify_changed_paths(service_tests, tmp_path, include_rust_plan=True)
-        == [expected] * 3
+        == [expected] * 4
     )
     assert _classify_changed_paths(
         service_tests, tmp_path, combined=True, include_rust_plan=True
@@ -1613,6 +1614,8 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in contracts:
         assert steps[name]["if"] == "matrix.lane == 'contracts'"
         assert not steps[name].get("continue-on-error", False)
+    live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
+    assert "csca_lifecycle_storage_contract:2" in live_signing
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
     ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
@@ -1753,6 +1756,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "contracts/canvas-worker-rest-wrappers-current-inputs.json",
             "contracts/canvas-worker-rest-dependent-current-inputs.json",
             "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+            "contracts/canvas-worker-provider-recovery-current-inputs.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
@@ -1776,6 +1780,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-oauth-revocation-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-provider-recovery-current-inputs.json": {
+            ".github/workflows/ci.yml",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -1826,6 +1836,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         for name in inventory_consumers
         if name.startswith("canvas-") and name.endswith("-current-inputs.json")
     }
+    release_only_records = {
+        "canvas-worker-oauth-revocation-current-inputs.json",
+        "canvas-worker-provider-recovery-current-inputs.json",
+    }
     assert CI_PATH.read_text(encoding="utf-8").count(
         "contracts/canvas-*-current-inputs.json"
     ) == 1, "Review the bounded classifier alongside the manifest inventory"
@@ -1843,7 +1857,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             if not path.endswith((".md", ".dockerignore"))
         } == (
             expected - {".github/workflows/ci.yml"}
-            if manifest in current_input_manifests
+            if manifest in current_input_manifests and manifest not in release_only_records
             else expected
         ), f"Review new consumer of {manifest} before narrowing its gate"
     tracked = subprocess.run(
@@ -1898,6 +1912,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 line.startswith("!contracts")
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    python_only_input_records = {
+        "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+        "contracts/canvas-worker-provider-recovery-current-inputs.json",
+    }
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
@@ -1905,6 +1923,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-rest-dependent-current-inputs.json",
         "contracts/canvas-worker-timeout-current-inputs.json",
         "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+        "contracts/canvas-worker-provider-recovery-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
@@ -1927,7 +1946,9 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "all": "false",
             "ui": "false",
             "python": "false",
-            "rust": str(path.startswith("contracts/")).lower(),
+            "rust": str(
+                path.startswith("contracts/") and path not in python_only_input_records
+            ).lower(),
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1966,6 +1987,25 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "verification": "false",
         "security": "false",
     }
+    for record in python_only_input_records:
+        assert _classify_changed_paths(
+            [record, "tests/test_canvas_worker_oracle_script_closure.py"],
+            tmp_path,
+            combined=True,
+        )[0] == {
+            "all": "false",
+            "ui": "false",
+            "python": "false",
+            "rust": "false",
+            "release": "true",
+            "verification": "false",
+            "security": "false",
+        }
+        assert _classify_changed_paths(
+            [record, "scripts/run_canvas_worker_provider_recovery_oracle.py"],
+            tmp_path,
+            combined=True,
+        )[0]["all"] == "true", "A changed capture implementation must stay broad"
     assert _classify_changed_path(
         "contracts/canvas-new-current-inputs.json", tmp_path
     ) == {
@@ -5144,6 +5184,7 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "passport_managed_kms_chain",
         "passport_gateway_postgres",
         "gateway_signing_acceptance",
+        "csca_capability_contract",
     }
     assert "marty-signing-keys" not in canvas["dev-dependencies"]
     assert "marty-signing-keys" not in worker["dev-dependencies"]
