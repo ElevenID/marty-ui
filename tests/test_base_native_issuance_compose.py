@@ -119,12 +119,25 @@ def test_source_guard_rejects_config_drift(fault):
 def modeled(tmp_path):
     # This deliberately small input tests the closed comparator, not rendering.
     # The separate mandatory Compose script supplies actual complete models.
+    (tmp_path / "didcomm-encryption-policy.json").write_text(
+        '{"version":1,"issuers":{}}', encoding="utf-8"
+    )
     baseline = {
         "services": {
             name: {"environment": {}} for name in GATE["NATIVE"]["TOKEN_CONSUMERS"]
         },
         "networks": {"marty-network": {}},
         "volumes": {"preserved": {}},
+    }
+    baseline["services"]["openbao"] = {
+        "image": "synthetic.invalid/openbao-base",
+        "command": ["server", "-dev"],
+        "volumes": [],
+    }
+    baseline["services"]["openbao-init"] = {
+        "image": "synthetic.invalid/openbao-base",
+        "environment": {},
+        "volumes": [],
     }
     baseline["services"]["issuance"]["environment"] = {
         "ALLOWED_REDIRECT_URIS": "",
@@ -149,7 +162,10 @@ def modeled(tmp_path):
     options = {
         "local": True,
         "authcrypt": True,
-        "inputs": {},
+        "inputs": {
+            "MARTY_OPENBAO_DIDCOMM_IMAGE": "synthetic.invalid/openbao-didcomm@sha256:"
+            + "d" * 64
+        },
         "policy_directory": tmp_path,
     }
     actual = GATE["expected_model"](baseline, **options)
@@ -243,9 +259,15 @@ def test_model_guard_rejects_every_unowned_delta(modeled, fault):
     elif fault == "policy-unpaired":
         native["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = "/other.json"
     elif fault == "policy-writable":
-        native["volumes"][0]["read_only"] = False
+        policy_mount = next(
+            volume for volume in native["volumes"] if volume["type"] == "bind"
+        )
+        policy_mount["read_only"] = False
     elif fault == "policy-create":
-        native["volumes"][0]["bind"]["create_host_path"] = True
+        policy_mount = next(
+            volume for volume in native["volumes"] if volume["type"] == "bind"
+        )
+        policy_mount["bind"]["create_host_path"] = True
     elif fault == "policy-outside":
         flow["volumes"] = deepcopy(native["volumes"])
     elif fault == "readiness":

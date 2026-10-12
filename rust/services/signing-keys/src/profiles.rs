@@ -9,6 +9,8 @@ use serde_json::{json, Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::private_material::contains_private_key;
+
 const PROFILE_STATUSES: &[&str] = &["draft", "active", "revoked"];
 const ISSUER_MODES: &[&str] = &["org_managed", "elevenid_managed", "elevenid_alias_for_org"];
 const ATTESTATION_MODES: &[&str] = &["disabled", "optional", "required"];
@@ -318,6 +320,27 @@ mod managed_reference_tests {
     use super::*;
 
     #[test]
+    fn profile_storage_rejects_nested_private_material_on_write_and_read() {
+        let public = json!({
+            "id": "profile-1", "organization_id": "org-1",
+            "signing_key_reference": "transit/keys/issuer-v4",
+            "public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public-only"}
+        });
+        assert!(validate_stored_profile(&public, "org-1", Some("profile-1")).is_ok());
+        let mut private = public.clone();
+        private["metadata"] = json!({"encoded": "{\"kty\":\"EC\",\"d\":\"private-scalar\"}"});
+        assert!(matches!(
+            validate_stored_profile(&private, "org-1", Some("profile-1")),
+            Err(ProfileError::Invalid(_))
+        ));
+        let document = json!({"revision": 1, "profiles": [private]});
+        assert!(matches!(
+            validate_scoped_document(&document, "org-1"),
+            Err(ProfileError::Corrupt(_))
+        ));
+    }
+
+    #[test]
     fn historical_managed_references_cannot_be_reprovisioned() {
         let fresh = json!({"profiles": []});
         let registry = json!({
@@ -348,6 +371,45 @@ mod managed_reference_tests {
         assert!(managed_reference_has_history(
             &registry, &revoked, "old-key"
         ));
+    }
+
+    #[test]
+    fn managed_profile_binding_rejects_foreign_tuple_and_namespaced_keys() {
+        let own = crate::registry::managed_key_reference_for_fields(
+            "org-a",
+            "did:example:issuer",
+            "vc_jwt_issuer",
+            "VC_JWT",
+            "ES256",
+        );
+        let foreign = crate::registry::managed_key_reference_for_fields(
+            "org-b",
+            "did:example:issuer",
+            "vc_jwt_issuer",
+            "VC_JWT",
+            "ES256",
+        );
+        let mut binding = ValidateBindingRequest {
+            profile: json!({
+                "organization_id": "org-a", "issuer_did": "did:example:issuer",
+                "credential_format": "VC_JWT", "key_purpose": "vc_jwt_issuer",
+                "algorithm": "ES256", "signing_key_reference": own
+            }),
+            service: json!({
+                "id": "managed-openbao-transit", "key_purposes": ["vc_jwt_issuer"],
+                "algorithms": ["ES256"]
+            }),
+            registry: json!({}),
+        };
+        assert!(validate_binding(&binding).is_ok());
+        binding.profile["signing_key_reference"] = json!(foreign);
+        assert!(validate_binding(&binding).is_err());
+        let foreign_namespace = Uuid::new_v5(&Uuid::NAMESPACE_URL, b"org-b")
+            .simple()
+            .to_string();
+        binding.profile["signing_key_reference"] =
+            json!(format!("cred-issuer-{foreign_namespace}-issuer-es256"));
+        assert!(validate_binding(&binding).is_err());
     }
 }
 
@@ -525,6 +587,18 @@ pub fn validate_binding(request: &ValidateBindingRequest) -> Result<(), ProfileE
         return Err(ProfileError::Invalid(
             "Issuer profiles require an explicit signing key reference.".to_string(),
         ));
+    }
+    if service_id == "managed-openbao-transit" {
+        let organization_id = string(profile, "organization_id").unwrap_or_default();
+        if !crate::registry::managed_profile_key_belongs_to_tenant(
+            &organization_id,
+            &request.profile,
+            &key_reference,
+        ) {
+            return Err(ProfileError::Invalid(
+                "Managed signing key does not belong to this tenant and profile.".to_string(),
+            ));
+        }
     }
     let reference_purposes = request.registry["key_reference_purposes"][&service_id]
         [&key_reference]
@@ -843,6 +917,11 @@ fn validate_scoped_document(document: &Value, organization_id: &str) -> Result<(
                 "profile organization does not match its storage scope".to_string(),
             ));
         }
+        if contains_private_key(profile) {
+            return Err(ProfileError::Corrupt(
+                "issuer profile contains private key material".to_string(),
+            ));
+        }
     }
     Ok(())
 }
@@ -852,6 +931,11 @@ fn validate_stored_profile(
     organization_id: &str,
     profile_id: Option<&str>,
 ) -> Result<(), ProfileError> {
+    if contains_private_key(profile) {
+        return Err(ProfileError::Invalid(
+            "Issuer profile must not contain private key material.".to_string(),
+        ));
+    }
     let profile = object(profile, "profile must be an object")?;
     if string(profile, "organization_id").as_deref() != Some(organization_id) {
         return Err(ProfileError::Invalid(

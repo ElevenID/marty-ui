@@ -13,12 +13,14 @@ from check_selfhost_locked_image_platform import probe  # noqa: E402
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 OTHER = "quay.io/openbao/openbao@sha256:" + "b" * 64
+PLUGIN = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "d" * 64
 DOCKER_HUB_POSTGRES = "docker.io/library/postgres@sha256:" + "c" * 64
 
 
 def lock(tmp_path: Path, services: dict[str, str] | None = None) -> Path:
     path = tmp_path / "lock.json"
     path.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
+                                "openbao_didcomm_image": PLUGIN,
                                 "services": services or {"gateway": IMAGE, "worker": IMAGE,
                                                          "openbao": OTHER}}), encoding="utf-8")
     return path
@@ -40,8 +42,9 @@ def test_exact_pull_platform_and_digest_association(tmp_path: Path, monkeypatch:
     result = probe(lock(tmp_path))
     assert result["qualification"] == "unqualified"
     assert result["platform"] == "linux/amd64"
-    assert len(result["images"]) == 2
-    assert len(calls) == 4
+    assert len(result["images"]) == 3
+    assert result["images"][PLUGIN] == "linux/amd64"
+    assert len(calls) == 6
 
 
 @pytest.mark.parametrize("os,arch,digests", [
@@ -65,6 +68,12 @@ def test_rejects_wrong_platform_or_unbound_inspection(
 
 def test_rejects_pull_failure_and_mutable_reference(tmp_path: Path,
                                                      monkeypatch: pytest.MonkeyPatch) -> None:
+    missing = lock(tmp_path)
+    value = json.loads(missing.read_text(encoding="utf-8"))
+    value.pop("openbao_didcomm_image")
+    missing.write_text(json.dumps(value), encoding="utf-8")
+    with pytest.raises(ValueError, match="OpenBao DIDComm"):
+        probe(missing)
     with pytest.raises(ValueError, match="exact service digests"):
         probe(lock(tmp_path, {"gateway": "ghcr.io/elevenid/marty-ui-oss/services:latest"}))
 
@@ -90,12 +99,14 @@ def test_docker_hub_library_alias_preserves_repository_and_digest(
         ref: str, reported: str, accepted: bool) -> None:
     def run(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         output = "" if argv[1] == "pull" else json.dumps({
-            "Os": "linux", "Architecture": "amd64", "RepoDigests": [reported]})
+            "Os": "linux", "Architecture": "amd64",
+            "RepoDigests": [argv[3] if argv[3] == PLUGIN else reported]})
         return subprocess.CompletedProcess(argv, 0, output, "")
 
     monkeypatch.setattr(subprocess, "run", run)
     if accepted:
-        assert probe(lock(tmp_path, {"database": ref}))["images"] == {ref: "linux/amd64"}
+        assert probe(lock(tmp_path, {"database": ref}))["images"] == {
+            ref: "linux/amd64", PLUGIN: "linux/amd64"}
     else:
         with pytest.raises(ValueError, match="not associated with locked digest"):
             probe(lock(tmp_path, {"database": ref}))

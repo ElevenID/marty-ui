@@ -245,6 +245,25 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         || "fact-1".to_owned(),
     )
     .expect("fresh verified candidate plan");
+    let mut private_fact = plan.facts[0].clone();
+    private_fact["source"]["signing_key"] = json!({
+        "kty": "OKP",
+        "crv": "Ed25519",
+        "d": "private-seed"
+    });
+    assert_eq!(
+        repository
+            .record_fact_and_evaluate_policy(
+                &application,
+                &snapshot.binding,
+                &snapshot.application_template,
+                &private_fact,
+            )
+            .await,
+        Err(CanvasAwardCandidateRepositoryError::Unavailable)
+    );
+    assert_eq!(table_count(&pool, "evidence_facts").await, 0);
+    assert_eq!(table_count(&pool, "issuance_events").await, 0);
     assert!(repository
         .record_fact_and_evaluate_policy(
             &application,
@@ -254,6 +273,39 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         )
         .await
         .unwrap());
+    let integration_context_before = sqlx::query_scalar::<_, Value>(
+        "SELECT integration_context FROM issuance_service.applications WHERE id = 'application-1'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let mut private_plan = plan.clone();
+    private_plan.application_canvas_patch.insert(
+        "signing_key".to_owned(),
+        json!({"kty": "OKP", "crv": "Ed25519", "d": "private-seed"}),
+    );
+    assert_eq!(
+        repository.link_candidate(&application, &private_plan).await,
+        Err(CanvasAwardCandidateRepositoryError::Unavailable)
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Value>(
+            "SELECT integration_context FROM issuance_service.applications WHERE id = 'application-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        integration_context_before
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT application_id FROM issuance_service.canvas_award_candidates WHERE id = 'candidate-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap(),
+        None
+    );
     repository
         .link_candidate(&application, &plan)
         .await
@@ -1584,6 +1636,33 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
             "SELECT json_array_length(submitted_evidence)
              FROM issuance_service.applications
              WHERE id = 'application-legacy-rollback'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap(),
+        0
+    );
+    insert_legacy_application(pool, "application-legacy-private", None).await;
+    let facts_before = table_count(pool, "evidence_facts").await;
+    let events_before = table_count(pool, "issuance_events").await;
+    let (body, headers) = signed_legacy_payload_with_achievement(
+        "application-legacy-private",
+        "legacy-event-private",
+        "course-1",
+        "-----BEGIN PRIVATE KEY-----",
+    );
+    assert_eq!(
+        service
+            .process(CanvasLegacyEventKind::Evidence, &body, &headers)
+            .await,
+        Err(CanvasLegacyIngestError::RepositoryUnavailable)
+    );
+    assert_eq!(table_count(pool, "evidence_facts").await, facts_before);
+    assert_eq!(table_count(pool, "issuance_events").await, events_before);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM issuance_service.canvas_event_receipts
+             WHERE provider_event_id = 'legacy-event-private'",
         )
         .fetch_one(pool)
         .await

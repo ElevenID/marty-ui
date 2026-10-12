@@ -82,6 +82,26 @@ impl CredentialAccountResolver for NoAccount {
     }
 }
 
+struct LinkedAccount;
+
+#[async_trait]
+impl CredentialAccountResolver for LinkedAccount {
+    async fn resolve(
+        &self,
+        _request: &ResolveCredentialAccount,
+    ) -> Result<Option<CredentialAccount>, PortError> {
+        Ok(Some(CredentialAccount {
+            user: None,
+            id_token: Some("linked-account-token".into()),
+            refresh_token: None,
+            validated_claims: Some(json!({
+                "sub": "linked-user",
+                "auth_time": now().timestamp(),
+            })),
+        }))
+    }
+}
+
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, 0).unwrap()
 }
@@ -218,6 +238,31 @@ async fn claim_only_login_sanitizes_authorization_and_is_retry_idempotent() {
     assert_eq!(sessions[0].user.roles, ["applicant"]);
     assert_eq!(sessions[0].user.organization_id.as_deref(), Some("org-1"));
     assert!(sessions[0].id_token.is_none());
+}
+
+#[tokio::test]
+async fn linked_account_token_exchange_cannot_supply_pairing_auth_time() {
+    let nonce = test_nonce();
+    let (application, sessions) =
+        build_application(&nonce, Some(Arc::new(LinkedAccount)), config()).await;
+    let (payload, headers) = signed_payload(json!({"email": "alice@example.com"}));
+    assert!(matches!(
+        application
+            .handle(&payload, &headers, &context(&nonce), now())
+            .await
+            .unwrap(),
+        CredentialCallbackResult::Completed { .. }
+    ));
+    let sessions = sessions.0.lock().unwrap();
+    let session = &sessions[0];
+    assert_eq!(session.id_token.as_deref(), Some("linked-account-token"));
+    assert_eq!(session.oidc_claims.as_ref().unwrap()["sub"], "linked-user");
+    assert!(session
+        .oidc_claims
+        .as_ref()
+        .unwrap()
+        .get("auth_time")
+        .is_none());
 }
 
 #[tokio::test]

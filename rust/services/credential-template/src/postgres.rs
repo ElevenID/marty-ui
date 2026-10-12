@@ -41,6 +41,9 @@ impl PostgresCredentialTemplateStore {
         &self,
         template: &CredentialTemplate,
     ) -> Result<(), CredentialTemplateRepositoryError> {
+        if let Some(value) = &template.compliance_profile {
+            reject_private_json("compliance_profile", value)?;
+        }
         let claims = json_value("claims", &template.claims)?;
         let selective_disclosure_fields = json_value(
             "selective_disclosure_fields",
@@ -308,6 +311,10 @@ impl PostgresCredentialTemplateStore {
         &self,
         destination: &DeliveryDestinationEntry,
     ) -> Result<(), CredentialTemplateRepositoryError> {
+        reject_private_json(
+            "claim_projection_policy",
+            &destination.claim_projection_policy,
+        )?;
         sqlx::query(
             "INSERT INTO credential_template_service.delivery_destinations (
                 id, organization_id, is_system, name, description, provider, mode, setup_actor,
@@ -422,6 +429,7 @@ impl PostgresCredentialTemplateStore {
 fn template_from_row(row: &PgRow) -> Result<CredentialTemplate, CredentialTemplateRepositoryError> {
     let template_id: String = row.try_get("id")?;
     let claims_value: Value = row.try_get("claims")?;
+    reject_private_json("claims", &claims_value)?;
     let claims = claims_value
         .as_array()
         .ok_or_else(|| invalid_data("claims", claims_value.to_string()))?
@@ -461,7 +469,7 @@ fn template_from_row(row: &PgRow) -> Result<CredentialTemplate, CredentialTempla
         supported_formats,
         credential_payload_format: row.try_get("credential_payload_format")?,
         wallet_configs: decode_row_or_default(row, "wallet_configs")?,
-        compliance_profile: row.try_get("compliance_profile")?,
+        compliance_profile: checked_optional_row_json(row, "compliance_profile")?,
         compliance_profile_id: row.try_get("compliance_profile_id")?,
         application_template_id: row.try_get("application_template_id")?,
         trust_profile_id: row.try_get("trust_profile_id")?,
@@ -532,7 +540,7 @@ fn destination_from_row(
         connector_type: row.try_get("connector_type")?,
         connector_id: row.try_get("connector_id")?,
         requires_consent: row.try_get("requires_consent")?,
-        claim_projection_policy: row.try_get("claim_projection_policy")?,
+        claim_projection_policy: checked_row_json(row, "claim_projection_policy")?,
         setup_requirements: decode_row(row, "setup_requirements")?,
         capabilities: decode_row::<BTreeMap<String, bool>>(row, "capabilities")?,
         docs_url: row.try_get("docs_url")?,
@@ -546,7 +554,40 @@ fn json_value<T: serde::Serialize>(
     field: &'static str,
     value: &T,
 ) -> Result<Value, CredentialTemplateRepositoryError> {
-    serde_json::to_value(value).map_err(|error| invalid_data(field, error.to_string()))
+    let value =
+        serde_json::to_value(value).map_err(|error| invalid_data(field, error.to_string()))?;
+    reject_private_json(field, &value)?;
+    Ok(value)
+}
+
+fn reject_private_json(
+    field: &'static str,
+    value: &Value,
+) -> Result<(), CredentialTemplateRepositoryError> {
+    if marty_key_material_policy::contains_private_key(value) {
+        return Err(invalid_data(field, "private key material rejected".into()));
+    }
+    Ok(())
+}
+
+fn checked_row_json(
+    row: &PgRow,
+    field: &'static str,
+) -> Result<Value, CredentialTemplateRepositoryError> {
+    let value: Value = row.try_get(field)?;
+    reject_private_json(field, &value)?;
+    Ok(value)
+}
+
+fn checked_optional_row_json(
+    row: &PgRow,
+    field: &'static str,
+) -> Result<Option<Value>, CredentialTemplateRepositoryError> {
+    let value: Option<Value> = row.try_get(field)?;
+    if let Some(value) = &value {
+        reject_private_json(field, value)?;
+    }
+    Ok(value)
 }
 
 fn decode_row<T: DeserializeOwned>(
@@ -560,7 +601,7 @@ fn decode_row_default<T: Default + DeserializeOwned>(
     row: &PgRow,
     field: &'static str,
 ) -> Result<T, CredentialTemplateRepositoryError> {
-    let value: Value = row.try_get(field)?;
+    let value = checked_row_json(row, field)?;
     if value.as_object().is_some_and(serde_json::Map::is_empty) {
         return Ok(T::default());
     }
@@ -571,7 +612,7 @@ fn decode_row_or_default<T: Default + DeserializeOwned>(
     row: &PgRow,
     field: &'static str,
 ) -> Result<T, CredentialTemplateRepositoryError> {
-    let value: Option<Value> = row.try_get(field)?;
+    let value = checked_optional_row_json(row, field)?;
     value.map_or_else(|| Ok(T::default()), |value| decode(field, value))
 }
 
@@ -579,10 +620,28 @@ fn decode<T: DeserializeOwned>(
     field: &'static str,
     value: Value,
 ) -> Result<T, CredentialTemplateRepositoryError> {
+    reject_private_json(field, &value)?;
     serde_json::from_value(value.clone())
         .map_err(|error| invalid_data(field, format!("{value}: {error}")))
 }
 
 fn invalid_data(field: &'static str, value: String) -> CredentialTemplateRepositoryError {
     CredentialTemplateRepositoryError::InvalidData { field, value }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode, json_value, reject_private_json};
+    use serde_json::{json, Value};
+
+    #[test]
+    fn json_storage_rejects_nested_private_material_before_write_or_decode() {
+        let private = json!({"metadata": "{\"private_jwk\":\"secret\"}"});
+        assert!(json_value("claims", &private).is_err());
+        assert!(decode::<Value>("claims", private.clone()).is_err());
+        assert!(reject_private_json("compliance_profile", &private).is_err());
+        let public = json!({"key_reference": "transit/keys/issuer-v4"});
+        assert!(json_value("claims", &public).is_ok());
+        assert!(decode::<Value>("claims", public).is_ok());
+    }
 }

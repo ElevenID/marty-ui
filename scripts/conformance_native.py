@@ -85,7 +85,6 @@ REQUIRED_ENVIRONMENT = (
     "ISSUER_BASE_URL",
     "TOKEN_HMAC_KEY",
     "ISSUANCE_API_KEY",
-    "INTEGRATION_SECRET_MASTER_KEY",
     "SIGNING_KEYS_INTERNAL_URL",
     "SIGNING_KEYS_INTERNAL_API_KEY",
     "ORG_GRPC_TARGET",
@@ -150,6 +149,49 @@ def validate_model(
         env = POLICY["environment_mapping"](native["environment"])
         previous = POLICY["environment_mapping"](legacy["environment"])
         edge = POLICY["environment_mapping"](gateway["environment"])
+        for owner in (env, previous):
+            require(
+                "INTEGRATION_SECRET_MASTER_KEY" not in owner
+                and "INTEGRATION_SECRET_MASTER_KEY_FILE" not in owner,
+                "Local integration-secret master-key custody is forbidden",
+            )
+        require(
+            env.get("INTEGRATION_SECRET_KMS_URL")
+            == "https://signing-keys:8018/internal",
+            "Native remote integration-secret URL is incomplete",
+        )
+        require(
+            env.get("INTEGRATION_SECRET_KMS_CA_FILE")
+            == "/run/secrets/dev_integration_secret_ca",
+            "Native remote integration-secret trust is incomplete",
+        )
+        require(
+            isinstance(env.get("SIGNING_KEYS_INTEGRATION_SECRET_KEY"), str)
+            and len(env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"].strip()) >= 32
+            and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"]
+            != env.get("SIGNING_KEYS_INTERNAL_API_KEY")
+            and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] != env.get("ISSUANCE_API_KEY"),
+            "Native remote integration-secret credential is incomplete",
+        )
+        require(
+            isinstance(env.get("SIGNING_KEYS_ISSUER_SIGN_KEY"), str)
+            and len(env["SIGNING_KEYS_ISSUER_SIGN_KEY"].strip()) >= 32
+            and env["SIGNING_KEYS_ISSUER_SIGN_KEY"]
+            not in {
+                env.get("SIGNING_KEYS_INTEGRATION_SECRET_KEY"),
+                env.get("SIGNING_KEYS_INTERNAL_API_KEY"),
+                env.get("ISSUANCE_API_KEY"),
+            },
+            "Native remote issuer-sign credential is incomplete",
+        )
+        require(
+            any(
+                secret.get("source") == "dev_integration_secret_ca"
+                and secret.get("target") == "/run/secrets/dev_integration_secret_ca"
+                for secret in native.get("secrets", [])
+            ),
+            "Native remote integration-secret CA mount is incomplete",
+        )
         require(
             edge.get("ISSUANCE_NATIVE_SERVICE_URL") == NATIVE_URL,
             "Native gateway selection must be explicit",
@@ -205,6 +247,13 @@ def validate_model(
             "UNIVERSAL_RESOLVER_URL",
             "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
         ):
+            if key == "SIGNING_KEYS_INTERNAL_URL":
+                require(
+                    env.get(key) == "http://gateway:8000/internal/signing-keys"
+                    and previous.get(key) == "http://signing-keys:8017/internal",
+                    "Native managed signing route is not bound to Gateway",
+                )
+                continue
             require(
                 env.get(key) == previous.get(key),
                 f"Native and issuance alias configuration is not paired: {key}",

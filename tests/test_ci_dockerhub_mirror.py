@@ -28,7 +28,7 @@ def test_buildkit_uses_only_the_documented_docker_hub_cache() -> None:
     assert config == {"registry": {"docker.io": {"mirrors": ["mirror.gcr.io"]}}}
     assert WORKFLOW["env"]["MARTY_CI_BUILDKIT_PIN"] == BUILDKIT_PIN
     for owner in (
-        "test-rust-passport-image",
+        "test-openbao-didcomm-plugin",
         "test-rust-services",
         "test-rust-service-images",
         "test-release-contracts",
@@ -62,8 +62,7 @@ def test_host_mirror_is_installed_before_docker_use_without_killing_services() -
     assert "systemctl restart" not in script
     for owner in (
         "test-ui-crawler-nginx",
-        "test-passport-fence-postgres",
-        "test-rust-passport-image",
+        "test-openbao-didcomm-plugin",
         "test-rust-services",
         "test-rust-service-images",
     ):
@@ -106,7 +105,7 @@ def test_release_oci_backend_keeps_containerd_and_adds_only_mirror() -> None:
     assert not docker.get("continue-on-error", False)
 
 
-def test_disposable_postgres_prefers_exact_cache_digest_with_canonical_fallback() -> None:
+def test_rust_fixtures_prefer_exact_cache_digest_with_canonical_fallback() -> None:
     script = (ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh").read_text(
         encoding="utf-8"
     )
@@ -115,21 +114,22 @@ def test_disposable_postgres_prefers_exact_cache_digest_with_canonical_fallback(
     assert script.index('docker pull "$mirror"') < script.index(
         'docker pull "$canonical"'
     )
-    job = JOBS["test-passport-fence-postgres"]
+    job = JOBS["test-rust-services"]
     pull = next(
         step for step in job["steps"]
-        if step.get("name") == "Pull the exact disposable PostgreSQL image with a safe registry fallback"
+        if step.get("name") == "Start digest-pinned Rust test services after registry setup"
     )
     assert not pull.get("continue-on-error", False)
     assert (
         "postgres:15-alpine@sha256:"
         "fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c"
     ) in pull["run"]
-    assert 'echo "BETA_FENCE_POSTGRES_IMAGE=$image" >> "$GITHUB_ENV"' in pull["run"]
-    test_source = (ROOT / "tests/test_passport_beta_scoped_fence_postgres.py").read_text(
+    assert "MARTY_RUST_CI_POSTGRES_IMAGE=$(bash scripts/ci/pull-pinned-dockerhub-image.sh" in pull["run"]
+    assert "docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml" in pull["run"]
+    fixtures = (ROOT / ".github/compose/rust-ci-fixtures.yml").read_text(
         encoding="utf-8"
     )
-    assert "if POSTGRES_IMAGE not in {CANONICAL_POSTGRES_IMAGE, MIRRORED_POSTGRES_IMAGE}:" in test_source
+    assert "${MARTY_RUST_CI_POSTGRES_IMAGE:?exact PostgreSQL digest required}" in fixtures
 
 
 @pytest.mark.skipif(os.name != "posix", reason="stub Docker requires POSIX executable PATH")

@@ -75,6 +75,18 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         expected_status: ManagedCredentialStatus,
         audit: &CredentialLifecycleAuditRecord,
     ) -> Result<ManagedCredential, CredentialManagementPortError> {
+        let audit_input = json!({
+            "reason": audit.reason,
+            "comments": audit.comments,
+            "actor_id": audit.actor_id,
+            "actor_type": audit.actor_type,
+            "revocation_reason": credential.revocation_reason,
+        });
+        if marty_key_material_policy::contains_private_key(&audit_input) {
+            return Err(CredentialManagementPortError(
+                "private key material in credential lifecycle audit".to_owned(),
+            ));
+        }
         let mut transaction = self.pool.begin().await.map_err(port_error)?;
         let row = sqlx::query(
             "UPDATE issuance_service.issued_credentials
@@ -141,9 +153,6 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
         action: CredentialLifecycleAction,
         reason: Option<&str>,
     ) -> Result<(), CanvasLifecycleSyncError> {
-        if let Some(lifecycle) = &self.canvas_lifecycle {
-            return lifecycle.synchronize(credential, action, reason).await;
-        }
         let request = json!({
             "status_sync_state": "pending",
             "last_status_sync_action": action.as_str(),
@@ -151,6 +160,16 @@ impl CredentialManagementRepository for PostgresCredentialManagementRepository {
             "requested_status_sync_reason": reason,
             "status_sync_requested_at": credential.status_updated_at.to_rfc3339(),
         });
+        if marty_key_material_policy::contains_private_key(&request) {
+            return Err(CanvasLifecycleSyncError::Port(
+                CredentialManagementPortError(
+                    "private key material in Canvas lifecycle request".to_owned(),
+                ),
+            ));
+        }
+        if let Some(lifecycle) = &self.canvas_lifecycle {
+            return lifecycle.synchronize(credential, action, reason).await;
+        }
         sqlx::query(
             "UPDATE issuance_service.credential_delivery_records
              SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb,

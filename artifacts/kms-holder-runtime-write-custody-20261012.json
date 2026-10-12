@@ -1,0 +1,36 @@
+{
+  "schema": "marty.kms-holder-runtime-write-custody/v1",
+  "scope": "Local disposable Rust service/database/OpenBao acceptance, not a published-image qualification",
+  "probe_commit": "5f2d2277474793d8faad3dde338dd9356021a92e",
+  "probe_file": "scripts/probe_signing_keys_openbao_policy.py",
+  "probe_file_sha256": "c345b4ebc44c2af2ec76876b240f7f4da8d9592991e17540c9a8cc52de469c3d",
+  "shared_sql_file": "scripts/qualify_selfhost_migrations.py",
+  "shared_sql_file_sha256": "9f6b570518441798e09554947ee0a2d7e07676f7f645241192b74906f0e11613",
+  "command": "py -3.12 scripts/probe_signing_keys_openbao_policy.py --rust-adapter",
+  "cargo_target_dir": "D:/marty-kms-cargo-home/target-kms-probe",
+  "infra_images": {
+    "postgres": "docker.io/library/postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+    "redis": "docker.io/library/redis@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065",
+    "openbao": "quay.io/openbao/openbao@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452"
+  },
+  "runtime_writes": {
+    "device_registrations": 5,
+    "holder_credentials": 6,
+    "remote_holder_key_records": 7
+  },
+  "checks": {
+    "provider_hmac_and_managed_policy": "passed",
+    "remote_csr_and_signing_grants": "passed",
+    "holder_service_database_openbao_lifecycle": "passed",
+    "credential_durability_and_pairing": "passed",
+    "gateway_managed_key_and_passport_ceremony": "passed",
+    "private_key_catalog_entries": 0,
+    "private_key_json_text_content_scan": "passed after runtime writes",
+    "disposable_containers_remaining": 0
+  },
+  "limits": [
+    "The Rust tests ran from a local source checkout and a prebuilt Windows test target, not signed UI release images.",
+    "The custody scan covers the persisted Device Registration holder database after this synthetic workflow; other product databases and later runtime writes still require assembled-artifact acceptance.",
+    "The two earlier local attempts ended during Windows compilation or a ten-minute per-command compile timeout before reaching the database scan; this successful run used the prebuilt D: target."
+  ]
+}

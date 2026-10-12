@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def verify(
     worker_only: bool = False,
     flow_only: bool = False,
     selfhost_only: bool = False,
+    check_worker_inventory: bool = False,
 ) -> None:
     if sum((worker_only, flow_only, selfhost_only)) > 1:
         raise ValueError("Artifact scope must have one owner")
@@ -49,6 +51,7 @@ def verify(
         required = SELFHOST_TEST_TARGETS
     else:
         required = (*TEST_TARGETS, *BIN_TARGETS)
+    worker_test_executable = None
     for package, target, kind in required:
         matches = {
             (record["executable"], record["profile"].get("test"))
@@ -73,23 +76,46 @@ def verify(
             raise ValueError(f"Expected a test harness for {package}/{target}")
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ValueError(f"Missing executable for {package}/{target}")
+        if (package, target, kind) == WORKER_TEST_TARGETS[0]:
+            worker_test_executable = path
+    if check_worker_inventory:
+        if worker_test_executable is None:
+            raise ValueError("Canvas worker inventory requires the compiled worker target")
+        listed = subprocess.run(
+            [str(worker_test_executable), "--list"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("check_canvas_tier_obligations.py"))],
+            input=listed,
+            check=True,
+            text=True,
+        )
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 4) or (
-        len(sys.argv) == 4
-        and sys.argv[1] not in ("--worker-only", "--flow-only", "--selfhost-only")
+    args = sys.argv[1:]
+    check_worker_inventory = "--check-worker-inventory" in args
+    if check_worker_inventory:
+        args.remove("--check-worker-inventory")
+    if len(args) not in (2, 3) or (
+        len(args) == 3
+        and args[0] not in ("--worker-only", "--flow-only", "--selfhost-only")
     ):
         raise SystemExit(
             "Usage: verify-canvas-test-artifacts.py "
-            "[--worker-only|--flow-only|--selfhost-only] ARTIFACTS TARGET_DIRECTORY"
+            "[--worker-only|--flow-only|--selfhost-only] "
+            "[--check-worker-inventory] ARTIFACTS TARGET_DIRECTORY"
         )
-    scoped = len(sys.argv) == 4
-    offset = 1 + scoped
+    scoped = len(args) == 3
+    offset = int(scoped)
     verify(
-        Path(sys.argv[offset]),
-        Path(sys.argv[offset + 1]),
-        worker_only=scoped and sys.argv[1] == "--worker-only",
-        flow_only=scoped and sys.argv[1] == "--flow-only",
-        selfhost_only=scoped and sys.argv[1] == "--selfhost-only",
+        Path(args[offset]),
+        Path(args[offset + 1]),
+        worker_only=scoped and args[0] == "--worker-only",
+        flow_only=scoped and args[0] == "--flow-only",
+        selfhost_only=scoped and args[0] == "--selfhost-only",
+        check_worker_inventory=check_worker_inventory,
     )

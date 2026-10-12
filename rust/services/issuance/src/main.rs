@@ -1,4 +1,5 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use marty_signing_grant::SigningOrigin;
+use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
@@ -90,6 +91,7 @@ use marty_issuance_service::{
     credential_postgres::PostgresCredentialRepository,
     credential_renewal::CredentialRenewalService,
     dependency_probe,
+    didcomm_remote_kms::RemoteDidcommKms,
     dpop::MartyDpopProofVerifier,
     ephemeral_postgres::PostgresProofNonceRepository,
     http::{
@@ -110,7 +112,7 @@ use marty_issuance_service::{
     initiation_didcomm_http::InitiationDidcommHttpService,
     initiation_http::InitiationHttpService,
     initiation_response::InitiationOfferProjector,
-    integration_secret::IntegrationSecretCipher,
+    integration_secret_kms::KmsIntegrationSecretCipher,
     internal_application_approval::{
         CompositeInternalApplicationApprover, CompositeInternalApplicationTransactionPreparer,
         OrdinaryInternalApplicationApprover,
@@ -139,6 +141,7 @@ use marty_issuance_service::{
     resource_owner::ResourceOwnerService,
     resource_owner_postgres::PostgresResourceOwnerRepository,
     retention::{PostgresRetentionRepository, RetentionService},
+    signing_grant_config::managed_grant_minter,
     signing_policy::HttpProofPolicyResolver,
     tenant_discovery::TenantDiscoveryService,
     tenant_postgres::PostgresTenantDiscoveryRepository,
@@ -309,13 +312,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(SecureProofNonceGenerator),
     );
     let canvas_lti_repository = Arc::new(PostgresCanvasLtiLoginRepository::new(pool.clone()));
-    let integration_secret_cipher = IntegrationSecretCipher::from_base64(
+    let integration_secret_cipher = KmsIntegrationSecretCipher::from_environment(
         config
-            .integration_secret_master_key
+            .integration_secret_api_key
             .as_deref()
-            .expect("from_env requires INTEGRATION_SECRET_MASTER_KEY"),
+            .expect("from_env requires integration-secret authentication"),
     )?;
-    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new(
+    let mut integration_secret_connection = pool.acquire().await?;
+    integration_secret_cipher
+        .verify_storage(&mut integration_secret_connection)
+        .await?;
+    drop(integration_secret_connection);
+    let integration_secret_vault = Arc::new(PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
         integration_secret_cipher,
     ));
@@ -498,10 +506,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.signing_keys_internal_api_key.as_deref(),
             config.dependency_timeout,
         )?),
-        Arc::new(HttpCanvasLtiToolSignatureProvider::new(
+        Arc::new(HttpCanvasLtiToolSignatureProvider::new_with_grant(
             config.signing_keys_internal_url.clone(),
-            config.signing_keys_internal_api_key.as_deref(),
+            config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
+            managed_grant_minter(SigningOrigin::IssuanceCanvas)?,
         )?),
     ));
     let canvas_readiness = Arc::new(CanvasReadinessRuntime::new(
@@ -514,11 +523,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
             config.revocation_profile_service_url.clone(),
             config.dependency_timeout,
         )?),
-        Arc::new(LiveCanvasReadinessChallengeProvider::new(
+        Arc::new(LiveCanvasReadinessChallengeProvider::new_with_grant(
             canvas_lti_tool_signer.clone(),
             config.signing_keys_internal_url.clone(),
             config.signing_keys_internal_api_key.as_deref(),
+            config.issuer_sign_key.as_deref(),
             config.dependency_timeout,
+            managed_grant_minter(SigningOrigin::IssuanceReadiness)?,
         )?),
         config.canvas_portable_enabled,
         config.canvas_pilot_organizations.clone(),
@@ -565,10 +576,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         pool.clone(),
         token_hmac_key,
     ));
-    let credential_builder = Arc::new(HttpCredentialBuilder::new(
+    let credential_builder = Arc::new(HttpCredentialBuilder::new_with_grant(
         config.signing_keys_internal_url.clone(),
-        config.signing_keys_internal_api_key.as_deref(),
+        config.issuer_sign_key.as_deref(),
         config.dependency_timeout,
+        managed_grant_minter(SigningOrigin::IssuanceCredential)?,
     )?);
     let credential_lifecycle = Arc::new(PostgresCredentialLifecycle::new(
         pool.clone(),
@@ -577,17 +589,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
         config.dependency_timeout,
         canvas_guard_config.clone(),
     )?);
+    let mut didcomm_envelope = NativeDidcommEnvelope::new(
+        config.didcomm_universal_resolver_url.as_deref(),
+        config.didcomm_did_web_internal_base_url.as_deref(),
+        config.didcomm_encryption_policy_file.as_deref(),
+    );
+    let kms_addr = std::env::var("DIDCOMM_KMS_ADDR").ok();
+    let kms_token_file = std::env::var("DIDCOMM_KMS_TOKEN_FILE").ok();
+    match (kms_addr, kms_token_file) {
+        (Some(addr), Some(token_file)) if !addr.is_empty() && !token_file.is_empty() => {
+            didcomm_envelope = didcomm_envelope
+                .with_remote_kms(RemoteDidcommKms::new(&addr, PathBuf::from(token_file))?);
+        }
+        (None, None) => {}
+        _ => {
+            return Err(
+                "DIDCOMM_KMS_ADDR and DIDCOMM_KMS_TOKEN_FILE must be configured together".into(),
+            )
+        }
+    }
     let didcomm_delivery = Arc::new(NativeInitiationDidcommDelivery::new(
         NativeInitiationDidcommPorts {
             repository: credential_repository.clone(),
             issuer_resolver: issuer_resolver.clone(),
             builder: credential_builder.clone(),
             lifecycle: credential_lifecycle.clone(),
-            envelope: Arc::new(NativeDidcommEnvelope::new(
-                config.didcomm_universal_resolver_url.as_deref(),
-                config.didcomm_did_web_internal_base_url.as_deref(),
-                config.didcomm_encryption_policy_file.as_deref(),
-            )),
+            envelope: Arc::new(didcomm_envelope),
             endpoints: Arc::new(DidcommEndpointValidator::new(
                 config.didcomm_allow_private_ips,
             )),

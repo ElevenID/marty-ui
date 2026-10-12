@@ -23,4 +23,4 @@ def test_packaged_bootstrap_uses_exact_immutable_openbao_image() -> None:
     assert "quay.io/openbao/openbao:" not in source
     assert "-policy=credential-service" in source
     assert "-policy=notification-webhook-service" in source
-    assert "-policy=passport-callback-hmac-service" in source
+    assert "-policy=passport-provider-callback-service" in source

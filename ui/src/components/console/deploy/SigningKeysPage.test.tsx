@@ -191,7 +191,7 @@ describe('SigningKeysPage', () => {
     expect(screen.getByTestId('current-path')).toHaveTextContent('/console/org/deploy/issuer-identity')
   })
 
-  it('requires an explicit registered-service CSR subject and sends only public fields', async () => {
+  it('requires an explicit registered-service CSR subject and sends the registered key intent', async () => {
     mockGetKeyManagementConfig.mockResolvedValue({
       supports_native_key_management: false,
       default_service_id: 'service-a',
@@ -215,9 +215,10 @@ describe('SigningKeysPage', () => {
     expect(csrButton).toBeEnabled()
     await user.click(csrButton)
     await waitFor(() => expect(mockGenerateServiceCsr).toHaveBeenCalledWith('service-a', {
-      organization_id: 'org-123', country: 'US', organization: 'Example Org', common_name: 'Registered signer',
+      organization_id: 'org-123', key_reference: 'server-side-only', algorithm: 'ES256',
+      country: 'US', organization: 'Example Org', common_name: 'Registered signer',
     }))
-    expect(mockGenerateServiceCsr.mock.calls[0][1]).not.toHaveProperty('key_reference')
+    expect(mockGenerateServiceCsr.mock.calls[0][1]).not.toHaveProperty('private_key')
   })
 
   it('renders the services registry view with managed and registered services', async () => {

@@ -405,24 +405,21 @@ fn project_revoked_transaction(transaction: ManagementTransaction) -> RevokedTra
 
 #[cfg(test)]
 mod tests {
-    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-    use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
-
     use super::*;
 
     fn valid_request() -> RegisteredClientRequest {
-        let public = SecretKey::from_slice(&[7_u8; 32])
-            .unwrap()
-            .public_key()
-            .to_encoded_point(false);
+        let public: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/registered_client_p256_public.json"
+        ))
+        .unwrap();
         RegisteredClientRequest {
             organization_id: " org-a ".to_owned(),
             client_id: " wallet-a ".to_owned(),
             jwks: serde_json::json!({"keys":[{
                 "kty":"EC", "crv":"P-256", "alg":"ES256", "use":"sig",
                 "key_ops":["verify"], "kid":"key-a",
-                "x":URL_SAFE_NO_PAD.encode(public.x().unwrap()),
-                "y":URL_SAFE_NO_PAD.encode(public.y().unwrap())
+                "x":public["x"],
+                "y":public["y"]
             }]}),
             redirect_uris: vec!["https://wallet.example/callback".to_owned()],
             active: true,

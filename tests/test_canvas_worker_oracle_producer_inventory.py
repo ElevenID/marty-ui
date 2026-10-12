@@ -1,4 +1,4 @@
-"""Keep the historical corpus-to-producer inventory exhaustive before reuse work."""
+"""Keep historical producers and frozen native corpus owners exhaustive."""
 
 import ast
 import json
@@ -65,56 +65,43 @@ def preparer_worker_runners(source):
     }
 
 
-def standalone_reference_inputs(source):
-    """Inventory literal corpus inputs used by the standalone launcher."""
-    inputs = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Name) or node.func.id != "contract":
-            continue
-        assert len(node.args) == 1 and not node.keywords, (
-            "Review standalone historical contract lookup"
-        )
-        argument = node.args[0]
-        assert isinstance(argument, ast.Constant) and isinstance(argument.value, str), (
-            "Review dynamic standalone historical contract input"
-        )
-        name = argument.value
-        assert Path(name).name == name and name.endswith("-oracle.json"), (
-            f"Review standalone historical contract path: {name}"
-        )
-        inputs.append(f"contracts/{name}")
-    return sorted(inputs)
-
-
 def test_oracle_producer_inventory_covers_every_corpus_once():
     inventory = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert inventory["schema"] == "marty.canvas-worker-oracle-producers/v1"
+    assert inventory["schema"] == "marty.canvas-worker-oracle-producers/v3"
     assert set(inventory) == {
         "schema",
         "purpose",
+        "retired_from_preparer",
+        "frozen_native_corpora",
         "direct_runner_corpora",
         "shared_runner_corpora",
-        "standalone_runner_entries",
-        "standalone_runner_reference_inputs",
         "external_fixture_corpora",
         "standalone_scenarios",
     }
 
     direct = inventory["direct_runner_corpora"]
+    retired = set(inventory["retired_from_preparer"])
+    assert retired == {
+        "run_canvas_worker_rest_oracle.py",
+        "run_canvas_worker_startup_oracle.py",
+    }
     shared = inventory["shared_runner_corpora"]
+    frozen = inventory["frozen_native_corpora"]
     metadata = inventory["external_fixture_corpora"]
     listed = (
-        direct + [name for names in shared.values() for name in names] + list(metadata)
+        direct
+        + [name for names in shared.values() for name in names]
+        + frozen
+        + list(metadata)
     )
     actual = {path.name for path in CONTRACTS.glob("canvas-worker-*-oracle.json")}
 
     assert len(listed) == len(set(listed)), (
-        "Each corpus needs exactly one producer class"
+        "Each corpus needs exactly one producer or frozen native owner class"
     )
     assert set(listed) == actual, "New or removed corpora require an inventory review"
     assert direct == sorted(direct)
+    assert frozen == sorted(frozen)
     assert list(metadata) == sorted(metadata)
     assert all(names == sorted(names) and names for names in shared.values())
     assert all(name.endswith(".json") for name in listed)
@@ -131,36 +118,38 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
             f"Missing external-source record: {source_doc}"
         )
 
-    # The OAuth runner emits ten kinds through one entry point. Keep the
-    # manifest's extra nine corpora aligned with its declared dispatch set.
-    oauth_runner = SCRIPTS / "run_canvas_worker_oauth_revocation_oracle.py"
-    tree = ast.parse(oauth_runner.read_text(encoding="utf-8"))
-    run = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef) and node.name == "run"
+    tiers = json.loads(
+        (CONTRACTS / "canvas-worker-tier-obligations.json").read_text(encoding="utf-8")
     )
-    kind_guards = [
-        node.comparators[0]
-        for node in ast.walk(run)
-        if isinstance(node, ast.Compare)
-        and isinstance(node.left, ast.Name)
-        and node.left.id == "kind"
-        and len(node.ops) == 1
-        and isinstance(node.ops[0], ast.In)
-        and len(node.comparators) == 1
-        and isinstance(node.comparators[0], ast.Set)
-    ]
-    assert len(kind_guards) == 1, "Review OAuth kind dispatch when its shape changes"
-    kinds = {
-        value.value for value in kind_guards[0].elts if isinstance(value, ast.Constant)
+    oauth = tiers["native_oauth_replays"]
+    assert len(oauth) == 10
+    assert {entry["scenario"] for entry in tiers["native_replays"]} == {
+        "rest", "facts", "retry"
     }
-    assert len(kinds) == len(kind_guards[0].elts)
-    assert {f"canvas-worker-{kind}-oracle.json" for kind in kinds} == (
-        {"canvas-worker-oauth-revocation-oracle.json"} | set(shared[oauth_runner.name])
+    assert len(frozen) == 16
+    assert set(frozen) == {
+        f"canvas-worker-{entry['scenario']}-oracle.json"
+        for entry in tiers["native_replays"]
+        if entry["scenario"] != "rest"
+    } | {
+        f"canvas-worker-{entry['scenario']}-oracle.json" for entry in oauth
+    } | {
+        "canvas-worker-logging-oracle.json",
+        "canvas-worker-validation-oracle.json",
+        "canvas-worker-roster-failure-oracle.json",
+        "canvas-worker-resources-unavailable-oracle.json",
+    }, "Frozen corpora need native Rust owners"
+    assert tiers["native_validation"]["test"] == (
+        "worker_validation_matches_frozen_published_process"
     )
-    for kind in kinds:
-        assert (CONTRACTS / f"canvas-worker-{kind}-scenarios.json").is_file()
+    assert tiers["native_roster_failure"]["test"] == (
+        "worker_roster_failure_matches_frozen_published_process"
+    )
+    assert tiers["native_resources_unavailable"]["test"] == (
+        "worker_resources_unavailable_matches_frozen_published_process"
+    )
+    for name in frozen:
+        assert (CONTRACTS / name.replace("-oracle.json", "-scenarios.json")).is_file()
 
     mapped_runners = {
         "run_" + name.removesuffix(".json").replace("-", "_") + ".py" for name in direct
@@ -171,42 +160,9 @@ def test_oracle_producer_inventory_covers_every_corpus_once():
     assert mapped_runners == actual_runners, (
         "New producers need corpus ownership review"
     )
-    standalone = inventory["standalone_runner_entries"]
-    reference_inputs = inventory["standalone_runner_reference_inputs"]
-    assert set(standalone) == {"run_canvas_worker_logging_oracle.py"}
-    assert set(reference_inputs) == set(standalone)
-    for runner, launcher in standalone.items():
-        source = (ROOT / launcher).read_text(encoding="utf-8")
-        assert source.count(f"/verification/scripts/{runner}") == 2, (
-            "Review standalone historical launcher mounting and invocation"
-        )
-        assert reference_inputs[runner] == standalone_reference_inputs(source), (
-            "Review standalone historical cross-corpus input"
-        )
-        assert reference_inputs[runner], "Standalone reference inputs must be explicit"
-        for path in reference_inputs[runner]:
-            assert (ROOT / path).is_file(), (
-                f"Missing standalone reference input: {path}"
-            )
-        assert launcher in (ROOT / ".github/workflows/ci.yml").read_text(
-            encoding="utf-8"
-        ), "Standalone historical runner must remain in CI"
     assert preparer_worker_runners(PREPARER.read_text(encoding="utf-8")) == (
-        mapped_runners - set(standalone)
+        mapped_runners - retired
     ), "Published preparer worker dispatch needs producer-ownership review"
-
-
-def test_standalone_reference_input_guard_rejects_changed_corpus():
-    launcher = ROOT / "scripts/test_canvas_worker_logging_reference.py"
-    source = launcher.read_text(encoding="utf-8")
-    expected = ["contracts/canvas-worker-consumer-range-oracle.json"]
-    assert standalone_reference_inputs(source) == expected
-    changed = source.replace(
-        "canvas-worker-consumer-range-oracle.json",
-        "canvas-worker-startup-oracle.json",
-    )
-    assert changed != source
-    assert standalone_reference_inputs(changed) != expected
 
 
 def test_preparer_worker_dispatch_guard_rejects_unmapped_runner():
@@ -263,6 +219,10 @@ def test_canvas_scenario_references_are_complete_and_acyclic():
         name.replace("-oracle.json", "-scenarios.json")
         for names in inventory["shared_runner_corpora"].values()
         for name in names
+    )
+    corpus_scenarios.update(
+        name.replace("-oracle.json", "-scenarios.json")
+        for name in inventory["frozen_native_corpora"]
     )
     standalone = inventory["standalone_scenarios"]
     assert corpus_scenarios.isdisjoint(standalone)

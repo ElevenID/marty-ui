@@ -187,7 +187,9 @@ impl CredentialCallbackApplication {
             refresh_token: account
                 .as_ref()
                 .and_then(|account| account.refresh_token.clone()),
-            oidc_claims: account.and_then(|account| account.validated_claims),
+            oidc_claims: account
+                .and_then(|account| account.validated_claims)
+                .map(without_authentication_time),
         });
         session.session_id = self
             .state
@@ -236,6 +238,14 @@ impl CredentialCallbackApplication {
                 .unwrap_or_else(|| "verification_failed".into()),
         })
     }
+}
+
+fn without_authentication_time(mut claims: Value) -> Value {
+    // A token exchanged for a linked account does not prove this user's presence.
+    if let Some(object) = claims.as_object_mut() {
+        object.remove("auth_time");
+    }
+    claims
 }
 
 fn string_claim(claims: &Map<String, Value>, key: &str) -> Option<String> {

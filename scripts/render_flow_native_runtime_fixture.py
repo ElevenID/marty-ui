@@ -26,9 +26,11 @@ SPEC_KEYS = {"native_rpc", "legacy_rpc", "legacy_http", "directory"}
 SECRET_VALUES = {
     "grpc_service_token": TOKEN,
     "issuance_api_key": KEY,
+    "signing_keys_issuer_sign_key": "synthetic-flow-issuer-sign-key-32-chars",
     "marty_db_password": "synthetic-flow-database-password",
     "flow_webhook_secret": "synthetic-flow-rendered-webhook-secret",
     "flow_application_event_hmac_key": "synthetic-flow-rendered-event-hmac-key",
+    "sign_grant_mint_flow_wallet_token": "synthetic-flow-grant-mint-capability",
 }
 TLS_FILES = {
     "GRPC_WORKLOAD_TLS_CLIENT_CERT": "flow_workload_client_cert",
@@ -70,6 +72,17 @@ def mapped_environment(service, spec):
         if key.endswith("_FILE") or key in TLS_FILES:
             if not value and key == "PASSPORT_TENANT_API_KEYS_FILE":
                 continue
+            if key == "FLOW_SIGN_GRANT_MINT_TOKEN_FILE":
+                if value == "/bao/flow-grant/token":
+                    assert service.get("volumes") == [{
+                        "type": "volume", "source": "openbao_flow_grant",
+                        "target": "/bao/flow-grant", "read_only": True, "volume": {},
+                    }]
+                else:
+                    assert value == "/run/secrets/sign_grant_mint_flow_wallet_token"
+                    assert "sign_grant_mint_flow_wallet_token" in declared
+                environment[key] = (Path(spec["directory"]) / "sign_grant_mint_flow_wallet_token").as_posix()
+                continue
             name = Path(value).name
             assert value == f"/run/secrets/{name}" and name in declared
             assert name in SECRET_VALUES or name in TLS_FILES.values()
@@ -89,7 +102,7 @@ def render(spec, command):
         root = Path(temporary)
         required = set()
         for name in ("docker-compose.base.yml", SELFHOST["GATE"]["BASE"],
-                     SELFHOST["FROZEN"]):
+                     SELFHOST["APPROVED"]):
             required.update(
                 re.findall(r"\$\{([A-Z0-9_]+):\?", (ROOT / name).read_text())
             )
@@ -98,6 +111,7 @@ def render(spec, command):
             ISSUANCE_API_KEY=KEY,
             SIGNING_KEYS_INTERNAL_API_KEY=KEY,
             GRPC_SERVICE_TOKEN=TOKEN,
+            DEVICE_REGISTRATION_GATEWAY_KEY="synthetic-distinct-flow-device-gateway-key-32-chars",
             PUBLIC_API_URL="https://issuer.example",
             FLOW_CALLBACK_DESTINATIONS="org-1|https://callback.example/result?nonce=__MARTY_TOKEN__",
             SELFHOST_STATE_DIR=(directory / "unused-state").as_posix(),
@@ -124,21 +138,9 @@ def render(spec, command):
             inputs=inputs,
             policy_directory=directory,
         )
-        previous = compose(ROOT / SELFHOST["FROZEN"])
+        previous = compose(ROOT / SELFHOST["APPROVED"])
         selfhost = compose(ROOT / SELFHOST["GATE"]["BASE"])
-        SELFHOST["assert_models"](
-            previous,
-            selfhost,
-            shared_additions=SELFHOST["rendered_additions"](
-                SELFHOST["SHARED_ADDITIONS"], inputs
-            ),
-            native_additive=SELFHOST["rendered_additions"](
-                SELFHOST["NATIVE_ADDITIVE"], inputs
-            ),
-            passport_consumer_additive=SELFHOST["rendered_passport_consumer_additions"](
-                inputs
-            ),
-        )
+        SELFHOST["assert_models"](previous, selfhost)
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {
             name: {

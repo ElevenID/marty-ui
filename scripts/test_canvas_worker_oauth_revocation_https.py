@@ -12,6 +12,17 @@ from test_canvas_worker_provider_signals_https import wait_for
 from test_canvas_worker_rest_https import assert_retry_timing
 
 
+def load_matrix(contracts, filename, seen=()):
+    assert filename not in seen and Path(filename).name == filename
+    matrix = json.loads((contracts / filename).read_text())
+    if "base_scenario" in matrix:
+        return {
+            **load_matrix(contracts, matrix["base_scenario"], (*seen, filename)),
+            **matrix,
+        }
+    return matrix
+
+
 def run_fenced_child(command, environment, https):
     """Reuse the existing marker protocol; SQL and worker remain in the child."""
     control = Path(https.certificates.name) / "native-control"
@@ -64,8 +75,8 @@ def run(executable, kind="oauth-revocation"):
         "oauth-revocation-secrets",
     }
     root = Path(__file__).resolve().parents[1]
-    matrix = json.loads(
-        (root / f"contracts/canvas-worker-{kind}-scenarios.json").read_text()
+    matrix = load_matrix(
+        root / "contracts", f"canvas-worker-{kind}-scenarios.json"
     )
     reference = json.loads(
         (root / f"contracts/canvas-worker-{kind}-oracle.json").read_text()

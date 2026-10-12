@@ -46,6 +46,7 @@ def test_exact_signed_rust_release_binds_kubernetes_services_image(tmp_path: Pat
         "ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "a" * 64,
         "ghcr.io/elevenid/marty-ui-oss/services": SERVICES_DIGEST,
         "ghcr.io/elevenid/marty-ui-oss/migrations": "sha256:" + "c" * 64,
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm": "sha256:" + "7" * 64,
     }, SOURCE)]
 
 

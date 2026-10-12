@@ -2,60 +2,29 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+from pathlib import Path
 import ssl
 
-from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
 import pytest
 
 from scripts import probe_passport_beta_chain as chain_probe
 from scripts.probe_passport_beta_chain import ChainProbeError, exercise, openssl_verify
 
 
+def public_chain_vectors() -> dict:
+    # Public signed vectors only; live KMS custody is qualified separately.
+    return json.loads(
+        (Path(__file__).parent / "fixtures/passport_beta_chain_public.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+
 def certificates() -> tuple[str, str, str]:
-    now = datetime.now(timezone.utc)
-    root_key = ec.generate_private_key(ec.SECP256R1())
-    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Disposable beta CSCA")])
-    root = (x509.CertificateBuilder().subject_name(root_name).issuer_name(root_name)
-            .public_key(root_key.public_key()).serial_number(x509.random_serial_number())
-            .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=2))
-            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-            .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
-                                          data_encipherment=False, key_agreement=False, key_cert_sign=True,
-                                          crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
-            .add_extension(x509.SubjectKeyIdentifier.from_public_key(root_key.public_key()), critical=False)
-            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()), critical=False)
-            .sign(root_key, hashes.SHA256()))
-    leaf_key = ec.generate_private_key(ec.SECP256R1())
-    leaf = (x509.CertificateBuilder()
-            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Disposable beta DSC")]))
-            .issuer_name(root_name).public_key(leaf_key.public_key())
-            .serial_number(x509.random_serial_number())
-            .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=1))
-            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
-            .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
-                                          data_encipherment=False, key_agreement=False, key_cert_sign=False,
-                                          crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
-            .add_extension(x509.SubjectKeyIdentifier.from_public_key(leaf_key.public_key()), critical=False)
-            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(root_key.public_key()), critical=False)
-            .sign(root_key, hashes.SHA256()))
-    other_key = ec.generate_private_key(ec.SECP256R1())
-    other = (x509.CertificateBuilder().subject_name(root_name).issuer_name(root_name)
-             .public_key(other_key.public_key()).serial_number(x509.random_serial_number())
-             .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=2))
-             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
-             .add_extension(x509.KeyUsage(digital_signature=True, content_commitment=False, key_encipherment=False,
-                                           data_encipherment=False, key_agreement=False, key_cert_sign=True,
-                                           crl_sign=True, encipher_only=False, decipher_only=False), critical=True)
-             .add_extension(x509.SubjectKeyIdentifier.from_public_key(other_key.public_key()), critical=False)
-             .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(other_key.public_key()), critical=False)
-             .sign(other_key, hashes.SHA256()))
-    return tuple(cert.public_bytes(serialization.Encoding.PEM).decode() for cert in (root, leaf, other))
+    fixture = public_chain_vectors()
+    return fixture["csca"], fixture["dsc"], fixture["other"]
 
 
 def plan() -> dict:

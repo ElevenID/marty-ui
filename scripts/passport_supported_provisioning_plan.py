@@ -37,6 +37,7 @@ UI_IMAGES = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
 # The hosted attestor signs a blocked producer receipt after its plan handoff.
@@ -88,7 +89,7 @@ def release_inputs(manifest_path: Path, source_commit: str, *,
     require(sorted(ui_artifact_uris) == sorted(UI_IMAGES.values()),
             "Official stack UI image roles are incomplete or ambiguous")
     ui_images = {images[role]["uri"]: images[role]["digest"]
-                 for role in ("ui", "services", "migrations")}
+                 for role in UI_IMAGES}
     require(verify_ui(manifest_path, ui_images, source_commit) is True,
             "Official stack UI attestations are unverified")
     infra_images = infra()

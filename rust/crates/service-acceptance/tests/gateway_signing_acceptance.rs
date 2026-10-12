@@ -15,6 +15,7 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
+use base64::Engine as _;
 use marty_gateway::{
     authorization::{OrganizationMembership, OrganizationMembershipProvider},
     contract::GatewayContract,
@@ -31,9 +32,8 @@ use marty_gateway::{
 use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
-    http::{
-        router_with_dependencies as signing_router, router_with_dependencies_and_ceremony_keys,
-    },
+    flow_envelope::OpenBaoEnvelopeProvider,
+    http::{router_with_all_keys, router_with_dependencies_and_sign_key as signing_router},
     profiles::ProfileStore as SigningProfileStore,
     registry::RegistryStore as SigningRegistryStore,
 };
@@ -44,6 +44,7 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 const DEFAULT_MAXIMUM_BODY_BYTES: usize = 10 * 1024 * 1024;
+const ISSUER_SIGN_GATEWAY_KEY: &str = "dedicated-issuer-sign-gateway-key-000001";
 
 struct SigningIdentity {
     organization_id: String,
@@ -291,6 +292,10 @@ fn signing_gateway_state(signing_url: String) -> Arc<GatewayRuntimeState> {
         )
         .unwrap()
         .with_service_token(Some("s".repeat(32)))
+        .unwrap()
+        .with_service_sign_gateway_key("dedicated-service-sign-gateway-key-000001".into())
+        .unwrap()
+        .with_issuer_sign_key(ISSUER_SIGN_GATEWAY_KEY.into())
         .unwrap(),
     )
 }
@@ -310,8 +315,10 @@ fn gateway_with_signing_http_dsc(
     dsc_key: Option<&str>,
     csca_key: Option<&str>,
     disposable_org: Option<(&str, bool, bool)>,
+    issuer_csr_grant_minter: Option<marty_signing_grant::minter::GrantMinter>,
 ) -> Router {
     let mut state = signing_gateway_state(signing_url);
+    Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter = issuer_csr_grant_minter;
     if let Some(dsc_key) = dsc_key {
         let state = Arc::get_mut(&mut state).unwrap();
         state.dsc_issue_gateway_key = Some(dsc_key.to_owned());
@@ -381,7 +388,9 @@ async fn gateway_transit_read(
     };
     Json(json!({"data": {
         "latest_version": 1, "type": key_type, "supports_signing": true,
-        "soft_deleted": false,
+        "soft_deleted": false, "exportable": false,
+        "allow_plaintext_backup": false, "deletion_allowed": false,
+        "imported_key": false,
         "keys": {"1": {"name": key_type, "public_key": material}}
     }}))
     .into_response()
@@ -413,15 +422,26 @@ async fn gateway_transit_sign(
     if !gateway_transit_authorized(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if !fixture.keys.lock().unwrap().contains_key(&reference) {
+    let Some(key_type) = fixture.keys.lock().unwrap().get(&reference).cloned() else {
         return StatusCode::NOT_FOUND.into_response();
-    }
+    };
     fixture.signs.lock().unwrap().push((reference, body));
-    Json(json!({"data":{"signature":"vault:v1:AQ=="}})).into_response()
+    // Return structurally valid remote signatures for each managed key type.
+    // This stub proves routing and custody boundaries, not cryptographic
+    // validity against a real provider key.
+    let signature = if key_type == "ed25519" {
+        format!(
+            "vault:v1:{}",
+            base64::engine::general_purpose::STANDARD.encode([7_u8; 64])
+        )
+    } else {
+        "vault:v1:MAYCAQECAQI=".to_owned()
+    };
+    Json(json!({"data":{"signature":signature}})).into_response()
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only"]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only; run alone"]
 async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
     let redis_url = disposable_signing_redis_url().await;
@@ -440,6 +460,10 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .with_state(fixture.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    // This exact-case acceptance process binds the mounted token to its own
+    // disposable transit stub, matching the production BAO_ADDR guard.
+    let prior_bao_addr = std::env::var_os("BAO_ADDR");
+    std::env::set_var("BAO_ADDR", &endpoint);
     let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
     let store = SigningRegistryStore::connect(&redis_url)
         .await
@@ -455,8 +479,14 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let profiles = SigningProfileStore::from_connection(store.connection());
     let documents = SigningDocumentStore::from_connection(store.connection());
     let cleanup_store = store.clone();
-    let signing = signing_router(
+    let signing = router_with_all_keys(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
+        None,
+        None,
+        false,
         Some(store),
         Some(documents.clone()),
         None,
@@ -521,6 +551,44 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     );
     assert!(!created.to_string().contains("test-only"));
     assert!(!created.to_string().contains("private_key"));
+    let service_sign_path = "/v1/signing-keys/services/managed-openbao-transit/sign";
+    let service_sign_body = json!({
+        "payload_b64": "cGF5bG9hZA", "key_reference": reference,
+        "key_purpose": "vc_jwt_issuer", "algorithm": "ES256"
+    });
+    let service_sign_request = |authenticated: bool| {
+        let mut request =
+            Request::post(service_sign_path).header("content-type", "application/json");
+        if authenticated {
+            request = request.header("cookie", "sessionId=valid");
+        }
+        request
+            .body(Body::from(service_sign_body.to_string()))
+            .unwrap()
+    };
+    let denied = gateway
+        .clone()
+        .oneshot(service_sign_request(false))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    assert!(fixture.signs.lock().unwrap().is_empty());
+    let signed_service = gateway
+        .clone()
+        .oneshot(service_sign_request(true))
+        .await
+        .unwrap();
+    let status = signed_service.status();
+    let signed_service: Value = serde_json::from_slice(
+        &to_bytes(signed_service.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    // This mock Transit fixture has no grant minter. The Gateway must stop
+    // before reaching the signer; real OpenBao grant paths are probed apart.
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{signed_service}");
+    assert!(fixture.signs.lock().unwrap().is_empty());
     let listed = gateway
         .clone()
         .oneshot(
@@ -671,13 +739,28 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .unwrap();
     assert_eq!(denied_sign.status(), StatusCode::UNAUTHORIZED);
     assert!(fixture.signs.lock().unwrap().is_empty());
-    let signed = gateway
+    let shared_key_sign = gateway
         .clone()
         .oneshot(
             Request::post(format!(
                 "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
             ))
             .header("x-api-key", "internal-signing-key")
+            .header("content-type", "application/json")
+            .body(Body::from(sign_body.to_string()))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(shared_key_sign.status(), StatusCode::UNAUTHORIZED);
+    assert!(fixture.signs.lock().unwrap().is_empty());
+    let signed = gateway
+        .clone()
+        .oneshot(
+            Request::post(format!(
+                "/internal/signing-keys/issuer-dids/sign?organization_id={organization_id}"
+            ))
+            .header("x-api-key", ISSUER_SIGN_GATEWAY_KEY)
             .header("content-type", "application/json")
             .body(Body::from(sign_body.to_string()))
             .unwrap(),
@@ -691,16 +774,8 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(status, StatusCode::OK, "{signed}");
-    assert_eq!(signed["ok"], true);
-    assert!(!signed["signature_b64"].as_str().unwrap().is_empty());
-    assert_eq!(
-        fixture.signs.lock().unwrap().as_slice(),
-        &[(
-            profile_reference.to_owned(),
-            json!({"input":"cGF5bG9hZA==","prehashed":false})
-        )]
-    );
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{signed}");
+    assert!(fixture.signs.lock().unwrap().is_empty());
     for public in [&created, &resolved, &signed] {
         for secret in [&endpoint[..], "test-only", profile_reference] {
             assert!(!public.to_string().contains(secret), "{public}");
@@ -735,6 +810,11 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .unwrap();
     signing_server.abort();
     kms_server.abort();
+    if let Some(previous) = prior_bao_addr {
+        std::env::set_var("BAO_ADDR", previous);
+    } else {
+        std::env::remove_var("BAO_ADDR");
+    }
 }
 
 async fn disposable_signing_openbao() -> (String, String) {
@@ -745,9 +825,17 @@ async fn disposable_signing_openbao() -> (String, String) {
         "CSR test requires a loopback disposable OpenBao instance"
     );
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    let guard_token = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN")
+        .expect("disposable OpenBao sentinel guard token");
+    assert_ne!(token, guard_token);
     assert!(
         std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
         "disposable OpenBao token binding does not match"
+    );
+    assert_eq!(
+        std::env::var("BAO_ADDR").ok().as_deref(),
+        Some(endpoint.as_str()),
+        "disposable OpenBao endpoint binding does not match"
     );
     let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
         .expect("pre-provisioned disposable OpenBao sentinel value");
@@ -761,7 +849,7 @@ async fn disposable_signing_openbao() -> (String, String) {
                 .join("/v1/secret/data/marty-test-disposable-guard")
                 .expect("disposable OpenBao sentinel URL"),
         )
-        .header("X-Vault-Token", &token)
+        .header("X-Vault-Token", &guard_token)
         .send()
         .await
         .expect("disposable OpenBao sentinel read");
@@ -783,15 +871,30 @@ async fn disposable_signing_openbao() -> (String, String) {
 #[tokio::test]
 #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao() {
-    use std::str::FromStr;
+    use std::{io::Write, str::FromStr};
 
     use der::{DecodePem, Encode};
+    use marty_signing_grant::{
+        minter::GrantMinter, replay::RedisGrantReplayStore, verifier::GrantVerifier, SigningOrigin,
+    };
+    use marty_signing_keys::http::router_with_all_keys_and_grants;
     use x509_cert::name::Name;
     use x509_cert::request::CertReq;
 
     let redis_url = disposable_signing_redis_url().await;
     let organization_id = format!("gateway-csr-{}", uuid::Uuid::new_v4().simple());
     let (endpoint, token) = disposable_signing_openbao().await;
+    let mint_token = std::env::var("MARTY_TEST_GRANT_ISSUER_MINT_TOKEN")
+        .expect("scoped GatewayIssuerDid mint token for disposable OpenBao");
+    let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN")
+        .expect("scoped grant verify token for disposable OpenBao");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, token);
+    assert_ne!(verify_token, token);
+    let mut mint_file = tempfile::NamedTempFile::new().unwrap();
+    mint_file.write_all(mint_token.as_bytes()).unwrap();
+    let mut verify_file = tempfile::NamedTempFile::new().unwrap();
+    verify_file.write_all(verify_token.as_bytes()).unwrap();
     let registry = SigningRegistryStore::connect(&redis_url)
         .await
         .unwrap()
@@ -799,19 +902,46 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
     let cleanup_store = registry.clone();
     let profiles = SigningProfileStore::from_connection(registry.connection());
     let documents = SigningDocumentStore::from_connection(registry.connection());
-    let signing = signing_router(
+    let verifier = GrantVerifier::for_managed_openbao(
+        &endpoint,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(registry.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
+        None,
+        None,
+        false,
         Some(registry),
         Some(documents),
         None,
         Some(profiles.clone()),
         None,
         Some("issuer.example".into()),
+        Some(verifier),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let signing_url = format!("http://{}", listener.local_addr().unwrap());
     let signing_server = tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
-    let gateway = gateway_with_signing_http(signing_url, &organization_id);
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::GatewayIssuerDid,
+        mint_file.path().to_path_buf(),
+    )
+    .unwrap();
+    let mut gateway_state = signing_gateway_state(signing_url);
+    let identity = Arc::new(SigningIdentity {
+        organization_id: organization_id.clone(),
+    });
+    let state = Arc::get_mut(&mut gateway_state).unwrap();
+    state.identities = identity.clone();
+    state.memberships = identity;
+    state.issuer_csr_grant_minter = Some(minter);
+    let gateway = gateway_router(gateway_state);
     let mut references = Vec::new();
     let mut public_keys = Vec::new();
     let mut issuer_dids = Vec::new();
@@ -986,17 +1116,37 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
 #[tokio::test]
 #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
-    use std::str::FromStr;
+    use std::{io::Write, str::FromStr};
 
     use der::{DecodePem, Encode};
+    use marty_signing_grant::{
+        minter::GrantMinter, replay::RedisGrantReplayStore, verifier::GrantVerifier, SigningOrigin,
+    };
+    use marty_signing_keys::{
+        documents::DocumentStore, http::router_with_all_keys_and_grants, profiles::ProfileStore,
+    };
     use x509_cert::name::Name;
     use x509_cert::request::CertReq;
 
     let redis_url = disposable_signing_redis_url().await;
     let (endpoint, token) = disposable_signing_openbao().await;
+    let mint_token = std::env::var("MARTY_TEST_GRANT_MINT_TOKEN")
+        .expect("scoped GatewayService mint token for disposable OpenBao");
+    let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN")
+        .expect("scoped grant verifier token for disposable OpenBao");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, token);
+    assert_ne!(verify_token, token);
+    let mut mint_file = tempfile::NamedTempFile::new().unwrap();
+    mint_file.write_all(mint_token.as_bytes()).unwrap();
+    let mut verify_file = tempfile::NamedTempFile::new().unwrap();
+    verify_file.write_all(verify_token.as_bytes()).unwrap();
     let organization_id = format!("gateway-service-csr-{}", uuid::Uuid::new_v4().simple());
     let service_id = format!("service-csr-{}", uuid::Uuid::new_v4().simple());
-    let key_reference = format!("service-csr-key-{}", uuid::Uuid::new_v4().simple());
+    let namespace = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, organization_id.as_bytes())
+        .simple()
+        .to_string();
+    let key_reference = format!("cred-issuer-{namespace}-service-csr-es256");
     let client = reqwest::Client::new();
     let created_key = client
         .post(format!("{endpoint}/v1/transit/keys/{key_reference}"))
@@ -1007,7 +1157,12 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap();
     assert!(created_key.status().is_success());
 
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(endpoint.clone(), token.clone()).unwrap(),
+        ));
     let service = json!({
         "id":service_id, "name":"Gateway dedicated CSR",
         "service_type":"openbao-transit", "endpoint":endpoint,
@@ -1021,22 +1176,58 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .unwrap()
         .push(service.clone());
     store.save(&organization_id, &registry).await.unwrap();
-    let signing = signing_router(
+    let mut raw_connection = store.connection();
+    let raw: String = redis::cmd("GET")
+        .arg(marty_signing_keys::registry::storage_key(&organization_id))
+        .query_async(&mut raw_connection)
+        .await
+        .unwrap();
+    assert!(raw.contains("auth_reference_envelope"));
+    assert!(!raw.contains(&token));
+    let verifier = GrantVerifier::for_managed_openbao(
+        &endpoint,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(store.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
+        None,
+        None,
+        None,
+        None,
+        false,
         Some(store.clone()),
+        Some(DocumentStore::from_connection(store.connection())),
+        None,
+        Some(ProfileStore::from_connection(store.connection())),
         None,
         None,
-        None,
-        None,
-        None,
+        Some(verifier),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let signing_url = format!("http://{}", listener.local_addr().unwrap());
     let signing_server = tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
-    let gateway = gateway_with_signing_http(signing_url, &organization_id);
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::GatewayService,
+        mint_file.path().to_path_buf(),
+    )
+    .unwrap();
+    let mut gateway_state = signing_gateway_state(signing_url);
+    let identity = Arc::new(SigningIdentity {
+        organization_id: organization_id.clone(),
+    });
+    let state = Arc::get_mut(&mut gateway_state).unwrap();
+    state.identities = identity.clone();
+    state.memberships = identity;
+    state.service_sign_grant_minter = Some(minter);
+    let gateway = gateway_router(gateway_state);
     let route = format!("/v1/signing-keys/services/{service_id}/certificate-csr");
     let subject = json!({
-        "country":"US", "organization":"ElevenID Beta", "common_name":"Pilot DSC"
+        "country":"US", "organization":"ElevenID Beta", "common_name":"Pilot DSC",
+        "key_reference":key_reference, "algorithm":"ES256"
     });
     let request = |path: &str, body: &Value, authenticated: bool| {
         let mut builder = Request::post(path).header("content-type", "application/json");
@@ -1068,7 +1259,7 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .oneshot(request(&route, &forged, true))
         .await
         .unwrap();
-    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
 
     let response = gateway
         .clone()
@@ -1109,6 +1300,44 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
     }
     for secret in [&endpoint[..], token.as_str(), key_reference.as_str()] {
         assert!(!result.to_string().contains(secret));
+    }
+    let sign_route = format!("/v1/signing-keys/services/{service_id}/sign");
+    let sign_body = json!({
+        "payload_b64": "cGF5bG9hZA", "key_reference": key_reference,
+        "key_purpose": "x509_doc_signer", "algorithm": "ES256"
+    });
+    let denied = gateway
+        .clone()
+        .oneshot(request(&sign_route, &sign_body, false))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    let mut unbound = sign_body.clone();
+    unbound["key_reference"] = json!("attacker-key");
+    let rejected = gateway
+        .clone()
+        .oneshot(request(&sign_route, &unbound, true))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::CONFLICT);
+    let signed = gateway
+        .clone()
+        .oneshot(request(&sign_route, &sign_body, true))
+        .await
+        .unwrap();
+    let status = signed.status();
+    let signed: Value = serde_json::from_slice(
+        &to_bytes(signed.into_body(), DEFAULT_MAXIMUM_BODY_BYTES)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(status, StatusCode::OK, "{signed}");
+    assert!(signed["signature_b64"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+    for secret in [&endpoint[..], token.as_str(), key_reference.as_str()] {
+        assert!(!signed.to_string().contains(secret));
     }
     let mut cleanup = store.connection();
     let _: usize = redis::cmd("DEL")
@@ -1155,8 +1384,14 @@ async fn disposable_gateway_json(
 #[tokio::test]
 #[ignore = "requires independently marked disposable Redis and OpenBao instances"]
 async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key() {
+    use std::io::Write;
+
     use der::{Decode, DecodePem};
     use marty_crypto::certificate::{load_certificate_pem, verify_certificate_signature};
+    use marty_signing_grant::{
+        minter::GrantMinter, replay::RedisGrantReplayStore, verifier::GrantVerifier, SigningOrigin,
+    };
+    use marty_signing_keys::http::router_with_all_keys_and_grants;
     use x509_cert::{request::CertReq, Certificate};
 
     const DSC_KEY: &str = "disposable-gateway-dsc-issue-key-32-characters";
@@ -1166,45 +1401,18 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
     const CSCA_ROUTE: &str = "/v1/signing-keys/issuer-identities/csca-self-signed-certificate";
 
     let redis_url = disposable_signing_redis_url().await;
-    let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
-    let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
-    assert!(
-        parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
-        "DSC test requires a loopback disposable OpenBao instance"
-    );
-    let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
-    assert!(
-        std::env::var("BAO_TOKEN").ok().as_deref() == Some(token.as_str()),
-        "disposable OpenBao token binding does not match"
-    );
-    let bao_nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
-        .expect("pre-provisioned disposable OpenBao sentinel value");
-    assert!(
-        bao_nonce.len() >= 16,
-        "disposable OpenBao sentinel is too short"
-    );
-    let marker = reqwest::Client::new()
-        .get(
-            parsed_bao
-                .join("/v1/secret/data/marty-test-disposable-guard")
-                .unwrap(),
-        )
-        .header("X-Vault-Token", &token)
-        .send()
-        .await
-        .expect("disposable OpenBao sentinel read");
-    assert!(
-        marker.status().is_success(),
-        "disposable OpenBao sentinel is absent"
-    );
-    let marker: Value = marker
-        .json()
-        .await
-        .expect("disposable OpenBao sentinel JSON");
-    assert!(
-        marker["data"]["data"]["nonce"].as_str() == Some(bao_nonce.as_str()),
-        "disposable OpenBao sentinel does not match"
-    );
+    let (endpoint, token) = disposable_signing_openbao().await;
+    let mint_token = std::env::var("MARTY_TEST_GRANT_ISSUER_MINT_TOKEN")
+        .expect("scoped GatewayIssuerDid mint token for disposable OpenBao");
+    let verify_token = std::env::var("MARTY_TEST_GRANT_VERIFY_TOKEN")
+        .expect("scoped grant verify token for disposable OpenBao");
+    assert_ne!(mint_token, verify_token);
+    assert_ne!(mint_token, token);
+    assert_ne!(verify_token, token);
+    let mut mint_file = tempfile::NamedTempFile::new().unwrap();
+    mint_file.write_all(mint_token.as_bytes()).unwrap();
+    let mut verify_file = tempfile::NamedTempFile::new().unwrap();
+    verify_file.write_all(verify_token.as_bytes()).unwrap();
 
     let registry = SigningRegistryStore::connect(&redis_url)
         .await
@@ -1213,8 +1421,17 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
     let profiles = SigningProfileStore::from_connection(registry.connection());
     let documents = SigningDocumentStore::from_connection(registry.connection());
     let lifecycle = CscaLifecycleStore::from_connection(registry.connection());
-    let signing = router_with_dependencies_and_ceremony_keys(
+    let verifier = GrantVerifier::for_managed_openbao(
+        &endpoint,
+        verify_file.path().to_path_buf(),
+        RedisGrantReplayStore::new(registry.connection()),
+    )
+    .unwrap();
+    let signing = router_with_all_keys_and_grants(
         INTERNAL_KEY.into(),
+        None,
+        Some(ISSUER_SIGN_GATEWAY_KEY.into()),
+        None,
         Some(DSC_KEY.into()),
         Some(CSCA_KEY.into()),
         true,
@@ -1224,10 +1441,17 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
         Some(profiles.clone()),
         None,
         Some("issuer.example".into()),
+        Some(verifier),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let signing_url = format!("http://{}", listener.local_addr().unwrap());
     let signing_server = tokio::spawn(async move { axum::serve(listener, signing).await.unwrap() });
+    let minter = GrantMinter::for_managed_openbao(
+        &endpoint,
+        SigningOrigin::GatewayIssuerDid,
+        mint_file.path().to_path_buf(),
+    )
+    .unwrap();
     let suffix = uuid::Uuid::new_v4().simple().to_string();
     let organization_id = format!("test-gateway-dsc-{suffix}");
     let gateway = gateway_with_signing_http_dsc(
@@ -1235,18 +1459,21 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
         Some(DSC_KEY),
         Some(CSCA_KEY),
         Some((&organization_id, true, true)),
+        Some(minter.clone()),
     );
     let limited_gateway = gateway_with_signing_http_dsc(
         signing_url.clone(),
         Some(DSC_KEY),
         Some(CSCA_KEY),
         Some((&organization_id, false, false)),
+        Some(minter.clone()),
     );
     let dsc_only_gateway = gateway_with_signing_http_dsc(
         signing_url.clone(),
         Some(DSC_KEY),
         Some(CSCA_KEY),
         Some((&organization_id, true, false)),
+        Some(minter),
     );
     let issuer_did = format!("did:web:issuer.example:orgs:gateway-dsc-{suffix}");
     let identity = |purpose: &str| {
@@ -1281,7 +1508,11 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
         None,
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "CSCA CSR creation failed");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "CSCA CSR creation failed: {csca_csr}"
+    );
     let csca_profile = profiles.list(&organization_id).await.unwrap()["profiles"]
         .as_array()
         .unwrap()
@@ -1501,11 +1732,12 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
 }
 
 #[tokio::test]
-#[ignore = "requires a marked disposable Redis database"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     use std::sync::atomic::AtomicUsize;
 
     let redis_url = disposable_signing_redis_url().await;
+    let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let key_reference = format!("gateway-rotation-key-{}", uuid::Uuid::new_v4().simple());
     let version = Arc::new(AtomicUsize::new(1));
@@ -1559,7 +1791,12 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
     let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let mut registry = marty_signing_keys::registry::empty_registry();
     registry["services"].as_array_mut().unwrap().push(json!({
@@ -1572,6 +1809,7 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
     store.save(&organization_id, &registry).await.unwrap();
     let signing = signing_router(
         "internal-signing-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(
             store
                 .clone()
@@ -1677,11 +1915,17 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
 }
 
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
     let redis_url = disposable_signing_redis_url().await;
+    let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-signing-{}", uuid::Uuid::new_v4().simple());
-    let store = SigningRegistryStore::connect(&redis_url).await.unwrap();
+    let store = SigningRegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(
+            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+        ));
     store
         .save(
             &organization_id,
@@ -1708,6 +1952,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
     let verify_registry = store.clone();
     let signing = signing_router(
         "test-internal-key".into(),
+        Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(store),
         Some(documents),
         None,
@@ -1805,16 +2050,20 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         (
             "POST",
             "/v1/signing-keys/services/missing-service/certificate-csr",
-            Some(json!({"country":"US","organization":"Test","common_name":"test"})),
-            StatusCode::NOT_FOUND,
-            "service",
+            Some(
+                json!({"country":"US","organization":"Test","common_name":"test","key_reference":"cred-issuer-missing-service","algorithm":"ES256"}),
+            ),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant minter",
         ),
         (
             "POST",
             "/v1/signing-keys/services/missing-service/sign",
-            Some(json!({"payload_b64":"cGF5bG9hZA"})),
-            StatusCode::NOT_FOUND,
-            "service",
+            Some(
+                json!({"payload_b64":"cGF5bG9hZA","key_reference":"cred-issuer-missing-service","key_purpose":"vc_jwt_issuer","algorithm":"ES256"}),
+            ),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "grant minter",
         ),
         (
             "GET",
@@ -2018,6 +2267,24 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         .find(|case| case["name"] == "gcp_pem_public_key")
         .unwrap()["provider_response"]
         .clone();
+    let metadata = Router::new().route(
+        "/computeMetadata/v1/instance/service-accounts/default/token",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(
+                headers
+                    .get("metadata-flavor")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Google")
+            );
+            Json(json!({"access_token": "internal-test-credential"}))
+        }),
+    );
+    let metadata_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let metadata_host = metadata_listener.local_addr().unwrap().to_string();
+    let prior_metadata_host = std::env::var_os("GCE_METADATA_HOST");
+    std::env::set_var("GCE_METADATA_HOST", metadata_host);
+    let metadata_server =
+        tokio::spawn(async move { axum::serve(metadata_listener, metadata).await.unwrap() });
     let kms_material = Arc::new(std::sync::Mutex::new(provider_response));
     let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let kms_endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
@@ -2065,7 +2332,7 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
                 "services": [{
                     "id": "gateway-service", "name": "Gateway mDoc Signer",
                     "service_type": "gcp-cloud-kms", "endpoint": kms_endpoint,
-                    "auth_mode": "workload_identity", "auth_reference": "internal-test-credential",
+                    "auth_mode": "workload_identity",
                     "key_reference": "projects/p/locations/l/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1",
                     "algorithms": ["ES256"], "key_purposes": ["mdoc_dsc"]
                 }],
@@ -2282,6 +2549,12 @@ async fn authenticated_gateway_reaches_remaining_rust_signing_handlers() {
         }));
     }
     kms_server.abort();
+    metadata_server.abort();
+    if let Some(previous) = prior_metadata_host {
+        std::env::set_var("GCE_METADATA_HOST", previous);
+    } else {
+        std::env::remove_var("GCE_METADATA_HOST");
+    }
     let mut connection = verify_registry.connection();
     let _: usize = redis::cmd("DEL")
         .arg(marty_signing_keys::registry::storage_key(&organization_id))

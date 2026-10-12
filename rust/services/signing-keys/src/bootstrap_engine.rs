@@ -194,6 +194,8 @@ impl Config {
 pub enum RunError {
     #[error("DATABASE_URL environment variable not set")]
     MissingDatabase,
+    #[error("Database connectivity verification failed")]
+    Database,
     #[error("Error creating schemas: {0}")]
     Schemas(String),
     #[error("OpenBao address/token are required for webhook secret protection")]
@@ -218,6 +220,7 @@ pub enum StampKind {
 // object or Send bound is part of its API.
 #[allow(async_fn_in_trait)]
 pub trait Backend {
+    async fn verify_database(&mut self, database_url: &str) -> Result<(), String>;
     async fn schemas(&mut self, database_url: &str, schemas: &[&str]) -> Result<(), String>;
     async fn mount(&mut self, address: &str, token: &str) -> Result<(), String>;
     async fn symmetric(
@@ -248,7 +251,10 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
         return Err(RunError::MissingDatabase);
     }
     if config.verify_only {
-        return Ok(());
+        return backend
+            .verify_database(&database.replace("+asyncpg", ""))
+            .await
+            .map_err(|_| RunError::Database);
     }
     backend
         .schemas(&database.replace("+asyncpg", ""), SCHEMAS)

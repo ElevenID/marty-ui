@@ -107,6 +107,7 @@ find_issuance_package_binary() {
 require_selfhost_tests() {
   local actual="$1" expected
   expected=$(printf '%s\n' \
+  'packaged_remote_secret_fixture_requires_verified_https: test' \
   'selfhost_public_image_loader_isolated: test' \
   'selfhost_public_image_loader_child: test' \
   'selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values: test' \
@@ -115,24 +116,23 @@ require_selfhost_tests() {
   'selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery: test' \
   'selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure: test' \
   'selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch: test' \
+  'selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts: test' \
   'selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed: test' \
   'selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts: test')
   [[ "$(printf '%s\n' "$actual" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]] || {
-    echo 'Selfhost executable changed its exact ten-case owner inventory' >&2
+    echo 'Selfhost executable changed its exact twelve-case owner inventory' >&2
     return 1
   }
 }
 deadline_serial_test=worker_deadline_matches_frozen_published_process
 mixed_roster_serial_test=worker_mixed_roster_reference_matches_published_process
-oauth_lease_serial_test=worker_oauth_revocation_lease_reference_matches_published_process
-# Both published-process replays enforce a 10-second child SIGINT bound. Run
-# them without the other Canvas owners during full qualification; routine
-# after-preflight runs already omit all historical references.
+# The mixed-roster published-process replay enforces a 10-second child SIGINT
+# bound. Run it without the other Canvas owners during full qualification.
 historical_serial_tests=()
 historical_serial_skips=()
 if [[ "$mode" == full || "$mode" == worker-full ||
   "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 1 ]]; then
-  historical_serial_tests=("$mixed_roster_serial_test" "$oauth_lease_serial_test")
+  historical_serial_tests=("$mixed_roster_serial_test")
   for historical_serial_test in "${historical_serial_tests[@]}"; do
     historical_serial_skips+=(--skip "$historical_serial_test")
   done
@@ -140,7 +140,6 @@ fi
 run_historical_serial_tests() {
   if (( ${#historical_serial_tests[@]} == 0 )); then return; fi
   timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1
-  timed canvas_serial oauth_lease_reference "$worker_executable" "$oauth_lease_serial_test" --exact --nocapture --test-threads=1
 }
 # Opt-in diagnostic owner. No current CI selector invokes these modes; the
 # default and existing full/preflight paths below retain their original order.
@@ -203,7 +202,7 @@ if [[ "$mode" == worker-* ]]; then
     expected_worker_skips=4
     if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]]; then
       worker_preflight_skips+=(--skip reference_matches_published)
-      expected_worker_skips=37
+      expected_worker_skips=21
       worker_retry_tier=routine
       worker_validation_tier=routine
     fi
@@ -242,7 +241,7 @@ if [[ "$mode" == selfhost-only ]]; then
   selfhost_log=$(mktemp "${RUNNER_TEMP:?}/canvas-selfhost-only.XXXXXX")
   trap 'rm -f -- "$selfhost_log"' EXIT
   timed canvas_target selfhost "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"
-  grep -Eq '^test result: ok\. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$selfhost_log"
+  grep -Eq '^test result: ok\. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$selfhost_log"
   exit 0
 fi
 composition_executable=$(find_executable canvas_published_schema_contract)
@@ -321,10 +320,10 @@ if [[ "$mode" == full-after-preflights ]]; then
       --skip worker_lease_expiry_matches_frozen_published_process
       --skip reference_matches_published
     )
-    # All 33 historical process/repository/cycle replays are available in
+    # All 17 remaining historical process/repository/cycle replays are available in
     # manual qualification, not the PR and merge-queue critical path. A new
     # replay changes this count and must be deliberately classified.
-    expected_skipped_worker_tests=37
+    expected_skipped_worker_tests=21
   fi
 fi
 pull_images() {
@@ -380,35 +379,21 @@ printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_envoy_composition_isola
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_envoy_composition_child: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'envoy_actual_image_validates_candidate: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_rest_reference_matches_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_facts_reference_matches_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_retry_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_retry_after_reference_matches_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_native_child: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_fence_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_fence_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_patch_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_patch_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_retry_after_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_retry_after_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_backoff_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_backoff_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_queue_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_queue_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_repository_selection_matches_published_order: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_lease_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_lease_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_selection_reference_matches_published_repository: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_selection_repository_matches_published: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_repository_matches_frozen_errors: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_validation_matches_frozen_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_failure_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_failure_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_resource_race_reference_matches_published_process: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_resources_unavailable_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_resources_unavailable_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_provider_resource_race_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_provider_resource_race_native_child: test'
@@ -495,9 +480,7 @@ printf '%s\n' "$all_test_names" | grep -Fx 'utf7_consumer_diagnostic_matches_pub
 printf '%s\n' "$all_test_names" | grep -Fx 'json_consumer_diagnostic_matches_published_boundaries: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'json_depth_diagnostic_matches_published_boundaries: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'cancelled_pool_release_does_not_wait_for_blocked_query: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_counters_reference_matches_published_cycle: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_counters_matches_frozen_published_cycle: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_secrets_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_secrets_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_secret_reference_constraints_match_published_schema: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_oauth_revocation_empty_token_is_not_dispatched: test'
@@ -552,10 +535,37 @@ timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --no
 # bound. Run it without concurrent Canvas database owners or test threads.
 timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
 run_historical_serial_tests
+
+# The packaged renewal cases need an actual non-exportable X25519 sender. Keep
+# root authority in this acceptance process; the native binary gets only the
+# exact-version read/pack token file provisioned by the Rust fixture.
+kms_config=$(mktemp "${RUNNER_TEMP:?}/canvas-kms.XXXXXX")
+chmod 600 "$kms_config"
+kms_container=""
+kms_owner_pid=$BASHPID
+cleanup_canvas_kms() {
+  [[ $BASHPID == "$kms_owner_pid" ]] || return 0
+  if [[ -n "$kms_container" ]]; then
+    docker rm -f "$kms_container" >/dev/null 2>&1 || true
+    kms_container=""
+  fi
+  rm -f -- "$kms_config"
+}
+trap cleanup_canvas_kms EXIT
+python3 "$(dirname "${BASH_SOURCE[0]}")/start-canvas-didcomm-openbao.py" > "$kms_config"
+kms_container=$(jq -er '.container' "$kms_config")
+kms_url=$(jq -er '.url' "$kms_config")
+kms_root_token=$(jq -er '.root_token' "$kms_config")
+[[ "$kms_container" =~ ^canvas-kms-[a-f0-9]{12}$ ]]
+[[ "$kms_url" =~ ^http://127\.0\.0\.1:[0-9]+$ ]]
+[[ "$kms_root_token" =~ ^[a-f0-9]{32}$ ]]
+scoped_signer_test='scoped_transit_signer_verifies_without_key_read_authority'
+"$composition_executable" --list --ignored | grep -Fx "$scoped_signer_test: test"
+timed canvas_serial kms_scoped_signer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" "$scoped_signer_test" --ignored --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
 # runs; contention must not turn its contract into an intermittent timeout.
-timed canvas_serial json_consumer "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
+timed canvas_serial json_consumer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
 # output separate, normally wait for all owners to finish cleanup, and fail
 # if any suite fails. The serial SQL-logging positive control stays outside
@@ -570,6 +580,8 @@ flow_end="$target_logs/flow.end"
 worker_end="$target_logs/worker.end"
 selfhost_end="$target_logs/selfhost.end"
 cleanup_target_logs() {
+  [[ $BASHPID == "$kms_owner_pid" ]] || return 0
+  cleanup_canvas_kms
   rm -f -- "$composition_log" "$flow_log" "$worker_log" "$selfhost_log" "$composition_end" "$flow_end" "$worker_end" "$selfhost_end"
   rmdir -- "$target_logs"
 }
@@ -597,7 +609,7 @@ selfhost_pid=$!
 relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &
 selfhost_relay_pid=$!
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &
 composition_relay_pid=$!

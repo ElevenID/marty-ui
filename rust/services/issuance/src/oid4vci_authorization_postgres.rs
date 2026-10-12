@@ -72,6 +72,10 @@ impl Oid4vciAuthorizationRepository for PostgresOid4vciAuthorizationRepository {
         ttl_seconds: u64,
     ) -> Result<bool, Oid4vciAuthorizationRepositoryError> {
         let ttl = i32::try_from(ttl_seconds).map_err(|_| repository_error("PAR TTL overflow"))?;
+        let payload = json!(parameters);
+        if marty_key_material_policy::contains_private_key(&payload) {
+            return Err(repository_error("private key material in PAR payload"));
+        }
         Ok(sqlx::query(
             "WITH expired AS (
                  SELECT purpose, key_digest
@@ -92,7 +96,7 @@ impl Oid4vciAuthorizationRepository for PostgresOid4vciAuthorizationRepository {
              RETURNING key_digest",
         )
         .bind(capability_digest(request_uri))
-        .bind(json!(parameters))
+        .bind(payload)
         .bind(ttl)
         .fetch_optional(&self.pool)
         .await
@@ -161,6 +165,12 @@ impl Oid4vciAuthorizationRepository for PostgresOid4vciAuthorizationRepository {
         &self,
         write: &AuthorizationSessionWrite,
     ) -> Result<(), Oid4vciAuthorizationRepositoryError> {
+        let configuration_ids = json!(write.session.credential_configuration_ids);
+        if marty_key_material_policy::contains_private_key(&configuration_ids) {
+            return Err(repository_error(
+                "private key material in authorization session",
+            ));
+        }
         let created_at = DateTime::from_timestamp(
             i64::try_from(write.session.created_at)
                 .map_err(|_| repository_error("authorization timestamp overflow"))?,
@@ -185,7 +195,7 @@ impl Oid4vciAuthorizationRepository for PostgresOid4vciAuthorizationRepository {
         .bind(&write.scope)
         .bind(&write.state)
         .bind(&write.session.issuer_state)
-        .bind(json!(write.session.credential_configuration_ids))
+        .bind(configuration_ids)
         .bind(&write.organization_id)
         .bind(&write.session.code_challenge)
         .bind(
@@ -335,6 +345,11 @@ impl Oid4vciAuthorizationRepository for PostgresOid4vciAuthorizationRepository {
             "event": request.event.as_str(),
             "event_description": request.event_description,
         });
+        if marty_key_material_policy::contains_private_key(&metadata) {
+            return Err(repository_error(
+                "private key material in wallet notification",
+            ));
+        }
         sqlx::query(
             "INSERT INTO issuance_service.issuance_events
                  (id, transaction_id, application_id, event_type, metadata, created_at)

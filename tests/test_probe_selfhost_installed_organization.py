@@ -12,10 +12,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import probe_selfhost_installed_organization as probe
+from qualify_selfhost_migrations import VERIFY_ONLY_CATALOG_QUERY
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64
 IMAGES = {
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "a" * 64,
+    "services": IMAGE,
     "postgres": "docker.io/library/postgres@sha256:" + "b" * 64,
     "redis": "docker.io/library/redis@sha256:" + "c" * 64,
     "openbao": "quay.io/openbao/openbao@sha256:" + "d" * 64,
@@ -47,6 +49,8 @@ def fixture(tmp_path: Path) -> tuple[Path, dict[str, str], list[str]]:
         "bao_root_token",
         "bao_service_token",
         "notification_openbao_token",
+        "sign_grant_verify_token",
+        "signing_keys_openbao_token",
     ):
         (tmp_path / name).write_text(name + "-value", encoding="ascii")
     environment = {
@@ -192,27 +196,31 @@ def test_runtime_hook_after_two_migrations_remains_unqualified(tmp_path, monkeyp
     monkeypatch.setattr(probe.migrations, "validate_scoped_model", lambda *args: None)
     monkeypatch.setattr(probe.migrations, "verify_local_platforms", lambda images: None)
     calls = []
-    completed = (
-        "Profile: selfhost-production (persistent=True)\n"
-        "Marty KMS identity: ready\n"
-        "Ensured non-exportable notification webhook envelope key\n"
-        "All migrations completed successfully\n"
-        "notification schema migrated\n"
-    )
+    completed = '{"level":"INFO","message":"notification schema migrated"}\n'
 
     def run(args, environment, timeout=90):
         calls.append(args)
+        if args[-1] == VERIFY_ONLY_CATALOG_QUERY:
+            return subprocess.CompletedProcess(args, 0, "0\n", "")
+        if args[-1] == "--verify-only":
+            return subprocess.CompletedProcess(args, 1 if "--env" in args else 0,
+                                               "", "")
         if args[-1] == "openbao-bootstrap":
             secret_dir = Path(environment["PROBE_SECRET_DIR"])
             (secret_dir / "bao_service_token").write_text("scoped-service")
             (secret_dir / "notification_openbao_token").write_text(
                 "scoped-notification"
             )
+            (secret_dir / "sign_grant_verify_token").write_text("scoped-verifier")
+            (secret_dir / "signing_keys_openbao_token").write_text("scoped-signing-keys")
         output = (
             "{}"
             if args[-3:] == ["config", "--format", "json"]
             else completed
             if args[-1] == "db-migrate"
+            else ""
+            if probe.migrations.PRIVATE_KEY_SCHEMA_QUERY in args
+            or probe.migrations.PRIVATE_KEY_CONTENT_QUERY in args
             else "20260808_0002"
             if "psql" in args
             else "1"

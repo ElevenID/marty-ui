@@ -12,6 +12,8 @@ mod bounded_fixture_command;
 mod canvas_published_database;
 #[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]
 mod owned_cleanup;
+#[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
+mod remote_integration_secret;
 #[path = "../../../services/issuance/tests/support/renewal_reference_fixture.rs"]
 mod renewal_reference_fixture;
 #[path = "../../selfhost-bundle/tests/support/extracted_bundle.rs"]
@@ -22,6 +24,19 @@ mod selfhost_packaged_runtime;
 mod selfhost_prepared;
 #[path = "support/selfhost_runtime_sidecar.rs"]
 mod selfhost_runtime_sidecar;
+
+#[tokio::test]
+async fn packaged_remote_secret_fixture_requires_verified_https() {
+    let fixture = remote_integration_secret::container_server(
+        std::net::Ipv4Addr::LOCALHOST,
+        selfhost_runtime_sidecar::MANAGEMENT_KEY,
+    )
+    .await
+    .unwrap();
+    assert!(fixture.base_url.starts_with("https://127.0.0.1:"));
+    assert!(fixture.ca_pem.starts_with("-----BEGIN CERTIFICATE-----"));
+    assert!(fixture.ca_pem.contains("-----END CERTIFICATE-----"));
+}
 
 #[test]
 fn selfhost_public_image_loader_isolated() {
@@ -48,6 +63,7 @@ async fn selfhost_public_image_loader_child() {
         selfhost_runtime_sidecar::PendingKind::Database,
     )
     .unwrap();
+    selfhost_packaged_runtime::record_database_stage("start");
     let owned = std::mem::ManuallyDrop::new(
         canvas_published_database::PublishedDatabase::start_with_scope(
             selfhost_runtime_sidecar::parent_scope().unwrap(),

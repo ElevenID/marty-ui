@@ -5,6 +5,7 @@ This bundle is the image-based distribution for the open-source self-host stack.
 ## What is inside the bundle
 
 - `docker-compose.yml` as the generated image-based runtime compose file operators should run
+- `docker-compose.selfhost.openbao.yml` with the Go DIDComm plugin image for the separate OpenBao Raft project
 - `.env.selfhost.production.example` with the non-secret settings contract
 - `docker/secrets/selfhost.example` as the tracked placeholder secret set
 - `config/keycloak` for the realm import and theme assets
@@ -30,6 +31,11 @@ Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do n
 For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
 images no longer use `SELFHOST_IMAGE_TAG` or `MARTY_ISSUANCE_IMAGE`; the
 qualified image lock supplies those references instead.
+The same lock pins both services in `docker-compose.selfhost.openbao.yml` to
+its `openbao_didcomm_image` digest. Start this separate project with the same
+external state and secret directories when using the bundled OpenBao backend;
+the main Compose project does not start OpenBao for you. The release must
+qualify both projects together before this is a supported KMS-only install.
 
 Use the image artifacts and verification evidence from the release workflow, then
 stage this bundle with `make package-selfhost-bundle` (Rust 1.95.0 and Docker
@@ -48,7 +54,8 @@ Compose service to an exact `registry/path@sha256:<64 lowercase hex>` reference.
 The JSON must use schema `marty.selfhost-image-lock/v1`, a `release` matching
 `release/stack-lock.json`, and a `services` object keyed by every rendered
 Compose service name. Packaging rejects missing/extra services, mutable image
-references, and a release mismatch, then includes the lock in the bundle as
+references, a missing exact `openbao_didcomm_image`, and a release mismatch,
+then includes the lock in the bundle as
 `.marty-selfhost-images.json`. This is a binding mechanism, not a qualification
 claim: the release process must first verify the image digests, provenance,
 signatures, licensing, and clean installed stack. No current public release

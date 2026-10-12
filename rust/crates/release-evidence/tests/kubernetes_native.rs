@@ -106,9 +106,27 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
             json!([{"configMapRef":{"name":"issuance-native-config"}}])
         );
         let native_env = env(native_owner);
+        assert_eq!(
+            native_env["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
         assert!(!native_env
             .keys()
-            .any(|v| v.starts_with("BAO") || v == "CANVAS_SYNC_PROCESSOR"));
+            .any(|v| (v.starts_with("BAO") && v != "BAO_ADDR") || v == "CANVAS_SYNC_PROCESSOR"));
+        for (name, path) in [
+            (
+                "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+                "credential",
+            ),
+            ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+            ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+            ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+        ] {
+            assert_eq!(
+                native_env[name]["value"],
+                format!("/run/secrets/issuance-sign-grants/{path}")
+            );
+        }
         for value in &mut after {
             if value["kind"] != "Deployment" {
                 continue;
@@ -148,35 +166,38 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         .unwrap()
                         .as_object_mut()
                         .unwrap();
-                    let volumes = pod.remove("volumes").unwrap();
-                    assert_eq!(volumes.as_array().unwrap().len(), 2);
-                    for volume in volumes.as_array().unwrap() {
+                    let volumes = pod["volumes"].as_array_mut().unwrap();
+                    assert_eq!(volumes.len(), 3);
+                    assert_eq!(volumes[0]["name"], "issuance-sign-grants");
+                    let added_volumes = volumes.split_off(1);
+                    for volume in &added_volumes {
                         assert_eq!(volume["secret"]["optional"], false);
                         assert_eq!(volume["secret"]["defaultMode"], 292);
                     }
                     let legacy_owner = owner_mut(value);
-                    let mounts = legacy_owner
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("volumeMounts")
-                        .unwrap();
-                    assert_eq!(mounts.as_array().unwrap().len(), 2);
-                    assert!(mounts
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .all(|v| v["readOnly"] == true));
+                    let mounts = legacy_owner["volumeMounts"].as_array_mut().unwrap();
+                    assert_eq!(mounts.len(), 3);
+                    assert_eq!(mounts[0]["name"], "issuance-sign-grants");
+                    let added_mounts = mounts.split_off(1);
+                    assert!(added_mounts.iter().all(|v| v["readOnly"] == true));
                     let entries = legacy_owner["env"].as_array_mut().unwrap();
                     assert_eq!(entries.pop().unwrap()["name"], "DIDCOMM_TLS_CA_FILE");
                     assert_eq!(
                         entries.pop().unwrap()["name"],
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
-                    assert_eq!(owner(native_owner)["volumeMounts"], mounts);
-                    assert_eq!(
-                        native_owner.pointer("/spec/template/spec/volumes").unwrap(),
-                        &volumes
-                    );
+                    let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
+                    assert_eq!(native_mounts.len(), 5);
+                    assert_eq!(native_mounts[2]["name"], "issuance-sign-grants");
+                    assert_eq!(native_mounts[3..], added_mounts);
+                    let native_volumes = native_owner
+                        .pointer("/spec/template/spec/volumes")
+                        .unwrap()
+                        .as_array()
+                        .unwrap();
+                    assert_eq!(native_volumes.len(), 5);
+                    assert_eq!(native_volumes[2]["name"], "issuance-sign-grants");
+                    assert_eq!(native_volumes[3..], added_volumes);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -217,7 +238,7 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     .find(|entry| entry["name"] == "ISSUANCE_GRPC_TARGET")
                     .unwrap();
                 assert_eq!(grpc["value"], "issuance-native:9005");
-                grpc["value"] = json!("issuance:9005");
+                grpc["value"] = json!("issuance-native:9005");
             }
         }
         assert_eq!(
@@ -235,7 +256,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     assert_eq!(common.len(), 1);
     assert_eq!(
         common[0]["data"]["ISSUANCE_NATIVE_SERVICE_URL"],
-        "http://issuance:8005"
+        "http://issuance-native:8005"
     );
     let recovery_ref = json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"ISSUANCE_NATIVE_SERVICE_URL"}}});
     for name in ["auth", "applicant", "presentation-policy"] {
@@ -252,7 +273,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     );
     assert_eq!(
         recovery_flow["ISSUANCE_GRPC_TARGET"]["value"],
-        "issuance:9005"
+        "issuance-native:9005"
     );
 
     let expected = native::compose(&baseline, &template, &ready, &values).unwrap();
@@ -445,7 +466,7 @@ fn absent_empty_and_explicit_settings_keep_both_owners_effectively_paired() {
                 let model = native::compose(&baseline, &template, &ready, &values).unwrap();
                 let rows = model["items"].as_array().unwrap();
                 let shared = &rows[index(rows, "ConfigMap", "issuance-native-config")]["data"];
-                let mut common = json!({"BAO_ADDR":"must-not-reach-native","CANVAS_SYNC_PROCESSOR":"legacy-only"});
+                let mut common = json!({"BAO_ADDR":"https://vault.example.com","CANVAS_SYNC_PROCESSOR":"legacy-only"});
                 if let Some(value) = existing {
                     common["DIDCOMM_ALLOW_PRIVATE_IPS"] = json!(value);
                 }
@@ -468,7 +489,7 @@ fn absent_empty_and_explicit_settings_keep_both_owners_effectively_paired() {
                         .map(String::as_str),
                     expected
                 );
-                assert!(!native_values.contains_key("BAO_ADDR"));
+                assert_eq!(native_values["BAO_ADDR"], "https://vault.example.com");
                 assert!(!native_values.contains_key("CANVAS_SYNC_PROCESSOR"));
                 assert!(!legacy_values.contains_key("MARTY_UI_SHA"));
                 assert_eq!(native_values["MARTY_UI_SHA"], "native-only-revision");
@@ -491,9 +512,8 @@ fn parser_environment_and_new_canonical_image_policy_fail_closed() {
     let captured = native::capture_environment(|name| {
         names.push(name.to_owned());
         (name == "K8S_ISSUANCE_NATIVE_ENABLED").then(|| "false".into())
-    })
-    .unwrap();
-    assert!(!native::selected(&captured).unwrap());
+    });
+    assert!(captured.is_err());
     assert_eq!(names, ["K8S_ISSUANCE_NATIVE_ENABLED"]);
     let (_, _, _, mut values) = fixtures();
     for &name in native::OPTIONAL_SETTINGS {
@@ -524,6 +544,22 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
     let (baseline, template, ready, values) = fixtures();
     let deployment = index(&template, "Deployment", "issuance-native");
     for (path, value) in [
+        (
+            "/spec/template/spec/volumes/0/secret/items/0/key",
+            json!("OPENBAO_SERVICE_TOKEN"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/mountPath",
+            json!("/run/secrets/shared"),
+        ),
+        (
+            "/spec/template/spec/volumes/1/secret/secretName",
+            json!("untrusted-ca"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/1/readOnly",
+            json!(false),
+        ),
         (
             "/spec/template/spec/initContainers",
             json!([{"name":"extra"}]),
@@ -587,6 +623,29 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
         native::compose(&changed, &template, &ready, &values),
         Err(REFUSAL)
     );
+    let signer = index(&template, "Deployment", "signing-keys");
+    for (path, value) in [
+        (
+            "/spec/template/spec/volumes/0/secret/secretName",
+            json!("untrusted-server-tls"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/readOnly",
+            json!(false),
+        ),
+        (
+            "/spec/template/spec/containers/0/ports/1/containerPort",
+            json!(8017),
+        ),
+    ] {
+        let mut changed = template.clone();
+        set_path(&mut changed[signer], path, value);
+        assert_eq!(
+            native::compose(&baseline, &changed, &ready, &values),
+            Err(REFUSAL),
+            "{path}"
+        );
+    }
 }
 
 fn api_defaults(model: &Value) -> Value {
@@ -1040,7 +1099,6 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "RP_GRPC_TARGET",
-        "SIGNING_KEYS_INTERNAL_URL",
     ] {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -1055,13 +1113,27 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         let entries = owner_mut(&mut baseline[i])["env"].as_array_mut().unwrap();
         entries.retain(|entry| entry["name"] != name);
         entries.push(custom.clone());
-        let model = native::compose(&baseline, &template, &ready, &values).unwrap();
+        let model = native::compose(&baseline, &template, &ready, &values)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         let rows = model["items"].as_array().unwrap();
         let selected = index(rows, "Deployment", "issuance-native");
         assert_eq!(env(&rows[i])[name], custom);
         assert_eq!(env(&rows[selected])[name], custom);
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
     }
+    let mut legacy_with_custom_signer = baseline.clone();
+    let legacy = index(&legacy_with_custom_signer, "Deployment", "issuance");
+    let signer = owner_mut(&mut legacy_with_custom_signer[legacy])["env"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["name"] == "SIGNING_KEYS_INTERNAL_URL")
+        .unwrap();
+    *signer = json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"https://custom-signer.example/internal"});
+    assert_eq!(
+        native::compose(&legacy_with_custom_signer, &template, &ready, &values),
+        Err(REFUSAL),
+    );
     for &name in native::SECRET_SETTINGS {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -1119,9 +1191,14 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
             }
         }
         let native_env = env(&rows[index(rows, "Deployment", "issuance-native")]);
+        assert_eq!(
+            native_env["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
         assert!(!native_env
             .keys()
-            .any(|name| name.starts_with("BAO") || name.starts_with("OPENBAO")));
+            .any(|name| (name.starts_with("BAO") && name != "BAO_ADDR")
+                || name.starts_with("OPENBAO")));
         let signing = env(&rows[index(rows, "Deployment", "signing-keys")]);
         assert_eq!(
             signing["SIGNING_KEYS_REDIS_URL"]["value"],
@@ -1133,7 +1210,7 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
         );
         assert_eq!(
             signing["OPENBAO_SERVICE_TOKEN"],
-            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"OPENBAO_SERVICE_TOKEN"}}})
+            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}})
         );
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
         for fault in [
@@ -1703,5 +1780,7 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
     cmd.arg("validate")
         .env("MARTY_SERVICES_IMAGE", "ignored-private-image");
     let (passed, output, errors) = execute(cmd, b"");
-    assert!(passed && output.is_empty() && errors.is_empty());
+    // Native issuance is selected by default. A missing or mutable image
+    // must fail preflight even when no explicit enable flag was supplied.
+    assert!(!passed && output.is_empty() && errors == format!("{REFUSAL}\n").as_bytes());
 }

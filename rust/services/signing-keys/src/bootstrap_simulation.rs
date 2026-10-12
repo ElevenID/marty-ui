@@ -33,6 +33,13 @@ impl MemoryBackend<'_> {
 }
 
 impl Backend for MemoryBackend<'_> {
+    async fn verify_database(&mut self, _database_url: &str) -> Result<(), String> {
+        if self.input["database_connect_failure"] == true {
+            return Err("injected database connectivity failure".into());
+        }
+        Ok(())
+    }
+
     async fn schemas(&mut self, _database: &str, schemas: &[&str]) -> Result<(), String> {
         let mut pending = vec![];
         for schema in schemas {
@@ -210,6 +217,7 @@ fn normalize_reference_state(value: &mut Value) {
 fn tags(error: RunError) -> Vec<String> {
     match error {
         RunError::MissingDatabase => vec!["DATABASE_URL environment variable not set".into()],
+        RunError::Database => vec!["Database connectivity verification failed".into()],
         RunError::Schemas(_) => vec!["Error creating schemas".into()],
         RunError::MissingNotificationKms => vec![
             "Notification webhook KMS preparation failed".into(),
@@ -286,4 +294,40 @@ pub async fn replay(invocation: &Value) -> Result<Value, String> {
         "state": { "postgres_schemas": memory.schemas, "openbao_mounted": memory.mounted,
             "openbao_token_roles_used": memory.roles, "openbao_keys": memory.keys, "redis": memory.redis },
         "error_tags": errors }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replay;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn verify_only_checks_database_and_never_writes() {
+        assert_eq!(
+            super::RunError::Database.to_string(),
+            "Database connectivity verification failed"
+        );
+        let successful = replay(&json!({"input": {
+            "environment": {"DATABASE_URL": "postgresql://marty@postgres/marty"},
+            "verify_only": true
+        }}))
+        .await
+        .unwrap();
+        assert_eq!(successful["exit_codes"], json!([0]));
+        assert_eq!(successful["effects"], json!(["run:1"]));
+
+        let disconnected = replay(&json!({"input": {
+            "environment": {"DATABASE_URL": "postgresql://marty@postgres/marty"},
+            "verify_only": true,
+            "database_connect_failure": true
+        }}))
+        .await
+        .unwrap();
+        assert_eq!(disconnected["exit_codes"], json!([1]));
+        assert_eq!(disconnected["effects"], json!(["run:1"]));
+        assert_eq!(
+            disconnected["error_tags"],
+            json!(["Database connectivity verification failed"])
+        );
+    }
 }

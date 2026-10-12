@@ -38,20 +38,6 @@ def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
     assert sandbox["command"] == []
 
 
-def test_live_operator_binds_all_signed_image_interpolation_inputs():
-    source = (Path(__file__).resolve().parents[1]
-              / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(
-                  encoding="utf-8")
-    for variable, field in (
-        ("MARTY_SERVICES_IMAGE", "services_image"),
-        ("MARTY_UI_RELEASE_IMAGE", "ui_image"),
-    ):
-        binding = f"$env:{variable} = [string]$script:plan.{field}"
-        assert source.count(binding) == 1
-        assert source.index(binding) < source.index("Invoke-SignedIssuanceMigration\n")
-
-
-
 def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
     head = "a" * 40
     docs_id = "b" * 64
@@ -252,16 +238,6 @@ def test_old_python_canvas_sandbox_cannot_pass_signed_beta_plan(change):
         prepare(handoff, intent, rendered, ui)
 
 
-def test_aggregate_runner_verifies_recreated_rust_sandbox_binary_and_health():
-    source = (Path(__file__).resolve().parents[1] /
-              "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(encoding="utf-8")
-    assert "Assert-RustCanvasSandbox" in source
-    assert source.index("Wait-BetaHealthy -Services $applications") < source.index(
-        "    Assert-RustCanvasSandbox\n")
-    assert "readlink /proc/1/exe" in source
-    assert "$image[0] -cne [string]$script:plan.services_image" in source
-
-
 def test_signed_services_images_package_canvas_sandbox_binary():
     root = Path(__file__).resolve().parents[1]
     build = (root / "scripts/build-rust-service-binaries.sh").read_text(encoding="utf-8")
@@ -363,6 +339,9 @@ def test_rendered_compose_rejects_external_provider_profile():
     ("issuance-native", "PERSONALIZATION_BUREAU_URL", "https://external.example"),
     ("issuance-native", "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID", "external"),
     ("issuance-native", "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", "/run/old-key"),
+    ("issuance-native", "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false"),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET", ""),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE", ""),
 ])
 def test_rendered_compose_rejects_external_or_legacy_passport_binding(service, key, value):
     handoff, intent, rendered, ui = candidate()
@@ -392,7 +371,6 @@ def test_rendered_compose_rejects_wrong_ui_image():
 def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: Path,
                                                                       monkeypatch):
     handoff, _, beta, ui = candidate()
-    monkeypatch.setenv("MARTY_COMMON_DIGEST", "sha256:" + "f" * 64)
     monkeypatch.setenv("MARTY_DOCS_IMAGE", "sha256:" + "f" * 64)
     monkeypatch.setattr(compose, "ROOT", tmp_path)
     monkeypatch.setattr(compose, "COMPOSE_FILES", ("base.yml", "passport.yml"))
@@ -415,8 +393,6 @@ def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: P
     assert commands[0][1]["input"] == evidence["image_override"]
     assert commands[0][1]["env"]["MARTY_SERVICES_IMAGE"] == handoff["services_image"]
     assert commands[1][1]["env"]["MARTY_UI_RELEASE_IMAGE"] == handoff["ui_image"]
-    assert commands[0][1]["env"]["MARTY_COMMON_DIGEST"] == (
-        handoff["build_only_artifacts"]["MARTY_COMMON_DIGEST"])
     assert commands[0][1]["env"]["MARTY_DOCS_IMAGE"] == handoff["docs_image"]
     assert set(evidence["compose_files_sha256"]) == {"base.yml", "passport.yml"}
     assert evidence["service_config_hashes"]["flow"] == "0" * 64

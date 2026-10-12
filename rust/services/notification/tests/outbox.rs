@@ -6,10 +6,12 @@ use marty_notification::{
         webhook_retry_delay, WEBHOOK_TEST_EVENT_ID_PREFIX, WEBHOOK_TEST_EVENT_TYPE,
         WEBHOOK_TEST_SUBSCRIPTION_ID,
     },
-    repository::{InMemoryNotificationRepository, NotificationRepository},
+    postgres::PgNotificationRepository,
+    repository::{InMemoryNotificationRepository, NotificationRepository, RepositoryError},
     webhook::{canonical_signature, decode_bound_webhook_secret, encode_bound_webhook_secret},
 };
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
+use sqlx::postgres::PgPoolOptions;
 
 fn event(now: chrono::DateTime<Utc>, id: &str) -> marty_notification::outbox::WebhookOutboxEvent {
     new_webhook_outbox_event(
@@ -30,6 +32,36 @@ fn event(now: chrono::DateTime<Utc>, id: &str) -> marty_notification::outbox::We
         now,
         86_400,
     )
+}
+
+#[tokio::test]
+async fn repositories_reject_private_outbox_payload_before_database_access() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost:1/notification_test")
+        .unwrap();
+    let postgres = PgNotificationRepository::new(pool);
+    let memory = InMemoryNotificationRepository::default();
+    let mut candidate = event(Utc::now(), "private-event");
+    candidate.payload.insert(
+        "data".into(),
+        json!({"issuer":{"private_jwk":{"kty":"EC","d":"secret"}}}),
+    );
+    for repository in [&postgres as &dyn NotificationRepository, &memory] {
+        assert!(matches!(
+            repository.enqueue_webhook_event(candidate.clone()).await,
+            Err(RepositoryError::Invalid(_))
+        ));
+    }
+    assert!(memory
+        .get_webhook_outbox_event(&candidate.id)
+        .await
+        .unwrap()
+        .is_none());
+    candidate.payload.insert(
+        "data".into(),
+        json!({"issuer":{"key_reference":"transit/issuer/1"}}),
+    );
+    assert!(memory.enqueue_webhook_event(candidate).await.unwrap());
 }
 
 #[test]

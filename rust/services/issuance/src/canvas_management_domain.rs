@@ -8,6 +8,7 @@ use marty_oid4vci::lti::{
     normalize_canvas_base_url, CanvasLtiPlatformProbe, CANVAS_LTI_TRUST_HOSTED_GLOBAL,
     CANVAS_LTI_TRUST_SELF_MANAGED_SAME_ORIGIN,
 };
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
@@ -101,7 +102,7 @@ impl CanvasOriginPolicy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasPlatformRecord {
     pub id: String,
     pub organization_id: String,

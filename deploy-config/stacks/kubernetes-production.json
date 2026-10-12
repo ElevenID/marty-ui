@@ -38,8 +38,8 @@
     "compliance_profile_workload_client_cert",
     "compliance_profile_workload_client_key",
     "flow_application_event_hmac_key",
-    "integration_secret_master_key",
-    "openbao_service_token"
+    "openbao_service_token",
+    "signing_keys_openbao_token"
   ],
   "artifact_profile": "oss-release",
   "deployment_targets": ["kubernetes"],

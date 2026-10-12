@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 if __package__:
+    from .release_transaction import REQUIRED_IMAGE_ROLES
     from .check_release_absent import (
         RegistryTagAlreadyExists,
         ReleaseAlreadyExists,
@@ -21,6 +22,7 @@ if __package__:
         ensure_release_absent,
     )
 else:
+    from release_transaction import REQUIRED_IMAGE_ROLES
     from check_release_absent import (
         RegistryTagAlreadyExists,
         ReleaseAlreadyExists,
@@ -61,9 +63,12 @@ def check(
     release_absent: Callable[[str, str, str], None] = ensure_release_absent,
     registry_absent: Callable[[str, str, str, str], None] = ensure_registry_tag_absent,
     digest_lookup: Callable[[str, str], str] = registry_digest,
-    token: str, actor: str, images: tuple[str, str, str],
+    token: str, actor: str, images: tuple[str, ...],
 ) -> dict[str, bool]:
     """Return existing exact image tags, including writes before a checkpoint."""
+    roles = REQUIRED_IMAGE_ROLES
+    if len(images) != len(roles):
+        raise PrePromotionError("Every release image coordinate is required")
     version = tag.removeprefix("v")
     if not (
         re.fullmatch(r"[0-9a-f]{40}", source_sha)
@@ -74,27 +79,24 @@ def check(
         and transaction.get("tag") == tag
         and transaction.get("version") == version
         and transaction.get("repository") == repository
-        and transaction.get("image_uris") == dict(zip(
-            ("ui", "services", "migrations"), images, strict=True,
-        ))
+        and transaction.get("image_uris") == dict(zip(roles, images, strict=True))
     ):
         raise PrePromotionError("Qualified transaction differs from the exact claim")
     promoted = transaction.get("promoted_roles")
     if not isinstance(promoted, list) or any(
-        not isinstance(role, str) or role not in ("ui", "services", "migrations")
+        not isinstance(role, str) or role not in roles
         for role in promoted
     ) or len(promoted) != len(set(promoted)):
         raise PrePromotionError("Qualified transaction has invalid promotion state")
     fresh = len(promoted) == 0
-    if promoted != list(("ui", "services", "migrations")[:len(promoted)]):
+    if promoted != list(roles[:len(promoted)]):
         raise PrePromotionError("Qualified transaction has invalid promotion order")
     state = transaction.get("state")
     if (fresh and state != "qualified") or (
-        0 < len(promoted) < 3 and state != "promoting"
-    ) or (len(promoted) == 3 and state != "promoted"):
+        0 < len(promoted) < len(roles) and state != "promoting"
+    ) or (len(promoted) == len(roles) and state != "promoted"):
         raise PrePromotionError("Qualified transaction has invalid promotion state")
     image_records = transaction.get("images")
-    roles = ("ui", "services", "migrations")
     if not isinstance(image_records, dict) or set(image_records) != set(roles) or any(
         not isinstance(image_records[role], dict)
         or image_records[role].get("uri") != image
@@ -143,14 +145,14 @@ def main() -> None:
     parser.add_argument("--tag", default=os.environ.get("TAG", ""))
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""))
     parser.add_argument("--image", action="append")
-    parser.add_argument("--role", choices=("ui", "services", "migrations"))
+    parser.add_argument("--role", choices=REQUIRED_IMAGE_ROLES)
     args = parser.parse_args()
     try:
         images = args.image or [os.environ.get(name, "") for name in (
-            "IMAGE", "SERVICES_IMAGE", "MIGRATIONS_IMAGE",
+            "IMAGE", "SERVICES_IMAGE", "MIGRATIONS_IMAGE", "OPENBAO_DIDCOMM_IMAGE",
         )]
-        if len(images) != 3:
-            raise PrePromotionError("Three release image coordinates are required")
+        if len(images) != len(REQUIRED_IMAGE_ROLES):
+            raise PrePromotionError("Every release image coordinate is required")
         transaction = json.loads(args.transaction.read_text(encoding="utf-8"))
         if not isinstance(transaction, dict):
             raise PrePromotionError("Qualified transaction is invalid")

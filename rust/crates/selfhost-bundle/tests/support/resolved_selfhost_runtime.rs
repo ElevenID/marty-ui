@@ -336,22 +336,33 @@ const MAPPINGS: &[(&str, &str, Role, &str)] = &[
     ),
 ];
 
-fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
+pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
     match owner {
         "issuance-native" => [
             "marty_db_password",
             "issuance_api_key",
-            "integration_secret_master_key",
+            "signing_keys_issuer_sign_key",
+            "signing_keys_integration_secret_key",
+            "didcomm_issuance_openbao_token",
+            "sign_grant_mint_issuance_credential_token",
+            "sign_grant_mint_issuance_canvas_token",
+            "sign_grant_mint_issuance_readiness_token",
+            "sign_grant_mint_issuance_passport_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
             "grpc_service_token",
+            "workload_identity_ca_cert",
         ]
         .into_iter()
         .collect(),
         "gateway" => [
             "issuance_api_key",
-            "openbao_service_token",
+            "signing_keys_service_sign_gateway_key",
+            "sign_grant_mint_gateway_service_token",
+            "sign_grant_mint_gateway_issuer_did_token",
+            "signing_keys_issuer_sign_key",
             "grpc_service_token",
+            "device_registration_gateway_key",
         ]
         .into_iter()
         .collect(),
@@ -366,6 +377,8 @@ fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "flow_webhook_secret",
             "flow_application_event_hmac_key",
             "issuance_api_key",
+            "signing_keys_issuer_sign_key",
+            "sign_grant_mint_flow_wallet_token",
         ]
         .into_iter()
         .collect(),
@@ -377,8 +390,28 @@ fn secret_field(key: &str) -> Result<&'static str> {
     match key {
         "MARTY_DB_PASSWORD_FILE" => Ok("marty_db_password"),
         "GRPC_SERVICE_TOKEN_FILE" => Ok("grpc_service_token"),
+        "DEVICE_REGISTRATION_GATEWAY_KEY_FILE" => Ok("device_registration_gateway_key"),
         "ISSUANCE_API_KEY_FILE" | "SIGNING_KEYS_INTERNAL_API_KEY_FILE" => Ok("issuance_api_key"),
-        "INTEGRATION_SECRET_MASTER_KEY_FILE" => Ok("integration_secret_master_key"),
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE" => Ok("signing_keys_service_sign_gateway_key"),
+        "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_gateway_service_token"),
+        "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_gateway_issuer_did_token")
+        }
+        "FLOW_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_flow_wallet_token"),
+        "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_credential_token")
+        }
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_issuance_canvas_token"),
+        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_readiness_token")
+        }
+        "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_passport_token")
+        }
+        "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" => Ok("signing_keys_integration_secret_key"),
+        "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
+        "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" => Ok("canvas_credentials_shared_secret"),
         "BAO_TOKEN_FILE" => Ok("openbao_service_token"),
@@ -454,10 +487,15 @@ impl ClosedSelfhostModel {
             for raw in [
                 "ISSUANCE_API_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+                "SIGNING_KEYS_ISSUER_SIGN_KEY",
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
                 "GRPC_SERVICE_TOKEN",
+                "DEVICE_REGISTRATION_GATEWAY_KEY",
                 "MARTY_DB_PASSWORD",
                 "DATABASE_URL",
                 "INTEGRATION_SECRET_MASTER_KEY",
+                "INTEGRATION_SECRET_MASTER_KEY_FILE",
                 "TOKEN_HMAC_KEY",
             ] {
                 require(!environment.contains_key(raw))?;
@@ -505,11 +543,15 @@ impl ClosedSelfhostModel {
                 && native["command"] == json!([]),
         )?;
         require(native["environment"]["DIDCOMM_ALLOW_PRIVATE_IPS"] == "false")?;
+        require(native["environment"]["DIDCOMM_KMS_ADDR"] == "http://openbao.invalid:8200")?;
+        require(native["environment"]["BAO_ADDR"] == "http://openbao.invalid:8200")?;
         require(
-            !object(&native["environment"])?
-                .keys()
-                .any(|key| key.starts_with("BAO_") || key.starts_with("OPENBAO_")),
+            native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+                == "/run/secrets/didcomm_issuance_openbao_token",
         )?;
+        require(!object(&native["environment"])?.keys().any(|key| {
+            (key.starts_with("BAO_") && key != "BAO_ADDR") || key.starts_with("OPENBAO_")
+        }))?;
         require(services["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] == READY)?;
         require(services["gateway"]["environment"]["REDIS_DB_GATEWAY"] == "2")?;
         require(services["flow"]["environment"]["REDIS_DB_FLOW"] == "3")?;
@@ -714,6 +756,7 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     let env_file = owned.path().join("synthetic.env");
     let mut inputs: BTreeMap<String, String> = [
         ("SELFHOST_IMAGE_TAG", "synthetic-immutable-v1"),
+        ("BAO_ADDR", "http://openbao.invalid:8200"),
         ("KEYCLOAK_SOCIAL_LOGIN_ENABLED", "false"),
         ("CORS_ORIGINS", "https://issuer.example"),
         (
@@ -1095,6 +1138,10 @@ fn negative_controls(
             json!("/run/secrets/token_hmac_key"),
         ),
         (
+            "/services/gateway/environment/DEVICE_REGISTRATION_GATEWAY_KEY_FILE",
+            json!("/run/secrets/grpc_service_token"),
+        ),
+        (
             "/services/issuance/environment/BAO_ADDR",
             json!("changed-unselected-sibling"),
         ),
@@ -1128,6 +1175,10 @@ fn negative_controls(
     }
     let mut changed = model.full_model.clone();
     changed["services"]["issuance-native"]["environment"]["ISSUANCE_API_KEY"] =
+        json!("raw-must-not-hide-file");
+    assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
+    let mut changed = model.full_model.clone();
+    changed["services"]["gateway"]["environment"]["DEVICE_REGISTRATION_GATEWAY_KEY"] =
         json!("raw-must-not-hide-file");
     assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
 }

@@ -16,6 +16,9 @@ use tokio::net::TcpListener;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+#[path = "support/disposable_backends.rs"]
+mod disposable_backends;
+
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_REDIS_URL"]
 async fn redis_round_trip_preserves_profile_crud_selection_and_tenant_scope() {
@@ -173,7 +176,8 @@ async fn transit_public_key(request: Request<Body>) -> Response {
 #[tokio::test]
 #[ignore = "requires MARTY_TEST_REDIS_URL"]
 async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method() {
-    let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("test Redis URL");
+    let redis_url = disposable_backends::disposable_redis_url().await;
+    let envelope = disposable_backends::disposable_openbao_envelope().await;
     let suffix = Uuid::new_v4().simple().to_string();
     let organization_id = format!("rust-issuer-rebind-{suffix}");
     let slug = format!("rebind-{suffix}");
@@ -202,7 +206,10 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
             "credential_formats": ["dc+sd-jwt"]
         })
     };
-    let registry = RegistryStore::connect(&redis_url).await.unwrap();
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_auth_envelopes(Some(envelope));
     let profiles = ProfileStore::from_connection(registry.connection());
     let documents = DocumentStore::from_connection(registry.connection());
     let app = marty_signing_keys::http::router_with_dependencies(
@@ -225,6 +232,19 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
         )
         .await
         .unwrap();
+    let mut raw_connection = registry.connection();
+    let raw: String = raw_connection
+        .get(marty_signing_keys::registry::storage_key(&organization_id))
+        .await
+        .unwrap();
+    assert!(!raw.contains("test-token"));
+    let persisted: Value = serde_json::from_str(&raw).unwrap();
+    for service in persisted["services"].as_array().unwrap() {
+        assert_eq!(service["auth_reference"], "");
+        assert!(service["auth_reference_envelope"]["ciphertext"]
+            .as_str()
+            .is_some_and(|ciphertext| ciphertext.starts_with("vault:v")));
+    }
     let identity_request = json!({
         "organization_id": organization_id,
         "issuer_did": issuer_did,

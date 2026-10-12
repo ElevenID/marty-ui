@@ -3,18 +3,26 @@ import {
   buildPushRegistrationPayload,
   generateWalletDeviceId,
   getWalletDeviceStorageKey,
-  resolveWalletStatusResponse,
 } from './walletSetupFlow';
 
 const DEFAULT_API_BASE_URL = import.meta.env.VITE_API_URL || '/api';
 
-async function defaultLoadDevices({ userId, apiBaseUrl = DEFAULT_API_BASE_URL }) {
-  return get(`${apiBaseUrl}/devices`, {
-    headers: { 'X-User-ID': userId },
-  });
+export async function issueRemotePairingTicket({ organizationId, trustProfileId }) {
+  if (!organizationId) throw new Error('Select an organization before pairing');
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trustProfileId || '')) {
+    throw new Error('Select a Trust Profile before pairing');
+  }
+  return post('/v1/devices/pairing-tickets', { organization_id: organizationId, trust_profile_id: trustProfileId });
 }
 
-async function defaultRegisterDevice({ userId, request, apiBaseUrl = DEFAULT_API_BASE_URL }) {
+export async function loadRemotePairingStatus({ pairingId }) {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pairingId || '')) {
+    throw new Error('Invalid wallet pairing identifier');
+  }
+  return get(`/v1/devices/pairing-confirmations/${pairingId}`);
+}
+
+async function defaultRegisterDevice({ request, apiBaseUrl = DEFAULT_API_BASE_URL }) {
   return post(`${apiBaseUrl}/devices/register`, request.body, {
     headers: request.headers,
   });
@@ -36,35 +44,6 @@ export function getOrCreateWalletDeviceId({
   const generated = generateWalletDeviceId({ organizationId, now, random });
   storage.setItem(storageKey, generated);
   return generated;
-}
-
-export async function loadWalletStatus({
-  userId,
-  activeStep,
-  loadDevices = defaultLoadDevices,
-} = {}) {
-  if (!userId) {
-    return {
-      ...resolveWalletStatusResponse({ activeStep, devices: [] }),
-      error: null,
-    };
-  }
-
-  try {
-    const data = await loadDevices({ userId });
-    return {
-      ...resolveWalletStatusResponse({
-        activeStep,
-        devices: data.devices,
-      }),
-      error: null,
-    };
-  } catch (error) {
-    return {
-      ...resolveWalletStatusResponse({ activeStep, devices: [] }),
-      error: getErrorMessage(error) || 'Failed to load wallet status',
-    };
-  }
 }
 
 export async function registerWalletPushNotifications({

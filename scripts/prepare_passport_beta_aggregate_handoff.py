@@ -90,6 +90,9 @@ def prepare(
     native_receipt: Path, runner: Callable[[list[str]], str] = run,
 ) -> dict[str, Any]:
     """Recheck the stopped generation and committed SQL before app login opens."""
+    raise HostProbeError(
+        "historical passport beta aggregate handoff is retired; use fresh Rust deployment"
+    )
     source_commit = protected_source(runner)
     for relative in PROTECTED_FILES:
         protected_file(relative, runner)

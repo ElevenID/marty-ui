@@ -191,6 +191,18 @@ const RESERVE_INITIATION: &str = concat!(
     transaction_columns!()
 );
 
+pub(crate) fn transaction_contains_private_material(transaction: &CredentialTransaction) -> bool {
+    marty_key_material_policy::contains_private_key_map(&transaction.claims)
+        || marty_key_material_policy::contains_private_key(&json!(
+            transaction.selective_disclosure_claims
+        ))
+        || marty_key_material_policy::contains_private_key(&json!(transaction.zk_predicate_claims))
+        || transaction
+            .wallet_configs
+            .iter()
+            .any(marty_key_material_policy::contains_private_key)
+}
+
 /// Insert the canonical issuance-transaction shape through either a pool or an
 /// existing database transaction. Application approval uses the latter so the
 /// application lifecycle transition and transaction reservation commit as one
@@ -202,6 +214,9 @@ pub(crate) async fn insert_issuance_transaction<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if transaction_contains_private_material(transaction) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
     let validity_days = i32::try_from(transaction.validity_days)
         .map_err(|_| CredentialIssuanceError::RepositoryUnavailable)?;
     let renewal_window_days = i32::try_from(transaction.renewal_window_days)
@@ -309,6 +324,9 @@ pub(crate) async fn refresh_pending_application_offer<'executor, E>(
 where
     E: Executor<'executor, Database = Postgres>,
 {
+    if transaction_contains_private_material(prepared) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
     let Some(application_id) = current.application_id.as_deref() else {
         return Ok(None);
     };
@@ -761,6 +779,10 @@ impl PostgresCredentialRepository {
             return Ok(None);
         };
         let metadata = get::<Value>(&row, "metadata")?;
+        if marty_key_material_policy::contains_private_key(&metadata) {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
+        let credential = issued_credential_row(&row)?;
         let metadata_text = |name: &str| {
             metadata
                 .get(name)
@@ -776,7 +798,7 @@ impl PostgresCredentialRepository {
                 DeliveredInitiationDidcommDelivery {
                     transaction_id: transaction.id,
                     organization_id: transaction.organization_id,
-                    credential_id: get(&row, "id")?,
+                    credential_id: credential.id,
                     holder_did: metadata_text("holder_did")?,
                     service_endpoint: metadata_text("service_endpoint")?,
                     message_id: metadata_text("didcomm_message_id")?,
@@ -786,22 +808,7 @@ impl PostgresCredentialRepository {
         Ok(Some(InitiationDidcommDeliveryState::Pending(Box::new(
             PendingInitiationDidcommDelivery {
                 transaction,
-                credential: IssuedCredential {
-                    id: get(&row, "id")?,
-                    transaction_id: get(&row, "transaction_id")?,
-                    organization_id: get(&row, "organization_id")?,
-                    credential_template_id: get(&row, "credential_template_id")?,
-                    applicant_id: get(&row, "applicant_id")?,
-                    subject_did: get(&row, "subject_did")?,
-                    issuer_did: get(&row, "issuer_did")?,
-                    revocation_profile_id: get(&row, "revocation_profile_id")?,
-                    renewed_from_credential_id: get(&row, "renewed_from_credential_id")?,
-                    status_list_entries: json_vec(&row, "status_list_entries")?,
-                    credential: get(&row, "credential_jwt")?,
-                    credential_hash: get(&row, "credential_hash")?,
-                    issued_at: get(&row, "issued_at")?,
-                    expires_at: get(&row, "expires_at")?,
-                },
+                credential,
                 delivery: StagedInitiationDidcommDelivery {
                     holder_did: metadata_text("holder_did")?,
                     service_endpoint: metadata_text("service_endpoint")?,
@@ -876,6 +883,13 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         let delivery_status = get::<String>(&delivery_row, "status")?;
         let last_error = get::<Option<String>>(&delivery_row, "last_error")?;
         let metadata = get::<Value>(&delivery_row, "metadata")?;
+        if marty_key_material_policy::contains_private_key(&metadata)
+            || last_error.as_ref().is_some_and(|value| {
+                marty_key_material_policy::contains_private_key(&Value::String(value.to_owned()))
+            })
+        {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         let database_now = get::<DateTime<Utc>>(&delivery_row, "database_now")?;
 
         let holder = metadata_required_text(&metadata, "holder_did")?;
@@ -1135,6 +1149,16 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         credential: &IssuedCredential,
         delivery: &StagedInitiationDidcommDelivery,
     ) -> Result<(), CredentialIssuanceError> {
+        let metadata = json!({
+            "protocol": "didcomm_v2",
+            "holder_did": delivery.holder_did,
+            "service_endpoint": delivery.service_endpoint,
+            "didcomm_message_id": delivery.message_id,
+            "encrypted_message": delivery.encrypted_message,
+        });
+        if marty_key_material_policy::contains_private_key(&metadata) {
+            return Err(CredentialIssuanceError::RepositoryUnavailable);
+        }
         let mut database = self.pool.begin().await.map_err(repository_error)?;
         finalize_credential(&mut database, transaction, credential, None).await?;
         sqlx::query(
@@ -1151,13 +1175,7 @@ impl InitiationDidcommRepository for PostgresCredentialRepository {
         .bind(&transaction.organization_id)
         .bind(&transaction.delivery_mode)
         .bind(DIDCOMM_TRANSPORT_READY_STATUS)
-        .bind(json!({
-            "protocol": "didcomm_v2",
-            "holder_did": delivery.holder_did,
-            "service_endpoint": delivery.service_endpoint,
-            "didcomm_message_id": delivery.message_id,
-            "encrypted_message": delivery.encrypted_message,
-        }))
+        .bind(metadata)
         .execute(&mut *database)
         .await
         .map_err(repository_error)?;
@@ -1259,7 +1277,7 @@ pub(crate) fn transaction_row(
     row: PgRow,
 ) -> Result<CredentialTransaction, CredentialIssuanceError> {
     let status = get::<String>(&row, "status")?;
-    Ok(CredentialTransaction {
+    let transaction = CredentialTransaction {
         id: get(&row, "id")?,
         organization_id: get(&row, "organization_id")?,
         credential_template_id: get(&row, "credential_template_id")?,
@@ -1292,7 +1310,11 @@ pub(crate) fn transaction_row(
         oid4vci_client_id: get(&row, "oid4vci_client_id")?,
         created_at: get(&row, "created_at")?,
         expires_at: get(&row, "expires_at")?,
-    })
+    };
+    if transaction_contains_private_material(&transaction) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(transaction)
 }
 
 #[async_trait]
@@ -1563,7 +1585,8 @@ fn validate_finalization_input(
     transaction: &CredentialTransaction,
     credential: &IssuedCredential,
 ) -> Result<(), CredentialIssuanceError> {
-    if transaction.status != CredentialTransactionStatus::Signing
+    if issued_credential_contains_private_material(credential)
+        || transaction.status != CredentialTransactionStatus::Signing
         || transaction.reserved_credential_id.as_deref() != Some(&credential.id)
         || credential.transaction_id != transaction.id
         || credential.organization_id != transaction.organization_id
@@ -1572,6 +1595,13 @@ fn validate_finalization_input(
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
     Ok(())
+}
+
+fn issued_credential_contains_private_material(credential: &IssuedCredential) -> bool {
+    marty_key_material_policy::contains_private_key(&json!(credential.status_list_entries))
+        || marty_key_material_policy::contains_private_key(&Value::String(
+            credential.credential.clone(),
+        ))
 }
 
 async fn finalize_credential(
@@ -1699,7 +1729,11 @@ async fn insert_notification_binding(
     credential: &IssuedCredential,
     notification_id: &str,
 ) -> Result<(), CredentialIssuanceError> {
-    if notification_id.trim().is_empty() {
+    if notification_id.trim().is_empty()
+        || marty_key_material_policy::contains_private_key(&Value::String(
+            notification_id.to_owned(),
+        ))
+    {
         return Err(CredentialIssuanceError::RepositoryUnavailable);
     }
     sqlx::query(INSERT_NOTIFICATION_BINDING)
@@ -1861,7 +1895,7 @@ fn metadata_required_text(metadata: &Value, name: &str) -> Result<String, Creden
 }
 
 fn issued_credential_row(row: &PgRow) -> Result<IssuedCredential, CredentialIssuanceError> {
-    Ok(IssuedCredential {
+    let credential = IssuedCredential {
         id: get(row, "id")?,
         transaction_id: get(row, "transaction_id")?,
         organization_id: get(row, "organization_id")?,
@@ -1876,7 +1910,11 @@ fn issued_credential_row(row: &PgRow) -> Result<IssuedCredential, CredentialIssu
         credential_hash: get(row, "credential_hash")?,
         issued_at: get(row, "issued_at")?,
         expires_at: get(row, "expires_at")?,
-    })
+    };
+    if issued_credential_contains_private_material(&credential) {
+        return Err(CredentialIssuanceError::RepositoryUnavailable);
+    }
+    Ok(credential)
 }
 
 async fn mark_locked_didcomm_outcome_unknown(

@@ -184,7 +184,8 @@ def build_lock(
     except release_transaction.ReleaseTransactionError as error:
         raise ImageLockError(str(error)) from error
     _verify_source_files(source_repo, source_sha,
-                         (stack_lock, base_compose, override_compose))
+                         (stack_lock, base_compose, override_compose,
+                          source_repo / "docker-compose.selfhost.openbao.yml"))
     _require(claim["images"] and claim["state"] in {
         "digests_recorded", "qualified", "promoting", "promoted", "published"
     }, "stack transaction has no recorded image digests")
@@ -247,8 +248,12 @@ def build_lock(
              "external image map has missing or extra Compose service roles")
     _require(resolved["issuance"] == resolved["issuance-migrations"],
              "issuance API and migration images differ")
+    plugin = claim["images"]["openbao_didcomm"]
+    plugin_image = _exact_image(plugin["uri"] + "@" + plugin["digest"],
+                                "openbao_didcomm")
     return {"schema": SCHEMA, "release": source_lock["release"],
-            "services": dict(sorted(resolved.items()))}
+            "services": dict(sorted(resolved.items())),
+            "openbao_didcomm_image": plugin_image}
 
 
 def main() -> None:

@@ -9,8 +9,15 @@ import subprocess
 from pathlib import Path
 
 import yaml
+import pytest
 
 from scripts import stack_tag_gate
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA_ACTION = re.compile(r"^\s*(?:-\s*)?uses:\s*[^\s]+@[0-9a-f]{40}\s*$")
@@ -50,7 +57,6 @@ def test_stack_release_consumes_only_immutable_public_components() -> None:
         "marty-api-core",
         "marty-blog",
         "marty-cli",
-        "marty-common",
         "marty-core-python",
         "marty-verification-python",
         "marty-iso18013-python",
@@ -109,23 +115,14 @@ def test_ci_verifies_the_pinned_mdoc_binding_evidence_contract() -> None:
     assert "result.not_revoked is None" in workflow
 
 
-def test_ci_and_stack_lock_pin_the_same_marty_common_release() -> None:
+def test_ci_and_stack_lock_exclude_retired_marty_common_wheel() -> None:
     workflow_text = _text(".github/workflows/ci.yml")
     workflow = yaml.safe_load(workflow_text)
     lock = json.loads(_text("release/stack-lock.json"))
-    common = next(
-        component
-        for component in lock["components"]
-        if component["name"] == "marty-common"
-    )
-    artifact = next(item for item in common["artifacts"] if item["type"] == "python")
-
-    assert common["version"] == "0.2.16"
-    assert common["commit"] == "36bb2aac65759edc2ccdce120e16a61391a7ce32"
-    assert workflow["env"]["MARTY_COMMON_URI"] == artifact["uri"]
-    assert workflow["env"]["MARTY_COMMON_DIGEST"] == artifact["digest"]
-    assert 'marty_common_wheel="$RUNNER_TEMP/${MARTY_COMMON_URI##*/}"' in workflow_text
-    assert "marty_common-0.2.4" not in workflow_text
+    assert all(item["name"] != "marty-common" for item in lock["components"])
+    assert "MARTY_COMMON_URI" not in workflow["env"]
+    assert "MARTY_COMMON_DIGEST" not in workflow["env"]
+    assert 'marty_common_wheel=' not in workflow_text
 
 
 def test_ci_and_stack_lock_pin_the_same_npm_releases() -> None:
@@ -240,6 +237,7 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         "marty-ui-migrations-sbom.cdx.json",
         "marty-deploy-linux-amd64",
         "marty-deploy-linux-arm64",
+        "marty-ui-openbao-didcomm-sbom.cdx.json",
     }
     expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
     for name in expected_assets:
@@ -370,7 +368,8 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
         subjects = (
             "stack-manifest.json", "release-transaction.json",
             "marty-ui-sbom.cdx.json", "marty-ui-services-sbom.cdx.json",
-            "marty-ui-migrations-sbom.cdx.json", "marty-deploy-linux-amd64",
+            "marty-ui-migrations-sbom.cdx.json", "marty-ui-openbao-didcomm-sbom.cdx.json",
+            "marty-deploy-linux-amd64",
             "marty-deploy-linux-arm64",
         )
         for name in subjects:
@@ -406,9 +405,9 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
     )
     assert result.returncode == 0, result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert len(calls) == 14  # Seven Cosign signatures and seven source attestations.
-    assert sum(call.startswith("cosign:") for call in calls) == 7
-    assert sum(call.startswith("gh:") for call in calls) == 7
+    assert len(calls) == 16  # Eight Cosign signatures and eight source attestations.
+    assert sum(call.startswith("cosign:") for call in calls) == 8
+    assert sum(call.startswith("gh:") for call in calls) == 8
 
     (old / "marty-deploy-linux-arm64").write_bytes(b"tampered")
     tampered = subprocess.run(
@@ -671,13 +670,14 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
                for artifact in component["artifacts"])
 
 
-def test_verifier_release_lineage_is_eligible_and_evidence_bounded() -> None:
+def test_verifier_release_lineage_is_held_until_core_wheels_are_hardened() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.245"
-    assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.245")
+    assert lock["release"] == "marty-ui@1.1.244"
+    assert lock["release_state"] == "hold"
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="release_state"):
+        stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
     assert components["marty-integration-tests"]["version"] == "1.2.84"
 
@@ -851,6 +851,84 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
+def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    native = jobs["native-schema-image-qualification"]
+    release = jobs["qualify-release"]
+    assert native["needs"] == [
+        "resolve-transaction", "build-services", "record-digests",
+    ]
+    assert "native-schema-image-qualification" in release["needs"]
+    step = next(item for item in native["steps"]
+                if item.get("name") == "Verify and qualify exact released Rust schema images")
+    assert step["env"]["SERVICES_DIGEST"] == (
+        "${{ needs.build-services.outputs.services_digest }}")
+    assert step["env"]["MIGRATIONS_DIGEST"] == (
+        "${{ needs.build-services.outputs.migrations_digest }}")
+    assert step["env"]["SOURCE_SHA"] == (
+        "${{ needs.resolve-transaction.outputs.source_sha }}")
+    script = step["run"]
+    assert "gh attestation verify" in script
+    assert "--source-ref refs/heads/main --deny-self-hosted-runners" in script
+    assert "python scripts/qualify_selfhost_migrations.py" in script
+    assert "deploy-config/passport-supported-disposable-infra-images.json" in script
+    assert "--services-image \"$services_image\"" in script
+    assert "--migrations-image \"$migrations_image\"" in script
+    assert any(item.get("with", {}).get("name") ==
+               "stack-release-native-schema-gate-${{ github.run_id }}"
+               for item in native["steps"])
+    assert any(item.get("with", {}).get("name") ==
+               "stack-release-native-schema-gate-${{ github.run_id }}"
+               for item in release["steps"])
+    persist = next(item["run"] for item in release["steps"]
+                   if item.get("name") == "Persist exact gate evidence")
+    assert "sha256sum gates/native/native-schema.json" in persist
+    assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
+
+
+def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+    jobs = yaml.safe_load(workflow)["jobs"]
+    prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    image = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"
+
+    assert f"OPENBAO_DIDCOMM_IMAGE: {image}" in workflow
+    assert f"OPENBAO_DIDCOMM_IMAGE: {image}" in prepare
+    assert '--image "openbao_didcomm=$OPENBAO_DIDCOMM_IMAGE"' in prepare
+    build = jobs["build-openbao-didcomm"]
+    build_step = next(step for step in build["steps"] if step.get("id") == "build")
+    assert build_step["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    assert "push-by-digest=true" in build_step["with"]["outputs"]
+    assert any("actions/attest-build-provenance" in step.get("uses", "")
+               for step in build["steps"])
+    assert any('cosign sign --yes "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"'
+               in step.get("run", "") for step in build["steps"])
+
+    assert "build-openbao-didcomm" in jobs["record-digests"]["needs"]
+    recorded = next(step["run"] for step in jobs["record-digests"]["steps"]
+                    if step.get("name") == "Persist the exact digest checkpoint")
+    assert '--digest "openbao_didcomm=$OPENBAO_DIDCOMM_DIGEST"' in recorded
+    gate = jobs["didcomm-plugin-image-qualification"]
+    assert "build-openbao-didcomm" in gate["needs"]
+    probe = next(step["run"] for step in gate["steps"]
+                 if step.get("name") == "Verify and exercise the exact published OpenBao DIDComm image")
+    for required in (
+        'gh attestation verify "oci://$image"',
+        'export MARTY_OPENBAO_PROBE_IMAGE="$image"',
+        "probe_didcomm_issuance_token.py",
+        "probe_didcomm_openbao_ha.py",
+        "test_openbao_raft_recovery.ps1",
+    ):
+        assert required in probe
+    assert "didcomm-plugin-image-qualification" in jobs["qualify-release"]["needs"]
+    assert '--gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest"' in workflow
+    publication = jobs["publish-manifest"]
+    assert "build-openbao-didcomm" in publication["needs"]
+    assert '--role openbao_didcomm --digest "$DIGEST"' in workflow
+    assert 'uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"' in workflow
+    assert "marty-ui-openbao-didcomm-sbom.cdx.json" in workflow
+
+
 def test_release_approval_notice_cannot_replace_the_protected_gate() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     notice = jobs["notify-release-approval"]
@@ -892,7 +970,8 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
     assert "COPY ../" not in dockerfiles
     assert "marty-migration-bootstrap" in dockerfiles
     assert "COPY ../" not in dockerfiles
-    assert "python" not in _text("services/Dockerfile.migrations").lower()
+    assert "pip install" not in _text("services/Dockerfile.migrations")
+    assert "marty_common" not in dockerfiles
 
 
 def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification() -> (
@@ -965,7 +1044,7 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     lock = json.loads(_text("release/stack-lock.json"))
     example_lock = json.loads(_text("release/stack-lock.example.json"))
 
-    assert lock["release_state"] == "eligible"
+    assert lock["release_state"] == "hold"
     assert example_lock["release_state"] == "hold"
     assert "scripts/stack_tag_gate.py prepare" in prepare
     assert "--repository ." in prepare
@@ -984,7 +1063,8 @@ def test_rust_migration_image_has_no_python_runtime_or_wheels() -> None:
     assert "FROM debian:bookworm-slim" in migrations
     assert "marty-migration-bootstrap" in migrations
     assert "marty-notification" in migrations
-    assert "python" not in migrations.lower()
+    assert "COPY services /app/services" not in migrations
+    assert "RUN python" not in migrations
     assert "pip install" not in migrations
     assert "MARTY_RS_WHEEL" not in service
     assert "python" not in service.split("FROM debian:bookworm-slim", maxsplit=1)[1]
@@ -996,8 +1076,11 @@ def test_rust_migration_image_has_no_python_runtime_or_wheels() -> None:
         "marty-verification-python",
         "marty-iso18013-python",
     ):
-        assert components[name]["version"] == "0.1.61"
-        assert components[name]["commit"] == "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c"
+        assert components[name]["version"] == CORE_VERSION
+        assert components[name]["commit"] == CORE_REVISION
+        assert components[name]["artifacts"][0]["uri"].startswith(
+            CORE_RELEASE_URI + CORE_WHEEL_PREFIXES[name] + "-" + CORE_VERSION + "-"
+        )
 
 
 def test_release_images_reject_commerce_markers() -> None:

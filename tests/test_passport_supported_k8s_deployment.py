@@ -50,6 +50,9 @@ def test_supported_k8s_pair_is_explicit_and_private() -> None:
     assert ingress_env["PASSPORT_PROVIDER_SIGNER_URL"]["value"] == (
         "http://passport-callback-signer-supported:8018/internal/documents"
     )
+    assert ingress_env["PASSPORT_PROVIDER_HMAC_KEY_VERSION"]["valueFrom"]["configMapKeyRef"]["key"] == (
+        "PASSPORT_PROVIDER_HMAC_KEY_VERSION"
+    )
     assert ingress_env["DATABASE_URL"]["valueFrom"]["secretKeyRef"]["key"] == (
         "DATABASE_SYNC_URL"
     )
@@ -57,6 +60,7 @@ def test_supported_k8s_pair_is_explicit_and_private() -> None:
         {"BAO_TOKEN", "BAO_TOKEN_FILE", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"}
     )
     assert "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE" not in signer_env
+    assert "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE" not in ingress_env
     assert "PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE" not in ingress_env
 
     signer_spec = signer["spec"]["template"]["spec"]
@@ -67,7 +71,6 @@ def test_supported_k8s_pair_is_explicit_and_private() -> None:
     }
     assert {item["secret"]["secretName"] for item in ingress_spec["volumes"]} == {
         "passport-callback-signer-api",
-        "passport-provider-webhook",
     }
     assert all(volume["secret"]["defaultMode"] == 0o440 for volume in signer_spec["volumes"])
     assert all(volume["secret"]["defaultMode"] == 0o440 for volume in ingress_spec["volumes"])

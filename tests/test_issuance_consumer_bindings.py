@@ -13,7 +13,7 @@ PRIVATE = "DIDCOMM_ALLOW_PRIVATE_IPS"
 UNUSED_PRIVATE = "DIDCOMM_ALLOW_PRIVATE_ENDPOINTS"
 NATIVE_URL = "http://issuance-native:8005"
 LEGACY_URL = "http://issuance:8005"
-SELFHOST_NATIVE_URL = "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
+SELFHOST_NATIVE_URL = NATIVE_URL
 
 
 class UniqueKeyLoader(yaml.SafeLoader):
@@ -101,15 +101,18 @@ def assert_kubernetes_bindings(documents, config):
         }
     }
     service = resource(documents, "Service", "issuance")
+    assert environment(issuance)["SIGNING_KEYS_INTERNAL_URL"] == {
+        "value": "http://signing-keys:8017/internal"
+    }
     assert flow["envFrom"] == [{"configMapRef": {"name": "marty-config"}}]
     assert config["metadata"]["name"] == "marty-config"
     assert config["metadata"]["namespace"] == "marty-prod"
     assert {key: value for key, value in config["data"].items() if target_key(key)} == {
         "ISSUANCE_SERVICE_URL": LEGACY_URL,
-        "ISSUANCE_NATIVE_SERVICE_URL": LEGACY_URL,
+        "ISSUANCE_NATIVE_SERVICE_URL": NATIVE_URL,
         "ES_GRPC_TARGET": "event-stream:9015",
     }
-    assert environment(flow)[TARGET] == {"value": "issuance:9005"}
+    assert environment(flow)[TARGET] == {"value": "issuance-native:9005"}
     assert service["spec"]["ports"] == [
         {"port": 8005, "targetPort": 8005, "name": "http"},
         {"port": 9005, "targetPort": 9005, "name": "grpc"},
@@ -181,7 +184,7 @@ def assert_kubernetes_bindings(documents, config):
         "revocation-profile": {"ORG_GRPC_TARGET": {"value": "organization:9002"}},
         "device-registration": {"ORG_GRPC_TARGET": {"value": "organization:9002"}},
         "flow": {
-            TARGET: {"value": "issuance:9005"},
+            TARGET: {"value": "issuance-native:9005"},
             "ISSUANCE_SERVICE_URL": legacy_alias,
             "ISSUANCE_NATIVE_SERVICE_URL": native_alias,
         },
@@ -203,6 +206,9 @@ def assert_selfhost_bindings(compose):
         "service": "issuance-native",
     }
     issuance = services["issuance"]
+    assert issuance["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
+        "http://signing-keys:8017/internal"
+    )
     assert issuance["build"]["dockerfile"] == "services/Dockerfile"
     assert issuance["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert issuance["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
@@ -258,6 +264,8 @@ def assert_selfhost_bindings(compose):
     expected["flow"]["ISSUANCE_NATIVE_SERVICE_URL"] = SELFHOST_NATIVE_URL
     expected["gateway"]["AUTH_GRPC_TARGET"] = "auth:9001"
     expected["flow"][TARGET] = "issuance-native:9005"
+    expected["issuance"]["DIDCOMM_DELIVERY_OWNER"] = "native"
+    expected["issuance"]["ISSUANCE_NATIVE_SERVICE_URL"] = NATIVE_URL
     expected["issuance-native"] = {
         "ES_GRPC_TARGET": "event-stream:9015",
         "ORG_GRPC_TARGET": "organization:9002",
@@ -386,7 +394,7 @@ def test_kubernetes_guard_rejects_misplaced_or_unrelated_target_changes(mutation
     elif mutation == "wrong-port":
         target["value"] = "issuance:9006"
     elif mutation == "native":
-        target["value"] = "issuance-native:9005"
+        target["value"] = "issuance:9005"
     elif mutation == "duplicate":
         flow["env"].append(deepcopy(target))
     elif mutation == "wrong-container":
@@ -550,7 +558,9 @@ def test_compose_owner_split_rejects_missing_health_dependency(
 )
 def test_production_rejects_native_http_consumer_reintroduction(service, setting):
     _, _, _, selfhost = source_models()
-    selfhost["services"][service]["environment"][setting] = NATIVE_URL
+    selfhost["services"][service]["environment"][setting] = (
+        LEGACY_URL if service == "flow" else NATIVE_URL
+    )
     with pytest.raises(AssertionError):
         assert_compose_owner_split(selfhost, production=True)
 

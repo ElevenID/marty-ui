@@ -2,21 +2,30 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 from scripts.passport_supported_provisioning_plan import (
-    PlanError, build_plan, protected_context, release_inputs, verify_handoff,
+    PlanError,
+    build_plan,
+    protected_context,
+    release_inputs,
+    verify_handoff,
     verify_record,
 )
 
-
 SOURCE = "a" * 40
-NOW = datetime(2026, 9, 27, 13, tzinfo=timezone.utc)
+NOW = datetime(2026, 9, 27, 13, tzinfo=UTC)
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "c" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "d" * 64
 INFRA = {
@@ -37,20 +46,34 @@ def manifest() -> dict:
               "digest": "sha256:" + "d" * 64},
              {"type": "oci", "uri": "ghcr.io/elevenid/marty-ui-oss/ui",
               "digest": "sha256:" + "f" * 64},
+             {"type": "oci", "uri": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+              "digest": "sha256:" + "7" * 64},
         ]}
     )
     supporting = (
         "marty-api-core", "marty-blog", "marty-core-python",
-        "marty-verification-python", "marty-iso18013-python", "marty-common",
+        "marty-verification-python", "marty-iso18013-python",
         "marty-cli", "marty-integration-tests",
     )
+    components = [ui]
+    for name in supporting:
+        if name in CORE_WHEEL_PREFIXES:
+            prefix = CORE_WHEEL_PREFIXES[name]
+            components.append({
+                "name": name, "repository": "ElevenID/marty-core",
+                "commit": CORE_REVISION, "version": CORE_VERSION,
+                "artifacts": [{"type": "python",
+                               "uri": f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl",
+                               "digest": "sha256:" + "e" * 64}],
+            })
+        else:
+            components.append({
+                "name": name, "repository": f"ElevenID/{name}", "commit": "b" * 40,
+                "artifacts": [{"type": "package", "uri": f"https://example.test/{name}",
+                               "digest": "sha256:" + "e" * 64}],
+            })
     return {"schema": "marty.stack/v1", "release": "marty-ui@1.1.219",
-            "components": [ui, *(
-                {"name": name, "repository": f"ElevenID/{name}", "commit": "b" * 40,
-                 "artifacts": [{"type": "package", "uri": f"https://example.test/{name}",
-                                "digest": "sha256:" + "e" * 64}]}
-                for name in supporting
-            )]}
+            "components": components}
 
 
 def verified_inputs(tmp_path: Path) -> dict:

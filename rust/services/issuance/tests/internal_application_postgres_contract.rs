@@ -269,6 +269,34 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
         .insert_application(&application)
         .await
         .expect("insert application");
+    let mut private_application = application.clone();
+    private_application.id = "application-private".to_owned();
+    private_application.integration_context.insert(
+        "issuer".to_owned(),
+        json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+    );
+    assert_eq!(
+        repository.insert_application(&private_application).await,
+        Err(InternalApplicationRepositoryError::Unavailable)
+    );
+    assert_eq!(
+        repository
+            .get_application("application-private")
+            .await
+            .expect("private insert inventory"),
+        None
+    );
+    private_application.id = application.id.clone();
+    assert_eq!(
+        repository
+            .replace_application_if_revision(
+                &private_application,
+                ApplicationStatus::Pending,
+                application.updated_at,
+            )
+            .await,
+        Err(InternalApplicationRepositoryError::Unavailable)
+    );
     assert_eq!(
         repository
             .get_application("application-1")

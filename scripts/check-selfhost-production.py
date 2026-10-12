@@ -39,6 +39,13 @@ def is_placeholder_value(value: str) -> bool:
     )
 
 
+def validate_openbao_plugin_image(env_values: dict[str, str]) -> str:
+    reference = env_values.get("MARTY_OPENBAO_DIDCOMM_IMAGE", "").strip()
+    if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", reference):
+        raise CheckError("MARTY_OPENBAO_DIDCOMM_IMAGE must be a reviewed immutable image digest.")
+    return reference
+
+
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Prevent urllib from following redirects outside our control."""
 
@@ -206,6 +213,100 @@ def validate_required_secret_files(secret_dir: Path, stack_name: str) -> str:
     return "files=" + ",".join(checked)
 
 
+def validate_holder_service_credential(secret_dir: Path) -> str:
+    holder = read_required_secret(
+        secret_dir / "device_registration_signing_keys_key",
+        "Device Registration-to-Signing Keys credential",
+    )
+    if len(holder.encode("utf-8")) < 32:
+        raise CheckError("Device Registration-to-Signing Keys credential must contain at least 32 bytes.")
+    for name in (
+        "device_registration_gateway_key",
+        "grpc_service_token",
+        "issuance_api_key",
+    ):
+        if holder == read_required_secret(secret_dir / name, name):
+            raise CheckError(
+                "Device Registration-to-Signing Keys credential must be dedicated."
+            )
+    return "dedicated credential length and separation verified"
+
+
+def validate_service_sign_gateway_credential(secret_dir: Path) -> str:
+    key = read_required_secret(
+        secret_dir / "signing_keys_service_sign_gateway_key",
+        "Gateway-to-Signing Keys service signing credential",
+    )
+    if len(key.encode("utf-8")) < 32:
+        raise CheckError("Gateway-to-Signing Keys service signing credential must contain at least 32 bytes.")
+    for name in (
+        "issuance_api_key",
+        "grpc_service_token",
+        "device_registration_gateway_key",
+        "device_registration_signing_keys_key",
+    ):
+        if key == read_required_secret(secret_dir / name, name):
+            raise CheckError("Gateway-to-Signing Keys service signing credential must be dedicated.")
+    return "dedicated service signing credential length and separation verified"
+
+
+def validate_issuer_sign_credential(secret_dir: Path) -> str:
+    key = read_required_secret(
+        secret_dir / "signing_keys_issuer_sign_key", "Issuer DID signing credential",
+    )
+    if len(key.encode("utf-8")) < 32:
+        raise CheckError("Issuer DID signing credential must contain at least 32 bytes.")
+    for name in (
+        "issuance_api_key", "signing_keys_service_sign_gateway_key",
+        "grpc_service_token", "device_registration_gateway_key",
+        "device_registration_signing_keys_key",
+    ):
+        if key == read_required_secret(secret_dir / name, name):
+            raise CheckError("Issuer DID signing credential must be dedicated.")
+    return "dedicated issuer signing credential length and separation verified"
+
+
+def validate_integration_secret_credential(secret_dir: Path) -> str:
+    key = read_required_secret(
+        secret_dir / "signing_keys_integration_secret_key", "Integration-secret credential",
+    )
+    if len(key.encode("utf-8")) < 32:
+        raise CheckError("Integration-secret credential must contain at least 32 bytes.")
+    for name in (
+        "issuance_api_key", "signing_keys_service_sign_gateway_key",
+        "signing_keys_issuer_sign_key", "grpc_service_token",
+        "device_registration_gateway_key", "device_registration_signing_keys_key",
+    ):
+        if key == read_required_secret(secret_dir / name, name):
+            raise CheckError("Integration-secret credential must be dedicated.")
+    return "dedicated integration-secret credential length and separation verified"
+
+
+def validate_signing_grant_credentials(secret_dir: Path) -> str:
+    grant_files = (
+        "sign_grant_verify_token",
+        "sign_grant_mint_flow_wallet_token",
+        "sign_grant_mint_gateway_service_token",
+        "sign_grant_mint_gateway_issuer_did_token",
+        "sign_grant_mint_issuance_credential_token",
+        "sign_grant_mint_issuance_canvas_token",
+        "sign_grant_mint_issuance_readiness_token",
+        "sign_grant_mint_issuance_passport_token",
+    )
+    provider_files = (
+        "openbao_service_token",
+        "signing_keys_openbao_token",
+        "didcomm_issuance_openbao_token",
+        "haip_kms_token",
+        "notification_openbao_token",
+    )
+    grants = [read_required_secret(secret_dir / name, name) for name in grant_files]
+    providers = [read_required_secret(secret_dir / name, name) for name in provider_files]
+    if len(set(grants + providers)) != len(grants) + len(providers):
+        raise CheckError("Signing grant and provider KMS credentials must be distinct.")
+    return "eight signing grant and five provider credentials are distinct"
+
+
 def validate_tunnel_token(secret_dir: Path) -> str:
     token = read_required_secret(secret_dir / "cloudflare_tunnel_token", "Cloudflare tunnel token")
     return f"token_length={len(token)}"
@@ -256,16 +357,10 @@ def validate_google_social_login(env_values: dict[str, str], secret_dir: Path) -
 
 
 def validate_migration_profile(env_values: dict[str, str]) -> str:
-    profile = (env_values.get("MARTY_MIGRATION_PROFILE") or "").strip().lower() or "dev"
-    profile = {
-        "selfhost-prod": "selfhost-production",
-        "selfhost_prod": "selfhost-production",
-        "selfhostproduction": "selfhost-production",
-        "selfhost_production": "selfhost-production",
-    }.get(profile, profile)
+    profile = (env_values.get("MARTY_MIGRATION_PROFILE") or "").strip()
     if profile != "selfhost-production":
         raise CheckError(
-            "MARTY_MIGRATION_PROFILE must resolve to selfhost-production for the self-host stack; "
+            "MARTY_MIGRATION_PROFILE must be selfhost-production for the self-host stack; "
             f"current={profile}"
         )
     return f"profile={profile}"
@@ -1141,6 +1236,9 @@ def validate_protocol_routes_do_not_spa_fallback(env_values: dict[str, str]) -> 
 
 def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Path, compose_file: Path) -> str:
     read_required_secret(secret_dir / "openbao_service_token", "OpenBao service token")
+    read_required_secret(secret_dir / "signing_keys_openbao_token", "signing-keys OpenBao token")
+    read_required_secret(secret_dir / "didcomm_issuance_openbao_token", "DIDComm Issuance OpenBao token")
+    read_required_secret(secret_dir / "haip_kms_token", "HAIP OpenBao workload token")
     read_required_secret(
         secret_dir / "notification_openbao_token",
         "Notification OpenBao workload token",
@@ -1262,11 +1360,17 @@ def main() -> int:
     catalog_lines("validate")
 
     compose_config_results = [
+        run_check("openbao-plugin-image", lambda: validate_openbao_plugin_image(env_values)),
         run_check("openbao-compose-config", lambda: (ensure_compose_config(env_file, openbao_compose_file) or openbao_compose_file.name)),
         run_check("prod-compose-config", lambda: (ensure_compose_config(env_file, prod_compose_file) or prod_compose_file.name)),
     ]
     validation_results = [
         run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, "selfhost-production")),
+        run_check("holder-service-credential", lambda: validate_holder_service_credential(secret_dir)),
+        run_check("service-sign-gateway-credential", lambda: validate_service_sign_gateway_credential(secret_dir)),
+        run_check("issuer-sign-credential", lambda: validate_issuer_sign_credential(secret_dir)),
+        run_check("integration-secret-credential", lambda: validate_integration_secret_credential(secret_dir)),
+        run_check("signing-grant-credentials", lambda: validate_signing_grant_credentials(secret_dir)),
         run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),

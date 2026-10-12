@@ -1371,6 +1371,23 @@ def create_org(audit: Audit, run_id: str, email: str) -> str | None:
     return slug
 
 
+def selected_signing_service(config: dict[str, Any]) -> dict[str, Any] | None:
+    services = config.get("services")
+    default_id = config.get("default_service_id")
+    if not isinstance(services, list) or not isinstance(default_id, str):
+        return None
+    return next(
+        (
+            service
+            for service in services
+            if isinstance(service, dict)
+            and service.get("id") == default_id
+            and service.get("status") in {"active", "configured", "registered"}
+        ),
+        None,
+    )
+
+
 def create_key_service_if_possible(audit: Audit, run_id: str) -> None:
     page = audit.page
     audit.goto("/console/org/deploy/key-management/services/new")
@@ -1425,14 +1442,14 @@ def create_key_service_if_possible(audit: Audit, run_id: str) -> None:
     organization_id = active_organization_id(page)
     probe = fetch_org_collection(page, "/v1/signing-keys/config", organization_id)
     config = probe.get("body") if isinstance(probe.get("body"), dict) else {}
-    services = config.get("services") if isinstance(config, dict) else []
-    if not config.get("hsm_enabled") or not isinstance(services, list) or not services:
-        audit.snapshot("kms-service-state-mismatch", "The canonical signing configuration did not contain an enabled service.")
+    service = selected_signing_service(config)
+    if service is None:
+        audit.snapshot("kms-service-state-mismatch", "The canonical signing configuration did not select a usable remote service.")
         return
     audit.snapshot(
         "kms-service-configured",
         "Configured a signing service for the fresh organization.",
-        {"signing_configuration": {"hsm_enabled": True, "service_count": len(services)}},
+        {"signing_configuration": {"default_service_id": service["id"], "service_count": len(config["services"])}},
     )
 
 
@@ -2157,14 +2174,15 @@ def verify_resource_inventory(audit: Audit, run_id: str) -> None:
 
     config_probe = fetch_org_collection(page, "/v1/signing-keys/config", organization_id)
     config = config_probe.get("body") if isinstance(config_probe.get("body"), dict) else {}
-    if not config.get("hsm_enabled") or not isinstance(config.get("services"), list) or not config.get("services"):
+    service = selected_signing_service(config)
+    if service is None:
         missing.append("signing_service")
     else:
         inventory.append({
             "resource_type": "signing_service",
-            "id": config["services"][0].get("id"),
-            "name": config["services"][0].get("name"),
-            "status": config["services"][0].get("status") or "configured",
+            "id": service.get("id"),
+            "name": service.get("name"),
+            "status": service.get("status") or "configured",
         })
 
     dependency_errors: list[str] = []

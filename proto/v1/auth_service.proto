@@ -65,6 +65,7 @@ message ValidateSessionResponse {
   bool valid = 1;
   UserInfo user = 2;       // populated only when valid=true
   string expires_at = 3;   // ISO 8601
+  optional int64 authentication_time_unix = 4; // verified OIDC auth_time, absent when unavailable
 }
 
 message CreateSessionRequest {

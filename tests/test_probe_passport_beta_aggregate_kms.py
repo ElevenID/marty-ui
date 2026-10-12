@@ -203,12 +203,3 @@ def test_pretransition_rejects_stale_certificate_and_rotated_key(monkeypatch) ->
             get_csca=lambda *args: record,
             key_version=lambda container, reference: versions[reference],
         )
-
-
-def test_owner_transition_waits_for_durable_kms_gate() -> None:
-    script = (Path(__file__).resolve().parents[1] / "scripts"
-              / "run-passport-beta-aggregate-deploy.ps1").read_text(encoding="utf-8")
-    assert script.index("probe_passport_beta_aggregate_kms.py") < script.index(
-        "$owner = Invoke-RustOwnerTransition")
-    assert "kms_pretransition_receipt_sha256" in script
-    assert "IssuerChainFile" in script

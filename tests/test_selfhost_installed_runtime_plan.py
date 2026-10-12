@@ -59,6 +59,10 @@ def model() -> dict:
 
 
 def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
+    assert "integration_secret_master_key" not in EXPECTED_SECRET_NAMES
+    assert {"sign_grant_verify_token", "signing_keys_openbao_token"} <= (
+        EXPECTED_ROLE_SECRETS["signing-keys"]
+    )
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
@@ -92,6 +96,9 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
     lambda m: m["services"]["gateway"]["secrets"].pop(),
     lambda m: m["secrets"].pop("issuance_api_key"),
     lambda m: m["secrets"].update({"extra": {"name": "extra", "file": str(SECRET_ROOT / "extra")}}),
+    lambda m: m["secrets"].update({"integration_secret_master_key": {
+        "name": "marty-selfhost-prod_integration_secret_master_key",
+        "file": str(SECRET_ROOT / "integration_secret_master_key")}}),
     lambda m: m["secrets"]["issuance_api_key"].update({"file": str(ROOT / "outside")}),
     lambda m: m["services"]["gateway"]["secrets"][0].update({"target": "/tmp/key"}),
     lambda m: m.update({"configs": {"extra": {"file": str(ROOT / "outside")}}}),

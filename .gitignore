@@ -108,6 +108,7 @@ tests/artifacts/
 # Runtime state and generated browser evidence belong in local volumes or CI artifacts.
 .selfhost-state/
 .beta-workload-identity/
+.dev-integration-secret-tls/
 tests/demo-recordings/
 tests/demo-recordings-report/
 
@@ -151,11 +152,9 @@ ehthumbs.db
 Thumbs.db
 
 # =============================================================================
-# Custom: Keep wheels directory
+# Core-owned native wheels are resolved from digest-pinned releases.
 # =============================================================================
-# Don't ignore wheels directory - we want to commit pre-built wheels
-!wheels/
-!wheels/*.whl
+wheels/
 
 # WASM build artifact
 ui/src/wasm/marty-biometrics-pkg/

@@ -107,15 +107,18 @@ separate HAIP overlay, which enables
 HAIP only for that disposable deployment and uses `x509_hash` client IDs.
 
 For an owned DIDComm authenticated-encryption boundary run, create an exact
-deployment-only directory outside the checkout containing
+deployment-only directory outside the checkout containing a reference-only
 `didcomm-encryption-policy.json`, set `DIDCOMM_ENCRYPTION_POLICY_DIR` to that
-directory, and add `--didcomm-authcrypt` to every launcher command. The file
-uses the exhaustive per-issuer schema documented by `marty-credentials`; an
-issuer omitted from a configured policy fails delivery closed. Update the file
-atomically when a disposable issuer key is created. The opt-in overlay mounts
-the directory read-only into issuance only. Never mount it into the gateway,
-publish it as evidence, or place sender private key material in Compose
-environment variables. The issuer's matching public X25519 JWK is published
+directory, and set `MARTY_OPENBAO_DIDCOMM_IMAGE` to the reviewed plugin image
+digest. Add `--didcomm-authcrypt` to every launcher command. The file uses
+the strict per-issuer `sender_key_ref` schema; an omitted issuer fails delivery
+closed. Create the non-exportable sender key and publish its versioned reference
+before selecting authcrypt. The overlay mounts only that file into native Rust
+Issuance. OpenBao init installs the extension, creates the read/pack-only
+policy and mints a scoped token into a dedicated project volume; native
+Issuance waits for init and receives that volume read-only. Never put sender
+private key material or an OpenBao root token in the policy directory or
+Compose environment. The issuer's matching public X25519 JWK is published
 through the tenant-bound issuer-identity API and appears in the managed DID
 document's `keyAgreement` relationship.
 

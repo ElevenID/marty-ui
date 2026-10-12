@@ -26,7 +26,12 @@ struct Signer {
 
 #[async_trait]
 impl CanvasLtiToolJwtSigner for Signer {
-    async fn sign_jwt(&self, claims: &Value) -> Result<String, CanvasLtiToolSigningError> {
+    async fn sign_jwt(
+        &self,
+        claims: &Value,
+        _kind: marty_issuance_service::canvas_lti_tool_signing::CanvasLtiSigningKind,
+        _source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError> {
         self.claims.lock().unwrap().push(claims.clone());
         Ok("synthetic-lti-assertion".into())
     }

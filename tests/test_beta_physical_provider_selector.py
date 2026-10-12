@@ -29,31 +29,43 @@ SIGNING = "ordinary-signing-secret-00000001"
 
 
 def model(tmp_path: Path) -> dict:
+    def grant_volumes(*names: str) -> list[dict]:
+        return [{"type": "volume", "source": f"openbao_{name}_grant",
+                 "target": f"/bao/{name.replace('_', '-')}-grant",
+                 "read_only": True, "volume": {}} for name in names]
+
     secret_root = tmp_path / "elevenid-beta-passport-physical"
     secret_root.mkdir()
     secret_names = (
-        "passport_physical_provider_api_key", "passport_provider_webhook_secret",
+        "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
         "marty_db_password",
         "flow_workload_client_cert", "flow_workload_client_key",
         "flow_workload_server_cert", "flow_workload_server_key",
         "workload_identity_ca_cert",
+        "dev_integration_secret_ca", "dev_integration_secret_server_cert",
+        "dev_integration_secret_server_key",
     )
     secrets = {}
     for index, name in enumerate(secret_names):
-        parent = secret_root if index < 5 else tmp_path / "beta-workload"
+        parent = secret_root if index < 4 else tmp_path / "beta-workload"
         parent.mkdir(exist_ok=True)
         path = parent / name
         path.write_text("beta-physical-secret-" + str(index) * 40, encoding="utf-8")
         secrets[name] = {"file": str(path)}
     return {"name": "elevenid-beta", "secrets": secrets,
+            "volumes": {f"openbao_{name}_grant": {
+                "name": f"elevenid-beta_openbao_{name}_grant"} for name in (
+                "gateway", "flow", "verify", "issuance_credential",
+                "issuance_canvas", "issuance_readiness", "issuance_passport")},
             "networks": {
                 "marty-network": {"name": "elevenid-beta-network", "ipam": {}},
                 "passport-provider-signing": {
                     "name": "elevenid-beta_passport-provider-signing", "internal": True,
                     "ipam": {}},
             }, "services": {
-        "gateway": {"networks": {"marty-network": {}}, "environment": {
+        "gateway": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("gateway"), "environment": {
             "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
             "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "true",
@@ -63,7 +75,8 @@ def model(tmp_path: Path) -> dict:
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
         }},
-        "flow": {"networks": {"marty-network": {}}, "secrets": [
+        "flow": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("flow"), "secrets": [
             "flow_workload_client_cert", "flow_workload_client_key",
             "flow_workload_server_cert", "flow_workload_server_key",
             "workload_identity_ca_cert"], "environment": {
@@ -72,43 +85,51 @@ def model(tmp_path: Path) -> dict:
             "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
             "GRPC_SERVICE_TOKEN": GRPC,
         }},
-        "issuance-native": {"networks": {"marty-network": {}}, "environment": {
+        "issuance-native": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("issuance_credential", "issuance_canvas",
+                                     "issuance_readiness", "issuance_passport"),
+            "environment": {
             "PASSPORT_NATIVE_HTTP_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
-            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
             "PERSONALIZATION_BUREAU_URL": "https://bureau.physical-provider.net/jobs",
             "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "physical-provider-marty-001",
             "PERSONALIZATION_BUREAU_API_KEY": "",
             "PERSONALIZATION_BUREAU_API_KEY_FILE":
                 "/run/secrets/passport_physical_provider_api_key",
-            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "",
-            "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE": "",
-            "DATABASE_URL": "postgresql://marty:beta-physical-secret-4444444444444444444444444444444444444444@postgres:5432/marty",
+            "DATABASE_URL": "postgresql://marty:beta-physical-secret-3333333333333333333333333333333333333333@postgres:5432/marty",
             "GRPC_SERVICE_TOKEN": GRPC,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
-        }, "secrets": ["passport_physical_provider_api_key"]},
-        "signing-keys": {"networks": {"marty-network": {}}, "environment": {
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
+        }, "secrets": ["passport_physical_provider_api_key",
+                        "dev_integration_secret_ca"]},
+        "signing-keys": {"networks": {"marty-network": {}},
+            "volumes": grant_volumes("verify"), "environment": {
             "ENVIRONMENT": "beta",
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
             "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": CSCA,
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
-        }},
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
+                "/run/secrets/dev_integration_secret_server_cert",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
+                "/run/secrets/dev_integration_secret_server_key",
+        }, "secrets": ["dev_integration_secret_server_cert",
+                       "dev_integration_secret_server_key"]},
         "openbao": {"networks": {"marty-network": {},
                                   "passport-provider-signing": {}}},
         "passport-callback-signer-supported": {"image": IMAGE,
             "networks": {"passport-provider-signing": {}},
             "environment": {
-                "SERVICE_NAME": "passport_callback_signer",
-                "ENVIRONMENT": "beta",
-                "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
-                "SIGNING_KEYS_INTERNAL_API_KEY": "",
-                "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
+                "SERVICE_NAME": "passport_callback_signer_supported",
+                "ENVIRONMENT": "production",
+                "PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED": "true",
+                "PASSPORT_CALLBACK_SIGNER_API_KEY_FILE":
                     "/run/secrets/passport_callback_signer_api_key",
-                "BAO_TOKEN": "", "BAO_TOKEN_FILE":
+                "PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE":
                     "/run/secrets/passport_callback_signer_bao_token",
                 "BAO_ADDR": "http://openbao:8200",
             }, "secrets": ["passport_callback_signer_api_key",
@@ -124,10 +145,9 @@ def model(tmp_path: Path) -> dict:
                 "PASSPORT_PROVIDER_NATIVE_CALLBACK_URL": VALIDATOR["PRIVATE_CALLBACK_URL"],
                 "PASSPORT_PROVIDER_SIGNER_API_KEY_FILE":
                     "/run/secrets/passport_callback_signer_api_key",
-                "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE":
-                    "/run/secrets/passport_provider_webhook_secret",
+                "PASSPORT_PROVIDER_HMAC_KEY_VERSION": "1",
             }, "secrets": ["passport_callback_signer_api_key",
-                            "passport_provider_webhook_secret", "marty_db_password"]},
+                            "marty_db_password"]},
     }}
 
 
@@ -187,9 +207,11 @@ def test_physical_mode_is_separate_and_default_off(tmp_path: Path) -> None:
     candidate = model(tmp_path)
     validate(candidate)
     physical = yaml.safe_load((ROOT / PROFILES[1]).read_text(encoding="utf-8"))
+    base = yaml.safe_load((ROOT / PROFILES[0]).read_text(encoding="utf-8"))
     assert "passport-beta-bureau" not in physical["services"]
-    assert physical["services"]["passport-callback-signer-supported"]["environment"][
-        "SERVICE_NAME"] == "passport_callback_signer"
+    assert "passport-callback-signer-supported" not in physical["services"]
+    assert base["services"]["passport-callback-signer-supported"]["environment"][
+        "SERVICE_NAME"] == "passport_callback_signer_supported"
     with pytest.raises(VALIDATOR["PassportConfigurationError"]):
         VALIDATOR["validate_model"](candidate, passport_enabled=False,
                                     files=PROFILES, physical_provider=True)
@@ -197,6 +219,17 @@ def test_physical_mode_is_separate_and_default_off(tmp_path: Path) -> None:
                        match="governed approval"):
         VALIDATOR["validate_model"](candidate, passport_enabled=True,
                                     files=PROFILES, physical_provider=True)
+
+
+@pytest.mark.parametrize("service", ["gateway", "flow", "issuance-native", "signing-keys"])
+def test_physical_mode_requires_its_scoped_grant_mounts(
+    tmp_path: Path, service: str,
+) -> None:
+    candidate = model(tmp_path)
+    candidate["services"][service]["volumes"] = []
+    with pytest.raises(VALIDATOR["PassportConfigurationError"],
+                       match="escaped isolation"):
+        validate(candidate)
 
 
 def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
@@ -248,7 +281,11 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
     lambda candidate: candidate["services"]["passport-callback-signer-supported"][
         "secrets"].remove("passport_callback_signer_bao_token"),
     lambda candidate: candidate["services"]["passport-provider-ingress"][
-        "secrets"].remove("passport_provider_webhook_secret"),
+        "environment"].update(PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE="/run/secrets/old"),
+    lambda candidate: candidate["services"]["passport-provider-ingress"][
+        "environment"].update(PASSPORT_PROVIDER_HMAC_SOURCE_FILE=""),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "environment"].update(PASSPORT_PROVIDER_HMAC_SOURCE_FILE=""),
     lambda candidate: candidate.update(name="marty-selfhost-prod"),
     lambda candidate: candidate["networks"]["passport-provider-signing"].update(
         internal=False),
@@ -364,22 +401,27 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "PASSPORT_PROVIDER_SECRET_DIR": str(tmp_path / "elevenid-beta-passport-physical"),
         "PASSPORT_PHYSICAL_PROVIDER_URL": "https://bureau.physical-provider.net/jobs",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "physical-provider-marty-001",
+        "PASSPORT_PROVIDER_HMAC_KEY_VERSION": "1",
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
         "SIGNING_KEYS_CSCA_ISSUE_GATEWAY_KEY": CSCA,
         "MARTY_NETWORK_NAME": "elevenid-beta-network",
-        "MARTY_DB_PASSWORD": "beta-physical-secret-" + "4" * 40,
+        "MARTY_DB_PASSWORD": "beta-physical-secret-" + "3" * 40,
         "MARTY_SERVICES_IMAGE": IMAGE,
         "MARTY_ISSUANCE_IMAGE": IMAGE,
         "MARTY_DOCS_IMAGE": "sha256:" + "a" * 64,
         "GRPC_SERVICE_TOKEN": GRPC,
+        "DEVICE_REGISTRATION_GATEWAY_KEY": "synthetic-distinct-beta-device-gateway-key-32-chars",
+        "DEVICE_REGISTRATION_SIGNING_KEYS_KEY": "synthetic-distinct-beta-device-signing-key-32-chars",
         "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "synthetic-beta-physical-issuer-sign-key-0001",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-beta-physical-envelope-key-0001",
     })
     digest_names = (
-        "MARTY_COMMON_DIGEST", "MARTY_RS_DIGEST", "MARTY_VERIFICATION_DIGEST",
+        "MARTY_RS_DIGEST", "MARTY_VERIFICATION_DIGEST",
         "MARTY_ISO18013_DIGEST",
     )
     uri_names = (
-        "MARTY_COMMON_URI", "MARTY_RS_URI", "MARTY_VERIFICATION_URI",
+        "MARTY_RS_URI", "MARTY_VERIFICATION_URI",
         "MARTY_ISO18013_URI",
     )
     required_names = (
@@ -396,7 +438,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE",
         "APPLICANT_WORKLOAD_CLIENT_KEY_FILE", "FLOW_WORKLOAD_CLIENT_KEY_FILE",
         "AUTH_WORKLOAD_CLIENT_KEY_FILE", "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
-        "AUTH_WORKLOAD_CLIENT_CERT_FILE", "INTEGRATION_SECRET_MASTER_KEY",
+        "AUTH_WORKLOAD_CLIENT_CERT_FILE",
         "TOKEN_HMAC_KEY", "CORS_ORIGINS",
     )
     env.update({name: "sha256:" + "a" * 64 for name in digest_names})

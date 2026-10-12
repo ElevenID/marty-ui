@@ -1,36 +1,77 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tower_http::trace::TraceLayer;
 
 use crate::{
-    control_plane::MembershipAuthorizer, ChallengeRequest, CreateRegistration, DeviceError,
-    DeviceRegistration, DeviceService, ProofHeaders, UpdateRegistration,
+    control_plane::MembershipAuthorizer,
+    holder_credential_rotation::HolderCredentialRotator,
+    holder_signer::HolderSigner,
+    pairing_confirmation::PostgresPairingConfirmations,
+    pairing_enrollment::{PairingEnrollment, PairingRedeemRequest},
+    pairing_ticket::PairingTicketRepository,
+    wallet_issuer_trust::WalletIssuerTrustClient,
+    CreateRegistration, DeviceError, DeviceRegistration, DeviceService, UpdateRegistration,
 };
 
 #[derive(Clone)]
 pub struct HttpState {
     pub service: Arc<DeviceService>,
     pub memberships: Arc<dyn MembershipAuthorizer>,
+    pub pairing_tickets: Arc<dyn PairingTicketRepository>,
+    pub wallet_issuer_trust: Option<Arc<WalletIssuerTrustClient>>,
+    pub pairing_confirmations: Option<Arc<PostgresPairingConfirmations>>,
+    pub pairing_enrollment: Option<Arc<PairingEnrollment>>,
+    pub holder_signer: Option<Arc<HolderSigner>>,
+    pub holder_credential_rotator: Option<Arc<HolderCredentialRotator>>,
     pub release_version: String,
     pub build_revision: String,
+    pub gateway_key: String,
 }
 
 pub fn router(state: HttpState) -> Router {
     Router::new()
         .route("/v1/devices", get(list_devices).post(register_device))
-        .route("/v1/devices/challenge", post(request_challenge))
+        .route(
+            "/v1/devices/pairing-tickets",
+            axum::routing::post(issue_pairing_ticket),
+        )
+        .route(
+            "/v1/devices/pair",
+            axum::routing::post(redeem_pairing_ticket),
+        )
+        .route(
+            "/v1/devices/pairing-confirmations/{pairing_id}",
+            get(pairing_status),
+        )
+        .route(
+            "/v1/devices/pairing-ack",
+            axum::routing::post(confirm_pairing),
+        )
+        .route(
+            "/v1/devices/holder-signatures",
+            axum::routing::post(sign_holder_payload),
+        )
+        .route(
+            "/v1/devices/holder-credential-rotations",
+            axum::routing::post(rotate_holder_credential),
+        )
+        .route("/v1/devices/wallet-issuer-keys", get(wallet_issuer_keys))
         .route(
             "/v1/devices/{registration_id}",
             get(get_device).patch(update_device).delete(delete_device),
         )
+        .route_layer(middleware::from_fn_with_state(state.clone(), gateway_auth))
         .route("/health", get(health))
         .route("/ready", get(health))
         .route("/startup", get(health))
@@ -38,6 +79,28 @@ pub fn router(state: HttpState) -> Router {
         .route("/metrics", get(metrics))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+async fn gateway_auth(State(state): State<HttpState>, request: Request, next: Next) -> Response {
+    let supplied = request
+        .headers()
+        .get("x-service-token")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    if state.gateway_key.len() < 32
+        || supplied
+            .as_bytes()
+            .ct_eq(state.gateway_key.as_bytes())
+            .unwrap_u8()
+            != 1
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"detail":"Gateway authentication is required"})),
+        )
+            .into_response();
+    }
+    next.run(request).await
 }
 
 #[derive(Debug)]
@@ -52,12 +115,12 @@ impl From<DeviceError> for ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match self.0 {
-            DeviceError::BadRequest(_) | DeviceError::Native(_) => StatusCode::BAD_REQUEST,
+            DeviceError::BadRequest(_) => StatusCode::BAD_REQUEST,
             DeviceError::Forbidden(_) => StatusCode::FORBIDDEN,
             DeviceError::NotFound(_) => StatusCode::NOT_FOUND,
             DeviceError::Conflict(_) => StatusCode::CONFLICT,
             DeviceError::Persistence(_)
-            | DeviceError::ChallengeStore(_)
+            | DeviceError::PairingStore(_)
             | DeviceError::AuthorizationUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         };
         (status, Json(json!({"detail": self.0.to_string()}))).into_response()
@@ -71,6 +134,236 @@ struct ListQuery {
     limit: usize,
     #[serde(default)]
     offset: usize,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingTicketRequest {
+    organization_id: String,
+    trust_profile_id: String,
+}
+
+async fn issue_pairing_ticket(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<PairingTicketRequest>,
+) -> Result<Response, ApiError> {
+    let user_id = identity(&headers)?;
+    let organization_id = body.organization_id.trim();
+    if organization_id.is_empty() {
+        return Err(DeviceError::BadRequest("organization_id is required".into()).into());
+    }
+    state
+        .memberships
+        .require_active(&user_id, organization_id)
+        .await?;
+    if uuid::Uuid::parse_str(&body.trust_profile_id).is_err() {
+        return Err(DeviceError::BadRequest("trust_profile_id is required".into()).into());
+    }
+    let trust = state
+        .wallet_issuer_trust
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    trust.fetch(&body.trust_profile_id, organization_id).await?;
+    let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
+    })?;
+    let ticket = state
+        .pairing_tickets
+        .issue(&user_id, organization_id, &body.trust_profile_id)
+        .await?;
+    confirmations.record_issued(&ticket.scope).await?;
+    let mut response = Json(json!({
+        "pairing_code": ticket.token,
+        "pairing_id": ticket.scope.pairing_id,
+        "expires_at": ticket.scope.expires_at,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn pairing_status(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(pairing_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let user_id = identity(&headers)?;
+    let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
+    })?;
+    let status = confirmations.status(&pairing_id, &user_id).await?;
+    state
+        .memberships
+        .require_active(&user_id, &status.organization_id)
+        .await?;
+    let mut response = Json(json!({
+        "state": status.state,
+        "registration_id": status.registration_id,
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn confirm_pairing(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<PairingAckRequest>,
+) -> Result<Response, ApiError> {
+    let confirmations = state.pairing_confirmations.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("wallet pairing confirmation is unavailable".into())
+    })?;
+    let signer = state
+        .holder_signer
+        .as_ref()
+        .ok_or_else(|| DeviceError::PairingStore("remote holder signing is unavailable".into()))?;
+    let bearer = bearer(&headers)?;
+    signer
+        .sign_pairing_confirmation(bearer, &body.pairing_id)
+        .await?;
+    confirmations.confirm(&body.pairing_id, bearer).await?;
+    let mut response = Json(json!({"confirmed": true})).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PairingAckRequest {
+    pairing_id: String,
+}
+
+async fn redeem_pairing_ticket(
+    State(state): State<HttpState>,
+    Json(body): Json<PairingRedeemRequest>,
+) -> Result<Response, ApiError> {
+    let enrollment = state.pairing_enrollment.as_ref().ok_or_else(|| {
+        DeviceError::PairingStore("remote holder enrollment is unavailable".into())
+    })?;
+    let enrolled = enrollment.redeem(body).await?;
+    let mut response = Json(enrolled).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HolderSignRequest {
+    purpose: String,
+    payload_b64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HolderCredentialRotationRequest {
+    replacement_credential: String,
+}
+
+async fn rotate_holder_credential(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<HolderCredentialRotationRequest>,
+) -> Result<Response, ApiError> {
+    let rotator = state
+        .holder_credential_rotator
+        .as_ref()
+        .ok_or_else(|| DeviceError::PairingStore("remote holder rotation is unavailable".into()))?;
+    let current = bearer(&headers)?;
+    let rotated = rotator
+        .rotate(current, &body.replacement_credential)
+        .await?;
+    let mut response = Json(rotated).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn wallet_issuer_keys(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let bearer = bearer(&headers)?;
+    let confirmations = state
+        .pairing_confirmations
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    let trust = state
+        .wallet_issuer_trust
+        .as_ref()
+        .ok_or(DeviceError::AuthorizationUnavailable)?;
+    let profile = confirmations.profile_for_bearer(bearer).await?;
+    state
+        .memberships
+        .require_active(&profile.user_id, &profile.organization_id)
+        .await?;
+    let snapshot = trust
+        .fetch(&profile.trust_profile_id, &profile.organization_id)
+        .await?;
+    // Recheck after the remote read so rotation or deactivation during that read fails closed.
+    if confirmations.profile_for_bearer(bearer).await? != profile {
+        return Err(
+            DeviceError::Forbidden("wallet issuer trust authorization changed".into()).into(),
+        );
+    }
+    let mut response = Json(snapshot).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+async fn sign_holder_payload(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Json(body): Json<HolderSignRequest>,
+) -> Result<Response, ApiError> {
+    let signer = state
+        .holder_signer
+        .as_ref()
+        .ok_or_else(|| DeviceError::Persistence("remote holder signing is unavailable".into()))?;
+    let bearer = bearer(&headers)?;
+    if body.payload_b64.len() > 87_384 {
+        return Err(DeviceError::BadRequest("holder signing input is invalid".into()).into());
+    }
+    let payload = URL_SAFE_NO_PAD
+        .decode(&body.payload_b64)
+        .map_err(|_| DeviceError::BadRequest("holder signing input is invalid".into()))?;
+    let signature = signer
+        .sign_from_bearer(bearer, &body.purpose, &payload)
+        .await?;
+    let mut response = Json(signature).into_response();
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    Ok(response)
+}
+
+fn bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|value| !value.is_empty() && !value.contains(' '))
+        .ok_or_else(|| {
+            DeviceError::Forbidden("holder signing authorization is invalid".into()).into()
+        })
 }
 
 const fn default_limit() -> usize {
@@ -87,20 +380,6 @@ fn identity(headers: &HeaderMap) -> Result<String, ApiError> {
         .ok_or_else(|| DeviceError::BadRequest("X-User-Id header is required".into()).into())
 }
 
-fn proof(headers: &HeaderMap) -> ProofHeaders {
-    ProofHeaders {
-        challenge_id: header(headers, "x-device-challenge-id"),
-        signature: header(headers, "x-device-challenge-signature"),
-    }
-}
-
-fn header(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned)
-}
-
 async fn authorize(
     state: &HttpState,
     user_id: &str,
@@ -115,15 +394,6 @@ async fn authorize(
     Ok(())
 }
 
-async fn request_challenge(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-    Json(body): Json<ChallengeRequest>,
-) -> Result<Json<crate::ChallengeResponse>, ApiError> {
-    let user_id = identity(&headers)?;
-    Ok(Json(state.service.request_challenge(&user_id, body).await?))
-}
-
 async fn register_device(
     State(state): State<HttpState>,
     headers: HeaderMap,
@@ -131,12 +401,7 @@ async fn register_device(
 ) -> Result<Json<DeviceRegistration>, ApiError> {
     let user_id = identity(&headers)?;
     authorize(&state, &user_id, body.organization_id.as_deref()).await?;
-    Ok(Json(
-        state
-            .service
-            .register(&user_id, body, proof(&headers))
-            .await?,
-    ))
+    Ok(Json(state.service.register(&user_id, body).await?))
 }
 
 async fn list_devices(
@@ -179,12 +444,7 @@ async fn update_device(
     let user_id = identity(&headers)?;
     let current = state.service.get(&user_id, &id).await?;
     authorize(&state, &user_id, current.organization_id.as_deref()).await?;
-    Ok(Json(
-        state
-            .service
-            .update(&user_id, &id, body, proof(&headers))
-            .await?,
-    ))
+    Ok(Json(state.service.update(&user_id, &id, body).await?))
 }
 
 async fn delete_device(
@@ -207,7 +467,7 @@ async fn health(State(state): State<HttpState>) -> Json<Value> {
 
 async fn native_health(State(state): State<HttpState>) -> Json<Value> {
     Json(
-        json!({"status":"ready","available":true,"backend":"marty-verification","version":env!("CARGO_PKG_VERSION"),"build_revision":state.build_revision,"required_capability":"device_authentication","capabilities":["device_authentication"]}),
+        json!({"status":"ready","available":true,"backend":"marty-device-registration","version":env!("CARGO_PKG_VERSION"),"build_revision":state.build_revision,"required_capability":"keyless_registration","capabilities":["keyless_registration"]}),
     )
 }
 

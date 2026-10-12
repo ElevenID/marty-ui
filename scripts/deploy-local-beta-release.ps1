@@ -767,7 +767,11 @@ $requiredFlowSecrets = @(
     "FLOW_WEBHOOK_SECRET",
     "FLOW_APPLICATION_EVENT_HMAC_KEY",
     "ISSUANCE_API_KEY",
-    "SIGNING_KEYS_INTERNAL_API_KEY"
+    "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+    "DEVICE_REGISTRATION_GATEWAY_KEY",
+    "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
 )
 if ($EnablePassportNative -and $EnablePassportPhysicalProvider) {
     $requiredFlowSecrets += @(
@@ -780,6 +784,11 @@ foreach ($name in $requiredFlowSecrets) {
     if ($secret.Length -lt 32 -or $secret -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
         throw "$name must be a non-placeholder value of at least 32 characters"
     }
+}
+$deviceGatewayKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_GATEWAY_KEY"
+$deviceSigningKey = Get-DotEnvValue -Path $GeneratedEnvFile -Name "DEVICE_REGISTRATION_SIGNING_KEYS_KEY"
+if ($deviceSigningKey -eq $deviceGatewayKey -or $deviceSigningKey -eq $grpcServiceToken) {
+    throw "DEVICE_REGISTRATION_SIGNING_KEYS_KEY must differ from device and gRPC credentials"
 }
 $operatorGatewayKeys = @{}
 if ($EnablePassportNative) {
@@ -840,6 +849,8 @@ if ($EnablePassportNative) {
 }
 $workloadIdentityPathNames = @(
     "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+    "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_KEY_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
@@ -887,6 +898,7 @@ if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
 }
 $workloadCa = $workloadIdentityPaths["MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"]
 $workloadLeafNames = @(
+    "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
@@ -955,7 +967,6 @@ function Get-StackArtifact([string]$Name, [string]$Type, [string]$SourceReposito
         Digest = [string]$artifact[0].digest
     }
 }
-$martyCommon = Get-StackArtifact "marty-common" "python"
 $martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
 $martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
 $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
@@ -1035,6 +1046,9 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+Invoke-Checked -FilePath python -Arguments @(
+    (Join-Path $PSScriptRoot "ensure-dev-integration-secret-tls.py")
+)
 . (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
 $legacyPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $legacyPostgres) { throw "Beta PostgreSQL container is unavailable" }
@@ -1085,14 +1099,6 @@ if ($LASTEXITCODE -ne 0) { throw "Could not inspect optional Canvas localhost br
 if ($runningCanvasBridge.Count -ne 0) {
     throw "Stop the optional Canvas localhost bridge before beta release; this public-Canvas deployment does not recreate it with issuance"
 }
-$env:MARTY_COMMON_URI = $martyCommon.Uri
-$env:MARTY_COMMON_DIGEST = $martyCommon.Digest
-$env:MARTY_RS_URI = $martyRs.Uri
-$env:MARTY_RS_DIGEST = $martyRs.Digest
-$env:MARTY_VERIFICATION_URI = $martyVerification.Uri
-$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest
-$env:MARTY_ISO18013_URI = $martyIso18013.Uri
-$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest
 if ($OfficialStackRelease) {
     $env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference
 }

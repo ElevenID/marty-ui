@@ -1,0 +1,15 @@
+{
+  "database_network": "disposable-isolated",
+  "limits": [
+    "Local source-built image, not signed release acceptance.",
+    "Only database connectivity and absence of verify-only schema writes are exercised."
+  ],
+  "migration_image": "marty-kms-migrations:rust-verify-local",
+  "migration_image_digest": "sha256:d9654904b7ca5b9f35735618ec49b06211addd93bd3eeafd7d7d0c7c5678fb2d",
+  "non_system_schema_count_after": 0,
+  "non_system_schema_count_before": 0,
+  "postgres_image": "docker.io/library/postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
+  "reachable_database_exit": 0,
+  "schema": "marty.kms-rust-verify-only-live/v1",
+  "unreachable_database_exit": 1
+}

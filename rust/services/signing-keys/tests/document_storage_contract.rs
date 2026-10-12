@@ -12,6 +12,21 @@ use uuid::Uuid;
 #[ignore = "requires MARTY_TEST_REDIS_URL"]
 async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("test Redis URL");
+    let parsed = reqwest::Url::parse(&redis_url).expect("disposable Redis URL");
+    assert!(matches!(
+        parsed.host_str(),
+        Some("127.0.0.1" | "localhost" | "::1")
+    ));
+    assert!(parsed
+        .path()
+        .trim_start_matches('/')
+        .parse::<u8>()
+        .is_ok_and(|db| db >= 13));
+    let nonce = std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE").expect("disposable Redis nonce");
+    let guard_client = redis::Client::open(redis_url.as_str()).unwrap();
+    let mut guard = guard_client.get_connection_manager().await.unwrap();
+    let observed: Option<String> = guard.get("marty:tests:disposable-guard").await.unwrap();
+    assert_eq!(observed.as_deref(), Some(nonce.as_str()));
     let suffix = Uuid::new_v4().simple().to_string();
     let organization_id = format!("rust-signing-documents-{suffix}");
     let other_organization_id = format!("rust-signing-documents-other-{suffix}");
@@ -54,14 +69,29 @@ async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
         serde_json::json!([fixture["certificate"]["expected_x5c"]])
     );
 
+    let private_publication = documents
+        .publish_jwk(
+            &organization_id,
+            service_id,
+            PublishJwkRequest {
+                jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "reject-marker"}),
+                key_reference: Some("key-a".to_string()),
+                cert_pem: None,
+                cert_chain_pem: None,
+            },
+        )
+        .await;
+    assert!(matches!(
+        private_publication,
+        Err(DocumentError::Invalid(_))
+    ));
     let publication = documents
         .publish_jwk(
             &organization_id,
             service_id,
             PublishJwkRequest {
                 jwk: json!({
-                    "kty": "EC", "crv": "P-256", "x": "x", "y": "y",
-                    "d": "must-not-be-persisted"
+                    "kty": "EC", "crv": "P-256", "x": "x", "y": "y"
                 }),
                 key_reference: Some("key-a".to_string()),
                 cert_pem: None,
@@ -78,12 +108,24 @@ async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
         publication.jwk
     );
 
+    assert!(matches!(
+        documents
+            .update_jwk(
+                &organization_id,
+                "key-a",
+                UpdateJwkRequest {
+                    updates: json!({"d": "reject-marker"})
+                },
+            )
+            .await,
+        Err(DocumentError::Invalid(_))
+    ));
     let updated = documents
         .update_jwk(
             &organization_id,
             "key-a",
             UpdateJwkRequest {
-                updates: json!({"name": "Issuer key", "d": "ignored"}),
+                updates: json!({"name": "Issuer key"}),
             },
         )
         .await
@@ -94,12 +136,30 @@ async fn redis_round_trip_preserves_certificate_jwks_did_and_slug_behavior() {
         "Issuer key"
     );
 
+    let private_did = documents
+        .publish_did(
+            &organization_id,
+            service_id,
+            PublishDidRequest {
+                jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "reject-marker"}),
+                public_domain: "issuer.example".to_string(),
+                did_id: Some(did_id.clone()),
+                org_slug: Some(slug.clone()),
+                fragment: Some("issuer-key".to_string()),
+                key_reference: Some("key-a".to_string()),
+                cert_pem: None,
+                cert_chain_pem: None,
+                relationship: Default::default(),
+            },
+        )
+        .await;
+    assert!(matches!(private_did, Err(DocumentError::Invalid(_))));
     let did = documents
         .publish_did(
             &organization_id,
             service_id,
             PublishDidRequest {
-                jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y", "d": "private"}),
+                jwk: json!({"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}),
                 public_domain: "issuer.example".to_string(),
                 did_id: Some(did_id.clone()),
                 org_slug: Some(slug.clone()),

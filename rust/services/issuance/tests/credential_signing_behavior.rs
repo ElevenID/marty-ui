@@ -336,15 +336,25 @@ impl IssuerContextResolver for SigningHarness {
             .unwrap()
             .remote_formats
             .push(credential_format.to_owned());
+        let public_jwk = if transaction.issuer_algorithm.as_deref() == Some("EdDSA") {
+            // The Ed25519 base point is public key material; this fixture never
+            // holds a private key or signs locally.
+            json!({"kty": "OKP", "crv": "Ed25519", "x": "WGZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY"})
+        } else {
+            let proofs: Value =
+                serde_json::from_str(include_str!("fixtures/dpop_public_proofs.json"))
+                    .expect("public DPoP fixture");
+            proofs["es256"]["jwk"].clone()
+        };
         Ok(IssuerContext {
             issuer_profile_id: "issuer-profile-contract".to_owned(),
             issuer_did: "did:web:issuer.example".to_owned(),
             signing_service_id: "managed-custody-contract".to_owned(),
             algorithm: transaction.issuer_algorithm.clone().unwrap(),
             verification_method_id: Some("did:web:issuer.example#contract-key".to_owned()),
-            public_jwk: Some(json!({"kty": "OKP", "crv": "Ed25519", "x": "issuer-x"})),
+            public_jwk: Some(public_jwk),
             certificate_chain: vec![],
-            raw_context: json!({}),
+            raw_context: json!({"signing_key_reference": "transit/keys/contract-issuer"}),
         })
     }
 }
@@ -474,6 +484,7 @@ fn app_with_builder(
 #[tokio::test]
 async fn actual_remote_diagnostic_failure_releases_the_claim_and_preserves_http_projection() {
     use marty_issuance_service::credential_builder::HttpCredentialBuilder;
+    use marty_signing_grant::{minter::GrantMinter, SigningOrigin, HEADER_NAME};
     use std::{
         sync::atomic::{AtomicUsize, Ordering},
         time::Duration,
@@ -505,14 +516,33 @@ async fn actual_remote_diagnostic_failure_releases_the_claim_and_preserves_http_
             let observed = observed.clone();
             async move {
                 assert_eq!(headers["x-api-key"], "synthetic-key");
+                let grant = marty_signing_grant::GrantEnvelope::from_header_value(headers[HEADER_NAME].to_str().unwrap()).unwrap();
+                assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCredential);
+                assert_eq!(grant.claims.key_reference.as_deref(), Some("transit/keys/contract-issuer"));
                 observed.fetch_add(1, Ordering::SeqCst);
                 (axum::http::StatusCode::SERVICE_UNAVAILABLE, [("content-type", "application/json")], remote_body)
             }
-        }));
+        })).route(
+            "/v1/transit/hmac/marty-sign-grant-issuance-credential-v1/sha2-256",
+            axum::routing::post(|headers: axum::http::HeaderMap| async move {
+                assert_eq!(headers["x-vault-token"], "credential-diagnostic-mint-token");
+                axum::Json(json!({"data": {"hmac": format!("vault:v1:{}", base64::engine::general_purpose::STANDARD.encode([7_u8; 32]))}}))
+            }),
+        );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let mut server = Server(tokio::spawn(async move { axum::serve(listener, server_app).await.unwrap(); }));
-        let builder = HttpCredentialBuilder::new(format!("http://{address}/internal").parse().unwrap(), Some("synthetic-key"), Duration::from_secs(2)).unwrap();
+        let mut token_file = tempfile::NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut token_file, b"credential-diagnostic-mint-token\n").unwrap();
+        let endpoint = format!("http://{address}");
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let minter = GrantMinter::for_managed_openbao(&endpoint, SigningOrigin::IssuanceCredential, token_file.path().to_path_buf()).unwrap();
+        match previous_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        let builder = HttpCredentialBuilder::new_with_grant(format!("http://{address}/internal").parse().unwrap(), Some("synthetic-key"), Duration::from_secs(2), minter).unwrap();
         let harness = SigningHarness::new(case, &contract);
         // The original controlled-builder corpus intentionally carries both
         // explicit subject and ordinary claims. A real JWT preparation accepts

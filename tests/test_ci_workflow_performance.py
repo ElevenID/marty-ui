@@ -318,6 +318,14 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
     managed_chain = next(
         step for step in rust["steps"] if step.get("name") == chain_step_name
     )["run"]
+    assert 'sys/policies/acl/kms-gateway-envelope-test' in managed_chain
+    assert '"policies":["kms-gateway-envelope-test"]' in managed_chain
+    for operation in ("encrypt", "decrypt"):
+        assert (
+            f'transit/{operation}/integration-secret-envelope-marty-aes256'
+            in managed_chain
+        )
+    assert 'transit/keys/integration-secret-envelope-marty-aes256' in managed_chain
     assert "--test passport_managed_kms_chain" in managed_chain
     assert (
         "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
@@ -336,9 +344,11 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         managed_chain.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 4
+        == 5
     )
     for case in (
+        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
+        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
         "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
         "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
         "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
@@ -357,15 +367,21 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         signing_routes.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 3
+        == 1
     )
-    for case in (
-        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
-        "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
-        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
-    ):
-        assert case in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 3
+    assert "authenticated_gateway_reaches_rust_managed_key_route_without_custody" in signing_routes
+    assert "authenticated_gateway_rotates_only_a_dedicated_signing_service" not in signing_routes
+    assert signing_routes.count("-- --ignored --exact") == 1
+    assert "--test public_config_resolve_live_contract" in managed_chain
+    assert "signing-public_config_resolve_live_contract.log" in managed_chain
+    assert "--test public_key_metadata_live_contract" in managed_chain
+    assert "signing-public_key_metadata_live_contract.log" in managed_chain
+    redis_contracts = next(
+        step["run"]
+        for step in rust["steps"]
+        if step.get("name") == "Exercise live Signing Keys public contracts on disposable Redis"
+    )
+    assert "--test public_key_metadata_live_contract" not in redis_contracts
     assert rust["env"]["FLOW_POSTGRES_TEST_URL"].endswith(
         "localhost:5432/marty_atomic_test"
     )
@@ -708,6 +724,7 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
             "rust": "true",
             "rust_runtime": "false",
             "rust_matrix": '["contracts"]',
+            "openbao": "false",
             "release": "false",
             "verification": "false",
             "security": "false",
@@ -820,6 +837,7 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["contracts"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
@@ -896,6 +914,7 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["worker"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
@@ -966,6 +985,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["flow"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
@@ -1027,6 +1047,7 @@ def test_verified_selfhost_test_sources_select_only_selfhost_on_pr(
         "rust": "true",
         "rust_runtime": "false",
         "rust_matrix": '["selfhost"]',
+        "openbao": "false",
         "release": "false",
         "verification": "false",
         "security": "false",
@@ -1085,6 +1106,84 @@ def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
     assert queued["rust_matrix"] == '["canvas","contracts"]'
+
+
+def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> None:
+    for path in (
+        "openbao/didcomm-authcrypt/backend/haip.go",
+        "docker/openbao-haip-migration-audit-policy.hcl",
+    ):
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
+    for path in (
+        "rust/services/flow/src/request_object.rs",
+        "rust/services/flow/src/verification_submission.rs",
+        "rust/services/flow/src/http_providers.rs",
+        "rust/services/flow/tests/haip_live_signing.rs",
+        "rust/services/signing-keys/src/flow_envelope.rs",
+        "rust/services/signing-keys/src/http.rs",
+        "rust/crates/oid4vp-contract/src/haip_key.rs",
+    ):
+        selected = _classify_changed_path(path, tmp_path)
+        assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
+    assert (
+        _classify_changed_path("rust/services/flow/src/lib.rs", tmp_path)["openbao"]
+        == "false"
+    )
+    assert (
+        _classify_changed_paths(
+            ["rust/services/flow/src/lib.rs"], tmp_path, event="merge_group"
+        )[0]["openbao"]
+        == "true"
+    )
+
+    _, document = _workflow(CI_PATH)
+    job = document["jobs"]["test-openbao-didcomm-plugin"]
+    assert job["if"] == "needs.changes.outputs.openbao == 'true'"
+    image_build = next(
+        step for step in job["steps"]
+        if step.get("name") == "Test and build the pinned OpenBao plugin image"
+    )
+    assert image_build["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    storage_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Qualify packaged plugin storage and self-host Raft behavior"
+    )
+    assert (
+        storage_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"] == "marty-openbao-didcomm:ci"
+    )
+    for probe in (
+        "probe_didcomm_issuance_token.py",
+        "probe_didcomm_openbao_file_storage.py",
+        "probe_selfhost_openbao_raft_bootstrap.py",
+        "probe_didcomm_openbao_ha.py",
+    ):
+        assert probe in storage_gate["run"]
+    recovery_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Qualify live Raft snapshot export and recovery"
+    )
+    assert recovery_gate["shell"] == "pwsh"
+    assert "test_openbao_raft_recovery.ps1" in recovery_gate["run"]
+    coordinated_gate = next(
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore"
+    )
+    assert (
+        coordinated_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"]
+        == "marty-openbao-didcomm:ci"
+    )
+    assert "probe_integration_secret_coordinated_restore.py" in coordinated_gate["run"]
+    assert job["timeout-minutes"] >= 30
+    assert "CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet ./..." in (
+        ROOT / "openbao/didcomm-authcrypt/Dockerfile"
+    ).read_text(encoding="utf-8")
+    assert "test-openbao-didcomm-plugin" in document["jobs"]["ci-gate"]["needs"]
 
 
 @pytest.mark.parametrize(
@@ -1156,6 +1255,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "rust",
         "rust_runtime",
         "rust_matrix",
+        "openbao",
         "planner_only",
         "rollback_test_only",
         "didcomm_release_test_only",
@@ -1173,10 +1273,9 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-ui-crawler-artifacts",
         "test-ui-crawler-nginx",
         "test-services",
-        "test-passport-fence-postgres",
         "test-rust-feature-probe",
-        "test-rust-passport-image",
         "test-rust-services",
+        "test-openbao-didcomm-plugin",
         "rust-lint-policy",
         "test-rust-service-images",
         "public-protocol-contract",
@@ -1227,10 +1326,9 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             "rust-lint-policy",
             "rust-supply-chain",
         },
+        "openbao": {"test-openbao-didcomm-plugin"},
         "rust_runtime": {
-            "test-passport-fence-postgres",
             "test-rust-feature-probe",
-            "test-rust-passport-image",
             "test-rust-service-images",
         },
         "security": {"security"},
@@ -1261,6 +1359,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "PYTHON_SELECTED": "python",
         "RUST_SELECTED": "rust",
         "RUST_RUNTIME_SELECTED": "rust_runtime",
+        "OPENBAO_SELECTED": "openbao",
         "RELEASE_SELECTED": "release",
         "VERIFICATION_SELECTED": "verification",
         "SECURITY_SELECTED": "security",
@@ -1333,7 +1432,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 18)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 17)
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],
@@ -1347,6 +1446,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         (),
         ("ui",),
         ("rust",),
+        ("rust", "openbao", "security"),
         ("python", "security"),
         ("release",),
         ("release", "verification"),
@@ -1446,6 +1546,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise(("ui",), {"fast-feedback": "failure"}).returncode != 0
     assert exercise((), {"changes": "failure"}).returncode != 0
     assert exercise((), selection_overrides={"RUST_SELECTED": ""}).returncode != 0
+    assert exercise((), result_count=16).returncode != 0
     didcomm_mode = {"DIDCOMM_RELEASE_TEST_ONLY": "true"}
     assert exercise(("release",), selection_overrides=didcomm_mode).returncode == 0
     assert (
@@ -1461,7 +1562,10 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
     assert exercise(("release",), event="workflow_dispatch", selection_overrides=didcomm_mode).returncode != 0
     for invalid in ("", "TRUE", "invalid"):
         assert exercise(("release",), selection_overrides={"DIDCOMM_RELEASE_TEST_ONLY": invalid}).returncode != 0
-    assert exercise((), result_count=17).returncode != 0
+    assert (
+        exercise(("release", "openbao"), selection_overrides=didcomm_mode).returncode
+        != 0
+    )
     assert exercise(tuple(selections.values()), event="merge_group").returncode == 0
     assert (
         exercise(
@@ -1533,31 +1637,22 @@ def test_independent_rust_lanes_remain_required_without_transferring_builds() ->
     jobs = document["jobs"]
     service_names = {step.get("name") for step in jobs["test-rust-services"]["steps"]}
     probe = jobs["test-rust-feature-probe"]
-    passport = jobs["test-rust-passport-image"]
-    assert probe["needs"] == passport["needs"] == "changes"
-    assert (
-        probe["if"] == passport["if"] == "needs.changes.outputs.rust_runtime == 'true'"
-    )
+    assert probe["needs"] == "changes"
+    assert probe["if"] == "needs.changes.outputs.rust_runtime == 'true'"
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
-    assert {"test-rust-feature-probe", "test-rust-passport-image"} <= set(
-        jobs["ci-gate"]["needs"]
-    )
+    assert "test-rust-feature-probe" in jobs["ci-gate"]["needs"]
+    assert "test-rust-passport-image" not in jobs
     assert "Verify frozen Rust feature-regression probe" not in service_names
     assert "Build opt-in passport test-mode image" not in service_names
     assert "Verify opt-in passport test-mode image boundary" not in service_names
     assert {step.get("name") for step in probe["steps"]} >= {
         "Verify frozen Rust feature-regression probe"
     }
-    passport_names = [step.get("name") for step in passport["steps"]]
-    assert passport_names.index(
-        "Build opt-in passport test-mode image"
-    ) < passport_names.index("Verify opt-in passport test-mode image boundary")
     assert "Build public selfhost image" in service_names
-    for job in (probe, passport):
-        assert not any(
-            step.get("uses", "").startswith("actions/download-artifact@")
-            for step in job["steps"]
-        )
+    assert not any(
+        step.get("uses", "").startswith("actions/download-artifact@")
+        for step in probe["steps"]
+    )
 
 
 def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
@@ -1580,7 +1675,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
         "Prepare required rendered base executable acceptance",
-        "Verify default passport test-mode boundary",
+        "Verify local passport signing is forbidden",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
         "Test native Canvas operation timeout TLS parity",
@@ -1594,12 +1689,18 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Exercise live Signing Keys public contracts on disposable Redis",
         "Exercise Gateway CSR and managed passport chain with disposable OpenBao",
         "Run Flow database contract after workspace suite",
-        "Test packaged passport self-signed mode",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
     }
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
+        assert not steps[name].get("continue-on-error", False)
+    for name in (
+        "Expose public image compiler cache credentials",
+        "Build public selfhost image",
+        "Prepare public selfhost image loader acceptance",
+    ):
+        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
         assert not steps[name].get("continue-on-error", False)
     for name in (
         "Expose public image compiler cache credentials",
@@ -1616,6 +1717,16 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert not steps[name].get("continue-on-error", False)
     live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
     assert "csca_lifecycle_storage_contract:2" in live_signing
+    assert "managed_key_create_live_contract:5" in live_signing
+    assert "document_storage_contract:1" in live_signing
+    assert "service_rotation_live_contract" not in live_signing
+    assert "vdsnc_registration_live_contract" not in live_signing
+    live_openbao = steps[
+        "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
+    ]["run"]
+    for suite in ("service_rotation_live_contract", "vdsnc_registration_live_contract"):
+        assert f"--test {suite}" in live_openbao
+    assert "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE" in live_openbao
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
     ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
@@ -1708,6 +1819,7 @@ def test_actual_classifier_selects_gates_for_compiler_and_runtime_inputs(
             "ui",
             "python",
             "rust",
+            "openbao",
             "release",
             "verification",
             "security",
@@ -1742,46 +1854,28 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "contracts/canvas-worker-tier-obligations.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
-            "tests/test_canvas_worker_rest_input_evidence.py",
-            "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
-            "tests/test_canvas_worker_rest_dependent_input_evidence.py",
+            "tests/test_canvas_worker_provider_signals_input_evidence.py",
             "tests/test_canvas_worker_timeout_input_evidence.py",
             "tests/test_canvas_worker_retry_after_input_evidence.py",
-            "tests/test_canvas_worker_startup_input_evidence.py",
-            "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
-            "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs",
         },
         "canvas-worker-rest-current-inputs.json": {
             ".github/workflows/ci.yml",
-            "contracts/canvas-worker-rest-wrappers-current-inputs.json",
-            "contracts/canvas-worker-rest-dependent-current-inputs.json",
-            "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+            "contracts/canvas-worker-tier-obligations.json",
+            "scripts/ci/check_canvas_tier_obligations.py",
             "contracts/canvas-worker-provider-recovery-current-inputs.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
-            "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
-            "tests/test_canvas_worker_rest_dependent_input_evidence.py",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         },
-        "canvas-worker-rest-wrappers-current-inputs.json": {
+        "canvas-worker-provider-signals-current-inputs.json": {
             ".github/workflows/ci.yml",
-            "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
-            "tests/test_ci_workflow_performance.py",
-        },
-        "canvas-worker-rest-dependent-current-inputs.json": {
-            ".github/workflows/ci.yml",
-            "tests/test_canvas_worker_rest_dependent_input_evidence.py",
+            "tests/test_canvas_worker_provider_signals_input_evidence.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-timeout-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_canvas_worker_timeout_input_evidence.py",
-            "tests/test_ci_workflow_performance.py",
-        },
-        "canvas-worker-oauth-revocation-current-inputs.json": {
-            ".github/workflows/ci.yml",
-            "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-provider-recovery-current-inputs.json": {
@@ -1810,6 +1904,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "scripts/ci/check_canvas_tier_obligations.py",
             "scripts/test_canvas_worker_rest_https.py",
             "tests/test_canvas_tier_obligations.py",
+            "tests/test_canvas_worker_oracle_producer_inventory.py",
             "tests/test_canvas_worker_validation_tier.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -1837,7 +1932,6 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         if name.startswith("canvas-") and name.endswith("-current-inputs.json")
     }
     release_only_records = {
-        "canvas-worker-oauth-revocation-current-inputs.json",
         "canvas-worker-provider-recovery-current-inputs.json",
     }
     assert CI_PATH.read_text(encoding="utf-8").count(
@@ -1878,6 +1972,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
     }
     image_contexts = {
         "services/Dockerfile": "services/Dockerfile.dockerignore",
+        "services/Dockerfile.migrations": "services/Dockerfile.migrations.dockerignore",
         "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
         "rust/services/event-stream/Dockerfile": ".dockerignore",
         "rust/services/revocation-profile/Dockerfile": ".dockerignore",
@@ -1913,16 +2008,13 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
     python_only_input_records = {
-        "contracts/canvas-worker-oauth-revocation-current-inputs.json",
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
     }
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
-        "contracts/canvas-worker-rest-wrappers-current-inputs.json",
-        "contracts/canvas-worker-rest-dependent-current-inputs.json",
+        "contracts/canvas-worker-provider-signals-current-inputs.json",
         "contracts/canvas-worker-timeout-current-inputs.json",
-        "contracts/canvas-worker-oauth-revocation-current-inputs.json",
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
@@ -1931,8 +2023,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "tests/test_canvas_worker_oracle_producer_inventory.py",
         "tests/test_canvas_worker_oracle_script_closure.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
-        "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
-        "tests/test_canvas_worker_rest_dependent_input_evidence.py",
+        "tests/test_canvas_worker_provider_signals_input_evidence.py",
         "tests/test_canvas_worker_timeout_input_evidence.py",
         "tests/test_canvas_json_depth_current_inputs.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
@@ -1949,6 +2040,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "rust": str(
                 path.startswith("contracts/") and path not in python_only_input_records
             ).lower(),
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1972,6 +2064,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "ui": "false",
         "python": "false",
         "rust": "true",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1983,6 +2076,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "ui": "false",
         "python": "false",
         "rust": "true",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -1997,6 +2091,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "ui": "false",
             "python": "false",
             "rust": "false",
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -2013,6 +2108,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "ui": "false",
         "python": "false",
         "rust": "true",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2067,8 +2163,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     )
     paths = (
         "tests/test_canvas_worker_startup_input_evidence.py",
-        "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
-        "tests/test_canvas_worker_rest_dependent_input_evidence.py",
+        "tests/test_canvas_worker_provider_signals_input_evidence.py",
         "tests/test_canvas_worker_timeout_input_evidence.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_validation_tier.py",
@@ -2080,6 +2175,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2097,8 +2193,7 @@ def test_evidence_test_sources_keep_their_release_owner_without_runtime_lanes(
     # inputs that the tests inspect; mixed/unknown edits also fail closed.
     for path in (
         "contracts/canvas-worker-startup-current-inputs.json",
-        "contracts/canvas-worker-rest-wrappers-current-inputs.json",
-        "contracts/canvas-worker-rest-dependent-current-inputs.json",
+        "contracts/canvas-worker-provider-signals-current-inputs.json",
         "contracts/canvas-worker-timeout-current-inputs.json",
         "contracts/canvas-worker-retry-after-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
@@ -2141,12 +2236,11 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
         "tests/test_canvas_json_depth_current_inputs.py",
         "tests/test_canvas_worker_startup_input_evidence.py",
         "tests/test_canvas_worker_rest_input_evidence.py",
-        "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
-        "tests/test_canvas_worker_rest_dependent_input_evidence.py",
+        "tests/test_canvas_worker_provider_signals_input_evidence.py",
         "tests/test_canvas_worker_timeout_input_evidence.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
-        "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_canvas_worker_oracle_script_closure.py",
     }
     assert (ROOT / helper).is_file()
     references = subprocess.run(
@@ -2205,6 +2299,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2276,6 +2371,7 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2315,6 +2411,7 @@ def test_release_contract_test_sources_keep_their_release_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2377,6 +2474,7 @@ def test_release_owned_policy_test_sources_have_no_second_execution_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2584,6 +2682,7 @@ def test_model_and_compose_policy_sources_select_only_their_release_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2645,6 +2744,7 @@ def test_shadow_planner_sources_use_existing_release_owner_on_prs(
             "ui": "false",
             "python": "false",
             "rust": "false",
+            "openbao": "false",
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -2722,6 +2822,7 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "rust": "false",
         "rust_runtime": "false",
         "rust_matrix": '["canvas","contracts"]',
+        "openbao": "false",
         "planner_only": "false",
         "rollback_test_only": "false",
         "k8s_policy_test_only": "true",
@@ -2803,7 +2904,7 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
     tmp_path: Path,
 ) -> None:
     cases = {
-        "tests/test_didcomm_native_consumer_ownership.py": 31,
+        "tests/test_didcomm_native_consumer_ownership.py": 38,
         "tests/test_didcomm_native_credentials_release.py": 21,
         "tests/test_issuance_retention_credentials_release.py": 4,
     }
@@ -2818,6 +2919,7 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -2871,7 +2973,7 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
         step.get("run") == RELEASE_TEST_COMMAND for step in release["steps"]
     )
     assert "tests" in RELEASE_TEST_COMMAND.split()
-    assert sum(cases.values()) == 56
+    assert sum(cases.values()) == 63
 
 
 def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
@@ -2897,7 +2999,7 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
         assert selected["didcomm_release_test_only"] == "true"
         assert selected["release"] == "true"
         assert all(selected[name] == "false" for name in (
-            "all", "ui", "python", "rust", "verification", "security"
+            "all", "ui", "python", "rust", "openbao", "verification", "security"
         ))
         for other in (
             source,
@@ -3085,6 +3187,7 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "rust": "false",
         "rust_runtime": "false",
         "rust_matrix": '["canvas","contracts"]',
+        "openbao": "false",
         "planner_only": "false",
         "rollback_test_only": "true",
         "release": "true",
@@ -3204,6 +3307,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
         "ui": "false",
         "python": "false",
         "rust": "false",
+        "openbao": "false",
         "release": "true",
         "verification": "false",
         "security": "false",
@@ -3268,6 +3372,7 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
     dockerfiles = [
         ROOT / "services/Dockerfile",
         ROOT / "services/Dockerfile.migrations",
+        ROOT / "openbao/didcomm-authcrypt/Dockerfile",
         ROOT / "rust/services/Dockerfile.ci",
         *(ROOT / "rust/services").glob("*/Dockerfile"),
     ]
@@ -3537,9 +3642,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert "grep -Fx 'status_provider_matches_json_depth_reference: test'" in published
     assert (
-        "grep -Fx 'worker_rest_reference_matches_published_process: test'" in published
+        "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
     )
-    assert "grep -Fx 'worker_rest_matches_frozen_published_process: test'" in published
     assert "grep -Fx 'worker_rest_native_child: test'" in published
     assert "grep -Fx 'worker_retry_matches_frozen_published_process: test'" in published
     assert (
@@ -3597,14 +3701,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert (
-        "grep -Fx 'worker_retry_reference_matches_published_process: test'" in published
-    )
-    assert (
         "grep -Fx 'worker_retry_after_reference_matches_published_process: test'"
-        in published
-    )
-    assert (
-        "grep -Fx 'worker_validation_reference_matches_published_process: test'"
         in published
     )
     assert (
@@ -3620,31 +3717,21 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         in published
     )
     assert "grep -Fx 'worker_facts_match_frozen_published_process: test'" in published
+    assert (
+        "grep -Fx 'worker_roster_failure_matches_frozen_published_process: test'"
+        in published
+    )
     for name in [
-        "worker_roster_failure_reference_matches_published_process",
-        "worker_roster_failure_matches_frozen_published_process",
-    ]:
-        assert f"grep -Fx '{name}: test'" in published
-    for name in [
-        "worker_oauth_revocation_reference_matches_published_process",
         "worker_oauth_revocation_matches_frozen_published_process",
         "worker_oauth_revocation_native_child",
-        "worker_oauth_revocation_fence_reference_matches_published_process",
         "worker_oauth_revocation_fence_matches_frozen_published_process",
-        "worker_oauth_revocation_patch_reference_matches_published_process",
         "worker_oauth_revocation_patch_matches_frozen_published_process",
-        "worker_oauth_revocation_retry_after_reference_matches_published_process",
         "worker_oauth_revocation_retry_after_matches_frozen_published_process",
-        "worker_oauth_revocation_backoff_reference_matches_published_process",
         "worker_oauth_revocation_backoff_matches_frozen_published_process",
-        "worker_oauth_revocation_queue_reference_matches_published_process",
         "worker_oauth_revocation_queue_matches_frozen_published_process",
         "worker_oauth_revocation_repository_selection_matches_published_order",
-        "worker_oauth_revocation_lease_reference_matches_published_process",
         "worker_oauth_revocation_lease_matches_frozen_published_process",
-        "worker_oauth_revocation_counters_reference_matches_published_cycle",
         "worker_oauth_revocation_counters_matches_frozen_published_cycle",
-        "worker_oauth_revocation_secrets_reference_matches_published_process",
         "worker_oauth_revocation_secrets_matches_frozen_published_process",
         "worker_oauth_revocation_secret_reference_constraints_match_published_schema",
         "worker_oauth_revocation_empty_token_is_not_dispatched",
@@ -3677,13 +3764,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_provider_recovery_first_native_child",
         "canvas_worker_provider_completion_replay::rejected_owner_check_rejects_unrelated_or_reference_drift",
         "canvas_worker_provider_recovery_replay::newer_generation_check_rejects_any_target_mutation",
-        "worker_oauth_revocation_selection_reference_matches_published_repository",
         "worker_oauth_revocation_selection_repository_matches_published",
     ]:
         assert f"grep -Fx '{name}: test'" in published
-    assert (
-        "grep -Fx 'worker_facts_reference_matches_published_process: test'" in published
-    )
     assert (
         "grep -Fx 'worker_startup_matches_published_process_and_idle_heartbeat: test'"
         in published
@@ -3788,7 +3871,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            'MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )
@@ -3879,7 +3962,7 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            'MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
         )
         == 1
     )

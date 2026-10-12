@@ -24,11 +24,10 @@
     "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.issuance-native.yml",
-    "docker-compose.profile.conformance-native.yml"
-  ],
-  "legacy_compose_models": [
+    "docker-compose.profile.conformance-native.yml",
     "docker-compose.selfhost.prod.yml"
   ],
+  "legacy_compose_models": [],
   "kubernetes": {
     "selector": "K8S_ISSUANCE_NATIVE_ENABLED",
     "selected_value": "true",

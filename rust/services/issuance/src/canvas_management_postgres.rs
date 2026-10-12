@@ -455,6 +455,7 @@ impl PostgresCanvasManagementRepository {
         &self,
         platform: &CanvasPlatformRecord,
     ) -> Result<(), CanvasManagementRepositoryError> {
+        reject_private_record(platform)?;
         let config_version = version_i32(platform.config_version)?;
         let result = bind_platform_insert(sqlx::query(INSERT_PLATFORM), platform, config_version)
             .execute(&self.pool)
@@ -533,6 +534,7 @@ impl PostgresCanvasManagementRepository {
         expected_config_version: i64,
         configuration_changed: bool,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        reject_private_record(platform)?;
         let expected_version = version_i32(expected_config_version)?;
         let next_version = expected_config_version
             .checked_add(1)
@@ -677,6 +679,7 @@ impl PostgresCanvasManagementRepository {
         expected_config_version: i64,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        reject_private_record(platform)?;
         sqlx::query(PERSIST_REGISTRATION_STATE)
             .bind(&platform.organization_id)
             .bind(&platform.id)
@@ -698,6 +701,7 @@ impl PostgresCanvasManagementRepository {
         expected_updated_at: DateTime<Utc>,
         invalidate_bindings: bool,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        reject_private_record(platform)?;
         let expected_version = version_i32(expected_config_version)?;
         let persisted_version = version_i32(platform.config_version)?;
         let mut transaction = self.pool.begin().await.map_err(repository_error)?;
@@ -734,6 +738,7 @@ impl PostgresCanvasManagementRepository {
         expected_config_version: i64,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasPlatformRecord>, CanvasManagementRepositoryError> {
+        reject_private_record(platform)?;
         sqlx::query(PERSIST_LTI_PROBE_METADATA)
             .bind(&platform.organization_id)
             .bind(&platform.id)
@@ -904,6 +909,7 @@ impl PostgresCanvasManagementRepository {
         expected_config_version: i64,
         expected_updated_at: DateTime<Utc>,
     ) -> Result<Option<CanvasProgramBindingRecord>, CanvasManagementRepositoryError> {
+        reject_private_record(binding)?;
         if binding.config_version != expected_config_version
             || binding.updated_at != expected_updated_at
             || binding.validated_config_version != Some(expected_config_version)
@@ -1389,6 +1395,7 @@ fn bind_binding_insert<'query>(
     sqlx::query::Query<'query, sqlx::Postgres, sqlx::postgres::PgArguments>,
     CanvasManagementRepositoryError,
 > {
+    reject_private_record(binding)?;
     let scope = serde_json::to_value(&binding.canvas_scope)
         .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
     let feature_flags = serde_json::to_value(&binding.feature_flags)
@@ -1436,6 +1443,7 @@ fn bind_binding_update<'query>(
     sqlx::query::Query<'query, sqlx::Postgres, sqlx::postgres::PgArguments>,
     CanvasManagementRepositoryError,
 > {
+    reject_private_record(binding)?;
     let scope = serde_json::to_value(&binding.canvas_scope)
         .map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
     let feature_flags = serde_json::to_value(&binding.feature_flags)
@@ -1667,6 +1675,17 @@ fn json_object(value: Value) -> Result<Map<String, Value>, CanvasManagementRepos
         .ok_or(CanvasManagementRepositoryError::Unavailable)
 }
 
+fn reject_private_record<T: serde::Serialize>(
+    record: &T,
+) -> Result<(), CanvasManagementRepositoryError> {
+    let value =
+        serde_json::to_value(record).map_err(|_| CanvasManagementRepositoryError::Unavailable)?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(CanvasManagementRepositoryError::Unavailable);
+    }
+    Ok(())
+}
+
 fn version_i32(value: i64) -> Result<i32, CanvasManagementRepositoryError> {
     if value < 1 {
         return Err(CanvasManagementRepositoryError::Unavailable);
@@ -1693,6 +1712,97 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn platform_write_guard_rejects_private_provider_metadata() {
+        let now = Utc::now();
+        let mut platform = CanvasPlatformRecord {
+            id: "platform-1".into(),
+            organization_id: "org-a".into(),
+            canvas_account_id: "account-1".into(),
+            display_name: None,
+            canvas_base_url: Some("https://canvas.example".into()),
+            lti_client_id: None,
+            lti_deployment_id: None,
+            lti_trust_profile: "hosted".into(),
+            lti_issuer: None,
+            lti_jwks_url: None,
+            lti_jwks_json: Some(json!({"keys": [{"kty": "EC", "d": "synthetic"}]})),
+            lti_jwks_fetched_at: None,
+            lti_jwks_expires_at: None,
+            lti_openid_configuration: None,
+            registration_status: "draft".into(),
+            connection_config: Map::new(),
+            capability_snapshot: Map::new(),
+            last_validated_at: None,
+            last_connection_error: None,
+            config_version: 1,
+            archived_at: None,
+            enabled: false,
+            created_at: now,
+            updated_at: now,
+        };
+        assert_eq!(
+            reject_private_record(&platform),
+            Err(CanvasManagementRepositoryError::Unavailable)
+        );
+        platform.lti_jwks_json = Some(json!({"keys": [{"kty": "EC", "x": "public"}]}));
+        platform.connection_config.insert(
+            "issuer".into(),
+            json!({"key_reference": "transit/keys/issuer-v4"}),
+        );
+        assert!(reject_private_record(&platform).is_ok());
+    }
+
+    #[test]
+    fn binding_writes_reject_private_material_before_database_access() {
+        let now = Utc::now();
+        let mut binding = CanvasProgramBindingRecord {
+            id: "binding-1".into(),
+            organization_id: "org-a".into(),
+            platform_id: "platform-1".into(),
+            application_template_id: "template-1".into(),
+            credential_template_id: "credential-1".into(),
+            display_name: None,
+            flow_mode: "elevenid_orchestrated_canvas_evidence".into(),
+            direct_issue_enabled: false,
+            auto_approve_on_evidence: false,
+            evidence_requirements: vec![],
+            canvas_scope: BTreeMap::new(),
+            delivery_mode: "wallet_only".into(),
+            issuer_mode: "org_managed".into(),
+            approval_policy_set_id: None,
+            deployment_profile_id: None,
+            feature_flags: BTreeMap::new(),
+            canvas_credentials: Map::new(),
+            config_version: 1,
+            validated_config_version: None,
+            readiness_checks: vec![],
+            readiness_validated_at: None,
+            activated_at: None,
+            archived_at: None,
+            credential_template_snapshot: Map::new(),
+            enabled: false,
+            created_at: now,
+            updated_at: now,
+        };
+        binding.credential_template_snapshot.insert(
+            "issuer".into(),
+            json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+        );
+        assert!(bind_binding_insert(sqlx::query(INSERT_BINDING), &binding).is_err());
+        assert!(
+            bind_binding_update(sqlx::query(UPDATE_BINDING_CONFIGURATION), &binding, 1).is_err()
+        );
+        binding.credential_template_snapshot.insert(
+            "issuer".into(),
+            json!({"key_reference": "transit/keys/issuer-v4"}),
+        );
+        assert!(bind_binding_insert(sqlx::query(INSERT_BINDING), &binding).is_ok());
+        assert!(
+            bind_binding_update(sqlx::query(UPDATE_BINDING_CONFIGURATION), &binding, 1).is_ok()
+        );
+    }
 
     #[test]
     fn management_queries_are_tenant_and_archive_scoped() {

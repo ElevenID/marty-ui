@@ -10,9 +10,13 @@ publish = false
 autotests = false
 
 [dev-dependencies]
+axum.workspace = true
+axum-server.workspace = true
 futures-util.workspace = true
 marty-issuance-service = { path = "../../services/issuance" }
 marty-selfhost-bundle = { path = "../selfhost-bundle" }
+rcgen.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

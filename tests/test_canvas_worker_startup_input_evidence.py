@@ -6,50 +6,41 @@ from pathlib import Path
 import pytest
 import yaml
 
-from scripts.ci.canvas_oracle_current_inputs import (
-    assert_current_inputs,
-    normalized_sha256,
-)
+from scripts.ci.canvas_oracle_current_inputs import normalized_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
-GRAPH = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
 EVIDENCE = ROOT / "contracts/canvas-worker-startup-current-inputs.json"
-STARTUP = "run_canvas_worker_startup_oracle.py"
+INPUTS = {
+    "contracts/canvas-worker-startup-expected.json",
+    "contracts/canvas-worker-startup-scenarios.json",
+    "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs",
+}
 
 
-def _assert_current_inputs(evidence: dict, graph: dict, root: Path) -> None:
-    assert_current_inputs(
-        evidence,
-        graph,
-        root,
-        entrypoint=STARTUP,
-        schema="marty.canvas-worker-startup-current-inputs/v1",
-        label="Startup",
-        disclaimer="not attest the historical startup corpus",
-    )
+def _assert_current_inputs(evidence: dict, root: Path) -> None:
+    assert evidence["schema"] == "marty.canvas-worker-startup-current-inputs/v2"
+    assert "native startup replay" in evidence["purpose"]
+    assert set(evidence["sha256"]) == INPUTS
+    for name, pinned in evidence["sha256"].items():
+        assert normalized_sha256(root / name) == pinned, f"Startup input drift: {name}"
 
 
 def test_current_startup_capture_inputs_match_explicit_hashes() -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    _assert_current_inputs(evidence, graph, ROOT)
-    assert graph["direct_imports"][STARTUP] == [], (
-        "New directly imported helpers require hash evidence"
-    )
+    _assert_current_inputs(evidence, ROOT)
 
 
 @pytest.mark.parametrize(
     "name",
     [
-        "scripts/run_canvas_worker_startup_oracle.py",
-        "scripts/run_canvas_worker_single_cycle.py",
+        "contracts/canvas-worker-startup-expected.json",
+        "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs",
         "contracts/canvas-worker-startup-scenarios.json",
     ],
 )
 def test_each_startup_input_change_invalidates_evidence(
     tmp_path: Path, name: str
 ) -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
     for source in evidence["sha256"]:
         target = tmp_path / source
@@ -58,16 +49,14 @@ def test_each_startup_input_change_invalidates_evidence(
     target = tmp_path / name
     target.write_bytes(target.read_bytes() + b"\n# changed\n")
     with pytest.raises(AssertionError, match="Startup input drift"):
-        _assert_current_inputs(evidence, graph, tmp_path)
+        _assert_current_inputs(evidence, tmp_path)
 
 
-def test_new_direct_helper_requires_input_evidence() -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+def test_extra_input_pin_requires_review() -> None:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    graph["direct_imports"][STARTUP] = ["new_local_helper.py"]
-    graph["direct_imports"]["new_local_helper.py"] = []
-    with pytest.raises(AssertionError, match="need input review"):
-        _assert_current_inputs(evidence, graph, ROOT)
+    evidence["sha256"]["scripts/unreviewed.py"] = "0" * 64
+    with pytest.raises(AssertionError):
+        _assert_current_inputs(evidence, ROOT)
 
 
 def test_text_hash_is_independent_of_checkout_line_endings(tmp_path: Path) -> None:
@@ -106,8 +95,10 @@ def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> 
         "async fn worker_startup_matches_published_process_and_idle_heartbeat()", 1
     )[1].split("\n}\n", 1)[0]
     assert "canvas_worker_process_signals::worker_executable()" in startup_test
+    assert "PublishedDatabase::start()" in startup_test
+    assert "start_with_worker_startup" not in startup_test
+    assert "canvas-worker-startup-oracle.json" not in startup_test
     assert startup_test.index("worker_binary_before") < startup_test.index("::replay(")
-    assert startup_test.index("assert_eq!(") < startup_test.index("::replay(")
     assert startup_test.index("::replay(") < startup_test.index(
         "owned.close().unwrap();"
     )
@@ -118,6 +109,9 @@ def test_fresh_attestation_upload_requires_successful_full_main_canvas_job() -> 
         ROOT
         / "rust/crates/canvas-worker-acceptance/tests/support/canvas_startup_attestation.rs"
     ).read_text(encoding="utf-8")
+    assert '"marty.canvas-worker-startup-fresh-run/v2"' in attester
+    assert "observed_python" not in attester
+    assert "canvas-worker-startup-oracle.json" not in attester
     assert '"worker_binary_sha256": worker_binary_sha' in attester
     assert (
         "verified_worker_binary_sha(worker_binary, worker_binary_before, &resolved)"

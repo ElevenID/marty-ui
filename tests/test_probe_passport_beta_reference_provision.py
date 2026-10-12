@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
@@ -146,19 +145,6 @@ def test_reference_creation_cannot_start_after_owner_transition(tmp_path, monkey
         probe.provision(plan, {"organization_id": ORG, "dsc_issuer_did": ISSUER},
                         "pilot-session", "dsc-session", tmp_path / "intents",
                         tmp_path / "application.json", None, phase="references")
-
-
-def test_aggregate_operator_orders_real_reference_and_flow_writes_around_fence():
-    operator = (Path(__file__).resolve().parents[1]
-                / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text()
-    staged = operator.index("Wait-BetaHealthy -Services $applications")
-    references = operator.index("'--phase', 'references'")
-    ceremony = operator.index("$ceremonyProof = Invoke-Plan")
-    transition = operator.index("$owner = Invoke-RustOwnerTransition")
-    flow = operator.index("'--phase', 'flow'")
-    flow_validation = operator.index("$flowReferences = Invoke-Plan")
-    ingress = operator.index("Invoke-Compose -Services @($script:plan.recreate_ingress_last)")
-    assert staged < references < ceremony < transition < flow < flow_validation < ingress
 
 
 def test_private_gateway_transport_accepts_scoped_list_and_keeps_cookie_on_stdin(

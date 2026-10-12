@@ -55,8 +55,30 @@ def test_internal_application_postgres_contract_is_required_in_ci() -> None:
     runtime = text("scripts/ci/run-rust-db-contracts.sh")
     assert 'name = "internal_application_postgres_contract"' in manifest
     assert 'path = "tests/internal_application_postgres_contract.rs"' in manifest
-    assert "internal_application_postgres_contract-*" in runtime
+    assert (
+        "resolve_contract_executable internal_application_postgres_contract" in runtime
+    )
     assert "Expected one internal Application PostgreSQL contract executable" in runtime
+
+
+def test_signing_storage_contracts_use_guarded_disposable_redis_in_ci() -> None:
+    workflow = text(".github/workflows/ci.yml")
+    runtime = text("scripts/ci/run-rust-db-contracts.sh")
+    contract = text("rust/services/signing-keys/tests/document_storage_contract.rs")
+    issuer_contract = text(
+        "rust/services/signing-keys/tests/issuer_profile_storage_contract.rs"
+    )
+
+    assert 'redis-cli -n 14 SET marty:tests:disposable-guard "$nonce"' in workflow
+    assert 'export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"' in workflow
+    assert "signing_disposable_redis_url=redis://127.0.0.1:6379/14" in runtime
+    for name in ("signing_document", "issuer_profile"):
+        assert (
+            'MARTY_TEST_REDIS_URL="$signing_disposable_redis_url" \\\n'
+            f"  run_timed {name}"
+        ) in runtime
+    assert 'std::env::var("MARTY_TEST_REDIS_DISPOSABLE_NONCE")' in contract
+    assert "disposable_backends::disposable_redis_url().await" in issuer_contract
 
 
 def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -> None:
@@ -65,12 +87,14 @@ def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -
     workflow = text(".github/workflows/ci.yml")
     assert 'name = "oid4vci_migration_postgres_contract"' in manifest
     assert 'path = "tests/oid4vci_migration_postgres_contract.rs"' in manifest
-    assert "oid4vci_migration_postgres_contract-*" in runtime
+    assert "resolve_contract_executable oid4vci_migration_postgres_contract" in runtime
     assert "Expected one Issuance OID4VCI migration PostgreSQL contract executable" in runtime
     assert '.target.name == "oid4vci_migration_postgres_contract"' in workflow
     assert "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
-    assert runtime.index("oid4vci_migration_postgres_contract-*") < runtime.index(
-        "issuance_transaction_postgres_contract-*"
+    assert runtime.index(
+        "resolve_contract_executable oid4vci_migration_postgres_contract"
+    ) < runtime.index(
+        "resolve_contract_executable issuance_transaction_postgres_contract"
     ), "the following transaction suite must recreate tables after the rollback fixture"
 
 
@@ -91,6 +115,8 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
     assert 'POSTGRES_PASSWORD="$postgres_password"' in smoke
     assert smoke.count('PGPASSWORD="$postgres_password"') == 3
     assert 'DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty"' in smoke
+    assert "SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys" in smoke
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in smoke
     assert "access_token_expires_at" in smoke
     assert "ux_issuance_events_oid4vci_notification_id" in smoke
 
@@ -98,10 +124,13 @@ def test_issuance_image_smoke_uses_the_shared_migration_fixture() -> None:
 def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
     workflow = text(".github/workflows/ci.yml")
     executable = text("rust/services/issuance/tests/executable_smoke.rs")
-    fixture = "rust/services/issuance/tests/fixtures/oid4vci_migration_base.sql"
 
     assert "marty_issuance_executable_smoke_test" in workflow
-    assert fixture in workflow
+    assert '"rust/target/debug/$owner" migrate' in workflow
+    assert '"rust/target/debug/$owner" verify-owned-schema' in workflow
+    assert "CREATE TABLE organization_service.organizations" not in workflow
+    assert "CREATE TABLE credential_template_service.credential_templates" not in workflow
+    assert "rust/target/debug/marty-issuance-service migrate" in workflow
     assert (
         "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
         "marty_issuance_executable_smoke_test"
@@ -206,7 +235,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["behavior_contract"]["commit"]
-        == "5b210bde2bee4360a9504e4c360250b54f48f5ba"
+        == "367945d4e37b93c5e3a385e60a5c417c7862dc6d"
     )
     assert discovery["schema"] == "marty.issuance-static-discovery/v1"
     assert (
@@ -215,7 +244,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
     )
     assert (
         coverage["tenant_behavior_contract"]["commit"]
-        == "d853a14efb5cce2894aea138e2e784735499a7fc"
+        == "8e3868bcf424838c7f47085bb7a24cca7006472c"
     )
     assert tenant["schema"] == "marty.issuance-tenant-discovery/v1"
     assert (
@@ -1097,7 +1126,7 @@ def test_candidate_uses_rust_runtime_across_compose_surfaces() -> None:
     assert "CANVAS_LTI_JWKS_TTL_MINUTES:" in beta
     assert "CANVAS_LTI_EXPERIENCE_SESSION_TTL_MINUTES:" in beta
     assert "CANVAS_OAUTH_COMPLETION_REDIRECT_URL:" in beta
-    assert "INTEGRATION_SECRET_MASTER_KEY:" in beta
+    assert "INTEGRATION_SECRET_MASTER_KEY:" not in beta
     assert "CANVAS_ALLOW_PRIVATE_BASE_URLS:" in beta
     assert "CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:" in beta
     assert "CANVAS_PRIVATE_ORIGIN_ALLOWLIST:" in beta

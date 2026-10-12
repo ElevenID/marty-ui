@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -14,12 +16,37 @@ ACCEPTANCE_SUPPORT = ROOT / "rust/crates/canvas-acceptance/tests/support"
 FIXTURE = runpy.run_path(str(ROOT / "scripts/render_base_native_runtime_fixture.py"))
 
 
+def test_owned_canvas_release_policy_imports_from_copied_source_assets(tmp_path):
+    source = (ACCEPTANCE_SUPPORT / "base_runtime_container.rs").read_text()
+    match = re.search(r"const ASSETS: &\[&str\] = &\[(.*?)\];", source, re.DOTALL)
+    assert match is not None
+    for relative in re.findall(r'"([^"]+)"', match.group(1)):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(tmp_path / "scripts/prepare_official_beta_release.py"),
+            "--help",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.fixture
 def spec(tmp_path):
     (tmp_path / "ca.pem").write_text("synthetic stat-only CA control")
     (tmp_path / "didcomm-encryption-policy.json").write_text(
         "synthetic stat-only policy control"
     )
+    (tmp_path / "openbao-token").write_text("synthetic stat-only token control")
     return {
         "inputs": dict.fromkeys(FIXTURE["INPUT_KEYS"], "synthetic"),
         "http_port": 28105,
@@ -31,6 +58,10 @@ def spec(tmp_path):
         "legacy_origin": "http://127.0.0.1:28501",
         "ca_file": str(tmp_path / "ca.pem"),
         "policy_directory": str(tmp_path),
+        "kms_url": "http://127.0.0.1:28200",
+        "kms_token_file": str(tmp_path / "openbao-token"),
+        "integration_secret_kms_url": "https://127.0.0.1:28201/internal",
+        "integration_secret_kms_ca_file": str(tmp_path / "ca.pem"),
         "authcrypt": True,
         "allow_private_ips": False,
     }
@@ -54,6 +85,13 @@ def test_spec_has_only_owned_explicit_addresses_and_paths(spec):
         ("legacy_origin", "http://127.0.0.1:28500"),
         ("ca_file", "absent"),
         ("policy_directory", "relative"),
+        ("kms_url", "http://production.example:8200"),
+        ("kms_url", "http://user:password@127.0.0.1:28200"),
+        ("kms_token_file", "absent"),
+        ("integration_secret_kms_url", "http://127.0.0.1:28201/internal"),
+        ("integration_secret_kms_url", "https://production.example:8018/internal"),
+        ("integration_secret_kms_url", "https://user:password@127.0.0.1:28201/internal"),
+        ("integration_secret_kms_ca_file", "absent"),
     ],
 )
 def test_spec_rejects_unowned_or_ambiguous_inputs(spec, field, value):
@@ -160,6 +198,20 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
     assert (
         "PASSPORT_PROVIDER_INGRESS_SERVICE_URL"
         not in overlay["services"]["gateway"]["environment"]
+    )
+
+
+def test_actual_authcrypt_render_binds_owned_kms_address_and_token_file(spec):
+    if shutil.which("docker") is None:
+        pytest.skip("Docker Compose is unavailable")
+    rendered = FIXTURE["render"](spec, ["docker", "compose"])
+    native = rendered["native_environment"]
+    assert native["DIDCOMM_KMS_ADDR"] == spec["kms_url"]
+    assert native["DIDCOMM_KMS_TOKEN_FILE"] == spec["kms_token_file"]
+    assert native["INTEGRATION_SECRET_KMS_URL"] == spec["integration_secret_kms_url"]
+    assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == spec["integration_secret_kms_ca_file"]
+    assert native["DIDCOMM_ENCRYPTION_POLICY_FILE"] == str(
+        Path(spec["policy_directory"]) / "didcomm-encryption-policy.json"
     )
 
 
@@ -369,8 +421,11 @@ def compatibility_ci(workflow):
         '--volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro"',
         '--volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw"',
         '--workdir "$GITHUB_WORKSPACE/rust"',
-        "cargo build --locked --offline -p marty-issuance-service",
-        "cargo build --locked --offline -p marty-gateway",
+        "run_cargo_phase issuance_binaries cargo build --locked --offline",
+        "-p marty-issuance-service -p marty-organization -p marty-credential-template",
+        "--bin marty-issuance-service --bin marty-canvas-sync-worker",
+        "--bin marty-organization --bin marty-credential-template",
+        "run_cargo_phase gateway_binary cargo build --locked --offline -p marty-gateway --bin marty-gateway",
         "--test canvas_published_schema_contract",
         "--no-run --timings --message-format=json",
         "python3 ../scripts/ci/verify-canvas-test-artifacts.py",

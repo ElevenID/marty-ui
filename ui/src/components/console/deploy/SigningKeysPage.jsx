@@ -487,6 +487,8 @@ export default function SigningKeysPage() {
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
         ...orgRequestParams,
+        key_reference: service.key_reference,
+        algorithm: service.algorithms?.[0],
         country: certData.country,
         organization: certData.organization,
         common_name: certData.common_name || service.name,
