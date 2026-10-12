@@ -1083,5 +1083,110 @@
       "signing_key_reference": "key-ref",
       "verification_method_id": "did:web:marty.example#key-ref"
     }
+  },
+  "canvas_core_rest": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/courses?search_term=Marty+Course",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/accounts/1/courses",
+        "payload": null,
+        "form": {
+          "course[name]": "Marty Course",
+          "course[course_code]": "MARTY-101",
+          "course[sis_course_id]": "marty-course",
+          "offer": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/users?search_term=learner%40example.com",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/accounts/1/users",
+        "payload": null,
+        "form": {
+          "user[name]": "Test Learner",
+          "pseudonym[unique_id]": "learner@example.com",
+          "pseudonym[password]": "test-learner-password",
+          "communication_channel[type]": "email",
+          "communication_channel[address]": "learner@example.com",
+          "skip_confirmation": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/enrollments?user_id%5B%5D=77&type%5B%5D=StudentEnrollment",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/enrollments",
+        "payload": null,
+        "form": {
+          "enrollment[user_id]": "77",
+          "enrollment[type]": "StudentEnrollment",
+          "enrollment[enrollment_state]": "active",
+          "notify": "false"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/courses?search_term=Marty+Course",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/accounts/1/users?search_term=learner%40example.com",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/enrollments?user_id%5B%5D=77&type%5B%5D=StudentEnrollment",
+        "payload": null,
+        "form": null
+      }
+    ],
+    "created": {
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      }
+    },
+    "existing": {
+      "course": {
+        "id": 42,
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      }
+    }
   }
 }

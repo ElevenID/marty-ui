@@ -49,6 +49,87 @@ def config(**overrides: object) -> seed.ConnectorSeedConfig:
     return seed.ConnectorSeedConfig(**values)
 
 
+def canvas_config(**overrides: object) -> seed.CanvasSeedConfig:
+    values = {
+        "enabled": True,
+        "api_base_url": "http://canvas:8088",
+        "browser_base_url": "https://canvas.example",
+        "admin_token": "test-canvas-token",
+        "admin_email": "admin@example.com",
+        "admin_password": "test-admin-password",
+        "account_id": "1",
+        "container_name": "marty-canvas-real",
+        "course_name": "Marty Course",
+        "course_code": "MARTY-101",
+        "course_sis_id": "marty-course",
+        "learner_name": "Test Learner",
+        "learner_email": "learner@example.com",
+        "learner_password": "test-learner-password",
+        "launch_seed_enabled": True,
+        "launch_module_name": "Credential Launch",
+        "launch_item_title": "Launch Credential",
+        "launch_assignment_name": "Credential Assignment",
+        "quiz_seed_enabled": True,
+        "quiz_title": "Credential Quiz",
+        "quiz_description": "Quiz description",
+        "quiz_passing_score_percent": 92,
+        "quiz_points_possible": 100,
+    }
+    values.update(overrides)
+    return seed.CanvasSeedConfig(**values)
+
+
+def capture_canvas_core_rest(monkeypatch) -> dict:
+    operations = []
+    responses = []
+
+    def request(method, url, *, payload=None, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": payload, "form": None})
+        return responses.pop(0)
+
+    def form_request(method, url, *, form, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": None, "form": form})
+        return responses.pop(0)
+
+    monkeypatch.setattr(seed, "_json_request", request)
+    monkeypatch.setattr(seed, "_form_request", form_request)
+    cfg = canvas_config()
+    responses.extend([
+        [],
+        {"id": 42, "name": cfg.course_name, "course_code": cfg.course_code},
+        [],
+        [{"id": 77, "name": cfg.learner_name, "login_id": cfg.learner_email}],
+        [],
+        {"id": 88, "user_id": 77},
+    ])
+    course = seed._ensure_canvas_course(cfg)
+    learner = seed._ensure_canvas_user(cfg)
+    enrollment = seed._ensure_canvas_enrollment(cfg, course["id"], learner["id"])
+    responses.extend([
+        [{"id": 42, "sis_course_id": cfg.course_sis_id}],
+        [{"id": 77, "login_id": cfg.learner_email}],
+        [{"id": 88, "user_id": 77}],
+    ])
+    existing_course = seed._ensure_canvas_course(cfg)
+    existing_learner = seed._ensure_canvas_user(cfg)
+    existing_enrollment = seed._ensure_canvas_enrollment(cfg, 42, 77)
+    assert not responses
+    return {
+        "operations": operations,
+        "created": {"course": course, "learner": learner, "enrollment": enrollment},
+        "existing": {
+            "course": existing_course,
+            "learner": existing_learner,
+            "enrollment": existing_enrollment,
+        },
+    }
+
+
+def test_frozen_canvas_core_rest(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_core_rest(monkeypatch) == contract["canvas_core_rest"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []

@@ -6,9 +6,14 @@ use serde_json::{json, Map, Value};
 use std::time::Duration;
 use url::form_urlencoded;
 
+mod canvas_rest;
 mod database;
 mod demo_evidence;
 mod wallet;
+pub use canvas_rest::{
+    ensure_course, ensure_enrollment, ensure_user, CanvasOperation, CanvasRestConfig,
+    CanvasRestError, CanvasRestHttp, CanvasRestTransport,
+};
 pub use database::seed_open_badge_templates;
 pub use demo_evidence::{
     ags_score_payload, application_payload, send_signed_ags, signed_ags_wire, DemoEvidenceConfig,
