@@ -62,9 +62,14 @@ Useful commands:
 - `sh scripts/marty-deploy.sh compose-command selfhost-production config`
 - `sh scripts/marty-deploy.sh secrets kubernetes-production --field env`
 
-For an operator host without Rust, set `MARTY_DEPLOY_BIN` to the packaged
-`marty-deploy` executable and `MARTY_DEPLOY_BIN_SHA256` to its verified release
-digest. A source checkout uses Cargo when those variables are absent.
+For an operator host without Rust, install the release binary with
+`bash scripts/install-marty-deploy.sh <tag> <source-sha> <destination>` and source
+the resulting `marty-deploy.lock` before running these commands. The installer
+requires `gh`, `jq`, and `cosign`; it checks the annotated tag, exact release
+asset list, checksum, Sigstore signature, GitHub provenance, and embedded
+source/tag identity. The wrapper verifies the binary digest and embedded
+identity on every call. A source checkout uses Cargo when no release binary is
+selected.
 
 Local image release commands:
 

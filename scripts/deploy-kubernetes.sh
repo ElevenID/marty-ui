@@ -87,6 +87,11 @@ IMAGE_REGISTRY="${IMAGE_REGISTRY:-${CONTAINER_REGISTRY:-${OCIR_REGISTRY:-}}}"
 REGISTRY_AUTH_TOKEN="${REGISTRY_AUTH_TOKEN:-${OCIR_AUTH_TOKEN:-}}"
 IMAGE_PULL_SECRET_NAME="${IMAGE_PULL_SECRET_NAME:-ocir-secret}"
 
+if [[ "$SUBCOMMAND" != status ]]; then
+  [[ -n "${MARTY_DEPLOY_BIN:-}" ]] || error "Install and source a signed marty-deploy operator binary before deployment."
+  "$REPO_ROOT/scripts/marty-deploy.sh" validate >/dev/null
+fi
+
 resolve_release_tag() {
   command -v "$PYTHON_BIN" >/dev/null 2>&1 || error "Required command not found: $PYTHON_BIN"
 

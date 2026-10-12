@@ -185,6 +185,10 @@ fn print_plan(plan: &Value) {
 
 fn run() -> Result<(), String> {
     let mut args: Vec<String> = env::args().skip(1).collect();
+    if args == ["--build-identity"] {
+        println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
+        return Ok(());
+    }
     let root = if let Some(index) = args.iter().position(|arg| arg == "--repo-root") {
         if index + 1 >= args.len() {
             return Err("--repo-root requires a path".to_owned());

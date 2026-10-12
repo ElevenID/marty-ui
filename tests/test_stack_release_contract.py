@@ -213,8 +213,9 @@ def test_stack_release_publishes_signed_evidence() -> None:
     assert "sbom: true" in workflow
     assert "SHA256SUMS" in workflow
     assert "softprops/action-gh-release" not in workflow
-    assert 'gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"' in workflow
-    assert "assets=(stack-manifest.json release-transaction.json" in workflow
+    assert 'gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"' in workflow
+    assert "source scripts/operator-release-assets.sh" in workflow
+    assert "operator_release_require_remote_allowlist" in workflow
     assert 'release_id="$(gh api' in workflow
     assert 'echo "id=$release_id" >> "$GITHUB_OUTPUT"' in workflow
     assert "pytest tests/oss_stack" in workflow
@@ -228,14 +229,8 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         step["run"] for step in steps
         if step.get("name") == "Sign and checksum manifest evidence"
     )
-    publication = next(step["run"] for step in steps if step.get("id") == "release")
-    checksum_commands = [
-        line for line in signing.splitlines() if line.startswith("sha256sum ")
-    ]
-    asset_commands = [
-        line for line in publication.splitlines() if line.startswith("assets=(")
-    ]
-    assert len(checksum_commands) == len(asset_commands) == 1
+    assert 'sha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS' in signing
+    assert "operator_release_require_local_assets" in signing
 
     subjects = {
         "stack-manifest.json",
@@ -243,6 +238,8 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         "marty-ui-sbom.cdx.json",
         "marty-ui-services-sbom.cdx.json",
         "marty-ui-migrations-sbom.cdx.json",
+        "marty-deploy-linux-amd64",
+        "marty-deploy-linux-arm64",
     }
     expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
     for name in expected_assets:
@@ -260,10 +257,12 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
     result = subprocess.run(
         [
             bash, "--noprofile", "--norc", "-euo", "pipefail", "-c",
-            checksum_commands[0] + "\n" + asset_commands[0]
-            + '\nprintf "%s\\n" "${assets[@]}"',
+            'source "$ASSET_SCRIPT"\nsha256sum "${OPERATOR_CHECKSUM_INPUTS[@]}" > SHA256SUMS\n'
+            'operator_release_require_local_assets\nprintf "%s\\n" "${OPERATOR_RELEASE_ASSETS[@]}"',
         ],
-        cwd=tmp_path, capture_output=True, text=True, check=True, timeout=30,
+        cwd=tmp_path,
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh")},
+        capture_output=True, text=True, check=True, timeout=30,
     )
 
     def flat_name(value: str) -> str:
@@ -299,6 +298,55 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
     corrupted = verify()
     assert corrupted.returncode != 0
     assert "release-transaction.json: FAILED" in corrupted.stdout
+
+    (tmp_path / "release-transaction.json").write_bytes(
+        b"fixture:release-transaction.json\n"
+    )
+    with (tmp_path / "SHA256SUMS").open("a", encoding="utf-8") as handle:
+        handle.write(f"{'0' * 64}  unexpected-asset\n")
+    unexpected = subprocess.run(
+        [bash, "--noprofile", "--norc", "-c",
+         'source "$ASSET_SCRIPT"; operator_release_require_checksum_names SHA256SUMS'],
+        cwd=tmp_path,
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh")},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert unexpected.returncode != 0
+    assert "exact release assets" in unexpected.stderr
+
+
+def test_operator_release_builds_native_arches_and_verifies_provenance() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    build = jobs["build-operator-catalog"]
+    publisher = jobs["publish-manifest"]
+    matrix = build["strategy"]["matrix"]["include"]
+    assert {(item["runner"], item["arch"]) for item in matrix} == {
+        ("ubuntu-24.04", "amd64"), ("ubuntu-24.04-arm", "arm64")
+    }
+    assert {item["target"] for item in matrix} == {
+        "x86_64-unknown-linux-musl", "aarch64-unknown-linux-musl"
+    }
+    assert build["permissions"]["attestations"] == "write"
+    assert "build-operator-catalog" in publisher["needs"]
+    build_steps = "\n".join(step.get("run", "") for step in build["steps"])
+    publish_steps = "\n".join(step.get("run", "") for step in publisher["steps"])
+    assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in build_steps
+    assert 'if readelf -l "$asset" | grep -q INTERP' in build_steps
+    assert 'test "$(./"$asset" --build-identity)" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG"' in build_steps
+    assert 'strings -a "$asset" | grep -Fx -- "$SOURCE_SHA:$RELEASE_TAG"' in publish_steps
+    assert '--source-digest "$SOURCE_SHA" --source-ref refs/heads/main' in publish_steps
+    assert "operator_release_require_remote_allowlist" in publish_steps
+
+    installer = _text("scripts/install-marty-deploy.sh")
+    for condition in (
+        "operator_release_require_remote_allowlist",
+        "operator_release_require_checksum_names",
+        "cosign verify-blob",
+        '--certificate-identity "https://github.com/$repo/.github/workflows/cd.yml@refs/heads/main"',
+        '--source-digest "$source_sha" --source-ref refs/heads/main',
+        'test "$("$stage/$asset" --build-identity)" = "$source_sha:$tag"',
+    ):
+        assert condition in installer
 
 
 def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> None:
@@ -630,7 +678,7 @@ def test_stack_release_is_claim_only_digest_first_and_publishes_last() -> None:
     assert "create-transaction-pin" in workflow
     assert "run-transaction" in workflow
     assert "TAG: ${{ needs.resolve-transaction.outputs.tag }}" in workflow
-    assert 'gh release create "$TAG" --verify-tag --generate-notes "${assets[@]}"' in workflow
+    assert 'gh release create "$TAG" --verify-tag --generate-notes "${OPERATOR_RELEASE_ASSETS[@]}"' in workflow
     assert "overwrite_files:" not in workflow
     assert "draft: true" not in workflow
     assert 'gh release edit "$RELEASE_TAG"' not in workflow

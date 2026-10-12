@@ -973,6 +973,8 @@ def test_selfhost_catalog_rejects_unpinned_operator_binary(tmp_path, monkeypatch
     with pytest.raises(namespace["CheckError"], match="SHA256 is required"):
         namespace["catalog_lines"]("validate")
     monkeypatch.setenv("MARTY_DEPLOY_BIN_SHA256", "0" * 64)
+    monkeypatch.setenv("MARTY_DEPLOY_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("MARTY_DEPLOY_RELEASE_TAG", "v1.1.246")
     with pytest.raises(namespace["CheckError"], match="digest mismatch"):
         namespace["catalog_lines"]("validate")
 

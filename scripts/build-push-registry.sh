@@ -79,6 +79,8 @@ resolve_release_tag() {
 }
 
 IMAGE_TAG="$(resolve_release_tag)"
+[[ -n "${MARTY_DEPLOY_BIN:-}" ]] || error "Install and source a signed marty-deploy operator binary before building."
+"$REPO_ROOT/scripts/marty-deploy.sh" validate >/dev/null
 SOURCE_SHA="${MARTY_UI_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 
 declare -A REGION_KEY=(
