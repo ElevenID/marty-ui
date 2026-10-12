@@ -102,7 +102,7 @@ Best practice:
 - make them re-runnable after a reset
 - scope them clearly by profile
 
-The first extracted explicit seed pack is `scripts/seed_demo_vendor_fixtures.py`,
+The first extracted explicit seed pack is the Rust `marty-demo-vendor-seed` binary,
 wrapped by `make seed-demo-vendor-fixtures` and now used by the dev/beta reset
 targets as a bridge while older demo-only Alembic revisions are phased out.
 Those reset targets set `MARTY_USE_EXPLICIT_DEMO_SEED_PACK=1` during migration

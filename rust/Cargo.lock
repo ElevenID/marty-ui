@@ -3919,6 +3919,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-demo-vendor-seed"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sqlx",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "marty-deployment-catalog"
 version = "0.1.0"
 dependencies = [

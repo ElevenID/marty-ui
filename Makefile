@@ -375,7 +375,7 @@ services-migrate-production: ## Run db-migrate with the production profile
 
 seed-demo-vendor-fixtures: ## Explicitly seed demo vendor org/catalog/template fixtures
 	@echo "$(BLUE)Seeding demo vendor fixtures...$(NC)"
-	@PYTHONIOENCODING=utf-8 MARTY_MIGRATION_PROFILE=$(if $(MARTY_MIGRATION_PROFILE),$(MARTY_MIGRATION_PROFILE),beta) python scripts/seed_demo_vendor_fixtures.py --env-file "$(BETA_ENV_FILE)"
+	@MARTY_MIGRATION_PROFILE=$(if $(MARTY_MIGRATION_PROFILE),$(MARTY_MIGRATION_PROFILE),beta) $(BASE_COMPOSE) run --build --rm --no-deps -e DATABASE_HOST=postgres -e DATABASE_PORT=5432 db-migrate /usr/local/bin/marty-demo-vendor-seed
 	@echo "$(GREEN)✓ Demo vendor fixtures seeded$(NC)"
 
 dev-db-reset: ## Drop local state volumes, rebuild infra, skip historical demo migrations, then apply explicit demo fixture seeds
