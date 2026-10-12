@@ -16828,3 +16828,15 @@ The full inventory, local image digests, source heads and limits are in
 `artifacts/kms-local-assembled-schema-probe-20261012.json`. This materially
 narrows the installed-image database gap but does not qualify signed UI
 images, representative runtime writes, or supported cutover.
+
+UI #1192 exact-head [CI 38197275350](https://github.com/ElevenID/marty-ui/actions/runs/38197275350)
+on pushed merge head `7bc066bfd4ce07a3bbdf2cea6d728d2b08b8c29c`
+completed successfully: all 22 jobs and the aggregate CI Gate passed.
+The isolated Canvas database suite reported 130 passed, zero failed, and
+explicitly passed `renewal_fresh_packaged_main_delivers_both_encryption_modes`,
+which had failed on the earlier head. Rust contracts, public service images,
+release contracts, the Go/OpenBao plugin with PostgreSQL/Raft recovery, browser,
+security, policy, and CodeQL workflows also passed on this head. The local
+beta-fence/context protection and assembled-schema receipt commits follow
+that tested head and require their own exact-head CI after one grouped push;
+the stack release hold and artifact/cutover gates remain.
