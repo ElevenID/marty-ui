@@ -6,6 +6,7 @@ import asyncio
 import json
 import sys
 import types
+from datetime import date as real_date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -151,3 +152,56 @@ def test_frozen_badge_template_database_behavior(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_database(monkeypatch, remote_columns=False, scope={}) == contract["database_seed"]["modern_schema"]
     assert capture_database(monkeypatch, remote_columns=True, scope={"course_id": "42", "quiz_id": "9"}) == contract["database_seed"]["legacy_remote_columns"]
+
+
+def capture_demo_evidence(monkeypatch) -> dict:
+    operations = []
+
+    class FixedDate:
+        @staticmethod
+        def today():
+            return real_date(2025, 4, 5)
+
+    class FixedUuid:
+        hex = "abc12345" + "0" * 24
+
+    def request(method, url, *, payload=None, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": payload, "timeout": timeout})
+        return {"id": "application-1"}
+
+    def signed_request(method, url, *, payload, secret, headers=None, timeout=20):
+        assert secret == "test-shared-secret"
+        operations.append({"method": method, "url": url, "payload": payload, "signed": True, "timeout": timeout})
+        return {"id": "event-1"}
+
+    monkeypatch.setattr(seed, "date", FixedDate)
+    monkeypatch.setattr(seed.uuid, "uuid4", lambda: FixedUuid())
+    monkeypatch.setattr(seed, "_json_request", request)
+    monkeypatch.setattr(seed, "_signed_json_request", signed_request)
+    monkeypatch.setitem(seed.os.environ, "CANVAS_CREDENTIALS_SHARED_SECRET", "test-shared-secret")
+    canvas_seed = {
+        "course": {"id": 42, "name": "Canvas Course"},
+        "quiz": {"id": 9, "title": "Canvas Quiz"},
+        "learner": {"id": 77},
+        "enrollment": {"id": 88},
+    }
+    canvas = seed.CanvasSeedConfig(
+        enabled=True, api_base_url="http://localhost:8088", browser_base_url="https://canvas.example",
+        admin_token="test-admin-token", admin_email="admin@example.com", admin_password="test-password",
+        account_id="1", container_name="test-canvas", course_name="Fallback Course",
+        course_code="TEST", course_sis_id="test", learner_name="First Last",
+        learner_email="learner@example.com", learner_password="test-password", launch_seed_enabled=True,
+        launch_module_name="Module", launch_item_title="Launch", launch_assignment_name="Assignment",
+        quiz_seed_enabled=True, quiz_title="Fallback Quiz", quiz_description="Demo", quiz_passing_score_percent=92,
+        quiz_points_possible=100,
+    )
+    cfg = config()
+    app = seed._create_canvas_demo_application(cfg, canvas, canvas_seed=canvas_seed)
+    event = seed._emit_canvas_demo_ags_score_event(cfg, canvas, canvas_seed=canvas_seed, application=app)
+    assert event == {"id": "event-1"}
+    return {"operations": operations}
+
+
+def test_frozen_demo_application_and_ags_event(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_demo_evidence(monkeypatch) == contract["demo_evidence"]

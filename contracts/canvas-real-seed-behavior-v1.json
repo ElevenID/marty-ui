@@ -201,7 +201,6 @@
   },
   "unfrozen_groups": [
     "canvas_lms_http_and_rails",
-    "demo_application_and_ags",
     "wallet_claim_and_mirror",
     "transition_summary"
   ],
@@ -848,5 +847,144 @@
         "disposed": true
       }
     }
+  },
+  "demo_evidence": {
+    "operations": [
+      {
+        "method": "POST",
+        "url": "http://issuance:8008/internal/applications",
+        "payload": {
+          "application_template_id": "at-1",
+          "applicant_data": {
+            "_credential_type": "OpenBadgeCredential",
+            "_vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "email": "learner@example.com",
+            "given_name": "First",
+            "family_name": "Last",
+            "achievement_id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge#achievement",
+            "achievement_name": "Interoperable Credentials Foundations Badge",
+            "achievement_description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+            "achievement_criteria": "Complete the Canvas learning activity and earn at least 80% on the interoperability quiz. ElevenID issues the credential from the Marty organization using the canonical DID issuer and remote signing service.",
+            "badge_image_url": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+            "course_name": "Canvas Course",
+            "quiz_name": "Canvas Quiz",
+            "score_percent": 92,
+            "completion_date": "2025-04-05",
+            "institution_name": "Marty Organization",
+            "certificate_id": "interoperable-credentials-foundations-2025-04-05",
+            "organization_id": "org-1",
+            "achievement": {
+              "id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge#achievement",
+              "type": [
+                "Achievement"
+              ],
+              "name": "Interoperable Credentials Foundations Badge",
+              "description": "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.",
+              "criteria": {
+                "id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria",
+                "narrative": "Complete the Canvas learning activity and earn at least 80% on the interoperability quiz. ElevenID issues the credential from the Marty organization using the canonical DID issuer and remote signing service."
+              },
+              "image": {
+                "id": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+                "type": "Image",
+                "caption": "Interoperable Credentials Foundations Badge"
+              },
+              "alignment": [
+                {
+                  "targetName": "Open Badges 3.0",
+                  "targetDescription": "Portable achievement credential carried as a verifiable credential."
+                },
+                {
+                  "targetName": "Marty Identity Protocol",
+                  "targetDescription": "MIP-governed issuance, status-list allocation, and destination projection."
+                }
+              ]
+            },
+            "result": {
+              "type": [
+                "Result"
+              ],
+              "source": "Canvas AGS score",
+              "score": 92,
+              "maximumScore": 100,
+              "passingScore": 80,
+              "resultDescription": "Completed Canvas Quiz with a score of 92%."
+            },
+            "learning_context": {
+              "provider": "canvas",
+              "course": {
+                "id": "42",
+                "name": "Canvas Course"
+              },
+              "activity": {
+                "id": "9",
+                "type": "quiz",
+                "name": "Canvas Quiz"
+              },
+              "canvas_account_id": "account-1"
+            }
+          },
+          "integration_context": {
+            "scenario": "canvas_mip_quiz_open_badge",
+            "credential_type": "OpenBadgeCredential",
+            "credential_vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+            "delivery_mode": "wallet_plus_canvas_mirror",
+            "delivery": {
+              "mode": "wallet_plus_canvas_mirror"
+            },
+            "open_badge": {
+              "vct": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge",
+              "name": "Interoperable Credentials Foundations Badge",
+              "image": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/image.svg",
+              "criteria": "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge/criteria"
+            },
+            "canvas": {
+              "canvas_account_id": "account-1",
+              "canvas_course_id": "42",
+              "canvas_quiz_id": "9",
+              "learner_email": "learner@example.com"
+            },
+            "issuer": {
+              "mode": "org_managed",
+              "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+              "signing_service_id": "managed-openbao-transit",
+              "signing_key_reference": "cred-issuer-marty-es256"
+            }
+          }
+        },
+        "timeout": 20
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/ags/score-events",
+        "payload": {
+          "canvas_event_id": "canvas-demo-ags-application-1-abc12345",
+          "application_id": "application-1",
+          "organization_id": "org-1",
+          "credential_template_id": "ct-1",
+          "canvas_account_id": "account-1",
+          "canvas_course_id": "42",
+          "canvas_course_name": "Canvas Course",
+          "canvas_user_id": "77",
+          "canvas_enrollment_id": "88",
+          "learner_email": "learner@example.com",
+          "learner_name": "First Last",
+          "evidence_type": "canvas.quiz_score",
+          "canvas_quiz_id": "9",
+          "line_item_label": "Canvas Quiz",
+          "activity_progress": "Completed",
+          "grading_progress": "FullyGraded",
+          "submitted": true,
+          "completed": true,
+          "passed": true,
+          "score_given": 92,
+          "score_maximum": 100,
+          "score_percent": 92,
+          "graded_at": "2025-04-05"
+        },
+        "signed": true,
+        "timeout": 20
+      }
+    ]
   }
 }
