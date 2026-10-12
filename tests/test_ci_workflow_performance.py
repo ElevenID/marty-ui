@@ -1752,10 +1752,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             ".github/workflows/ci.yml",
             "contracts/canvas-worker-rest-wrappers-current-inputs.json",
             "contracts/canvas-worker-rest-dependent-current-inputs.json",
+            "contracts/canvas-worker-oauth-revocation-current-inputs.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
             "tests/test_canvas_worker_rest_dependent_input_evidence.py",
+            "tests/test_canvas_worker_oracle_script_closure.py",
             "rust/crates/canvas-worker-acceptance/tests/support/canvas_rest_requalification.rs",
         },
         "canvas-worker-rest-wrappers-current-inputs.json": {
@@ -1771,6 +1773,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "canvas-worker-timeout-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_canvas_worker_timeout_input_evidence.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-oauth-revocation-current-inputs.json": {
+            "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-json-depth-current-inputs.json": {
@@ -1898,6 +1904,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-rest-wrappers-current-inputs.json",
         "contracts/canvas-worker-rest-dependent-current-inputs.json",
         "contracts/canvas-worker-timeout-current-inputs.json",
+        "contracts/canvas-worker-oauth-revocation-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
@@ -2099,6 +2106,7 @@ def test_canvas_current_input_helper_has_only_release_test_consumers(
         "tests/test_canvas_worker_timeout_input_evidence.py",
         "tests/test_canvas_worker_retry_after_input_evidence.py",
         "tests/test_canvas_worker_oracle_producer_inventory.py",
+        "tests/test_canvas_worker_oracle_script_closure.py",
     }
     assert (ROOT / helper).is_file()
     references = subprocess.run(

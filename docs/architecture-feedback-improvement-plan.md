@@ -482,6 +482,18 @@ corpus selection, or claim a hosted speedup. The rebased candidate passed 147
 local workflow-policy tests and independent review; hosted/protected CI remains
 required before promotion.
 
+OAuth-revocation current-input follow-up (2026-10-12 local candidate): the
+shared runner produces ten reviewed kinds, including nine variant corpora.
+One overlay inherits the guarded REST inputs and pins eleven additional
+current inputs (the runner and ten scenario matrices). Its release-owned test
+checks the producer mapping, exact dynamic scenario template, static local
+imports, nested JSON references, mounted helpers, and every normalized source
+hash. A new kind, helper, or scenario requires input review. This guards only
+current capture inputs; it does not attest historical OAuth observations,
+establish runtime compatibility, authorize qualification reuse, or alter any
+routine/full oracle execution. The candidate is stacked locally on the A6
+metadata-classifier PR until that base passes protected CI.
+
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
 ### A6-A7: rollout and fast feedback
@@ -3715,9 +3727,13 @@ not evidence that the repaired opt-in diagnostic passed. Its Canvas database
 step took 27m26s (07:22:01–07:49:27 UTC), and its timing artifact has 105
 distinct successful `scenario` names; this is a baseline, not a speed claim. A new
 [manual run 38220186150](https://github.com/ElevenID/marty-ui/actions/runs/38220186150)
-was requested on main with the input set to `true`; its job-level input,
-result, and comparable timings remain pending verification. Keep reuse
-manual-only.
+ completed successfully. Its Canvas job log confirms
+ `MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT: 1`; the opt-in parity/isolation
+ step passed, and the timing artifact has the same 105 distinct successful
+ scenario identities with no failed phase. Its database step took 28m33s
+ (08:20:41-08:49:14 UTC), versus 27m26s off. The runs have different commits
+ and load conditions, so this is not a controlled speed estimate; it provides
+ no basis to promote reuse. Keep the switch manual-only.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both

@@ -1,0 +1,31 @@
+{
+  "schema": "marty.canvas-worker-oauth-revocation-current-inputs/v1",
+  "purpose": "Guard current shared OAuth revocation capture inputs only; do not attest historical OAuth revocation corpora or authorize qualification reuse.",
+  "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+  "inherited_inputs": "contracts/canvas-worker-rest-current-inputs.json",
+  "kinds": [
+    "oauth-revocation",
+    "oauth-revocation-backoff",
+    "oauth-revocation-counters",
+    "oauth-revocation-fence",
+    "oauth-revocation-lease",
+    "oauth-revocation-patch",
+    "oauth-revocation-queue",
+    "oauth-revocation-retry-after",
+    "oauth-revocation-secrets",
+    "oauth-revocation-selection"
+  ],
+  "sha256": {
+    "contracts/canvas-worker-oauth-revocation-backoff-scenarios.json": "2772a5189c2ab27dc30daccfbf7734511b0a9ed481176629c882cc1990cc8c74",
+    "contracts/canvas-worker-oauth-revocation-counters-scenarios.json": "05b121aea1913ab2dbee660652e604582d56ef7659e2abe2a81f0bc34eae6376",
+    "contracts/canvas-worker-oauth-revocation-fence-scenarios.json": "da169c66a7122871d9270b54e7de13a74bef2509525f8ba19c8cf5d821198c52",
+    "contracts/canvas-worker-oauth-revocation-lease-scenarios.json": "dc93991f95684ec7d14e8bb4e4dc2b8ec71329d5b5d5551262cc1d0f0e76f661",
+    "contracts/canvas-worker-oauth-revocation-patch-scenarios.json": "a5651ab84f20de3f25fefa809522514409e8c483aff1198d7d7c675d0232bc0b",
+    "contracts/canvas-worker-oauth-revocation-queue-scenarios.json": "b0f5280c307732e4fc4ecc66b08b41244d5e8f306786abab769f9f543a22e5ac",
+    "contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json": "423e12aeb0c4e9d90f60856e11eb4c5b13d7c7e981ae549085e71c0c095bd16a",
+    "contracts/canvas-worker-oauth-revocation-scenarios.json": "46cd64b69af1a51509525bad53b6d75e5e79cece5ec819a10e011c79734af019",
+    "contracts/canvas-worker-oauth-revocation-secrets-scenarios.json": "2f5a4c7d91b455742ce4abf7198a26857a37fca9edbcd114291c123f33472ee1",
+    "contracts/canvas-worker-oauth-revocation-selection-scenarios.json": "b5196792511aa6174883e2672f52ec0a53f37dc506171454b4b6358876222ea4",
+    "scripts/run_canvas_worker_oauth_revocation_oracle.py": "bce4add0ff22f418903bdc6f13adbb851af97ac73a7bddd120405153e8b2ffb0"
+  }
+}
