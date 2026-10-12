@@ -12,7 +12,7 @@ pub struct Catalog {
     pub root: PathBuf,
     pub services: Map<String, Value>,
     pub groups: Map<String, Value>,
-    pub secrets: Map<String, Value>,
+    pub input_specs: Map<String, Value>,
     pub artifacts: Map<String, Value>,
     pub stacks: Map<String, Value>,
     pub bundles: Map<String, Value>,
@@ -142,7 +142,7 @@ impl Catalog {
         };
         let catalog_dir = root.join("deploy-config/catalog");
         let services = read_json(&catalog_dir.join("services.json"))?;
-        let secrets = read_json(&catalog_dir.join("secrets.json"))?;
+        let input_manifest = read_json(&catalog_dir.join("secrets.json"))?;
         let artifacts = read_json(&catalog_dir.join("artifacts.json"))?;
         let result = Self {
             root: root.clone(),
@@ -152,8 +152,8 @@ impl Catalog {
             )?
             .clone(),
             groups: object(field(&services, "groups").unwrap_or(&Value::Null), "groups")?.clone(),
-            secrets: object(
-                field(&secrets, "secrets").unwrap_or(&Value::Null),
+            input_specs: object(
+                field(&input_manifest, "secrets").unwrap_or(&Value::Null),
                 "secrets",
             )?
             .clone(),
@@ -193,8 +193,8 @@ impl Catalog {
                 }
             }
         }
-        for (id, secret) in &self.secrets {
-            for stack in strings(field(secret, "required_for")) {
+        for (id, descriptor) in &self.input_specs {
+            for stack in strings(field(descriptor, "required_for")) {
                 if !self.stacks.contains_key(&stack) {
                     errors.push(format!(
                         "secret {} references unknown required_for stack {}",
@@ -218,7 +218,7 @@ impl Catalog {
                 ("required_service_groups", &self.groups, "service group"),
                 ("required_services", &self.services, "service"),
                 ("optional_services", &self.services, "optional service"),
-                ("required_secrets", &self.secrets, "secret"),
+                ("required_secrets", &self.input_specs, "secret"),
             ] {
                 for id in strings(field(stack, key)) {
                     if !known.contains_key(&id) {
@@ -366,15 +366,15 @@ impl Catalog {
     pub fn required_secrets(&self, stack_name: &str) -> Result<Vec<String>> {
         let stack = self.stack(stack_name)?;
         let mut ids = strings(field(stack, "required_secrets"));
-        for (id, secret) in &self.secrets {
-            if strings(field(secret, "required_for")).contains(&stack_name.to_owned()) {
+        for (id, descriptor) in &self.input_specs {
+            if strings(field(descriptor, "required_for")).contains(&stack_name.to_owned()) {
                 ids.push(id.clone());
             }
         }
         Ok(dedupe(ids))
     }
 
-    pub fn secret_field(&self, id: &str, name: &str) -> Result<String> {
+    pub fn public_input_field(&self, id: &str, name: &str) -> Result<String> {
         if name == "id" {
             return Ok(id.to_owned());
         }
@@ -390,11 +390,11 @@ impl Catalog {
             "required_for" => "required_for",
             _ => return Err(format!("Unsupported secret metadata field: {name}")),
         };
-        let secret = self
-            .secrets
+        let descriptor = self
+            .input_specs
             .get(id)
             .ok_or_else(|| format!("Unknown secret: {id}"))?;
-        match field(secret, name) {
+        match field(descriptor, name) {
             Some(Value::Array(values)) => Ok(values.iter().map(text).collect::<Vec<_>>().join(",")),
             Some(value) => Ok(text(value)),
             None => Ok(String::new()),

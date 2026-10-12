@@ -58,7 +58,7 @@ fn secret_metadata_selector_never_exposes_new_value_fields() {
         .unwrap();
     let mut catalog = Catalog::load(root).unwrap();
     let metadata = catalog
-        .secrets
+        .input_specs
         .get_mut("postgres_password")
         .unwrap()
         .as_object_mut()
@@ -68,8 +68,12 @@ fn secret_metadata_selector_never_exposes_new_value_fields() {
         Value::String("private-sentinel".to_owned()),
     );
     assert_eq!(
-        catalog.secret_field("postgres_password", "env").unwrap(),
+        catalog
+            .public_input_field("postgres_password", "env")
+            .unwrap(),
         "POSTGRES_PASSWORD"
     );
-    assert!(catalog.secret_field("postgres_password", "value").is_err());
+    assert!(catalog
+        .public_input_field("postgres_password", "value")
+        .is_err());
 }

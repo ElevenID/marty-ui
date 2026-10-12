@@ -279,7 +279,7 @@ fn run() -> Result<(), String> {
                 "stacks={} services={} secrets={} bundles={}",
                 catalog.stacks.len(),
                 catalog.services.len(),
-                catalog.secrets.len(),
+                catalog.input_specs.len(),
                 catalog.bundles.len()
             );
         }
@@ -319,7 +319,7 @@ fn run() -> Result<(), String> {
             let positionals = positional(params, &["--field"]);
             let field = option(params, "--field").unwrap_or("id");
             for id in catalog.required_secrets(required(&positionals, 0, "stack")?)? {
-                println!("{}", catalog.secret_field(&id, field)?);
+                println!("{}", catalog.public_input_field(&id, field)?);
             }
         }
         "compose-command" => {
