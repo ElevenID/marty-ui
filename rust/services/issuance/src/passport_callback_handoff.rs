@@ -1,6 +1,7 @@
 //! Shared KMS callback handoff for the beta bureau and physical provider ingress.
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_passport_auth::valid_provider_profile_id;
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -45,6 +46,58 @@ pub enum CallbackHandoffError {
     SigningUnavailable,
     #[error("passport callback unavailable")]
     CallbackUnavailable,
+}
+
+/// Verify the external provider's exact callback bytes with a profile-scoped
+/// imported HMAC key. The ingress never receives or computes with that key.
+pub async fn verify_provider_callback(
+    http: &Client,
+    signing_base_url: &Url,
+    signing_api_key: &str,
+    provider_profile_id: &str,
+    key_version: u32,
+    body: &[u8],
+    signature_hex: &str,
+) -> Result<bool, CallbackHandoffError> {
+    if !valid_provider_profile_id(provider_profile_id)
+        || key_version == 0
+        || body.is_empty()
+        || body.len() > MAX_CALLBACK_BODY_BYTES
+        || signature_hex.len() != 64
+        || !signature_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(CallbackHandoffError::InvalidBody);
+    }
+    let mut verify_url = signing_base_url.clone();
+    verify_url
+        .path_segments_mut()
+        .map_err(|()| CallbackHandoffError::InvalidSigningEndpoint)?
+        .push(provider_profile_id)
+        .push("passport-provider-callbacks")
+        .push("verify");
+    let response = http
+        .post(verify_url)
+        .header("x-api-key", signing_api_key)
+        .json(&json!({
+            "body_b64": STANDARD.encode(body),
+            "signature_hex": signature_hex,
+            "key_version": key_version
+        }))
+        .send()
+        .await
+        .map_err(|_| CallbackHandoffError::SigningUnavailable)?;
+    if !response.status().is_success() {
+        return Err(CallbackHandoffError::SigningUnavailable);
+    }
+    response
+        .json::<Value>()
+        .await
+        .map_err(|_| CallbackHandoffError::SigningUnavailable)?
+        .get("valid")
+        .and_then(Value::as_bool)
+        .ok_or(CallbackHandoffError::SigningUnavailable)
 }
 
 /// Sign the exact internal body bytes, then deliver those same bytes to the

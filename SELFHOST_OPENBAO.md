@@ -4,7 +4,7 @@ This is the standalone external OpenBao setup for the workstation-local self-hos
 
 ## Paths
 
-- `SELFHOST_OPENBAO_STATE_DIR` stores the OpenBao file backend and recovery material
+- `SELFHOST_OPENBAO_STATE_DIR` stores OpenBao Raft data and recovery material
 - `SELFHOST_OPENBAO_EXPORT_DIR` stores zipped export archives created with `scripts/export-selfhost-openbao.py`
 - `SELFHOST_SECRET_DIR/openbao_service_token` is the runtime token the main self-host stack consumes
 
@@ -34,7 +34,7 @@ For the main self-host application stack on the same machine, `BAO_ADDR` should 
 The recovery material lives under `SELFHOST_OPENBAO_STATE_DIR`.
 
 - If the host reboots, restart the standalone OpenBao compose project
-- If you move to another host, copy `SELFHOST_OPENBAO_STATE_DIR` to the new host and start the same compose file there
+- For a cold move to another host, stop the OpenBao server, copy `SELFHOST_OPENBAO_STATE_DIR` to the new host, and start the same compose file there. Do not copy the live Raft data directory as a backup.
 - If `openbao_service_token` is missing on the destination, rerun the bootstrap service:
 
 ```bash
@@ -61,10 +61,11 @@ Or:
 make selfhost-prod-openbao-export
 ```
 
-That writes a zip archive under `SELFHOST_OPENBAO_EXPORT_DIR` containing:
+The command requests an authenticated Raft snapshot from the running local OpenBao API. It writes a zip archive under `SELFHOST_OPENBAO_EXPORT_DIR` containing:
 
-- the full OpenBao state directory
+- `raft.snap`, the OpenBao Raft snapshot
+- `recovery/selfhost-init.json`, `recovery/root.token`, and `recovery/unseal.key`
 - the current `openbao-selfhost.hcl`
-- a small manifest describing the export
+- a manifest with the snapshot SHA-256
 
-Because the archive contains root-token and unseal-key material, protect it like production secrets.
+The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. Because the archive contains root-token and unseal-key material, protect it like production secrets.

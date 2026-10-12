@@ -59,7 +59,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "utf7_consumer",
     "validation_boundary",
     "worker_concurrent",
-    "worker_facts",
     "worker_provider_completion",
     "worker_provider_final",
     "worker_provider_generation",
@@ -68,9 +67,6 @@ const TIMED_PUBLISHED_SCRIPTS: &[&str] = &[
     "worker_provider_signals",
     "worker_reclaimers",
     "worker_reclaimers_retry",
-    "worker_rest",
-    "worker_retry",
-    "worker_startup",
 ];
 
 fn published_probe_timing_name(script: Option<&str>) -> String {
@@ -1037,42 +1033,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_startup() -> Result<Self, String> {
-        Self::start_probe(Some((
-            "worker_startup",
-            "worker-startup",
-            "worker_startup",
-            "MARTY_CANVAS_WORKER_STARTUP_ORACLE=1",
-        )))
-        .await
-    }
-
-    pub async fn start_with_worker_rest() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_rest",
-                "worker-rest",
-                "worker_rest",
-                "MARTY_CANVAS_WORKER_REST_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_facts() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_facts",
-                "worker-facts",
-                "worker_facts",
-                "MARTY_CANVAS_WORKER_FACTS_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
     pub async fn start_with_worker_provider_signal(signal: &str) -> Result<Self, String> {
         if !matches!(signal, "SIGINT" | "SIGTERM" | "SIGKILL") {
             return Err("unsupported owned worker signal".into());
@@ -1097,76 +1057,6 @@ impl PublishedDatabase {
             "worker_retry_after",
             "worker-retry-after",
             "MARTY_CANVAS_WORKER_RETRY_AFTER_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_fence(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-fence",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_FENCE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_patch(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-patch",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_PATCH_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_retry_after(
-        case: &str,
-    ) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"),
-            "worker_oauth_revocation", "worker-oauth-revocation-retry-after",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_RETRY_AFTER_CASE",
-        ).await
-    }
-
-    pub async fn start_with_worker_validation(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-validation-scenarios.json"),
-            "worker_validation",
-            "worker-validation",
-            "MARTY_CANVAS_WORKER_VALIDATION_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_roster_failure(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!("../../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
-            "worker_roster_failure",
-            "worker-roster-failure",
-            "MARTY_CANVAS_WORKER_ROSTER_FAILURE_CASE",
         )
         .await
     }
@@ -1243,19 +1133,6 @@ impl PublishedDatabase {
         .await
     }
 
-    pub async fn start_with_worker_resources_unavailable(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-resources-unavailable-scenarios.json"
-            ),
-            "worker_resources_unavailable",
-            "worker-resources-unavailable",
-            "MARTY_CANVAS_WORKER_RESOURCES_UNAVAILABLE_CASE",
-        )
-        .await
-    }
-
     pub async fn start_with_worker_resource_race(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
@@ -1263,84 +1140,6 @@ impl PublishedDatabase {
             "worker_resource_race",
             "worker-resource-race",
             "MARTY_CANVAS_WORKER_RESOURCE_RACE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_queue(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-queue",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_QUEUE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_counters(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-counters",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_COUNTERS_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_secrets(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-secrets",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SECRETS_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_selection(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-selection",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_SELECTION_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_lease(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-lease",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_LEASE_CASE",
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_oauth_revocation_backoff(case: &str) -> Result<Self, String> {
-        Self::start_with_worker_case(
-            case,
-            include_str!(
-                "../../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
-            ),
-            "worker_oauth_revocation",
-            "worker-oauth-revocation-backoff",
-            "MARTY_CANVAS_WORKER_OAUTH_REVOCATION_BACKOFF_CASE",
         )
         .await
     }
@@ -1474,19 +1273,6 @@ impl PublishedDatabase {
                 "worker-provider-recovery-first",
                 "worker_provider_recovery_first",
                 "MARTY_CANVAS_WORKER_PROVIDER_RECOVERY_FIRST_ORACLE=1",
-            )),
-            Some("canvas-issued-review-scenarios.json"),
-        )
-        .await
-    }
-
-    pub async fn start_with_worker_retry() -> Result<Self, String> {
-        Self::start_probe_with_extra(
-            Some((
-                "worker_retry",
-                "worker-retry",
-                "worker_retry",
-                "MARTY_CANVAS_WORKER_RETRY_ORACLE=1",
             )),
             Some("canvas-issued-review-scenarios.json"),
         )
@@ -1736,15 +1522,8 @@ impl PublishedDatabase {
         );
         let worker_https = matches!(
             script,
-            "worker_rest"
-                | "worker_facts"
-                | "worker_oauth_revocation"
-                | "worker_retry"
-                | "worker_retry_after"
-                | "worker_validation"
-                | "worker_roster_failure"
+            "worker_retry_after"
                 | "worker_resource_race"
-                | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
                 | "worker_deadline"
@@ -1833,14 +1612,8 @@ impl PublishedDatabase {
             };
         if matches!(
             script,
-            "worker_facts"
-                | "worker_retry"
-                | "worker_oauth_revocation"
-                | "worker_retry_after"
-                | "worker_validation"
-                | "worker_roster_failure"
+            "worker_retry_after"
                 | "worker_resource_race"
-                | "worker_resources_unavailable"
                 | "worker_mixed_roster"
                 | "worker_dispatch"
                 | "worker_deadline"
@@ -1960,12 +1733,6 @@ impl PublishedDatabase {
                 "scripts/run_canvas_worker_provider_signals_oracle.py",
                 "scripts/run_canvas_worker_provider_recovery_oracle.py",
             ],
-            "worker_resources_unavailable" => &[
-                "contracts/canvas-worker-validation-scenarios.json",
-                "scripts/run_canvas_worker_provider_signals_oracle.py",
-                "scripts/run_canvas_worker_provider_recovery_oracle.py",
-            ],
-            "worker_roster_failure" => &["contracts/canvas-worker-retry-scenarios.json"],
             "worker_resource_race" => &[
                 "contracts/canvas-worker-retry-scenarios.json",
                 "scripts/run_canvas_worker_provider_signals_oracle.py",
@@ -1978,35 +1745,6 @@ impl PublishedDatabase {
             ],
             "worker_provider_generation" | "worker_provider_completion" => {
                 &["contracts/canvas-worker-provider-final-scenarios.json"]
-            }
-            "worker_oauth_revocation" if scenario == "worker-oauth-revocation-counters" => &[
-                "contracts/canvas-worker-oauth-revocation-scenarios.json",
-                "contracts/canvas-worker-oauth-revocation-fence-scenarios.json",
-                "scripts/run_canvas_worker_single_cycle.py",
-            ],
-            "worker_oauth_revocation"
-                if matches!(
-                    scenario,
-                    "worker-oauth-revocation-fence"
-                        | "worker-oauth-revocation-secrets"
-                        | "worker-oauth-revocation-patch"
-                        | "worker-oauth-revocation-retry-after"
-                        | "worker-oauth-revocation-backoff"
-                        | "worker-oauth-revocation-queue"
-                ) =>
-            {
-                &["contracts/canvas-worker-oauth-revocation-scenarios.json"]
-            }
-            "worker_oauth_revocation"
-                if matches!(
-                    scenario,
-                    "worker-oauth-revocation-lease" | "worker-oauth-revocation-selection"
-                ) =>
-            {
-                &[
-                    "contracts/canvas-worker-oauth-revocation-scenarios.json",
-                    "contracts/canvas-worker-oauth-revocation-queue-scenarios.json",
-                ]
             }
             "worker_reclaimers" => &[
                 "contracts/canvas-worker-provider-final-scenarios.json",

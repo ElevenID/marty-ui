@@ -162,6 +162,7 @@ fn signing_identity_is_bound_to_the_exact_public_capability_tuple() {
             "verification_method_id" => {
                 invalid.verification_method_id = "did:web:other.example#key".into()
             }
+            "signing_key_reference" => invalid.signing_key_reference.clear(),
             "key_purpose" => invalid.key_purpose = "vc_jwt_issuer".into(),
             "credential_format" => invalid.credential_format = "jwt_vc_json".into(),
             "algorithm" => invalid.algorithm = "ES384".into(),
@@ -333,6 +334,7 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
         ("FLOW_WEBHOOK_SECRET".into(), "w".repeat(32)),
         ("FLOW_APPLICATION_EVENT_HMAC_KEY".into(), "a".repeat(32)),
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
+        ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
         ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
         (

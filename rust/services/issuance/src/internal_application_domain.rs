@@ -136,6 +136,11 @@ impl ApplicationRecord {
         generated_identifier: &str,
         now: DateTime<Utc>,
     ) -> Result<Self, ApplicationDomainError> {
+        if marty_key_material_policy::contains_private_key_map(&request.applicant_data)
+            || marty_key_material_policy::contains_private_key_map(&request.integration_context)
+        {
+            return Err(ApplicationDomainError::PrivateKeyMaterial);
+        }
         let applicant_identifier =
             derive_applicant_identifier(&request.applicant_data, generated_identifier);
         let expires_at = now
@@ -170,6 +175,11 @@ impl ApplicationRecord {
         now: DateTime<Utc>,
     ) -> Result<(), ApplicationDomainError> {
         self.require_pending("submit evidence for")?;
+        if marty_key_material_policy::contains_private_key_map(&evidence.evidence_data)
+            || marty_key_material_policy::has_private_key_marker(&evidence.evidence_type)
+        {
+            return Err(ApplicationDomainError::PrivateKeyMaterial);
+        }
         self.evidence_submissions.push(Map::from_iter([
             (
                 "evidence_type".to_owned(),
@@ -195,6 +205,9 @@ impl ApplicationRecord {
         now: DateTime<Utc>,
     ) -> Result<(), ApplicationDomainError> {
         self.require_pending("reject")?;
+        if marty_key_material_policy::has_private_key_marker(&review_notes) {
+            return Err(ApplicationDomainError::PrivateKeyMaterial);
+        }
         self.status = ApplicationStatus::Rejected;
         self.review_notes = Some(review_notes);
         self.reviewer_id = Some(reviewer_id.to_owned());
@@ -215,6 +228,12 @@ impl ApplicationRecord {
         now: DateTime<Utc>,
     ) -> Result<(), ApplicationDomainError> {
         self.ensure_approvable()?;
+        if review_notes
+            .as_deref()
+            .is_some_and(marty_key_material_policy::has_private_key_marker)
+        {
+            return Err(ApplicationDomainError::PrivateKeyMaterial);
+        }
         self.status = ApplicationStatus::Approved;
         self.review_notes = review_notes;
         self.reviewer_id = Some(reviewer_id.to_owned());
@@ -451,6 +470,8 @@ pub struct EvidenceReconciliationResult {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ApplicationDomainError {
+    #[error("Private key material is not accepted; use a remote key reference")]
+    PrivateKeyMaterial,
     #[error("Cannot {operation} application in ApplicationStatus.{status} status")]
     InvalidTransition {
         operation: &'static str,
@@ -785,5 +806,70 @@ mod tests {
             error.to_string(),
             "Cannot submit evidence for application in ApplicationStatus.REJECTED status"
         );
+    }
+
+    #[test]
+    fn application_inputs_reject_private_material_without_mutation() {
+        let now = Utc::now();
+        let create = |applicant_data, integration_context| {
+            ApplicationRecord::new(
+                "application-1".into(),
+                "organization-1".into(),
+                ApplicationCreate {
+                    application_template_id: "template-1".into(),
+                    applicant_data,
+                    integration_context,
+                },
+                "applicant-1",
+                now,
+            )
+        };
+        let private = json!({"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            create(private.clone(), Map::new()),
+            Err(ApplicationDomainError::PrivateKeyMaterial)
+        );
+        assert_eq!(
+            create(Map::new(), private),
+            Err(ApplicationDomainError::PrivateKeyMaterial)
+        );
+        let public = json!({"issuer": {"key_reference": "transit/keys/issuer-v4"}})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut record = create(Map::new(), public).unwrap();
+        let original = record.clone();
+        assert_eq!(
+            record.submit_evidence(
+                EvidenceSubmission {
+                    evidence_type: "DOCUMENT_SCAN".into(),
+                    evidence_data: json!({"private_key_pem": "synthetic"})
+                        .as_object()
+                        .unwrap()
+                        .clone(),
+                },
+                now,
+            ),
+            Err(ApplicationDomainError::PrivateKeyMaterial)
+        );
+        assert_eq!(record, original);
+        assert_eq!(
+            record.reject("-----BEGIN PRIVATE KEY-----".into(), "reviewer", now),
+            Err(ApplicationDomainError::PrivateKeyMaterial)
+        );
+        assert_eq!(record, original);
+        assert_eq!(
+            record.approve_reserved(
+                "transaction-1".into(),
+                Some("-----BEGIN PRIVATE KEY-----".into()),
+                "reviewer",
+                now,
+            ),
+            Err(ApplicationDomainError::PrivateKeyMaterial)
+        );
+        assert_eq!(record, original);
     }
 }

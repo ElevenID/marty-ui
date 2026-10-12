@@ -188,6 +188,7 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
         serde_json::json!({
             "schema": "marty.selfhost-image-lock/v1",
             "release": source_lock["release"],
+            "openbao_didcomm_image": format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}", "b".repeat(64)),
             "services": references
         })
         .to_string(),

@@ -6,6 +6,7 @@ use marty_issuance_service::{
     passport_provider_ingress::{router, ProviderIngressState},
     passport_repository::PostgresPassportRepository,
 };
+use marty_passport_auth::valid_provider_profile_id;
 use reqwest::{redirect::Policy, Client, Url};
 use sqlx::postgres::PgPoolOptions;
 use tokio::net::TcpListener;
@@ -14,7 +15,7 @@ struct Config {
     listen: SocketAddr,
     database_url: String,
     provider_profile_id: String,
-    webhook_secret: Vec<u8>,
+    provider_hmac_key_version: u32,
     signing_base_url: Url,
     signing_api_key: String,
     native_callback_url: Url,
@@ -26,14 +27,23 @@ impl Config {
             return Err("passport provider ingress must be explicitly enabled");
         }
         let provider_profile_id = required("PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID")?;
-        if provider_profile_id.len() > 128 || provider_profile_id.trim() != provider_profile_id {
+        if !valid_provider_profile_id(&provider_profile_id) {
             return Err("invalid bureau provider profile ID");
         }
-        let webhook_secret = read_secret("PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE")?;
-        std::str::from_utf8(&webhook_secret).map_err(|_| "bureau webhook secret must be UTF-8")?;
+        if env::var_os("PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE").is_some()
+            || env::var_os("PASSPORT_PROVIDER_WEBHOOK_SECRET").is_some()
+            || env::var_os("PASSPORT_PROVIDER_HMAC_SOURCE_FILE").is_some()
+        {
+            return Err("local provider webhook-secret configuration is forbidden");
+        }
+        let provider_hmac_key_version = required("PASSPORT_PROVIDER_HMAC_KEY_VERSION")?
+            .parse::<u32>()
+            .map_err(|_| "provider HMAC key version is invalid")?;
+        if provider_hmac_key_version == 0 {
+            return Err("provider HMAC key version is invalid");
+        }
         let signing_api_key =
             normalize_signer_key(read_secret("PASSPORT_PROVIDER_SIGNER_API_KEY_FILE")?)?;
-        validate_credential_separation(&webhook_secret, &signing_api_key)?;
         let signing_base_url = private_url(
             "PASSPORT_PROVIDER_SIGNER_URL",
             "passport-callback-signer-supported",
@@ -54,7 +64,7 @@ impl Config {
             listen,
             database_url,
             provider_profile_id,
-            webhook_secret,
+            provider_hmac_key_version,
             signing_base_url,
             signing_api_key,
             native_callback_url,
@@ -89,18 +99,6 @@ fn normalize_signer_key(bytes: Vec<u8>) -> Result<String, &'static str> {
         return Err("signer API key is invalid");
     }
     Ok(value.to_owned())
-}
-
-fn validate_credential_separation(
-    webhook_secret: &[u8],
-    signing_api_key: &str,
-) -> Result<(), &'static str> {
-    let provider_secret =
-        std::str::from_utf8(webhook_secret).map_err(|_| "bureau webhook secret must be UTF-8")?;
-    if provider_secret.trim_end_matches(['\r', '\n']) == signing_api_key {
-        return Err("provider webhook secret and signer API key must differ");
-    }
-    Ok(())
 }
 
 fn private_url(name: &str, service: &str, path: &str) -> Result<Url, &'static str> {
@@ -140,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     let state = ProviderIngressState {
         provider_profile_id: config.provider_profile_id,
-        webhook_secret: config.webhook_secret,
+        provider_hmac_key_version: config.provider_hmac_key_version,
         repository: PostgresPassportRepository::new(pool),
         signing_base_url: config.signing_base_url,
         signing_api_key: config.signing_api_key,
@@ -197,15 +195,12 @@ mod tests {
     }
 
     #[test]
-    fn signer_credential_is_normalized_and_separate_from_provider_secret() {
+    fn signer_credential_is_normalized() {
         let key = "dedicated-ingress-signing-key-00000001";
         assert_eq!(
             normalize_signer_key(format!("{key}\r\n").into_bytes()).unwrap(),
             key
         );
-        assert!(validate_credential_separation(key.as_bytes(), key).is_err());
-        assert!(validate_credential_separation(format!("{key}\n").as_bytes(), key).is_err());
-        assert!(validate_credential_separation(b"different-provider-secret", key).is_ok());
         assert!(normalize_signer_key(b"short-key".to_vec()).is_err());
     }
 }

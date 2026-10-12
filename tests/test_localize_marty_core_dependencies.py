@@ -91,7 +91,8 @@ def test_migration_image_contains_only_shared_rust_binaries() -> None:
     assert "FROM debian:bookworm-slim" in dockerfile
     assert "marty-migration-bootstrap" in dockerfile
     assert "marty-notification" in dockerfile
-    assert "python" not in dockerfile.lower()
+    assert "COPY contracts/python-text-semantics.json" in dockerfile
+    assert "COPY services /app/services" not in dockerfile
     assert "pip install" not in dockerfile
 
 

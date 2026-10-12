@@ -149,6 +149,15 @@ def test_shipped_helper_does_not_put_bootstrap_token_in_docker_argv() -> None:
     assert "/bin/sh -ec '\numask 077\n" in source
     assert 'private_tmp="$(mktemp "$output_dir/.openbao-token.XXXXXX")"' in source
     assert 'mv -f "$private_tmp" "$output_file"' in source
+    for output in (
+        "SERVICE_TOKEN_OUTPUT_FILE",
+        "SIGNING_KEYS_TOKEN_OUTPUT_FILE",
+        "DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE",
+        "NOTIFICATION_TOKEN_OUTPUT_FILE",
+        "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE",
+    ):
+        assert f'write_private_token "${output}"' in source
+    assert 'write_private_token "$grant_file" "$grant_token"' in source
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX atomic file replacement")
@@ -164,15 +173,22 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
     inner = inner.replace("/bin/sh /scripts/openbao-init.sh", ":", 1)
     fake_bao = (
         'bao() { case "$*" in\n'
+        '  *signing-keys-managed*) command printf \'{"auth":{"client_token":"signing-new"}}\\n\' ;;\n'
+        '  *didcomm-issuance*) command printf \'{"auth":{"client_token":"didcomm-new"}}\\n\' ;;\n'
+        '  *sign-grant-mint-*) command printf \'{"auth":{"client_token":"grant-new"}}\\n\' ;;\n'
+        '  *sign-grant-verify*) command printf \'{"auth":{"client_token":"verify-new"}}\\n\' ;;\n'
         '  *credential-service*) command printf \'{"auth":{"client_token":"service-new"}}\\n\' ;;\n'
         '  *notification-webhook-service*) command printf \'{"auth":{"client_token":"notification-new"}}\\n\' ;;\n'
-        '  *passport-callback-hmac-service*) command printf \'{"auth":{"client_token":"callback-new"}}\\n\' ;;\n'
+        '  *passport-provider-callback-service*) command printf \'{"auth":{"client_token":"callback-new"}}\\n\' ;;\n'
         "esac; }\n"
         'mv() { [ "$1" = -f ] && shift; '
         '[ "$(stat -c %a "$1")" = 600 ] || exit 98; '
         'command mv -f "$@"; }\n'
     )
     paths = [tmp_path / name for name in bootstrap.TOKEN_NAMES]
+    signing_path = tmp_path / "signing_keys_openbao_token"
+    didcomm_path = tmp_path / "didcomm_issuance_openbao_token"
+    paths.extend((signing_path, didcomm_path))
     for path in paths:
         path.write_text("shipped-public-placeholder", encoding="ascii")
         path.chmod(0o644)
@@ -183,6 +199,9 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         "SERVICE_TOKEN_OUTPUT_FILE": str(paths[0]),
         "NOTIFICATION_TOKEN_OUTPUT_FILE": str(paths[1]),
         "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE": str(paths[2]),
+        "SIGNING_KEYS_TOKEN_OUTPUT_FILE": str(signing_path),
+        "DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE": str(didcomm_path),
+        "GRANT_TOKEN_OUTPUT_DIR": str(tmp_path),
     }
     with paths[0].open("rb") as old_handle:
         completed = subprocess.run(
@@ -199,8 +218,13 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         "service-new",
         "notification-new",
         "callback-new",
+        "signing-new",
+        "didcomm-new",
     ]
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
+    grant_paths = list(tmp_path.glob("sign_grant_*_token"))
+    assert len(grant_paths) == 8
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in grant_paths)
     assert not list(tmp_path.glob(".openbao-token.*"))
 
     paths[0].unlink()

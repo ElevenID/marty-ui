@@ -140,11 +140,6 @@ VECTOR_TEST_OWNERS = {
     "gateway-flow-behavior.json": VectorTestOwner(
         "rust/services/gateway/src/flow_contract.rs", "language_neutral_flow_contract"
     ),
-    "gateway-flow-key-envelope-behavior.json": VectorTestOwner(
-        "rust/services/signing-keys/src/flow_envelope.rs",
-        "envelope_round_trip_preserves_exact_binding_and_payload",
-        "contract",
-    ),
     "gateway-internal-signing-behavior.json": VectorTestOwner(
         "rust/services/gateway/src/signing_compat.rs",
         "shared_internal_signing_route_contract",

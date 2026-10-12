@@ -14,6 +14,7 @@ AGS_SCOPE = "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly"
 ISSUER_DID = "did:web:synthetic-worker.invalid:canvas"
 VERIFICATION_METHOD = ISSUER_DID + "#lti"
 SIGNATURE = "c3ludGhldGljLW5vdC1hLXJlYWwtUlMyNTYtc2lnbmF0dXJl"
+ISSUER_SIGN_KEY = "synthetic-mixed-roster-issuer-sign-key-0001"
 NAME_SENTINEL = "SYNTHETIC_NAME_MUST_NOT_PERSIST"
 EMAIL_SENTINEL = "synthetic-no-retention@example.invalid"
 
@@ -133,7 +134,12 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                 url = urlsplit(self.path)
                 assert url.path == "/internal/signing-keys/" + path
                 assert parse_qs(url.query) == expected_query
-                assert self.headers.get("X-API-Key") == "synthetic-startup-api-key"
+                expected_key = (
+                    ISSUER_SIGN_KEY
+                    if path == "issuer-dids/sign"
+                    else "synthetic-startup-api-key"
+                )
+                assert self.headers.get("X-API-Key") == expected_key
 
             def do_GET(self):
                 try:

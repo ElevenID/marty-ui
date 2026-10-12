@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import json
 from pathlib import Path
 
@@ -22,11 +20,10 @@ KMS_CONTRACT = json.loads(
 )
 
 
-def test_frozen_python_provider_raw_body_hmac() -> None:
+def test_frozen_external_provider_wire_format_has_no_local_key_fixture() -> None:
     reference = CONTRACT["frozen_reference"]
     raw = reference["raw_body_utf8"].encode("utf-8")
-    secret = reference["webhook_secret"].encode("utf-8")
-    signature = hmac.new(secret, raw, hashlib.sha256).hexdigest()
+    signature = reference["raw_body_hmac_sha256_hex"]
 
     assert raw == (
         b'{"bureau_job_id":"bureau-reference","status":"SHIPPED",'
@@ -34,13 +31,9 @@ def test_frozen_python_provider_raw_body_hmac() -> None:
     )
     assert signature == reference["raw_body_hmac_sha256_hex"]
     assert len(signature) == 64 and signature == signature.lower()
-    assert not hmac.compare_digest(
-        hmac.new(secret, raw + b" ", hashlib.sha256).digest(),
-        bytes.fromhex(signature),
-    )
-    assert not hmac.compare_digest(
-        hmac.new(b"other-provider-secret", raw, hashlib.sha256).digest(),
-        bytes.fromhex(signature),
+    assert "webhook_secret" not in reference
+    assert CONTRACT["provider_authentication"]["algorithm"].endswith(
+        "imported non-exportable provider key"
     )
 
 
@@ -116,10 +109,12 @@ def test_existing_beta_signer_does_not_qualify_supported_consumers() -> None:
     assert "no public sign route" in gate
     assert "no OpenBao token exposure" in gate
     assert "marty-credentials #305" in gate
+    assert "no provider HMAC generation" in CONTRACT["supported_signer_runtime"]["kms"]
+    assert "do not re-enable a local-secret" in CONTRACT["supported_signer_runtime"]["rollback"]
 
 
 if __name__ == "__main__":
-    test_frozen_python_provider_raw_body_hmac()
+    test_frozen_external_provider_wire_format_has_no_local_key_fixture()
     test_provider_binding_and_new_kms_envelope_are_distinct()
     test_contract_requires_fail_closed_provider_resolution()
     test_existing_beta_signer_does_not_qualify_supported_consumers()

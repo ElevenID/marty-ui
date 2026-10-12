@@ -7,6 +7,7 @@
 //! canonical Flow and presentation-policy producer adapter.
 
 mod digest;
+pub mod haip_key;
 mod types;
 mod validation;
 

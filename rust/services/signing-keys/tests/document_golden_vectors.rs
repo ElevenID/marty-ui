@@ -45,7 +45,7 @@ fn certificate_alerts_match_the_language_neutral_vector() {
 }
 
 #[test]
-fn jwks_upsert_replaces_one_service_and_strips_private_material() {
+fn jwks_upsert_replaces_one_service_and_rejects_private_material() {
     let fixture = fixture();
     let vector = &fixture["jwks"];
     let request: PublishJwkRequest = serde_json::from_value(vector["request"].clone()).unwrap();
@@ -64,6 +64,15 @@ fn jwks_upsert_replaces_one_service_and_strips_private_material() {
         .iter()
         .any(|key| key["kid"] == vector["expected_kept_kid"]));
     assert!(result.jwk.get("d").is_none());
+    let private: PublishJwkRequest =
+        serde_json::from_value(vector["private_request"].clone()).unwrap();
+    assert!(build_jwks_document(
+        vector["existing"].clone(),
+        vector["organization_id"].as_str().unwrap(),
+        vector["service_id"].as_str().unwrap(),
+        private,
+    )
+    .is_err());
 }
 
 #[test]
@@ -82,6 +91,9 @@ fn did_publication_and_failures_match_language_neutral_vectors() {
         .get("d")
         .is_none());
     assert_eq!(result.verification_method_count, 1);
+    let private: PublishDidRequest =
+        serde_json::from_value(vector["private_request"].clone()).unwrap();
+    assert!(build_did_document(None, vector["service_id"].as_str().unwrap(), private).is_err());
 
     for invalid in fixture["invalid_did_requests"].as_array().unwrap() {
         let request: PublishDidRequest = serde_json::from_value(invalid.clone()).unwrap();

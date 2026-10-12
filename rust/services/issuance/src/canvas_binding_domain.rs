@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
+use serde::Serialize;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 use uuid::Uuid;
@@ -72,7 +73,7 @@ pub struct CanvasApplicationTemplateProjection {
     pub active: bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct CanvasProgramBindingRecord {
     pub id: String,
     pub organization_id: String,

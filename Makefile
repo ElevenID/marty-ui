@@ -64,7 +64,6 @@ CANVAS_SANDBOX_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-san
 CANVAS_REAL_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml
 CANVAS_EXPERIMENTS_COMPOSE := $(TUNNEL_COMPOSE) -f docker-compose.profile.canvas-real.yml -f docker-compose.profile.canvas-sandbox.yml
 WALTID_SERVICES := waltid-wallet-api waltid-web-wallet waltid-nginx
-WHEELS_SCRIPT := ./scripts/build-rust-wheels.sh
 SETUP_LOCAL_SCRIPT := ./scripts/setup-local.sh
 SELFHOST_ENV_FILE ?= .env.selfhost.production.local
 -include $(SELFHOST_ENV_FILE)
@@ -150,11 +149,6 @@ beta-status: status ## Show beta development stack status
 beta-logs: logs ## Follow beta development stack logs
 
 beta-clean: clean ## Stop the beta development stack and remove volumes
-
-build-wheels: ## Build native Rust wheels for local Python development (optional)
-	@echo "$(BLUE)Building native Rust wheels for local development...$(NC)"
-	@bash $(WHEELS_SCRIPT)
-	@echo "$(GREEN)✓ Native wheels built successfully$(NC)"
 
 package-selfhost-bundle: ## Stage the image-based open-source self-host bundle in dist/selfhost-bundle
 	@echo "$(BLUE)Staging open-source self-host bundle...$(NC)"

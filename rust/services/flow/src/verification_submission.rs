@@ -12,8 +12,8 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowKeyEnvelope,
-    FlowProviderError, FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
+    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowProviderError,
+    FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
     PresentationEvaluationResult, VerificationResultResponse,
 };
 
@@ -85,28 +85,45 @@ pub async fn decrypt_verification_response(
 ) -> Result<Value, FlowVerificationSubmissionError> {
     marty_verification::jwk::validate_haip_response_header(compact_jwe)
         .map_err(|_| FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
-    let envelope = instance
-        .context
-        .get("haip_response_encryption_key_envelope")
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("vault:"))
-        .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
     let provider = providers
         .flow_key_envelope
         .as_ref()
         .ok_or(FlowProviderError::Unavailable {
             provider: "flow_key_envelope",
         })?;
-    let private_jwk = provider
-        .unwrap(&FlowKeyEnvelope {
-            organization_id: instance.organization_id.clone(),
-            flow_instance_id: instance.id.clone(),
-            purpose: "oid4vp_response_decryption".into(),
-            envelope: envelope.into(),
-        })
+    if instance
+        .context
+        .get("haip_response_encryption_key_envelope")
+        .is_some()
+    {
+        return Err(FlowVerificationSubmissionError::InvalidEncryptedResponse);
+    }
+    let reference = instance
+        .context
+        .get("haip_response_encryption_key_reference")
+        .and_then(Value::as_str)
+        .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
+    let version = marty_oid4vp_contract::haip_key::version_for(
+        reference,
+        &instance.organization_id,
+        &instance.id,
+    )
+    .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
+    let public = instance
+        .context
+        .get("haip_response_encryption_public_jwk")
+        .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
+    if !marty_oid4vp_contract::haip_key::matches_public_jwk(public, version) {
+        return Err(FlowVerificationSubmissionError::InvalidEncryptedResponse);
+    }
+    let plaintext = provider
+        .decrypt_haip_response(
+            &instance.organization_id,
+            &instance.id,
+            version,
+            compact_jwe,
+        )
         .await?;
-    let plaintext = marty_verification::jwk::decrypt_haip_response(compact_jwe, &private_jwk)
-        .map_err(|_| FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
     let value: Value = serde_json::from_slice(&plaintext)
         .map_err(|_| FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
     if !value.is_object() {
@@ -651,7 +668,7 @@ pub(crate) fn transition(
     }));
 }
 
-fn expire_submission(
+pub(crate) fn expire_submission(
     instance: &mut FlowInstanceRecord,
     now: DateTime<Utc>,
     event: &str,

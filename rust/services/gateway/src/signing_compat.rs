@@ -4,8 +4,6 @@ use mmf_platform::HttpMethod;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SigningCompatibilityOperation {
-    FlowEnvelopeUnwrap,
-    FlowEnvelopeWrap,
     IssuerContext,
     IssuerDidSign,
     CreateProfile,
@@ -21,19 +19,12 @@ pub enum SigningCompatibilityOperation {
     PassportArtifactEncrypt,
     PassportArtifactDecrypt,
     PassportCallbackVerify,
-    ServiceSign { service_id: String },
 }
 
 #[must_use]
 pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityOperation> {
     let relative = path.strip_prefix("/internal/signing-keys/")?;
     match (method, relative) {
-        (HttpMethod::Post, "flow-key-envelopes/unwrap") => {
-            Some(SigningCompatibilityOperation::FlowEnvelopeUnwrap)
-        }
-        (HttpMethod::Post, "flow-key-envelopes/wrap") => {
-            Some(SigningCompatibilityOperation::FlowEnvelopeWrap)
-        }
         (HttpMethod::Get, "issuer-context") => Some(SigningCompatibilityOperation::IssuerContext),
         (HttpMethod::Post, "issuer-dids/sign") => {
             Some(SigningCompatibilityOperation::IssuerDidSign)
@@ -60,17 +51,6 @@ pub fn operation(method: HttpMethod, path: &str) -> Option<SigningCompatibilityO
 }
 
 fn parameterized(method: HttpMethod, relative: &str) -> Option<SigningCompatibilityOperation> {
-    if method == HttpMethod::Post {
-        if let Some(service_id) = relative
-            .strip_prefix("services/")
-            .and_then(|value| value.strip_suffix("/sign"))
-            .filter(|value| !value.is_empty() && !value.contains('/'))
-        {
-            return Some(SigningCompatibilityOperation::ServiceSign {
-                service_id: service_id.into(),
-            });
-        }
-    }
     let profile = relative.strip_prefix("issuer-profiles/")?;
     if let Some(profile_id) = profile.strip_suffix("/identity") {
         return (method == HttpMethod::Get && valid_segment(profile_id)).then(|| {
@@ -141,7 +121,7 @@ mod tests {
         ))
         .expect("internal signing contract");
         assert_eq!(contract.schema_version, 1);
-        assert_eq!(contract.routes.len(), 18);
+        assert_eq!(contract.routes.len(), 15);
         for case in contract.routes {
             let path = case.example_path.as_deref().unwrap_or(&case.path);
             let actual = operation(case.method, path).expect("classified route");
@@ -151,8 +131,6 @@ mod tests {
 
     fn operation_name(operation: &SigningCompatibilityOperation) -> &'static str {
         match operation {
-            SigningCompatibilityOperation::FlowEnvelopeUnwrap => "flow_envelope_unwrap",
-            SigningCompatibilityOperation::FlowEnvelopeWrap => "flow_envelope_wrap",
             SigningCompatibilityOperation::IssuerContext => "issuer_context",
             SigningCompatibilityOperation::IssuerDidSign => "issuer_did_sign",
             SigningCompatibilityOperation::CreateProfile => "create_profile",
@@ -170,7 +148,6 @@ mod tests {
             SigningCompatibilityOperation::PassportArtifactEncrypt => "passport_artifact_encrypt",
             SigningCompatibilityOperation::PassportArtifactDecrypt => "passport_artifact_decrypt",
             SigningCompatibilityOperation::PassportCallbackVerify => "passport_callback_verify",
-            SigningCompatibilityOperation::ServiceSign { .. } => "service_sign",
         }
     }
 }

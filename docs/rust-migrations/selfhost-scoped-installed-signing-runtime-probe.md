@@ -35,8 +35,11 @@ exact `services` digest for Linux amd64, and checks the selected local image's
 platform and repository-digest association. A closed Compose overlay starts
 only the shared-services image as `signing_keys` on the existing private
 disposable network, without source builds, host ports, persistent volumes, or
-the OpenBao root token. It uses a generated API key distinct from the scoped
-OpenBao token. After health, it reads the migration-seeded public JWKS for the
+the OpenBao root token. It uses three distinct generated API credentials,
+its own OpenBao token with the reviewed credential-service and
+signing-keys-managed policies, and a separate verify-only signing-grant
+token minted by the disposable bootstrap. The grant token cannot mint HMACs;
+the probe does not exercise a signing operation. After health, it reads the migration-seeded public JWKS for the
 fixture organization and confirms that another organization has no keys.
 The complete overlay is torn down even if the runtime read fails.
 

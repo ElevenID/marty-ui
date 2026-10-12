@@ -1,7 +1,11 @@
-# Credential renewal: remaining DIDComm caller and frozen evidence
+# Credential renewal: native DIDComm caller and frozen evidence
 
-This is reference evidence, not a native renewal implementation or a deployment
-approval. DIDComm KMS corrections remain outside this migration slice.
+This records the historical Python reference and the native renewal cutover.
+The frozen corpus remains an input to Rust regression checks; its Python
+capture program and capture-dependent test were retired during KMS hardening
+because the capture executed a local X25519 sender private key. A small
+key-free test retains the corpus-integrity checks. This document is not
+deployment approval.
 
 ## Why the Python owner is still reachable
 
@@ -21,7 +25,7 @@ those profiles. Shared Canvas claim/delivery helpers are used by issuance and
 other remaining routes, not only the eight migrated operations. This does not
 expand the task to all 58 remaining gateway routes.
 
-## Reproducible, bounded reference
+## Frozen historical reference
 
 `contracts/credential-renewal-python-reference.json` records 31 scenarios with
 complete public response bodies, ordered owner/port/repository observations,
@@ -29,14 +33,13 @@ and complete transaction, credential, delivery-record, and event snapshots.
 The 22 distinct snapshots are losslessly interned by canonical-JSON SHA256;
 `#/states/<hash>` references do not omit unchanged fields.
 
-The script verifies ten source blobs at Credentials commit
+The retired capture verified ten source blobs at Credentials commit
 `87eae30788924921a42848425d315e2f33f7ae41`, including unchanged routes blob
 `6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a`, eight imported module origins,
 and the actual nonempty native binary SHA256 list for `marty-rs==0.1.60`.
-This deliberately preserves the older consumer contract; Credentials PR #275's
-later removal of unused decrypt/unpack wrappers does not replace this oracle.
+These hashes remain historical provenance, not an executable Python oracle.
 
-Actual FastAPI routing, API-key authentication, tenant checks, renewal,
+The historical capture executed actual FastAPI routing, API-key authentication, tenant checks, renewal,
 initiation/idempotency, projector, direct delivery, renewal finalizer, and
 revocation functions execute unchanged. `sys.setprofile` observes their entries;
 the repository observer delegates to the original `InMemoryIssuanceRepository`.
@@ -46,30 +49,25 @@ objects: this is **not PostgreSQL persistence or concurrency qualification**.
 Clock/seed, organization/template gRPC, issuer context, credential builder/signer,
 status allocation/publication, DID resolution/endpoint policy, and wallet
 HTTP/TLS are controlled ports. Original prepared policy and Core packing and
-encryption execute with fixed, synthetic X25519 fixtures in both modes. No real
+encryption were exercised with fixed, synthetic X25519 fixtures in both modes. No real
 signing key, operator environment, network wallet, TLS trust, or KMS is tested.
 Public fixture vectors are recorded constants, not Python key derivation. The
-Rust-ownership guard remains unchanged, and exact live replay still matches all
-31 cases after this fixture-only replacement.
-Actual socket connections/name resolution are denied after the event loop is
-created; caught attempts also fail the capture. Import-time environment is
-cleared. Five actual clock owners are frozen; timestamps are retained, not
+Rust-ownership guard remains unchanged. The historical capture matched all
+31 cases before retirement. Its harness denied socket connections/name
+resolution after creating the event loop and cleared the import environment.
+Five actual clock owners were frozen; timestamps are retained, not
 normalized. Only the independently generated Core message UUID is validated
 then represented as `$core-message-id`.
 
-Default, repo-local CI guards require neither another checkout nor an installed
-legacy native binding:
+Current native regression owners require neither a Python reference checkout
+nor an installed legacy native binding. The Issuance HTTP test replays 29
+frozen admission cases; the composed Rust renewal gate owns the two
+ordinary-then-direct cases across anoncrypt and remote-KMS authcrypt:
 
 ```text
-python -m pytest tests/test_credential_renewal_reference.py
-```
-
-Explicit live replay requires the pinned checkout and its Python dependencies,
-including the recorded native binding. It is not a default CI gate and does not
-silently skip missing prerequisites:
-
-```text
-python scripts/capture_credential_renewal_reference.py PATH_TO_PINNED_CREDENTIALS --check
+cargo test -p marty-issuance-service --test credential_renewal_behavior
+cargo test -p marty-canvas-acceptance --test canvas_published_schema_contract didcomm_renewal_http_composes_real_delivery_and_renewal_links
+python -m pytest tests/test_credential_renewal_corpus.py
 ```
 
 Two fresh final captures matched the entire document, including every state

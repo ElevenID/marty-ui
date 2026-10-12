@@ -71,11 +71,13 @@ impl AuthService for AuthGrpcService {
                 valid: false,
                 user: None,
                 expires_at: String::new(),
+                authentication_time_unix: None,
             },
             |session| ValidateSessionResponse {
                 valid: true,
                 user: Some(user_info(&session.user)),
                 expires_at: session.expires_at.to_rfc3339(),
+                authentication_time_unix: verified_authentication_time(&session),
             },
         );
         Ok(Response::new(response))
@@ -139,6 +141,12 @@ impl AuthService for AuthGrpcService {
             status: "serving".into(),
         }))
     }
+}
+
+fn verified_authentication_time(session: &crate::Session) -> Option<i64> {
+    let timestamp = session.oidc_claims.as_ref()?.get("auth_time")?.as_i64()?;
+    // A future claim must never make an old session appear freshly authenticated.
+    (timestamp > 0 && timestamp <= session.created_at.timestamp() + 60).then_some(timestamp)
 }
 
 fn user_info(user: &AuthenticatedUser) -> UserInfo {

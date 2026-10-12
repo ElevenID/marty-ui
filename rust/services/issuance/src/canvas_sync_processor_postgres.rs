@@ -246,6 +246,9 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         resources: &CanvasSyncResources,
         fact: &Value,
     ) -> Result<CanvasFactCommit, CanvasSyncProcessingError> {
+        if marty_key_material_policy::contains_private_key(fact) {
+            return Err(unavailable());
+        }
         let lease = self.lease.clone().ok_or_else(lease_lost)?;
         let application = resources.application.as_ref().ok_or_else(unavailable)?;
         let template = resources
@@ -312,13 +315,16 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         checked: &[String],
         policy_allowed: bool,
     ) -> Result<bool, CanvasSyncProcessingError> {
-        let mut transaction = self.begin_write(target).await?;
-        let application = resources.application.as_ref().ok_or_else(stale)?;
         let patch = json!({
             "last_evidence_sync_at": Utc::now(),
             "last_evidence_policy_allowed": policy_allowed,
             "last_evidence_requirements_checked": checked,
         });
+        if marty_key_material_policy::contains_private_key(&patch) {
+            return Err(unavailable());
+        }
+        let mut transaction = self.begin_write(target).await?;
+        let application = resources.application.as_ref().ok_or_else(stale)?;
         lock_current_scope(&mut transaction, target, resources).await?;
         lock_current_application(&mut transaction, application).await?;
         let result = sqlx::query(
@@ -470,6 +476,11 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
         requirement_id: &str,
         observation: &CanvasAuthoritativeObservation,
     ) -> Result<bool, CanvasSyncProcessingError> {
+        if marty_key_material_policy::contains_private_key_map(&observation.assertion)
+            || marty_key_material_policy::contains_private_key_map(&observation.source_payload)
+        {
+            return Err(unavailable());
+        }
         let canonical = crate::canvas_award_candidate::python_canonical_json(&json!({
             "assertion": observation.assertion,
             "payload": observation.source_payload,

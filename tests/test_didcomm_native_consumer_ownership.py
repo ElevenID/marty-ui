@@ -83,12 +83,9 @@ def test_consumer_contract_rejects_partial_or_legacy_selection(path: str, mutati
         _assert_selected(model)
 
 
-def test_only_selfhost_production_model_remains_legacy() -> None:
-    assert CONTRACT["legacy_compose_models"] == ["docker-compose.selfhost.prod.yml"]
-    for path in CONTRACT["legacy_compose_models"]:
-        environment = _model(path)["services"]["issuance"]["environment"]
-        assert CONTRACT["owner_selector"]["name"] not in environment
-        assert CONTRACT["native_origin"]["name"] not in environment
+def test_no_compose_model_retains_legacy_didcomm_owner() -> None:
+    assert CONTRACT["legacy_compose_models"] == []
+    assert "docker-compose.selfhost.prod.yml" in CONTRACT["selected_compose_models"]
 
 
 def test_kubernetes_source_keeps_legacy_template_for_explicit_rendering() -> None:

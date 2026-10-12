@@ -227,11 +227,3 @@ def test_staged_domain_and_local_dids_are_checked_before_intent(
                             "PUBLIC_DOMAIN=other.example"]}})
     with pytest.raises(HostProbeError, match="public domain differs"):
         ceremony_gate.staged_public_domain(plan, lambda *_: "")
-
-
-def test_ceremony_precedes_read_only_kms_and_owner_switch() -> None:
-    script = (Path(__file__).resolve().parents[1] / "scripts"
-              / "run-passport-beta-aggregate-deploy.ps1").read_text(encoding="utf-8")
-    assert script.index("probe_passport_beta_aggregate_ceremony.py") < script.index(
-        "probe_passport_beta_aggregate_kms.py") < script.index(
-        "$owner = Invoke-RustOwnerTransition")

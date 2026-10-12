@@ -137,6 +137,17 @@ impl LiveBackend {
 }
 
 impl Backend for LiveBackend {
+    async fn verify_database(&mut self, database_url: &str) -> Result<(), String> {
+        let mut connection = PgConnection::connect(database_url)
+            .await
+            .map_err(|error| error.to_string())?;
+        sqlx::query_scalar::<_, i32>("SELECT 1")
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|error| error.to_string())?;
+        connection.close().await.map_err(|error| error.to_string())
+    }
+
     async fn schemas(&mut self, database_url: &str, schemas: &[&str]) -> Result<(), String> {
         let mut connection = PgConnection::connect(database_url)
             .await

@@ -1,4 +1,4 @@
-"""Mutation tests against the frozen and current rendered self-host models."""
+"""Mutation tests against the approved KMS-only self-host model."""
 
 from copy import deepcopy
 import hashlib
@@ -12,12 +12,20 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_selfhost_native_owner_compose.py"))
 
 
+def test_selfhost_openbao_requires_transactional_raft_storage():
+    config = (ROOT / "docker/openbao-selfhost.hcl").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "docker/openbao-selfhost-init.sh").read_text(encoding="utf-8")
+    assert 'storage "raft" {' in config
+    assert 'storage "file" {' not in config
+    assert "bao operator raft list-peers" in bootstrap
+
+
 def test_reference_identity_and_descriptor_closure():
     GATE["assert_input_inventory"]()
-    data = (ROOT / GATE["FROZEN"]).read_text(encoding="utf-8").encode()
+    data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "5c643478422ecb9f71bb9bd3133af55805e91b184bd8f3c84852fafd418905f8"
+        == "6057f8101f9abce234b0413111c7190267c8a1b74a1569ce4a9d3f2fd52d477f"
     )
     import json
 
@@ -27,9 +35,9 @@ def test_reference_identity_and_descriptor_closure():
 
 @pytest.fixture(scope="module")
 def rendered_models():
-    # Compare the reviewed frozen source to the current complete Rust model.
+    # Compare the independently approved KMS-only source to the current model.
     render = GATE["GATE"]["render"]
-    before = render(GATE["FROZEN"])
+    before = render(GATE["APPROVED"])
     after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
@@ -38,6 +46,26 @@ def rendered_models():
 @pytest.fixture
 def models(rendered_models):
     return deepcopy(rendered_models)
+
+
+@pytest.mark.parametrize("fault", ["raw-environment", "raw-secret-mount"])
+def test_approved_model_rejects_return_of_raw_master_key(models, fault):
+    approved, current = models
+    for model in (approved, current):
+        if fault == "raw-environment":
+            model["services"]["issuance"]["environment"][
+                "INTEGRATION_SECRET_MASTER_KEY_FILE"
+            ] = "/run/secrets/integration_secret_master_key"
+        else:
+            model["secrets"]["integration_secret_master_key"] = {
+                "file": "/synthetic/integration_secret_master_key"
+            }
+            model["services"]["issuance"]["secrets"].append(
+                {"source": "integration_secret_master_key"}
+            )
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
+
 
 @pytest.mark.parametrize(
     "field",
@@ -145,6 +173,25 @@ def test_siblings_resources_and_secret_boundary_are_closed(models, fault):
         )
     else:
         after["x-issuance-application-env"]["BAO_ADDR"] = "legacy"
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](before, after)
+
+
+@pytest.mark.parametrize("fault", ["file", "binding", "mount"])
+def test_signing_keys_has_a_dedicated_openbao_token(models, fault):
+    before, after = models
+    if fault == "file":
+        after["secrets"]["signing_keys_openbao_token"]["file"] = (
+            "/synthetic/openbao_service_token"
+        )
+    elif fault == "binding":
+        after["services"]["signing-keys"]["environment"]["BAO_TOKEN_FILE"] = (
+            "/run/secrets/openbao_service_token"
+        )
+    else:
+        after["services"]["signing-keys"]["secrets"][0]["source"] = (
+            "openbao_service_token"
+        )
     with pytest.raises(AssertionError):
         GATE["assert_models"](before, after)
 

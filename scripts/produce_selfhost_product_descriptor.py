@@ -41,7 +41,8 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
         raise ValueError("transaction source differs from preparation receipt")
     if claim["state"] not in {"qualified", "promoting", "promoted", "published"}:
         raise ValueError("transaction lacks stack qualification gate evidence")
-    if claim["repository"] != "ElevenID/marty-ui" or len(claim["gates"]) != 2:
+    if (claim["repository"] != "ElevenID/marty-ui"
+            or set(claim["gates"]) != set(release_transaction.REQUIRED_GATE_ROLES)):
         raise ValueError("transaction repository or stack gates changed")
     lock = _json(image_lock)
     if lock.get("release") != f"marty-ui@{claim['version']}":
@@ -54,6 +55,9 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
         exact_image = recorded["uri"] + "@" + recorded["digest"]
         if exact_image not in locked_images.values():
             raise ValueError(f"image lock omits transaction {role} image")
+    plugin = claim["images"]["openbao_didcomm"]
+    if lock.get("openbao_didcomm_image") != plugin["uri"] + "@" + plugin["digest"]:
+        raise ValueError("image lock omits transaction OpenBao DIDComm image")
     archive_digest = "sha256:" + receipt["archive_sha256"]
     manifest = {
         "schema": "marty.product-artifact/v1",

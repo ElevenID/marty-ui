@@ -16,7 +16,7 @@
   ],
   "consumers": {
     "base_compose": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token": "GRPC_SERVICE_TOKEN"},
-    "selfhost_compose": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token_file": "/run/secrets/grpc_service_token", "flow_reference_default": "http://issuance:8005", "activation_native_url_override": "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005", "native_url_passthrough_default": "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"},
+    "selfhost_compose": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token_file": "/run/secrets/grpc_service_token", "flow_reference_default": "http://issuance:8005", "activation_native_url_override": "ISSUANCE_NATIVE_SERVICE_URL=http://issuance-native:8005", "native_url_default": "http://issuance-native:8005"},
     "kubernetes": {"gateway": "PASSPORT_NATIVE_GATEWAY_ENABLED", "flow": "PASSPORT_NATIVE_FLOW_ENABLED", "owner": "PASSPORT_NATIVE_HTTP_ENABLED", "auth": "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED", "token_secret": "marty-secrets/GRPC_SERVICE_TOKEN"}
   },
   "software_route_acceptance": {

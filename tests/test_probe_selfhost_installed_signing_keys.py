@@ -12,10 +12,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import probe_selfhost_installed_signing_keys as probe
+from qualify_selfhost_migrations import VERIFY_ONLY_CATALOG_QUERY
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "e" * 64
 IMAGES = {
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "a" * 64,
+    "services": IMAGE,
     "postgres": "docker.io/library/postgres@sha256:" + "b" * 64,
     "redis": "docker.io/library/redis@sha256:" + "c" * 64,
     "openbao": "quay.io/openbao/openbao@sha256:" + "d" * 64,
@@ -125,6 +127,8 @@ def test_runtime_uses_private_service_and_tears_down_after_business_read(tmp_pat
     (install / "docker").mkdir(parents=True)
     (install / "docker/openbao-init.sh").write_text("fixture", encoding="utf-8")
     (tmp_path / "bao_service_token").write_text("scoped-openbao-token", encoding="ascii")
+    (tmp_path / "sign_grant_verify_token").write_text("scoped-verify-token", encoding="ascii")
+    (tmp_path / "signing_keys_openbao_token").write_text("scoped-signing-token", encoding="ascii")
     monkeypatch.setattr(probe, "verify_local_image", lambda image: None)
     environment = {**os.environ,
         "PROBE_MIGRATIONS_IMAGE": IMAGES["migrations"],
@@ -171,6 +175,8 @@ def test_failed_runtime_read_still_tears_down(tmp_path, monkeypatch):
     (install / "docker").mkdir(parents=True)
     (install / "docker/openbao-init.sh").write_text("fixture", encoding="utf-8")
     (tmp_path / "bao_service_token").write_text("scoped-openbao-token", encoding="ascii")
+    (tmp_path / "sign_grant_verify_token").write_text("scoped-verify-token", encoding="ascii")
+    (tmp_path / "signing_keys_openbao_token").write_text("scoped-signing-token", encoding="ascii")
     monkeypatch.setattr(probe, "verify_local_image", lambda image: None)
     environment = {**os.environ,
         "PROBE_MIGRATIONS_IMAGE": IMAGES["migrations"],
@@ -205,21 +211,26 @@ def test_runtime_hook_runs_after_two_migrations_and_retains_unqualified(tmp_path
     monkeypatch.setattr(probe.migrations, "validate_scoped_model", lambda *args: None)
     monkeypatch.setattr(probe.migrations, "verify_local_platforms", lambda images: None)
     calls = []
-    completed = ("Profile: selfhost-production (persistent=True)\n"
-                 "Marty KMS identity: ready\n"
-                 "Ensured non-exportable notification webhook envelope key\n"
-                 "All migrations completed successfully\n"
-                 "notification schema migrated\n")
+    completed = '{"level":"INFO","message":"notification schema migrated"}\n'
 
     def run(args, environment, timeout=90):
         calls.append(args)
+        if args[-1] == VERIFY_ONLY_CATALOG_QUERY:
+            return subprocess.CompletedProcess(args, 0, "0\n", "")
+        if args[-1] == "--verify-only":
+            return subprocess.CompletedProcess(args, 1 if "--env" in args else 0,
+                                               "", "")
         if args[-1] == "openbao-bootstrap":
             secret_dir = Path(environment["PROBE_SECRET_DIR"])
             (secret_dir / "bao_service_token").write_text("scoped-service")
             (secret_dir / "notification_openbao_token").write_text("scoped-notification")
+            (secret_dir / "sign_grant_verify_token").write_text("scoped-verifier")
+            (secret_dir / "signing_keys_openbao_token").write_text("scoped-signing-keys")
         output = ("{}" if args[-3:] == ["config", "--format", "json"] else
                   completed if args[-1] == "db-migrate" else
-                  "20260808_0002" if "psql" in args else
+                  "20260808_0002" if args[-1] == probe.migrations.HEAD else
+                  "" if args[-1] in (probe.migrations.PRIVATE_KEY_SCHEMA_QUERY,
+                                      probe.migrations.PRIVATE_KEY_CONTENT_QUERY) else
                   "1" if "redis-cli" in args else "")
         return subprocess.CompletedProcess(args, 0, output, "")
 
@@ -234,4 +245,6 @@ def test_runtime_hook_runs_after_two_migrations_and_retains_unqualified(tmp_path
         run=run, project=PROJECT, after_migrations=after_migrations)
     assert report["qualification"] == "unqualified"
     assert report["runtime"]["service"] == "signing-keys"
+    assert sum(args[-1] == probe.migrations.PRIVATE_KEY_SCHEMA_QUERY for args in calls) == 2
+    assert sum(args[-1] == probe.migrations.PRIVATE_KEY_CONTENT_QUERY for args in calls) == 2
     assert any(args[-2:] == ["down", "--volumes"] for args in calls)

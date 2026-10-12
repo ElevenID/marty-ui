@@ -42,6 +42,11 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         f"  cloudflared: {{image: '{PREFIX}/cloudflared-wrapper:1.2.3'}}\n"
         f"  cloudflared-beta: {{image: '{PREFIX}/cloudflared-wrapper:1.2.3'}}\n",
         encoding="utf-8")
+    (tmp_path / "docker-compose.selfhost.openbao.yml").write_text(
+        "services:\n"
+        "  openbao: {image: '${MARTY_OPENBAO_DIDCOMM_IMAGE:?required}'}\n"
+        "  openbao-bootstrap: {image: '${MARTY_OPENBAO_DIDCOMM_IMAGE:?required}'}\n",
+        encoding="utf-8")
     lock_file = tmp_path / "stack-lock.json"
     lock_file.write_text(json.dumps({
         "schema": "marty.stack-lock/v1", "release": "marty-ui@1.2.3",
@@ -50,7 +55,8 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
     if not (tmp_path / ".git").exists():
         subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
         subprocess.run(["git", "-C", str(tmp_path), "add", "base.yml",
-                        "override.yml", "stack-lock.json"], check=True)
+                        "override.yml", "stack-lock.json",
+                        "docker-compose.selfhost.openbao.yml"], check=True)
         subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=CI",
                         "-c", "user.email=ci@example.invalid", "commit", "-qm",
                         "source fixture"], check=True)
@@ -66,6 +72,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "ui": "sha256:" + "1" * 64,
         "services": "sha256:" + "2" * 64,
         "migrations": "sha256:" + "3" * 64,
+        "openbao_didcomm": "sha256:" + "7" * 64,
     }, build_run_id="92")
     model = {"services": {
         "postgres": {"image": "postgres:15-alpine"},
@@ -104,6 +111,7 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result == build(tmp_path)
     assert result["schema"] == "marty.selfhost-image-lock/v1"
     assert result["release"] == "marty-ui@1.2.3"
+    assert result["openbao_didcomm_image"] == reference("openbao-didcomm", "7")
     assert result["services"]["gateway"] == reference("services", "2")
     assert result["services"]["issuance"] == result["services"]["issuance-migrations"] == reference("services", "2")
     assert result["services"]["db-migrate"] == reference("migrations", "3")
@@ -258,6 +266,22 @@ def test_tampered_base_and_override_cannot_reclassify_gateway_external(tmp_path:
         builder.build_lock(
             model=model, transaction=claim, stack_lock=stack_lock,
             source_repo=tmp_path, base_compose=base, override_compose=override,
+            source_sha=claim["source_sha"], claim_run_id="91",
+            selfhost_images=selfhost, external_services=external,
+        )
+
+
+def test_rejects_modified_openbao_compose_source(tmp_path: Path) -> None:
+    model, claim, stack_lock, selfhost, external = inputs(tmp_path)
+    openbao = tmp_path / "docker-compose.selfhost.openbao.yml"
+    openbao.write_text(openbao.read_text(encoding="utf-8") + "# changed\n",
+                       encoding="utf-8")
+    with pytest.raises(builder.ImageLockError,
+                       match="claimed Git blob: docker-compose.selfhost.openbao.yml"):
+        builder.build_lock(
+            model=model, transaction=claim, stack_lock=stack_lock,
+            source_repo=tmp_path, base_compose=tmp_path / "base.yml",
+            override_compose=tmp_path / "override.yml",
             source_sha=claim["source_sha"], claim_run_id="91",
             selfhost_images=selfhost, external_services=external,
         )

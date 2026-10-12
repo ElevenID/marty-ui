@@ -12,6 +12,7 @@ autotests = false
 [dev-dependencies]
 async-trait.workspace = true
 axum.workspace = true
+axum-server.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
@@ -25,7 +26,9 @@ marty-issuance-service = { path = "../../services/issuance" }
 percent-encoding.workspace = true
 prost.workspace = true
 redis.workspace = true
+rcgen.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

@@ -205,6 +205,19 @@ async fn selection_and_mutation_are_tenant_and_identity_qualified() {
         .is_none());
     assert_eq!(persisted.status, "delivered");
     assert_eq!(persisted.metadata["saved"], true);
+    let mut private_delivery = persisted.clone();
+    private_delivery.metadata.insert(
+        "issuer".into(),
+        json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+    );
+    assert!(repository.save_delivery(&private_delivery).await.is_err());
+    assert!(!repository
+        .delivery_record(&ids[0], &native_organization)
+        .await
+        .unwrap()
+        .unwrap()
+        .metadata
+        .contains_key("issuer"));
 
     let mut foreign_identity = persisted.clone();
     foreign_identity.organization_id = foreign_organization.clone();
@@ -313,6 +326,14 @@ async fn selection_and_mutation_are_tenant_and_identity_qualified() {
         .save_claimed_delivery(&claimed, "not-the-owner")
         .await
         .is_err());
+    let mut private_claimed = claimed.clone();
+    private_claimed
+        .metadata
+        .insert("private_key_pem".into(), json!("synthetic"));
+    assert!(repository
+        .save_claimed_delivery(&private_claimed, &claim_id)
+        .await
+        .is_err());
     claimed.status = "delivered".into();
     claimed.updated_at = "2026-09-01T12:01:00+00:00".into();
     repository
@@ -357,6 +378,17 @@ async fn selection_and_mutation_are_tenant_and_identity_qualified() {
         .execute(&pool)
         .await
         .unwrap();
+    assert!(repository
+        .save_alert_event(&CanvasMirrorAlertEvent {
+            id: event_id.clone(),
+            transaction_id: format!("transaction-native-0-{scope}"),
+            application_id: None,
+            event_type: "canvas_mirror_alert_emitted".into(),
+            metadata: json!({"private_key_pem": "synthetic"}),
+            created_at: "2026-09-01T12:00:00+00:00".into(),
+        })
+        .await
+        .is_err());
     repository
         .save_alert_event(&CanvasMirrorAlertEvent {
             id: event_id.clone(),

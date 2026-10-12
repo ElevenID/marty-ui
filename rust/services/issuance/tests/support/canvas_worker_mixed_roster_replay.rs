@@ -275,6 +275,14 @@ pub async fn replay(
             "ISSUANCE_API_KEY".into(),
             "synthetic-startup-api-key".into(),
         ),
+        (
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "synthetic-startup-api-key".into(),
+        ),
+        (
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            "synthetic-mixed-roster-issuer-sign-key-0001".into(),
+        ),
         ("SIGNING_KEYS_INTERNAL_URL".into(), signer_origin.into()),
     ]);
     let stages = case["stages"].as_array().unwrap();

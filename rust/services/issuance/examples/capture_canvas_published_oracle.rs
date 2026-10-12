@@ -22,25 +22,15 @@ async fn main() -> Result<(), String> {
         _ => return Err("expected scenario [--output ABSOLUTE_NEW_FILE]".into()),
     };
     use canvas_published_database::PublishedDatabase;
-    if matches!(
-        scenario.as_str(),
-        "worker-retry-after" | "worker-validation"
-    ) {
-        let scenarios: serde_json::Value = serde_json::from_str(match scenario.as_str() {
-            "worker-validation" => {
-                include_str!("../../../../contracts/canvas-worker-validation-scenarios.json")
-            }
-            _ => include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
-        })
+    if scenario == "worker-retry-after" {
+        let scenarios: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-worker-retry-after-scenarios.json"
+        ))
         .unwrap();
         let mut matrix = serde_json::Map::new();
         for case in scenarios["cases"].as_array().unwrap() {
             let name = case["name"].as_str().unwrap();
-            let owned = if scenario == "worker-validation" {
-                PublishedDatabase::start_with_worker_validation(name).await?
-            } else {
-                PublishedDatabase::start_with_worker_retry_after(name).await?
-            };
+            let owned = PublishedDatabase::start_with_worker_retry_after(name).await?;
             matrix.insert(
                 name.into(),
                 owned
@@ -59,10 +49,6 @@ async fn main() -> Result<(), String> {
         "utf7-consumer" => PublishedDatabase::start_with_utf7_consumer().await?,
         "json-consumer" => PublishedDatabase::start_with_json_consumer().await?,
         "json-depth" => PublishedDatabase::start_with_json_depth().await?,
-        "worker-startup" => PublishedDatabase::start_with_worker_startup().await?,
-        "worker-rest" => PublishedDatabase::start_with_worker_rest().await?,
-        "worker-facts" => PublishedDatabase::start_with_worker_facts().await?,
-        "worker-retry" => PublishedDatabase::start_with_worker_retry().await?,
         "worker-provider-sigint" => PublishedDatabase::start_with_worker_provider_signal("SIGINT").await?,
         "worker-provider-sigterm" => PublishedDatabase::start_with_worker_provider_signal("SIGTERM").await?,
         "worker-provider-sigkill" => PublishedDatabase::start_with_worker_provider_signal("SIGKILL").await?,
@@ -74,7 +60,7 @@ async fn main() -> Result<(), String> {
         "worker-reclaimers-retry" => PublishedDatabase::start_with_worker_reclaimers_retry().await?,
         _ => {
             return Err(
-                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-startup, worker-rest, worker-facts, worker-retry, worker-retry-after, worker-validation, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
+                "expected validation-boundary, status-provider, utf7-consumer, json-consumer, json-depth, worker-retry-after, worker-concurrent, worker-reclaimers, worker-reclaimers-retry or worker-provider-{sigint,sigterm,sigkill,renewal,recovery,final}"
                     .into(),
             )
         }

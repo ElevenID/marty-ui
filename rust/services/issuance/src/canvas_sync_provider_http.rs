@@ -22,7 +22,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    canvas_lti_tool_signing::CanvasLtiToolJwtSigner,
+    canvas_lti_tool_signing::{CanvasLtiSigningKind, CanvasLtiToolJwtSigner},
     canvas_network_timeout::CanvasNetworkTimeout,
     canvas_oauth::{CanvasOAuthError, CanvasOAuthService},
     canvas_operation_http::{
@@ -482,16 +482,21 @@ impl HttpCanvasAuthoritativeProvider {
         scope: &str,
     ) -> Result<String, CanvasProviderReadError> {
         let now = Utc::now().timestamp();
+        let assertion_id = Uuid::new_v4().to_string();
         let assertion = self
             .signer
-            .sign_jwt(&json!({
-                "iss": resources.platform.lti_client_id,
-                "sub": resources.platform.lti_client_id,
-                "aud": endpoint,
-                "iat": now,
-                "exp": now + 300,
-                "jti": Uuid::new_v4().to_string(),
-            }))
+            .sign_jwt(
+                &json!({
+                    "iss": resources.platform.lti_client_id,
+                    "sub": resources.platform.lti_client_id,
+                    "aud": endpoint,
+                    "iat": now,
+                    "exp": now + 300,
+                    "jti": assertion_id,
+                }),
+                CanvasLtiSigningKind::OAuthClientAssertion,
+                &assertion_id,
+            )
             .await
             .map_err(|_| CanvasProviderReadError::Unavailable)?;
         let endpoint_url =
@@ -1568,13 +1573,18 @@ mod tests {
             canvas_oauth_postgres::{
                 PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault,
             },
-            integration_secret::IntegrationSecretCipher,
+            integration_secret_kms::KmsIntegrationSecretCipher,
         };
 
         struct UnusedSigner;
         #[async_trait]
         impl CanvasLtiToolJwtSigner for UnusedSigner {
-            async fn sign_jwt(&self, _: &Value) -> Result<String, CanvasLtiToolSigningError> {
+            async fn sign_jwt(
+                &self,
+                _: &Value,
+                _kind: CanvasLtiSigningKind,
+                _source_id: &str,
+            ) -> Result<String, CanvasLtiToolSigningError> {
                 panic!("factory and rejected-trust tests must not sign")
             }
 
@@ -1590,10 +1600,11 @@ mod tests {
             .unwrap();
         let oauth = CanvasOAuthService::new(
             Arc::new(PostgresCanvasOAuthRepository::new(pool.clone())),
-            Arc::new(PostgresIntegrationSecretVault::new(
+            Arc::new(PostgresIntegrationSecretVault::new_remote(
                 pool.clone(),
-                IntegrationSecretCipher::from_base64(
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                KmsIntegrationSecretCipher::new(
+                    url::Url::parse("https://127.0.0.1:1/internal").unwrap(),
+                    "synthetic-test-key",
                 )
                 .unwrap(),
             )),

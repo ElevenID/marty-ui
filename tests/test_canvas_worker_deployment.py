@@ -154,7 +154,9 @@ def test_deployments_migrate_issuance_from_the_shared_rust_services_image() -> N
         assert migration["build"] == services["issuance"]["build"]
         assert migration["build"]["args"]["SERVICE_NAME"] == "issuance-native"
         command = str(migration["command"])
-        assert "marty-issuance-service" in str(migration["entrypoint"] + migration["command"])
+        assert "marty-issuance-service" in str(
+            migration["entrypoint"] + migration["command"]
+        )
         assert "migrate" in command
         assert migration["healthcheck"] == {"disable": True}
         assert migration["restart"] == "no"
@@ -178,7 +180,9 @@ def test_deployments_migrate_issuance_from_the_shared_rust_services_image() -> N
 
     deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     ui_wait = deploy.index("condition=complete job/db-migrate")
-    issuance_apply = deploy.index('apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"')
+    issuance_apply = deploy.index(
+        'apply_manifest "${K8S_DIR}/06a-issuance-migrations.yaml"'
+    )
     issuance_wait = deploy.index("condition=complete job/issuance-migrations")
     assert ui_wait < issuance_apply < issuance_wait
 
@@ -218,8 +222,9 @@ def test_kubernetes_runs_headless_canvas_worker_as_its_own_deployment() -> None:
     }
     assert secret_names == {
         "DATABASE_URL": "DATABASE_URL",
-        "INTEGRATION_SECRET_MASTER_KEY": "INTEGRATION_SECRET_MASTER_KEY",
         "SIGNING_KEYS_INTERNAL_API_KEY": "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
         "TOKEN_HMAC_KEY": "TOKEN_HMAC_KEY",
     }
     issuance = next(
@@ -313,7 +318,7 @@ def test_bundle_worker_comparison_preserves_every_field(compose_worker_gate, fie
     elif field == "environment":
         worker[field]["SERVICE_NAME"] = "issuance_native"
     elif field == "secrets":
-        worker[field].remove("integration_secret_master_key")
+        worker[field].remove("issuance_api_key")
     elif field == "depends_on":
         worker[field]["issuance-migrations"]["condition"] = "service_started"
     elif field is not None:
@@ -491,7 +496,7 @@ def test_consumer_matrix_derives_all_conformance_switches_from_real_owner(
             (
                 released,
                 "docker-compose.profile.oidf-haip.yml" in files,
-                "docker-compose.profile.didcomm-authcrypt.yml" in files,
+                "docker-compose.profile.issuance-native-authcrypt.yml" in files,
             )
         )
     assert len(combinations) == 8

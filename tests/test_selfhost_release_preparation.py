@@ -26,7 +26,7 @@ def test_only_explicit_official_dispatch_can_prepare_selfhost_lock() -> None:
     assert "qualify-release" in jobs["prepare-selfhost-image-lock"]["needs"]
     assert jobs["publish-manifest"]["needs"] == [
         "resolve-transaction", "validate-stack", "build-ui",
-        "build-services", "qualify-release",
+        "build-services", "build-openbao-didcomm", "qualify-release",
     ]
 
 
@@ -67,14 +67,16 @@ def test_lock_staging_checks_exact_source_provenance_and_full_profile_closure() 
     assert "git rev-parse 'HEAD^{commit}'" in source
     assert "refs/remotes/origin/main" in source
     assert "scripts/release_transaction.py validate" in source
-    assert ".gates | length == 2" in source
+    assert ".gates | length == 4" in source
     assert "docker compose --profile '*'" in source
     assert "scripts/build_selfhost_image_lock.py" in source
     assert "--source-repo ." in source
     assert "gh attestation verify" in source
+    assert '.images.openbao_didcomm | .uri + "@" + .digest' in source
     assert "--source-digest \"$SOURCE_SHA\"" in source
     assert "docker logout ghcr.io" in source
     assert "docker pull \"$image\"" in source
+    assert '.services[], .openbao_didcomm_image' in source
     assert "selfhost-lock-preparation-unqualified-" in str(preparation)
     assert "retention-days: 30" in WORKFLOW.read_text(encoding="utf-8")
     assert "selfhost-lock-preparation-unqualified-" not in str(jobs["publish-manifest"])
@@ -103,7 +105,7 @@ def test_prepared_consumer_is_separate_and_cannot_qualify_or_publish() -> None:
     assert "scripts/release_transaction.py validate" in source
     assert '--stack-lock release/stack-lock.json' in source
     assert '--source-sha "$GITHUB_SHA"' in source
-    assert '.gates | length == 2' in source
+    assert '.gates | length == 4' in source
     assert "docker compose up" not in source
 
 

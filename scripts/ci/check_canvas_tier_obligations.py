@@ -7,6 +7,7 @@ The existing runner still owns every invocation, skip and run-bound proof.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -62,7 +63,7 @@ def validate_package_migration(migration: dict, listed: set[str], root: Path = R
     case_ids = migration.get("case_ids")
     require(
         isinstance(case_ids, list)
-        and len(case_ids) == 147
+        and len(case_ids) == 131
         and all(isinstance(name, str) and name for name in case_ids)
         and case_ids == sorted(set(case_ids)),
         "Canvas package migration identity list drift",
@@ -107,12 +108,67 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
 
     historical = inventory["historical"]
     preflights = inventory["preflights"]
-    names = [entry["test"] for entry in historical + preflights]
+    native_replays = inventory["native_replays"]
+    native_oauth = inventory["native_oauth_replays"]
+    names = [
+        entry["test"]
+        for entry in historical + preflights + native_replays + native_oauth
+    ]
+    names.append(inventory["native_validation"]["test"])
+    names.append(inventory["native_roster_failure"]["test"])
+    names.append(inventory["native_resources_unavailable"]["test"])
     require(
-        len(historical) == 33 and len(preflights) == 4,
+        len(historical) == 17
+        and len(preflights) == 4
+        and len(native_replays) == 3
+        and len(native_oauth) == 10,
         "Canvas tier inventory count changed",
     )
     require(len(names) == len(set(names)), "Duplicate Canvas obligation")
+    require(
+        inventory["native_validation"]["test"] in listed
+        and 'assert_worker_https("validation")' in text,
+        "Native validation process owner missing",
+    )
+    for key, scenario, test, count in (
+        ("native_roster_failure", "roster-failure", "worker_roster_failure_matches_frozen_published_process", 5),
+        ("native_resources_unavailable", "resources-unavailable", "worker_resources_unavailable_matches_frozen_published_process", 1),
+    ):
+        entry = inventory[key]
+        require(
+            entry.get("scenario") == scenario
+            and entry.get("test") == test
+            and entry.get("cases") == count
+            and test in listed
+            and f'assert_worker_https("{scenario}")' in text,
+            f"Native {scenario} process owner missing",
+        )
+        inputs = {
+            kind: root / f"contracts/canvas-worker-{scenario}-{kind}.json"
+            for kind in ("oracle", "scenarios")
+        }
+        require(
+            set(entry.get("sha256", {})) == set(inputs)
+            and all(
+                entry["sha256"][kind]
+                == hashlib.sha256(
+                    path.read_text(encoding="utf-8")
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+                    .encode()
+                ).hexdigest()
+                for kind, path in inputs.items()
+            ),
+            f"Native {scenario} frozen input drift",
+        )
+        cases = json.loads(inputs["scenarios"].read_text(encoding="utf-8"))["cases"]
+        expected = json.loads(inputs["oracle"].read_text(encoding="utf-8"))
+        require(
+            len(cases) == count
+            and len({case["name"] for case in cases}) == count
+            and {case["name"] for case in cases} == set(expected),
+            f"Native {scenario} case inventory drift",
+        )
     actual_historical = {
         name for name in listed if "reference_matches_published" in name
     }
@@ -121,6 +177,132 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
         expected_historical == actual_historical,
         "Historical Canvas discovery/inventory mismatch",
     )
+    expected_native = {
+        "rest": ("worker_rest_matches_frozen_published_process", 4),
+        "facts": ("worker_facts_match_frozen_published_process", 4),
+        "retry": ("worker_retry_matches_frozen_published_process", 5),
+    }
+    require(
+        {entry["scenario"] for entry in native_replays} == set(expected_native),
+        "Native replay scenario inventory drift",
+    )
+    for entry in native_replays:
+        scenario = entry["scenario"]
+        name, stages = expected_native[scenario]
+        inputs = [
+            f"contracts/canvas-worker-{scenario}-oracle.json",
+            f"contracts/canvas-worker-{scenario}-scenarios.json",
+        ]
+        if scenario == "rest":
+            inputs.append("contracts/canvas-worker-rest-current-inputs.json")
+        require(
+            entry["test"] == name
+            and entry["stages"] == stages
+            and entry["inputs"] == inputs
+            and entry.get("assertion", "").strip()
+            and name in listed
+            and f"fn {name}(" in text
+            and all((root / path).is_file() for path in inputs),
+            f"Native {scenario} replay obligation drift",
+        )
+        pinned = entry.get("sha256")
+        require(
+            isinstance(pinned, dict) and set(pinned) == {"oracle", "scenarios"},
+            f"Native {scenario} frozen pins missing",
+        )
+        for kind, path in zip(("oracle", "scenarios"), inputs[:2]):
+            source = (root / path).read_text(encoding="utf-8")
+            digest = hashlib.sha256(
+                source.replace("\r\n", "\n").replace("\r", "\n").encode()
+            ).hexdigest()
+            require(
+                pinned[kind] == digest,
+                f"Native {scenario} frozen {kind} input drift",
+            )
+        scenarios = json.loads((root / inputs[1]).read_text(encoding="utf-8"))
+        oracle = json.loads((root / inputs[0]).read_text(encoding="utf-8"))
+        require(
+            [stage["name"] for stage in scenarios["stages"]]
+            == [observation["name"] for observation in oracle["observations"]]
+            and len(scenarios["stages"]) == stages,
+            f"Native {scenario} frozen stage inventory drift",
+        )
+    expected_oauth = {
+        "oauth-revocation": ("worker_oauth_revocation_matches_frozen_published_process", 7),
+        "oauth-revocation-fence": ("worker_oauth_revocation_fence_matches_frozen_published_process", 2),
+        "oauth-revocation-patch": ("worker_oauth_revocation_patch_matches_frozen_published_process", 1),
+        "oauth-revocation-retry-after": ("worker_oauth_revocation_retry_after_matches_frozen_published_process", 8),
+        "oauth-revocation-backoff": ("worker_oauth_revocation_backoff_matches_frozen_published_process", 5),
+        "oauth-revocation-queue": ("worker_oauth_revocation_queue_matches_frozen_published_process", 2),
+        "oauth-revocation-lease": ("worker_oauth_revocation_lease_matches_frozen_published_process", 4),
+        "oauth-revocation-counters": ("worker_oauth_revocation_counters_matches_frozen_published_cycle", 4),
+        "oauth-revocation-secrets": ("worker_oauth_revocation_secrets_matches_frozen_published_process", 6),
+        "oauth-revocation-selection": ("worker_oauth_revocation_selection_repository_matches_published", 1),
+    }
+    require(
+        {entry["scenario"] for entry in native_oauth} == set(expected_oauth),
+        "Native OAuth corpus owner inventory drift",
+    )
+    parent = (root / "scripts/test_canvas_worker_oauth_revocation_https.py").read_text(
+        encoding="utf-8"
+    )
+    native_source = (
+        root / "rust/services/issuance/tests/support/canvas_worker_oauth_revocation_replay.rs"
+    ).read_text(encoding="utf-8")
+    require(
+        "assert_native_oauth_revocation_matrix" in text
+        and "assert_capped_repository_selection" in text
+        and "assert_capped_repository_selection" in native_source,
+        "Native OAuth process or repository owner missing",
+    )
+    for entry in native_oauth:
+        scenario = entry["scenario"]
+        name, cases = expected_oauth[scenario]
+        require(
+            entry["test"] == name
+            and entry["cases"] == cases
+            and name in listed
+            and f"fn {name}(" in text,
+            f"Native {scenario} test owner drift",
+        )
+        if scenario != "oauth-revocation-selection":
+            require(
+                f'assert_native_oauth_revocation_matrix("{scenario}")' in text
+                and f'"{scenario}"' in parent
+                and 'for case in matrix["cases"]' in parent,
+                f"Native {scenario} HTTPS dispatch missing",
+            )
+        else:
+            require(
+                "assert_capped_repository_selection(&pool).await" in text,
+                "Native OAuth repository selection dispatch missing",
+            )
+        scenarios_path = root / f"contracts/canvas-worker-{scenario}-scenarios.json"
+        oracle_path = root / f"contracts/canvas-worker-{scenario}-oracle.json"
+        require(
+            scenarios_path.is_file() and oracle_path.is_file(),
+            f"Native {scenario} frozen input missing",
+        )
+        pinned = entry.get("sha256")
+        require(
+            isinstance(pinned, dict) and set(pinned) == {"scenarios", "oracle"},
+            f"Native {scenario} frozen pins missing",
+        )
+        for kind, path in (("scenarios", scenarios_path), ("oracle", oracle_path)):
+            source = path.read_text(encoding="utf-8")
+            digest = hashlib.sha256(
+                source.replace("\r\n", "\n").replace("\r", "\n").encode()
+            ).hexdigest()
+            require(pinned[kind] == digest, f"Native {scenario} frozen {kind} drift")
+        matrix = json.loads(scenarios_path.read_text(encoding="utf-8"))
+        oracle = json.loads(oracle_path.read_text(encoding="utf-8"))
+        case_names = [case["name"] for case in matrix["cases"]]
+        require(
+            len(case_names) == cases
+            and len(set(case_names)) == cases
+            and set(case_names) == set(oracle),
+            f"Native {scenario} frozen case inventory drift",
+        )
     require(
         {entry["test"] for entry in preflights} <= listed,
         "Canvas preflight missing from compiled target",
@@ -131,10 +313,47 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
             encoding="utf-8"
         )
     )
+    require(
+        producers.get("schema") == "marty.canvas-worker-oracle-producers/v3",
+        "Wrong Canvas corpus ownership inventory schema",
+    )
     direct = set(producers["direct_runner_corpora"])
     shared = {
         name for cases in producers["shared_runner_corpora"].values() for name in cases
     }
+    frozen = producers.get("frozen_native_corpora", [])
+    expected_frozen = {
+        f"canvas-worker-{entry['scenario']}-oracle.json"
+        for entry in native_oauth
+    } | {
+        "canvas-worker-logging-oracle.json",
+        "canvas-worker-facts-oracle.json",
+        "canvas-worker-retry-oracle.json",
+        "canvas-worker-roster-failure-oracle.json",
+        "canvas-worker-resources-unavailable-oracle.json",
+        "canvas-worker-validation-oracle.json",
+    }
+    require(
+        isinstance(frozen, list)
+        and len(frozen) == len(set(frozen)) == len(expected_frozen)
+        and set(frozen) == expected_frozen,
+        "Frozen native corpus ownership drift",
+    )
+    logging_owner = (
+        root / "rust/services/issuance/src/bin/canvas_sync_worker.rs"
+    ).read_text(encoding="utf-8")
+    logging_process = (
+        root / "rust/services/issuance/tests/support/canvas_worker_logging_contract.rs"
+    ).read_text(encoding="utf-8")
+    require(
+        "fn deployed_log_level_matches_frozen_published_thresholds()"
+        in logging_owner
+        and 'include_str!(\n            "../../../../../contracts/canvas-worker-logging-oracle.json"'
+        in logging_owner
+        and "fn invalid_log_level_process_failure_does_not_echo_operator_value()"
+        in logging_process,
+        "Frozen logging corpus native owner drift",
+    )
     for entry in historical:
         name = entry["test"]
         require(
@@ -253,8 +472,7 @@ def validate_fast_owner_execution(inventory: dict, lane: str, log: str) -> None:
     native = inventory.get("native_validation", {})
     require(
         native.get("test") == "worker_validation_matches_frozen_published_process"
-        and native.get("historical_test")
-        == "worker_validation_reference_matches_published_process",
+        and "historical_test" not in native,
         "Wrong native validation test owner",
     )
     require(
@@ -312,8 +530,8 @@ def main() -> int:
         validate(inventory, listed)
         validate_package_migration(migration, listed)
         print(
-            "Canvas tier inventory: 33 historical references and 4 native cases discovered; "
-            "147 package-migrated cases retained"
+            "Canvas tier inventory: 17 historical references, 3 native REST-family replays, 10 native OAuth corpus owners, two native failure-matrix owners, one native validation owner, and 4 native preflights discovered; "
+            "131 package-migrated cases retained"
         )
     else:
         require(

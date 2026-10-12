@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use marty_schema_startup::SchemaStartupMode;
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use redis::aio::ConnectionManager;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use thiserror::Error;
@@ -109,10 +110,28 @@ async fn connect_providers(
         presentation_policy_mtls,
     )?;
 
-    let signing = Arc::new(HttpSigningProvider::new(
-        &config.signing_keys_url,
-        required_secret(&config.signing_keys_api_key, "signing keys API key")?,
-    )?);
+    let grant_bao_addr = config.sign_grant_bao_addr.as_deref().ok_or_else(|| {
+        FlowConnectionError::Configuration("BAO_ADDR is required for signing grants".into())
+    })?;
+    let grant_token_file = config.sign_grant_mint_token_file.clone().ok_or_else(|| {
+        FlowConnectionError::Configuration(
+            "FLOW_SIGN_GRANT_MINT_TOKEN_FILE is required for signing grants".into(),
+        )
+    })?;
+    let grant_minter = GrantMinter::for_managed_openbao(
+        grant_bao_addr,
+        SigningOrigin::FlowWalletRequest,
+        grant_token_file,
+    )
+    .map_err(|error| FlowConnectionError::Configuration(error.to_string()))?;
+    let signing = Arc::new(
+        HttpSigningProvider::new(
+            &config.signing_keys_url,
+            required_secret(&config.signing_keys_api_key, "signing keys API key")?,
+            required_secret(&config.issuer_sign_key, "issuer signing API key")?,
+        )?
+        .with_grant_minter(grant_minter),
+    );
     signing.health_check().await?;
     runtime.mark_healthy(FlowDependency::SigningKeys)?;
 

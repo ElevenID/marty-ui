@@ -15,17 +15,13 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "packages"))
+if __package__:
+    from .demo_vendor_seed_data import DEMO_VENDOR_ORG_ID, get_demo_vendor_seed_bundle
+else:
+    from demo_vendor_seed_data import DEMO_VENDOR_ORG_ID, get_demo_vendor_seed_bundle
 
-from marty_common.demo_seed_data import (  # pylint: disable=import-error
-    DEMO_VENDOR_ORG_ID,
-    get_demo_vendor_seed_bundle,
-)
-from marty_common.migration_profile import (  # pylint: disable=import-error
-    is_persistent_profile,
-    normalize_migration_profile,
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"))
+from migration_profile import is_persistent_profile, normalize_migration_profile  # noqa: E402
 
 
 def _load_dotenv(env_file: Path) -> None:

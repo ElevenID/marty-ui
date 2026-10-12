@@ -1115,6 +1115,14 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         verification_method: "synthetic",
         effective_at: None,
     };
+    let private_requirement =
+        ["{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"private-seed\"}".to_owned()];
+    let denied = unscoped
+        .patch_application_sync(&target, &resources, &private_requirement, true)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, "canvas_sync_repository_unavailable");
+    assert_eq!(roster_storage(pool).await, original);
     for effect in [
         "fact",
         "application",
@@ -1174,6 +1182,23 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         .unwrap();
     let lease = CanvasSyncLease::from_job(&job, "processor-auth-worker").unwrap();
     let processor = unscoped.clone().for_lease(lease);
+    let mut private_observation = observation.clone();
+    private_observation.assertion.insert(
+        "issuer".into(),
+        json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+    );
+    let denied = processor
+        .save_candidate_observation(
+            &target,
+            &resources,
+            &candidate.id,
+            "synthetic",
+            &private_observation,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, "canvas_sync_repository_unavailable");
+    assert_eq!(roster_storage(pool).await, original);
     processor
         .update_roster_cursor(&target, &resources, 25, 40)
         .await

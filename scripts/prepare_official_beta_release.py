@@ -7,8 +7,13 @@ import argparse
 import hashlib
 import json
 import re
+import runpy
 from pathlib import Path
 from typing import Any
+
+has_hardened_core_wheels = runpy.run_path(
+    str(Path(__file__).with_name("kms_core_release.py"))
+)["has_hardened_core_wheels"]
 
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}$")
@@ -22,7 +27,6 @@ REQUIRED_COMPONENTS = {
     "marty-verification-python",
     "marty-iso18013-python",
     "marty-credentials-issuance",
-    "marty-common",
     "marty-cli",
     "marty-integration-tests",
     "marty-ui",
@@ -31,6 +35,7 @@ REQUIRED_IMAGE_ROLES = {
     "ui": ("marty-ui", "ui"),
     "services": ("marty-ui", "services"),
     "migrations": ("marty-ui", "migrations"),
+    "openbao_didcomm": ("marty-ui", "openbao-didcomm"),
     "issuance": ("marty-credentials-issuance", "marty-credentials-issuance"),
 }
 
@@ -146,10 +151,18 @@ def _validated_components(
             f"Official stack component is duplicated: {name}",
         )
         _require(
+            name.lower().replace("_", "-") != "marty-common",
+            "Official stack contains the retired marty-common component",
+        )
+        _require(
             isinstance(repository, str),
             f"Official stack component repository is invalid: {name}",
         )
         key = _repository_key(repository)
+        _require(
+            key.replace("_", "-") != "marty-common",
+            "Official stack contains the retired marty-common repository",
+        )
         _require(
             isinstance(commit, str) and COMMIT.fullmatch(commit) is not None,
             f"Official stack component commit is invalid: {name}",
@@ -179,6 +192,10 @@ def _validated_components(
                 isinstance(artifact.get("uri"), str) and artifact["uri"],
                 f"Official stack artifact URI is invalid: {name}",
             )
+            _require(
+                "marty-common" not in artifact["uri"].lower().replace("_", "-"),
+                "Official stack contains a retired marty-common artifact",
+            )
         components_by_name[name] = component
 
     required = REQUIRED_COMPONENTS - ({"marty-credentials-issuance"} if rust_only else set())
@@ -186,6 +203,10 @@ def _validated_components(
     _require(
         not missing,
         f"Official stack manifest is missing components: {', '.join(missing)}",
+    )
+    _require(
+        has_hardened_core_wheels(components),
+        "Official stack must pin reviewed KMS-only Core wheel artifacts",
     )
     if rust_only:
         _require(

@@ -4,20 +4,80 @@ use std::sync::Arc;
 
 use axum::http::StatusCode;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use ed25519_dalek::SigningKey;
 use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
 use sha2::Sha256;
 
 use super::issuance_named_peers::{
-    counts, start_peers, PeerState, API_KEY, FORMAT, HOLDER, ISSUER, ORGANIZATION, PROFILE,
-    SIGNING_KEY, TEMPLATE, TOKEN,
+    counts, start_peers, PeerState, RemoteIssuerSigner, API_KEY, ENVELOPE_KEY, FORMAT, HOLDER,
+    ISSUER, ISSUER_SIGN_KEY, ORGANIZATION, PROFILE, SIGNING_KEY, TEMPLATE, TOKEN,
 };
+use super::remote_didcomm_sender::RemoteSenderFixture;
 
 use super::renewal_reference_fixture as reference;
 
 const TOKEN_HMAC_KEY: &str = "synthetic-fresh-main-hmac";
 const LEGACY_ACCESS_TOKEN: &str = "synthetic-legacy-access-token";
+const CREDENTIAL_GRANT_KEY: &str =
+    marty_signing_grant::SigningOrigin::IssuanceCredential.transit_key_name();
+
+async fn credential_grant_token(directory: &std::path::Path, base_url: &str) -> std::path::PathBuf {
+    let root = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let key_url = format!("{base_url}/v1/transit/keys/{CREDENTIAL_GRANT_KEY}");
+    let lookup = client
+        .get(&key_url)
+        .header("X-Vault-Token", &root)
+        .send()
+        .await
+        .unwrap();
+    if lookup.status() == StatusCode::NOT_FOUND {
+        let created = client.post(&key_url).header("X-Vault-Token", &root)
+            .json(&json!({"type":"hmac","key_size":32,"exportable":false,"allow_plaintext_backup":false}))
+            .send().await.unwrap();
+        assert!(created.status().is_success() || created.status() == StatusCode::BAD_REQUEST);
+    } else {
+        lookup.error_for_status().unwrap();
+    }
+    let metadata: Value = client
+        .get(&key_url)
+        .header("X-Vault-Token", &root)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(metadata["data"]["type"], "hmac");
+    assert_eq!(metadata["data"]["exportable"], false);
+    assert_eq!(metadata["data"]["allow_plaintext_backup"], false);
+    let policy_name = format!("canvas-credential-grant-{}", uuid::Uuid::new_v4().simple());
+    client.put(format!("{base_url}/v1/sys/policies/acl/{policy_name}"))
+        .header("X-Vault-Token", &root)
+        .json(&json!({"policy":format!("path \"transit/hmac/{CREDENTIAL_GRANT_KEY}/sha2-256\" {{ capabilities = [\"update\"] }}")}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let issued: Value = client
+        .post(format!("{base_url}/v1/auth/token/create"))
+        .header("X-Vault-Token", &root)
+        .json(&json!({"policies":[policy_name],"no_default_policy":true,"ttl":"1h"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let token_file = directory.join("credential-grant-openbao-token");
+    std::fs::write(
+        &token_file,
+        issued["auth"]["client_token"].as_str().unwrap(),
+    )
+    .unwrap();
+    token_file
+}
 
 fn access_token_digest(token: &str) -> String {
     let mut hmac = Hmac::<Sha256>::new_from_slice(TOKEN_HMAC_KEY.as_bytes()).unwrap();
@@ -122,7 +182,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         Ingress::KubernetesDirect | Ingress::KubernetesGateway
     );
     use super::{
-        didcomm_test_fixtures::authcrypt_parties_with_ids,
+        didcomm_test_fixtures::{document_with_public_and_signing, holder_with_id},
         didcomm_wallet_fixture::WalletFixture,
         issuance_process::{
             bounded_http_client, isolated_smoke_command, reserve_port, wait_for_health_with_client,
@@ -154,10 +214,22 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         } = case_database_keys(authenticated, allow_private_ips);
         let wallet = WalletFixture::start(200);
         let endpoint = format!("{}/inbox", wallet.origin);
-        let (sender, sender_secret, mut recipient, recipient_secret) =
-            authcrypt_parties_with_ids(ISSUER, HOLDER);
-        // Reuse the shared document's distinct, fixed synthetic signing key.
-        let signer = Arc::new(SigningKey::from_bytes(&[11; 32]));
+        let (mut recipient, recipient_secret) = holder_with_id(HOLDER);
+        let remote_sender =
+            RemoteSenderFixture::create(wallet.ca_file.parent().unwrap(), ISSUER, ORGANIZATION)
+                .await;
+        let credential_grant_file =
+            credential_grant_token(wallet.ca_file.parent().unwrap(), &remote_sender.base_url).await;
+        let signer = Arc::new(
+            RemoteIssuerSigner::create(
+                &remote_sender.base_url,
+                &std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap(),
+            )
+            .await,
+        );
+        let signing_x = URL_SAFE_NO_PAD.encode(signer.verifying_key().as_bytes());
+        let sender =
+            document_with_public_and_signing(ISSUER, &remote_sender.public_key, &signing_x);
         let signing_methods: Vec<_> = sender
             .verification_method
             .iter()
@@ -171,11 +243,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .unwrap()
                 .x
                 .as_deref(),
-            Some(
-                URL_SAFE_NO_PAD
-                    .encode(signer.verifying_key().as_bytes())
-                    .as_str()
-            )
+            Some(signing_x.as_str())
         );
         recipient.service.push(
             serde_json::from_value(
@@ -213,7 +281,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "fresh-main-policy.json"
             });
         let encryption = if authenticated {
-            json!({"mode":"authcrypt","sender_x25519_private_key":URL_SAFE_NO_PAD.encode(sender_secret)})
+            json!({"mode":"authcrypt","sender_key_ref":remote_sender.reference})
         } else {
             json!({"mode":"anoncrypt"})
         };
@@ -324,8 +392,9 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "inputs": {
                     "ISSUANCE_API_KEY":API_KEY, "GRPC_SERVICE_TOKEN":TOKEN,
                     "SIGNING_KEYS_INTERNAL_API_KEY":SIGNING_KEY,
+                    "SIGNING_KEYS_ISSUER_SIGN_KEY":ISSUER_SIGN_KEY,
+                    "SIGNING_KEYS_INTEGRATION_SECRET_KEY":ENVELOPE_KEY,
                     "TOKEN_HMAC_KEY":TOKEN_HMAC_KEY,
-                    "INTEGRATION_SECRET_MASTER_KEY":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
                     "PUBLIC_API_URL":"https://issuer.example", "UI_BASE_URL":"http://localhost:3000",
                     "ISSUANCE_OFFER_TTL_MINUTES":"10080", "TOKEN_RATE_LIMIT":"30",
                     "CANVAS_PORTABLE_INTEGRATION_ENABLED":"false", "CANVAS_PILOT_ORGANIZATION_IDS":""
@@ -334,6 +403,9 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "database_url":database_url, "redis_url":redis_url,
                 "peer_origin":origin, "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
                 "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
+                "kms_url":remote_sender.base_url, "kms_token_file":remote_sender.token_file,
+                "integration_secret_kms_url":super::issuance_process::remote_integration_secret::base_url(),
+                "integration_secret_kms_ca_file":super::issuance_process::remote_integration_secret::ca_file(),
                 "authcrypt":authenticated, "allow_private_ips":allow_private_ips
             });
             // Native-only stage reserves but does not launch the gateway. The
@@ -344,6 +416,19 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             } else {
                 super::rendered_base_process::RenderedBase::render(&spec).resolved()
             };
+            for environment in [&model.native_environment, &model.gateway_environment] {
+                assert_eq!(
+                    environment
+                        .get("SIGNING_KEYS_ISSUER_SIGN_KEY")
+                        .map(String::as_str),
+                    Some(ISSUER_SIGN_KEY),
+                    "rendered signer credential must match the owned signing peer"
+                );
+            }
+            assert!(model.native_environment.contains_key("BAO_ADDR"));
+            assert!(model
+                .native_environment
+                .contains_key("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE"));
             let command = model.native_command();
             rendered_model = Some(model);
             command
@@ -361,23 +446,47 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("REVOCATION_PROFILE_SERVICE_URL", &origin)
                 .env("SIGNING_KEYS_INTERNAL_URL", &origin)
                 .env("SIGNING_KEYS_INTERNAL_API_KEY", SIGNING_KEY)
+                .env("SIGNING_KEYS_ISSUER_SIGN_KEY", ISSUER_SIGN_KEY)
+                .env("SIGNING_KEYS_INTEGRATION_SECRET_KEY", ENVELOPE_KEY)
                 .env("DIDCOMM_DID_WEB_INTERNAL_BASE_URL", &origin)
                 .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
                 .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)
+                .env("DIDCOMM_KMS_ADDR", &remote_sender.base_url)
+                .env("DIDCOMM_KMS_TOKEN_FILE", &remote_sender.token_file)
                 .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
             command
         };
+        // Translate deployed secret mounts to a disposable, operation-scoped
+        // token for the host process; keep every other signing origin closed.
+        command.env("BAO_ADDR", &remote_sender.base_url).env(
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            &credential_grant_file,
+        );
         drop((http_listener, grpc_listener, gateway_reservation));
         let mut child = ChildGuard(command.spawn().unwrap());
         let client = bounded_http_client(Duration::from_secs(20));
+        // This packaged process shares a busy runner with the owned database,
+        // OpenBao and wallet cases. Keep the health requirement, but allow the
+        // already-bounded probe to cover a slow startup before failing.
+        let health_result = tokio::time::timeout(Duration::from_secs(20), async {
+            for _ in 0..3 {
+                if let Some(value) = wait_for_health_with_client(http_port, &client).await {
+                    return Some(value);
+                }
+                if child.0.try_wait().unwrap().is_some() {
+                    return None;
+                }
+            }
+            None
+        })
+        .await;
+        let timed_out = health_result.is_err();
+        let health = health_result.unwrap_or(None);
         assert_eq!(
-            tokio::time::timeout(
-                Duration::from_secs(15),
-                wait_for_health_with_client(http_port, &client)
-            )
-            .await
-            .unwrap(),
-            Some(json!({"status":"healthy","service":"issuance-service"}))
+            health,
+            Some(json!({"status":"healthy","service":"issuance-service"})),
+            "{mode} packaged issuance startup timed out: {timed_out}; process status: {:?}",
+            child.0.try_wait().unwrap()
         );
         let startup_migration_not_after: chrono::DateTime<chrono::Utc> =
             sqlx::query_scalar("SELECT clock_timestamp()")
@@ -520,18 +629,17 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         assert_eq!(captures["messages"].as_array().unwrap().len(), 1);
         let encrypted = captures["messages"][0].as_str().unwrap();
         let plaintext = if authenticated {
-            let envelope = marty_didcomm::decrypt_authenticated_jwe(
+            let envelope = super::didcomm_test_fixtures::holder_decrypt_authcrypt(
                 encrypted,
                 &recipient_secret,
                 &state.recipient,
                 &state.sender,
-            )
-            .unwrap();
+            );
             assert_eq!(envelope.sender_kid, format!("{ISSUER}#key-1"));
             assert_eq!(envelope.recipient_kid, format!("{HOLDER}#key-1"));
             envelope.plaintext
         } else {
-            marty_didcomm::decrypt_jwe(encrypted, &recipient_secret).unwrap()
+            super::didcomm_test_fixtures::holder_decrypt_anoncrypt(encrypted, &recipient_secret)
         };
         let message = marty_didcomm::unpack_didcomm_message(&plaintext).unwrap();
         assert_eq!(message.from.as_deref(), Some(ISSUER));

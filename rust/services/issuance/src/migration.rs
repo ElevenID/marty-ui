@@ -1,14 +1,11 @@
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 
-const ALEMBIC_FINAL_HEAD: &str = "issuance_event_owner";
 const RUST_BASELINE_VERSION: &str = "issuance_service_baseline_v1";
+const HISTORICAL_ALEMBIC_ERROR: &str =
+    "historical issuance Alembic schema is unsupported; start with a fresh KMS-only database";
 const BASE_CATALOG: &str = include_str!("../migrations/0000_issuance_service_catalog.json");
 const NATIVE_MIGRATIONS: &[(&str, &str)] = &[
-    (
-        "0000_merge_issuance_heads_bridge",
-        include_str!("../migrations/0000_merge_issuance_heads_bridge.sql"),
-    ),
     (
         "0001_oid4vci_public_protocol",
         include_str!("../migrations/0001_oid4vci_public_protocol.sql"),
@@ -74,9 +71,9 @@ const BASE_TABLES: &[&str] = &[
     "physical_document_jobs",
 ];
 
-/// Claim the final issuance schema under one database lock. A fresh database
-/// receives the checked-in baseline; an existing database must have completed
-/// the exact published Alembic head before Rust can take ownership.
+/// Claim the Rust-owned issuance schema under one database lock. A fresh
+/// database receives the checked-in baseline; a Rust-owned database must have
+/// its baseline ledger. Historical Alembic schemas are not supported.
 pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     let mut transaction = pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('issuance_schema_owner_v1', 0))")
@@ -120,34 +117,24 @@ pub async fn migrate_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         .fetch_one(&mut *transaction)
         .await?;
         if has_alembic {
-            let heads: Vec<String> =
-                sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
-                    .fetch_all(&mut *transaction)
-                    .await?;
-            if heads.as_slice() != [ALEMBIC_FINAL_HEAD]
-                && heads.as_slice() != ["merge_issuance_heads"]
-            {
-                return Err(sqlx::Error::Protocol(format!(
-                    "issuance Alembic head must be merge_issuance_heads or {ALEMBIC_FINAL_HEAD}; observed {heads:?}"
-                )));
-            }
-        } else if !has_ledger {
+            return Err(sqlx::Error::Protocol(HISTORICAL_ALEMBIC_ERROR.into()));
+        }
+        if !has_ledger {
             return Err(sqlx::Error::Protocol(
-                "issuance schema has neither the final Alembic head nor a Rust ledger".into(),
+                "issuance schema has no Rust migration ledger".into(),
             ));
-        } else {
-            let baseline_claimed: bool = sqlx::query_scalar(
-                "SELECT EXISTS (SELECT 1 FROM issuance_service.rust_schema_migrations
+        }
+        let baseline_claimed: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM issuance_service.rust_schema_migrations
                  WHERE version = $1)",
-            )
-            .bind(RUST_BASELINE_VERSION)
-            .fetch_one(&mut *transaction)
-            .await?;
-            if !baseline_claimed {
-                return Err(sqlx::Error::Protocol(
-                    "issuance Rust ledger has no baseline claim".into(),
-                ));
-            }
+        )
+        .bind(RUST_BASELINE_VERSION)
+        .fetch_one(&mut *transaction)
+        .await?;
+        if !baseline_claimed {
+            return Err(sqlx::Error::Protocol(
+                "issuance Rust ledger has no baseline claim".into(),
+            ));
         }
     }
 
@@ -202,14 +189,12 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query("SET TRANSACTION READ ONLY")
         .execute(&mut *transaction)
         .await?;
-    let heads: Vec<String> =
-        sqlx::query_scalar("SELECT version_num FROM issuance_service.alembic_version")
-            .fetch_all(&mut *transaction)
+    let has_alembic: bool =
+        sqlx::query_scalar("SELECT to_regclass('issuance_service.alembic_version') IS NOT NULL")
+            .fetch_one(&mut *transaction)
             .await?;
-    if heads.as_slice() != [ALEMBIC_FINAL_HEAD] {
-        return Err(sqlx::Error::Protocol(format!(
-            "issuance Alembic head differs from {ALEMBIC_FINAL_HEAD}: {heads:?}"
-        )));
+    if has_alembic {
+        return Err(sqlx::Error::Protocol(HISTORICAL_ALEMBIC_ERROR.into()));
     }
     let mut actual: Vec<String> =
         sqlx::query_scalar("SELECT version FROM issuance_service.rust_schema_migrations")
@@ -236,6 +221,28 @@ pub async fn verify_owned_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn validate_base_tables(connection: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    let private_key_storage: Option<String> = sqlx::query_scalar(
+        "SELECT 'table:' || table_name
+         FROM information_schema.tables
+         WHERE table_schema = 'issuance_service'
+           AND (table_name = 'issuer_signing_keys' OR table_name ILIKE '%private_key%'
+                OR table_name ILIKE '%private_jwk%' OR table_name ILIKE '%secret_key%')
+         UNION ALL
+         SELECT 'column:' || table_name || '.' || column_name
+         FROM information_schema.columns
+         WHERE table_schema = 'issuance_service'
+           AND (column_name ILIKE '%private_key%' OR column_name ILIKE '%private_jwk%'
+                OR column_name ILIKE '%encrypted_jwk%' OR column_name ILIKE '%secret_key%'
+                OR column_name ILIKE '%key_material%')
+         LIMIT 1",
+    )
+    .fetch_optional(&mut *connection)
+    .await?;
+    if let Some(object) = private_key_storage {
+        return Err(sqlx::Error::Protocol(format!(
+            "issuance schema contains retired private-key storage: {object}"
+        )));
+    }
     let actual: Vec<String> =
         sqlx::query_scalar("SELECT tablename FROM pg_tables WHERE schemaname = 'issuance_service'")
             .fetch_all(&mut *connection)

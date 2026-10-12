@@ -25,6 +25,7 @@ impl MemoryComplianceRepository {
 #[async_trait]
 impl ComplianceRepository for MemoryComplianceRepository {
     async fn save(&self, p: ComplianceProfile) -> Result<(), ComplianceError> {
+        checked_payload(&p)?;
         self.inner.lock().await.insert(p.id.clone(), p);
         Ok(())
     }
@@ -73,7 +74,7 @@ impl PostgresComplianceRepository {
 #[async_trait]
 impl ComplianceRepository for PostgresComplianceRepository {
     async fn save(&self, p: ComplianceProfile) -> Result<(), ComplianceError> {
-        let payload = serde_json::to_value(&p).map_err(|_| bad("record serialization failed"))?;
+        let payload = checked_payload(&p)?;
         sqlx::query("INSERT INTO compliance_profile_service.profiles(id,organization_id,status,is_system,discoverable,payload,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(id) DO UPDATE SET organization_id=EXCLUDED.organization_id,status=EXCLUDED.status,is_system=EXCLUDED.is_system,discoverable=EXCLUDED.discoverable,payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at")
             .bind(&p.id).bind(&p.organization_id).bind(status(p.status)).bind(p.is_system).bind(p.discoverable).bind(payload).bind(p.created_at).bind(p.updated_at).execute(&self.pool).await.map_err(db)?;
         Ok(())
@@ -104,7 +105,20 @@ impl ComplianceRepository for PostgresComplianceRepository {
 }
 fn row(r: sqlx::postgres::PgRow) -> Result<ComplianceProfile, ComplianceError> {
     let v: serde_json::Value = r.try_get("payload").map_err(db)?;
+    if marty_key_material_policy::contains_private_key(&v) {
+        return Err(bad("persisted record contains private key material"));
+    }
     serde_json::from_value(v).map_err(|_| bad("persisted record is invalid"))
+}
+
+fn checked_payload(profile: &ComplianceProfile) -> Result<serde_json::Value, ComplianceError> {
+    let payload = serde_json::to_value(profile).map_err(|_| bad("record serialization failed"))?;
+    if marty_key_material_policy::contains_private_key(&payload) {
+        return Err(ComplianceError::BadRequest(
+            "Private key material is not allowed in compliance profiles".into(),
+        ));
+    }
+    Ok(payload)
 }
 const fn status(v: ComplianceStatus) -> &'static str {
     match v {

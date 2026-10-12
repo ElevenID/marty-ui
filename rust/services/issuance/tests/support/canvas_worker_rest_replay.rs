@@ -1,11 +1,12 @@
 //! Actual native binary, published schema, real HTTPS and encrypted OAuth.
 //! The Python parent checks every request; this child checks durable effects.
 use super::canvas_worker_process_signals::OwnedWorker;
+use super::remote_integration_secret;
 use chrono::Utc;
 use marty_issuance_service::{
     canvas_oauth::{CanvasOAuthConnection, CanvasOAuthRepository, CanvasOAuthSecretVault},
     canvas_oauth_postgres::{PostgresCanvasOAuthRepository, PostgresIntegrationSecretVault},
-    integration_secret::{IntegrationSecretCipher, NewIntegrationSecret},
+    integration_secret::NewIntegrationSecret,
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -172,10 +173,9 @@ pub(super) async fn prepare(pool: &PgPool, origin: &str, scenario: &str) -> Work
         .execute(pool)
         .await
         .unwrap();
-    let vault = PostgresIntegrationSecretVault::new(
+    let vault = PostgresIntegrationSecretVault::new_remote(
         pool.clone(),
-        IntegrationSecretCipher::from_base64("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-            .unwrap(),
+        remote_integration_secret::cipher(),
     );
     vault
         .save(NewIntegrationSecret {
