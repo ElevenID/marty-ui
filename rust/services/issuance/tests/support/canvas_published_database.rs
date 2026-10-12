@@ -348,12 +348,45 @@ pub(super) fn docker_output_with_timeout(
             }
         })?;
     if !output.status.success() {
+        if arguments.first() == Some(&"create") {
+            return Err(format!(
+                "Docker create failed ({})",
+                docker_create_failure_category(&output.stderr)
+            ));
+        }
         return Err(format!(
             "Docker {} failed",
             arguments.first().copied().unwrap_or("command")
         ));
     }
     Ok(output)
+}
+
+// Docker stderr can contain mounted paths, image coordinates, and daemon data.
+// Return only fixed categories; never include the original stream in CI logs.
+fn docker_create_failure_category(stderr: &[u8]) -> &'static str {
+    let detail = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if detail.contains("no such image") || detail.contains("image not found") {
+        "image_unavailable"
+    } else if detail.contains("cannot connect to the docker daemon")
+        || detail.contains("is the docker daemon running")
+    {
+        "daemon_unavailable"
+    } else if detail.contains("no space left on device") {
+        "storage_exhausted"
+    } else if detail.contains("cannot allocate memory")
+        || detail.contains("resource temporarily unavailable")
+    {
+        "runtime_capacity"
+    } else if detail.contains("port is already allocated")
+        || detail.contains("address already in use")
+    {
+        "port_conflict"
+    } else if detail.contains("permission denied") {
+        "permission_denied"
+    } else {
+        "unknown"
+    }
 }
 
 // Plain SQL stays in this test process only. The pinned probe has completed
@@ -740,7 +773,9 @@ impl PublishedDatabase {
     ) -> Result<Self, String> {
         let owned = Self::start_empty_postgres(scope).await?;
         let postgres = owned.postgres.as_deref().ok_or("Missing owned database")?;
-        let timing = PhaseTimer::start("migration_seed", "published_probe");
+        // Distinguish restoring the in-process base from running the pinned
+        // published migration probe. Both previously shared one timing name.
+        let timing = PhaseTimer::start("migration_seed", "published_base_restore");
         restore_published_base(postgres, base)?;
         timing.success();
         Ok(owned)
