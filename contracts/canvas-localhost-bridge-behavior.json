@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "source": "docker/canvas-localhost-bridge/server.py at be17936d3",
+  "discovery_path": "/.well-known/openid-configuration",
+  "discovery_methods": ["GET", "HEAD"],
+  "discovery": {
+    "issuer": "{public_base}",
+    "authorization_endpoint": "{public_base}/api/lti/authorize_redirect",
+    "token_endpoint": "{public_base}/login/oauth2/token",
+    "jwks_uri": "{public_base}/api/lti/security/jwks",
+    "registration_endpoint": "{public_base}/api/lti/registrations",
+    "scopes_supported": ["openid"],
+    "response_types_supported": ["id_token"],
+    "subject_types_supported": ["public"],
+    "id_token_signing_alg_values_supported": ["RS256"],
+    "claims_supported": ["iss", "sub", "aud", "exp", "iat", "nonce", "https://purl.imsglobal.org/spec/lti/claim/deployment_id", "https://purl.imsglobal.org/spec/lti/claim/context", "https://purl.imsglobal.org/spec/lti/claim/roles", "https://purl.imsglobal.org/spec/lti/claim/message_type", "https://purl.imsglobal.org/spec/lti/claim/version", "https://purl.imsglobal.org/spec/lti/claim/target_link_uri"]
+  },
+  "proxy_methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+  "proxy_preserves": ["path_and_query", "method", "request_body", "request_content_type", "response_status", "response_body", "response_content_type"],
+  "hop_by_hop_headers_removed": ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"],
+  "request_host_removed": true,
+  "head_response_content_length": 0,
+  "upstream_timeout_seconds": 30,
+  "upstream_error_status": 502,
+  "upstream_error_json_prefix": "Canvas localhost bridge upstream failure: "
+}
