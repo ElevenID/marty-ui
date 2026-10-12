@@ -436,6 +436,21 @@ def test_frozen_canvas_lms_summary(monkeypatch) -> None:
     assert capture_canvas_lms_summary(monkeypatch) == contract["canvas_lms_summary"]
 
 
+def capture_canvas_secret_fallback(monkeypatch) -> dict:
+    operations = []
+    def run(command, *, text=True, capture_output=True, check=False, timeout=None):
+        operations.append({"command": command, "timeout": timeout})
+        return types.SimpleNamespace(returncode=0, stdout=json.dumps(["OTHER=value", "CANVAS_CREDENTIALS_SHARED_SECRET=test-shared-secret"]), stderr="")
+    monkeypatch.setattr(seed.subprocess, "run", run)
+    secret = seed._docker_container_env_value("marty-issuance", "CANVAS_CREDENTIALS_SHARED_SECRET")
+    return {"operations": operations, "secret": secret}
+
+
+def test_frozen_canvas_secret_fallback(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_secret_fallback(monkeypatch) == contract["canvas_secret_fallback"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []

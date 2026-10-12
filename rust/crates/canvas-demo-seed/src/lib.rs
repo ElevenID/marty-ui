@@ -15,10 +15,10 @@ mod lms;
 mod transition;
 mod wallet;
 pub use canvas_rails::{
-    canvas_admin_exists, ensure_canvas_developer_key, ensure_canvas_external_tool,
-    ensure_canvas_initial_data, ensure_canvas_public_domain, mint_canvas_admin_token, CanvasDocker,
-    CanvasDockerOperation, CanvasDockerOutput, CanvasDockerTransport, CanvasRailsConfig,
-    CANVAS_ADMIN_TOKEN_SCRIPT, CANVAS_LTI_SETUP_SCRIPT,
+    canvas_admin_exists, docker_container_env_value, ensure_canvas_developer_key,
+    ensure_canvas_external_tool, ensure_canvas_initial_data, ensure_canvas_public_domain,
+    mint_canvas_admin_token, CanvasDocker, CanvasDockerOperation, CanvasDockerOutput,
+    CanvasDockerTransport, CanvasRailsConfig, CANVAS_ADMIN_TOKEN_SCRIPT, CANVAS_LTI_SETUP_SCRIPT,
 };
 pub use canvas_rest::{
     ensure_course, ensure_enrollment, ensure_external_tool_assignment, ensure_module,

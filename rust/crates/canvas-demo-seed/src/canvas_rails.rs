@@ -376,3 +376,40 @@ pub async fn mint_canvas_admin_token<T: CanvasDockerTransport + Sync>(
         })
         .ok_or_else(|| "Canvas admin token minting completed but did not emit a token".into())
 }
+
+/// Reads one Docker container environment value for the legacy Canvas AGS
+/// shared secret fallback. A missing container or malformed inspect response
+/// remains an empty value, matching the existing demo behavior.
+pub async fn docker_container_env_value<T: CanvasDockerTransport + Sync>(
+    transport: &T,
+    container_name: &str,
+    key: &str,
+) -> String {
+    let output = transport
+        .run(CanvasDockerOperation {
+            args: vec![
+                "inspect".into(),
+                "--format".into(),
+                "{{json .Config.Env}}".into(),
+                container_name.into(),
+            ],
+            input: None,
+            timeout_seconds: 20,
+        })
+        .await;
+    let Ok(output) = output else {
+        return String::new();
+    };
+    if output.exit_code != 0 {
+        return String::new();
+    }
+    let Ok(Value::Array(values)) = serde_json::from_str::<Value>(output.stdout.trim()) else {
+        return String::new();
+    };
+    let prefix = format!("{key}=");
+    values
+        .into_iter()
+        .filter_map(|value| value.as_str().map(str::to_owned))
+        .find_map(|value| value.strip_prefix(&prefix).map(str::to_owned))
+        .unwrap_or_default()
+}

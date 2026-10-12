@@ -1975,5 +1975,20 @@
         "error": "Canvas quiz seed failed (422)"
       }
     }
+  },
+  "canvas_secret_fallback": {
+    "operations": [
+      {
+        "command": [
+          "docker",
+          "inspect",
+          "--format",
+          "{{json .Config.Env}}",
+          "marty-issuance"
+        ],
+        "timeout": 20
+      }
+    ],
+    "secret": "test-shared-secret"
   }
 }

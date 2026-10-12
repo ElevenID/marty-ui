@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use marty_canvas_demo_seed::{
-    ensure_canvas_developer_key, ensure_canvas_external_tool, ensure_canvas_initial_data,
-    ensure_canvas_public_domain, mint_canvas_admin_token, CanvasDockerOperation,
-    CanvasDockerOutput, CanvasDockerTransport, CanvasRailsConfig, CANVAS_ADMIN_TOKEN_SCRIPT,
-    CANVAS_LTI_SETUP_SCRIPT,
+    docker_container_env_value, ensure_canvas_developer_key, ensure_canvas_external_tool,
+    ensure_canvas_initial_data, ensure_canvas_public_domain, mint_canvas_admin_token,
+    CanvasDockerOperation, CanvasDockerOutput, CanvasDockerTransport, CanvasRailsConfig,
+    CANVAS_ADMIN_TOKEN_SCRIPT, CANVAS_LTI_SETUP_SCRIPT,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -13,6 +13,45 @@ use std::{collections::VecDeque, sync::Mutex};
 struct Stub {
     responses: Mutex<VecDeque<Value>>,
     operations: Mutex<Vec<Value>>,
+}
+
+struct InspectStub(Mutex<Vec<Value>>);
+
+#[async_trait]
+impl CanvasDockerTransport for InspectStub {
+    async fn run(&self, operation: CanvasDockerOperation) -> Result<CanvasDockerOutput, String> {
+        self.0.lock().unwrap().push(json!({
+            "command": std::iter::once("docker".to_owned()).chain(operation.args).collect::<Vec<_>>(),
+            "timeout": operation.timeout_seconds
+        }));
+        Ok(CanvasDockerOutput {
+            exit_code: 0,
+            stdout: json!([
+                "OTHER=value",
+                "CANVAS_CREDENTIALS_SHARED_SECRET=test-shared-secret"
+            ])
+            .to_string(),
+            stderr: String::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn docker_secret_fallback_matches_frozen_python() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-real-seed-behavior-v1.json"
+    ))
+    .unwrap();
+    let stub = InspectStub(Mutex::new(Vec::new()));
+    assert_eq!(
+        docker_container_env_value(&stub, "marty-issuance", "CANVAS_CREDENTIALS_SHARED_SECRET")
+            .await,
+        contract["canvas_secret_fallback"]["secret"]
+    );
+    assert_eq!(
+        json!(*stub.0.lock().unwrap()),
+        contract["canvas_secret_fallback"]["operations"]
+    );
 }
 
 #[async_trait]

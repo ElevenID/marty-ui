@@ -1,5 +1,6 @@
 //! Canvas demo CLI configuration, kept separate from side effects.
 
+use crate::{DemoEvidenceConfig, GatewaySeedConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -66,6 +67,43 @@ pub struct CanvasRunConfig {
 pub struct SeedRunConfig {
     pub connector: ConnectorRunConfig,
     pub canvas: CanvasRunConfig,
+}
+
+impl From<&ConnectorRunConfig> for GatewaySeedConfig {
+    fn from(config: &ConnectorRunConfig) -> Self {
+        Self {
+            base_url: config.issuance_base_url.clone(),
+            organization_id: config.organization_id.clone(),
+            canvas_account_id: config.canvas_account_id.clone(),
+            credential_template_id: config.credential_template_id.clone(),
+            application_template_id: config.application_template_id.clone(),
+            display_name: config.display_name.clone(),
+            canvas_base_url: config.canvas_base_url.clone(),
+            lti_client_id: config.lti_client_id.clone(),
+            lti_deployment_id: config.lti_deployment_id.clone(),
+            probe_after_upsert: config.probe_after_upsert,
+            program_binding_display_name: config.program_binding_display_name.clone(),
+            program_binding_evidence_type: config.program_binding_evidence_type.clone(),
+            program_binding_delivery_mode: config.program_binding_delivery_mode.clone(),
+            program_binding_auto_approve: config.program_binding_auto_approve,
+            program_binding_direct_issue: config.program_binding_direct_issue,
+            program_binding_score_threshold: config.program_binding_score_threshold,
+            signing_keys_internal_base_url: config.signing_keys_internal_base_url.clone(),
+        }
+    }
+}
+
+impl From<&CanvasRunConfig> for DemoEvidenceConfig {
+    fn from(config: &CanvasRunConfig) -> Self {
+        Self {
+            learner_name: config.learner_name.clone(),
+            learner_email: config.learner_email.clone(),
+            course_name: config.course_name.clone(),
+            quiz_title: config.quiz_title.clone(),
+            quiz_passing_score_percent: config.quiz_passing_score_percent,
+            quiz_points_possible: config.quiz_points_possible,
+        }
+    }
 }
 
 fn value(env: &HashMap<String, String>, name: &str, default: &str) -> String {
