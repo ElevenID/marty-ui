@@ -17091,3 +17091,19 @@ Canvas/CI focused suite passed 191/191, Ruff passed, and the branch diff check
 passed. The unrelated untracked `%SystemDrive%` directory was not added. This
 local batch is ready for a single UI #1192 push and exact-head CI; the stack
 release lock remains `hold`.
+
+2026-10-12 K7 supported-feature audit follow-up: the retired Credentials
+`digital_identity.feature` specifies an issued W3C VC, SD-JWT, mdoc and
+OpenID4VP presentation, a cross-format subject query, expiry/revocation,
+Open Badge v2/v3 status and trust, and ZK policy behavior. The removed Behave
+files had no step definitions, so they did not execute these cases. Current
+native UI `credential_signing_behavior` exercises four format selections and
+signing order with a test builder; `revocation-profile` has service/storage
+contracts. Core's live remote-issuer tests exercise real issuer custody for
+credential formats. These are useful but do not by themselves prove a single
+installed KMS-only stack can issue, store, present and verify across formats or
+enforce revocation and trust. The native Issuance record API currently lists by
+organization and status, not by subject; first check whether the old scenario's
+subject query was ever a supported route. Keep supported cross-format retrieval,
+OB2/OB3 status/trust and expiry/revocation as K7/K8 release-acceptance cases;
+do not count the inert Behave deletion or mock-builder contract as their proof.
