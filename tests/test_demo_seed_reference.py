@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -74,9 +75,9 @@ def test_live_seed_commands_start_without_marty_common() -> None:
 
 
 def test_demo_vendor_seed_rejects_persistent_alias_without_database(monkeypatch, capsys) -> None:
-    from scripts import seed_demo_vendor_fixtures as seed
+    seed = runpy.run_path(str(ROOT / "scripts" / "seed_demo_vendor_fixtures.py"))
 
     monkeypatch.setenv("MARTY_MIGRATION_PROFILE", "selfhost_prod")
     monkeypatch.setattr(sys, "argv", ["seed_demo_vendor_fixtures.py", "--env-file", "missing.env"])
-    assert seed.main() == 2
+    assert seed["main"]() == 2
     assert "selfhost-production" in capsys.readouterr().err
