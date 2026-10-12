@@ -17504,3 +17504,17 @@ suites: managed-key creation 5/5, CSCA lifecycle/storage 2/2, and document
 storage 1/1. The container was removed after the run.
 Preserve the failing run, inspect remaining jobs, then publish this grouped
 correction for fresh exact-head CI. The stack release remains `hold`.
+
+2026-10-12 UI CI `38261847276` completed: Rust contracts and its dependent
+CI Gate failed from the early OpenBao-dependent duplicate invocation above;
+the packaged OpenBao plugin/coordinated recovery, service images, Canvas,
+and other independent jobs passed. Protected main advanced through #1295
+to `5297e214f`, adding verified retry of pinned UI release-asset downloads.
+The KMS branch merged that exact main without conflicts. Its merged workflow
+retains the KMS-only Rust/Go selection and the new asset helper. On the
+merged head, 149 affected Python workflow/asset-bootstrap tests passed and
+one platform-dependent case skipped; Ruff, YAML parsing and merge diff checks
+passed. The earlier owned Redis proof remains valid because the merge did not
+alter those Rust suites or their CI invocation. Publish the grouped final
+head and require new exact-head CI before protected merge. Release stays
+`hold`.
