@@ -1750,9 +1750,9 @@ jobs:
               operator_release_require_remote_allowlist release-response.json
               mkdir existing-release
               gh release download "$TAG" --dir existing-release
-              for asset in "${OPERATOR_RELEASE_ASSETS[@]}"; do
-                cmp --silent "$asset" "existing-release/$asset"
-              done
+              operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY"
+              cmp --silent stack-manifest.json existing-release/stack-manifest.json
+              cmp --silent release-transaction.json existing-release/release-transaction.json
               {
                 echo "exists=true"
                 echo "release_id=$(jq -er .id release-response.json)"

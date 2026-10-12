@@ -63,9 +63,8 @@ def test_selfhost_secret_templates_cover_compose_references():
     required = set(stacks["selfhost-production"]["required_secrets"])
     assert required <= names
     for name in required:
-        assert (template_dir / name).read_text(encoding="utf-8").strip().startswith(
-            "change-me"
-        )
+        placeholder = (template_dir / name).read_text(encoding="utf-8").strip().lower()
+        assert placeholder.startswith(("change-me", "change_me"))
 
 
 def test_selfhost_example_declares_required_compose_settings():

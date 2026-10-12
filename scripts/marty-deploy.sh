@@ -15,6 +15,10 @@ if [ -n "${MARTY_DEPLOY_BIN:-}" ]; then
   [ "$actual_sha" = "$MARTY_DEPLOY_BIN_SHA256" ] || { echo "MARTY_DEPLOY_BIN digest mismatch" >&2; exit 1; }
   actual_identity="$("$MARTY_DEPLOY_BIN" --build-identity)" || { echo "MARTY_DEPLOY_BIN identity unavailable" >&2; exit 1; }
   [ "$actual_identity" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG" ] || { echo "MARTY_DEPLOY_BIN source or tag mismatch" >&2; exit 1; }
+  if [ -e "$repo_root/.git" ]; then
+    checkout_sha="$(git -C "$repo_root" rev-parse --verify 'HEAD^{commit}')" || exit 1
+    [ "$checkout_sha" = "$MARTY_DEPLOY_SOURCE_SHA" ] || { echo "MARTY_DEPLOY_BIN source differs from checkout HEAD" >&2; exit 1; }
+  fi
   exec "$MARTY_DEPLOY_BIN" --repo-root "$repo_root" "$@"
 fi
 

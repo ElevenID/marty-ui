@@ -82,6 +82,7 @@ IMAGE_TAG="$(resolve_release_tag)"
 [[ -n "${MARTY_DEPLOY_BIN:-}" ]] || error "Install and source a signed marty-deploy operator binary before building."
 "$REPO_ROOT/scripts/marty-deploy.sh" validate >/dev/null
 SOURCE_SHA="${MARTY_UI_SHA:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
+[[ "$SOURCE_SHA" == "$MARTY_DEPLOY_SOURCE_SHA" ]] || error "MARTY_UI_SHA differs from the verified operator source."
 
 declare -A REGION_KEY=(
   [us-ashburn-1]=iad [us-phoenix-1]=phx [eu-frankfurt-1]=fra

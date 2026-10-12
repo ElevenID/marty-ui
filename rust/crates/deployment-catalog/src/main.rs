@@ -89,6 +89,27 @@ fn usage_error(usage: &str, context: &str, message: &str) -> String {
     format!("__USAGE__{usage}{context}: error: {message}\n")
 }
 
+fn frozen_help(command: &str) -> String {
+    let help: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/deployment-catalog-cli-help.json"
+    ))
+    .expect("frozen deployment CLI help must be valid JSON");
+    help.get(command)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn command_usage(command: &str) -> String {
+    format!(
+        "{}\n",
+        frozen_help(command)
+            .split("\n\n")
+            .next()
+            .unwrap_or_default()
+    )
+}
+
 fn check_options(command: &str, params: &[String]) -> Result<(), String> {
     let (flags, valued): (&[&str], &[&str]) = match command {
         "validate" | "bundle-assets" => (&[], &[]),
@@ -101,23 +122,56 @@ fn check_options(command: &str, params: &[String]) -> Result<(), String> {
         _ => (&[], &[]),
     };
     let mut unknown = Vec::new();
+    let mut positionals = Vec::new();
     let mut index = 0;
     while index < params.len() {
         let arg = &params[index];
         if valued.contains(&arg.as_str()) {
+            if index + 1 == params.len() || params[index + 1].starts_with('-') {
+                return Err(usage_error(
+                    &command_usage(command),
+                    &format!("marty-deploy.py {command}"),
+                    &format!("argument {arg}: expected one argument"),
+                ));
+            }
             index += 2;
             continue;
         }
         if arg.starts_with('-') && !flags.contains(&arg.as_str()) {
             unknown.push(arg.clone());
+        } else if !arg.starts_with('-') {
+            positionals.push(arg.clone());
         }
         index += 1;
     }
+    let maximum = match command {
+        "validate" => 0,
+        "compose-command" => 2,
+        "plan" | "services" | "secrets" | "bundle-assets" => 1,
+        _ => 0,
+    };
+    unknown.extend(positionals.iter().skip(maximum).cloned());
     if !unknown.is_empty() {
         return Err(usage_error(
             TOP_USAGE,
             "marty-deploy.py",
             &format!("unrecognized arguments: {}", unknown.join(" ")),
+        ));
+    }
+    let required = match command {
+        "plan" | "secrets" => &["stack"][..],
+        "compose-command" => &["stack", "operation"][..],
+        "bundle-assets" => &["bundle"][..],
+        _ => &[][..],
+    };
+    if positionals.len() < required.len() {
+        return Err(usage_error(
+            &command_usage(command),
+            &format!("marty-deploy.py {command}"),
+            &format!(
+                "the following arguments are required: {}",
+                required[positionals.len()..].join(", ")
+            ),
         ));
     }
     if let Some(field) = option(params, "--field") {
@@ -195,16 +249,28 @@ fn run() -> Result<(), String> {
         }
         let path = PathBuf::from(args.remove(index + 1));
         args.remove(index);
-        path
+        Some(path)
     } else {
-        root_from_executable()?
+        None
     };
+    if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
+        print!("{}", frozen_help("root"));
+        return Ok(());
+    }
     let command = args
         .first()
         .map(String::as_str)
         .ok_or_else(|| "command is required".to_owned())?;
     let params = &args[1..];
+    if params.iter().any(|arg| arg == "--help" || arg == "-h") {
+        print!("{}", frozen_help(command));
+        return Ok(());
+    }
     check_options(command, params)?;
+    let root = match root {
+        Some(path) => path,
+        None => root_from_executable()?,
+    };
     let catalog = Catalog::load(root)?;
     match command {
         "validate" => {

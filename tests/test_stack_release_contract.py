@@ -349,6 +349,77 @@ def test_operator_release_builds_native_arches_and_verifies_provenance() -> None
         assert condition in installer
 
 
+def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration(
+    tmp_path: Path,
+) -> None:
+    """A retry may produce different valid Sigstore bundles for the same source."""
+    workflow = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    step = next(
+        step["run"] for step in workflow["jobs"]["publish-manifest"]["steps"]
+        if step.get("name") == "Detect only an exact resumable immutable release"
+    )
+    assert "operator_release_verify_published_assets existing-release" in step
+    assert "cmp --silent stack-manifest.json existing-release/stack-manifest.json" in step
+    assert "cmp --silent release-transaction.json existing-release/release-transaction.json" in step
+    assert 'cmp --silent "$asset"' not in step
+
+    old = tmp_path / "published"
+    new = tmp_path / "regenerated"
+    for directory, signature in ((old, b"original"), (new, b"retry")):
+        directory.mkdir()
+        subjects = (
+            "stack-manifest.json", "release-transaction.json",
+            "marty-ui-sbom.cdx.json", "marty-ui-services-sbom.cdx.json",
+            "marty-ui-migrations-sbom.cdx.json", "marty-deploy-linux-amd64",
+            "marty-deploy-linux-arm64",
+        )
+        for name in subjects:
+            (directory / name).write_bytes(f"qualified:{name}\n".encode())
+            (directory / f"{name}.sigstore.json").write_bytes(signature + name.encode())
+        checksums = "".join(
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n"
+            for path in directory.iterdir()
+        )
+        (directory / "SHA256SUMS").write_bytes(checksums.encode())
+
+    assert (old / "SHA256SUMS").read_bytes() != (new / "SHA256SUMS").read_bytes()
+    if os.name == "nt":
+        git = shutil.which("git")
+        assert git is not None
+        bash = str(Path(git).resolve().parents[1] / "bin" / "bash.exe")
+    else:
+        bash = shutil.which("bash")
+    assert bash is not None
+    script = (
+        'source "$ASSET_SCRIPT"\n'
+        'cosign() { printf "cosign:%s\\n" "$3" >> "$VERIFY_LOG"; }\n'
+        'gh() { printf "gh:%s\\n" "$3" >> "$VERIFY_LOG"; }\n'
+        'operator_release_verify_published_assets "$PUBLISHED" '
+        '"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ElevenID/marty-ui\n'
+    )
+    log = tmp_path / "verification.log"
+    result = subprocess.run(
+        [bash, "--noprofile", "--norc", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh"),
+             "PUBLISHED": str(old), "VERIFY_LOG": str(log)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == 14  # Seven Cosign signatures and seven source attestations.
+    assert sum(call.startswith("cosign:") for call in calls) == 7
+    assert sum(call.startswith("gh:") for call in calls) == 7
+
+    (old / "marty-deploy-linux-arm64").write_bytes(b"tampered")
+    tampered = subprocess.run(
+        [bash, "--noprofile", "--norc", "-euo", "pipefail", "-c", script],
+        env={**os.environ, "ASSET_SCRIPT": str(ROOT / "scripts/operator-release-assets.sh"),
+             "PUBLISHED": str(old), "VERIFY_LOG": str(log)},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert tampered.returncode != 0
+
+
 def test_beta_lifecycle_binds_the_deployed_sha_to_stack_release_evidence() -> None:
     workflow = _text(".github/workflows/e2e-tests.yml")
     document = yaml.safe_load(workflow)

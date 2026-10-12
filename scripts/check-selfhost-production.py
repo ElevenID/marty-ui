@@ -32,7 +32,11 @@ class CheckError(RuntimeError):
 
 def is_placeholder_value(value: str) -> bool:
     normalized = value.strip().lower()
-    return not normalized or normalized.startswith("change-me") or normalized in {"changeme", "placeholder"}
+    return (
+        not normalized
+        or normalized.startswith(("change-me", "change_me", "changeme", "replace-me", "replace_me"))
+        or normalized == "placeholder"
+    )
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -166,6 +170,13 @@ def catalog_lines(*args: str) -> list[str]:
         )
         if identity.returncode != 0 or identity.stdout.strip() != f"{source_sha}:{release_tag}":
             raise CheckError("MARTY_DEPLOY_BIN source or tag mismatch")
+        if (REPO_ROOT / ".git").exists():
+            checkout = subprocess.run(
+                ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
+                check=False, capture_output=True, text=True,
+            )
+            if checkout.returncode != 0 or checkout.stdout.strip() != source_sha:
+                raise CheckError("MARTY_DEPLOY_BIN source differs from checkout HEAD")
         command = [str(binary_path), "--repo-root", str(REPO_ROOT), *args]
     else:
         command = [

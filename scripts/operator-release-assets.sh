@@ -57,3 +57,18 @@ operator_release_require_remote_allowlist() {
     return 1
   fi
 }
+
+operator_release_verify_published_assets() (
+  local directory="$1" source_sha="$2" repo="$3" file
+  cd "$directory" || return 1
+  operator_release_require_local_assets || return 1
+  for file in "${OPERATOR_SIGNED_INPUTS[@]}"; do
+    cosign verify-blob "$file" --bundle "${file}.sigstore.json" \
+      --certificate-identity "https://github.com/$repo/.github/workflows/cd.yml@refs/heads/main" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com || return 1
+    gh attestation verify "$file" --repo "$repo" \
+      --signer-workflow "$repo/.github/workflows/cd.yml" \
+      --source-digest "$source_sha" --source-ref refs/heads/main \
+      --deny-self-hosted-runners || return 1
+  done
+)

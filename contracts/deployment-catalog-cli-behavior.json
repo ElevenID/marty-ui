@@ -220,6 +220,95 @@
       "exit_code": 2,
       "stdout": "",
       "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\nmarty-deploy.py secrets: error: argument --field: expected one argument\n"
+    },
+    {
+      "args": [
+        "validate",
+        "extra"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: extra\n"
+    },
+    {
+      "args": [
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\n\nInspect Marty deployment metadata without executing deployment commands.\n\npositional arguments:\n  {validate,plan,services,secrets,compose-command,bundle-assets}\n    validate            Validate deployment catalogs, stacks, and bundle\n                        manifests.\n    plan                Render a redacted deployment plan for a stack.\n    services            List service metadata from a stack or group.\n    secrets             List required secret metadata for a stack.\n    compose-command     Preview the docker compose command for a stack\n                        operation.\n    bundle-assets       List resolved asset paths for a bundle manifest.\n\noptions:\n  -h, --help            show this help message and exit\n  --repo-root REPO_ROOT\n                        Path to the marty-ui repository root.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "-h"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\n\nInspect Marty deployment metadata without executing deployment commands.\n\npositional arguments:\n  {validate,plan,services,secrets,compose-command,bundle-assets}\n    validate            Validate deployment catalogs, stacks, and bundle\n                        manifests.\n    plan                Render a redacted deployment plan for a stack.\n    services            List service metadata from a stack or group.\n    secrets             List required secret metadata for a stack.\n    compose-command     Preview the docker compose command for a stack\n                        operation.\n    bundle-assets       List resolved asset paths for a bundle manifest.\n\noptions:\n  -h, --help            show this help message and exit\n  --repo-root REPO_ROOT\n                        Path to the marty-ui repository root.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "validate",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py validate [-h]\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "plan",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py plan [-h] [--json] stack\n\npositional arguments:\n  stack       Stack profile name, for example selfhost-production.\n\noptions:\n  -h, --help  show this help message and exit\n  --json      Emit JSON instead of text.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "services",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py services [-h] [--group GROUP] [--running-only]\n                                [--include-optional]\n                                [--field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}]\n                                [stack]\n\npositional arguments:\n  stack                 Stack profile name.\n\noptions:\n  -h, --help            show this help message and exit\n  --group GROUP         Service group name to list instead of a stack.\n  --running-only        Only include services with lifecycle=running when\n                        listing a stack.\n  --include-optional    Include stack optional services.\n  --field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}\n                        Service field to print.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "secrets",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\n\npositional arguments:\n  stack                 Stack profile name.\n\noptions:\n  -h, --help            show this help message and exit\n  --field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}\n                        Secret field to print. Values are never resolved or\n                        printed.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "compose-command",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py compose-command [-h] [--json] stack operation\n\npositional arguments:\n  stack       Stack profile name.\n  operation   Operation name from the stack manifest, such as config, up, ps,\n              or logs.\n\noptions:\n  -h, --help  show this help message and exit\n  --json      Emit JSON argv instead of shell-quoted text.\n",
+      "stderr": ""
+    },
+    {
+      "args": [
+        "bundle-assets",
+        "--help"
+      ],
+      "exit_code": 0,
+      "stdout": "usage: marty-deploy.py bundle-assets [-h] bundle\n\npositional arguments:\n  bundle      Bundle manifest name, for example selfhost.\n\noptions:\n  -h, --help  show this help message and exit\n",
+      "stderr": ""
     }
   ]
 }
