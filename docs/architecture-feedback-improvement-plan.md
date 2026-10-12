@@ -496,7 +496,7 @@ establish runtime compatibility, authorize qualification reuse, or alter any
 routine/full oracle execution. Exact-head and protected combined-head CI
 passed before merge.
 
-Provider-recovery current-input follow-up (2026-10-12 local candidate): eight
+Provider-recovery current-input follow-up (2026-10-12 merged [UI #1292](https://github.com/ElevenID/marty-ui/pull/1292)): eight
 direct provider/reclaimer runners are treated as one family because the
 recovery runner can select sibling scenarios. A single overlay inherits the
 REST current inputs and pins 17 additional scripts/scenario files. Tests
@@ -504,7 +504,24 @@ reject a new producer, scenario selection, local helper, transitive JSON
 reference, or changed hash without review. The manifest is release-sensitive
 in the existing CI classifier. This is current capture-input evidence only,
 not historical corpus attestation, a qualification skip, or a runtime change.
-Local validation and independent review are required before a PR.
+Independent review, 212 local tests, exact-head CI, and [protected
+combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38242078139)
+passed before merge. The protected Canvas job took 28m37s, including 443s
+compiling test executables, 422s building the public image, and 618s in
+isolated database contracts. The prior protected run's corresponding values
+were 28m31s, 467s, 388s, and 639s. These two different candidates do not
+prove any speed change from the guard.
+
+A6 Python-owned input-record candidate (2026-10-12): only the OAuth and
+provider-recovery overlays have Python release-test consumers and no Rust
+reader; the inventory test checks every literal consumer, and all service
+Docker contexts exclude these records. Assign an exact edit to either record
+to Release Contract Tests on PRs. Their inherited REST record, capture
+scripts/scenarios, other current-input records, mixed or unknown edits, and
+protected merge groups retain the existing broader checks. This changes PR
+feedback selection only, not qualification or a production image. A hosted
+feedback saving remains unmeasured until an eligible record-only candidate
+runs after the change.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
