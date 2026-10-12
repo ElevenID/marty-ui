@@ -16,8 +16,10 @@ def test_public_flow_main_gate_is_registered_and_required():
     assert "OwnedRedis::start()" in body
     assert "run_flow_public_startup(&owned.url, redis.url())" in body
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
-    assert f"'{NAME}: test'" in script
-    assert "Flow executable changed its exact nine-case owner inventory" in script
+    inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
+    assert f"'{NAME}: test'" in inventory
+    assert "Flow executable changed its exact nine-case owner inventory" in inventory
     assert "preflight_skips=()" in script
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in script
     assert (
@@ -40,8 +42,10 @@ def test_public_flow_gate_uses_real_main_and_retains_historical_gates():
     assert "FlowServiceClient::new" in helper
     assert '"/v1/flows/instances"' in helper
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     for existing in [
         "flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http",
         "flow_rendered_settings_select_native_rpc_and_preserve_legacy_http",
     ]:
-        assert f"'{existing}: test'" in script
+        assert f"'{existing}: test'" in inventory
