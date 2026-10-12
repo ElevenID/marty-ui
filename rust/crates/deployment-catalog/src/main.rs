@@ -366,16 +366,7 @@ fn run() -> Result<(), String> {
                 println!(
                     "{}",
                     argv.iter()
-                        .map(|a| {
-                            if a.is_empty()
-                                || a.chars()
-                                    .any(|c| c.is_whitespace() || "'\"\\$`".contains(c))
-                            {
-                                format!("'{}'", a.replace('\'', "'\"'\"'"))
-                            } else {
-                                a.clone()
-                            }
-                        })
+                        .map(|a| posix_shell_quote(a))
                         .collect::<Vec<_>>()
                         .join(" ")
                 );
@@ -392,6 +383,20 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
+fn posix_shell_quote(value: &str) -> String {
+    if !value.is_empty()
+        && value.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || "_/@%+=:,.-".contains(c)
+                || ('\u{7f}'..='\u{ff}').contains(&c)
+        })
+    {
+        value.to_owned()
+    } else {
+        format!("'{}'", value.replace('\'', "'\"'\"'"))
+    }
+}
+
 fn main() {
     if let Err(error) = run() {
         if let Some(usage) = error.strip_prefix("__USAGE__") {
@@ -400,5 +405,20 @@ fn main() {
         }
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::posix_shell_quote;
+
+    #[test]
+    fn compose_preview_quotes_posix_shell_metacharacters() {
+        for value in ["a;b", "a&b", "a|b", "a<b", "a>b", "a*b", "a#b"] {
+            assert_eq!(posix_shell_quote(value), format!("'{value}'"));
+        }
+        assert_eq!(posix_shell_quote(""), "''");
+        assert_eq!(posix_shell_quote("a'b"), "'a'\"'\"'b'");
+        assert_eq!(posix_shell_quote("safe/path-1"), "safe/path-1");
     }
 }

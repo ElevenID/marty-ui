@@ -118,6 +118,50 @@ fn malformed_service_descriptor_fails_validation_before_operator_use() {
 }
 
 #[test]
+fn malformed_truthy_service_group_fails_validation_before_operator_use() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut catalog = Catalog::load(root).unwrap();
+    catalog
+        .services
+        .get_mut("gateway")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("group".into(), Value::from(123));
+    assert!(catalog
+        .validate()
+        .unwrap_err()
+        .contains("service 'gateway' group must be a string"));
+}
+
+#[test]
+fn explicit_non_string_lifecycle_is_not_running() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut catalog = Catalog::load(root).unwrap();
+    assert!(catalog
+        .running_services("kubernetes-production", false)
+        .unwrap()
+        .contains(&"gateway".to_owned()));
+    catalog
+        .services
+        .get_mut("gateway")
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .insert("lifecycle".into(), Value::Null);
+    assert!(!catalog
+        .running_services("kubernetes-production", false)
+        .unwrap()
+        .contains(&"gateway".to_owned()));
+}
+
+#[test]
 fn malformed_metadata_descriptors_fail_validation_before_operator_use() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")

@@ -43,6 +43,14 @@ fn python_truthy(value: &Value) -> bool {
     }
 }
 
+fn windows_path_without_verbatim_prefix(path: &str) -> String {
+    if let Some(share) = path.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{share}")
+    } else {
+        path.strip_prefix(r"\\?\").unwrap_or(path).to_owned()
+    }
+}
+
 fn list(value: &Value) -> Vec<&Value> {
     value
         .as_array()
@@ -163,7 +171,7 @@ impl Catalog {
         // expose in the catalog's public CLI output.
         let root = if cfg!(windows) {
             let display = canonical.to_string_lossy();
-            PathBuf::from(display.strip_prefix(r"\\?\").unwrap_or(&display))
+            PathBuf::from(windows_path_without_verbatim_prefix(&display))
         } else {
             canonical
         };
@@ -222,13 +230,17 @@ impl Catalog {
                 ));
                 continue;
             }
-            if let Some(group) = field(service, "group").and_then(string) {
-                if !group.is_empty() && !self.groups.contains_key(group) {
-                    errors.push(format!(
-                        "service {} references unknown group {}",
-                        pyrepr(id),
-                        pyrepr(group)
-                    ));
+            if let Some(group) = field(service, "group").filter(|group| python_truthy(group)) {
+                if let Some(group) = string(group) {
+                    if !self.groups.contains_key(group) {
+                        errors.push(format!(
+                            "service {} references unknown group {}",
+                            pyrepr(id),
+                            pyrepr(group)
+                        ));
+                    }
+                } else {
+                    errors.push(format!("service {} group must be a string", pyrepr(id)));
                 }
             }
         }
@@ -455,9 +467,7 @@ impl Catalog {
                 self.services
                     .get(id)
                     .and_then(|s| field(s, "lifecycle"))
-                    .and_then(string)
-                    .unwrap_or("running")
-                    == "running"
+                    .is_none_or(|lifecycle| lifecycle.as_str() == Some("running"))
             })
             .collect())
     }
@@ -614,7 +624,7 @@ impl Catalog {
 
 #[cfg(test)]
 mod tests {
-    use super::read_named;
+    use super::{read_named, windows_path_without_verbatim_prefix};
     use std::fs;
 
     #[test]
@@ -637,5 +647,17 @@ mod tests {
         assert!(read_named(&dir).unwrap().contains_key("explicit"));
         fs::remove_file(document).unwrap();
         fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn windows_verbatim_unc_path_remains_absolute() {
+        assert_eq!(
+            windows_path_without_verbatim_prefix(r"\\?\UNC\server\share\repo"),
+            r"\\server\share\repo"
+        );
+        assert_eq!(
+            windows_path_without_verbatim_prefix(r"\\?\C:\repo"),
+            r"C:\repo"
+        );
     }
 }
