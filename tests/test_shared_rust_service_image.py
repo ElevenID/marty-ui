@@ -36,7 +36,10 @@ UNROUTED_RUST_BINARIES = {
     "marty-verifier-positive-gate",
     "marty-passport-acceptance-api-key",
 }
-ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
+PROFILE_RUST_BINARIES = {"marty-canvas-sandbox"}
+ALL_RUST_BINARIES = (
+    set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES | PROFILE_RUST_BINARIES
+)
 
 
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
