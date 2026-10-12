@@ -90,6 +90,7 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     let image_lock = json!({
         "schema": "marty.selfhost-image-lock/v1",
         "release": "marty-ui@1.2.3",
+        "openbao_didcomm_image": format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}", "b".repeat(64)),
         "services": {"app": image}
     });
     fs::write(&lock_path, image_lock.to_string()).unwrap();
@@ -116,6 +117,15 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     assert!(package_with_image_lock(&options, render, &lock_path)
         .unwrap_err()
         .contains("differs from source stack lock"));
+    assert!(!options.output.exists());
+
+    let mut unbound_plugin = image_lock.clone();
+    unbound_plugin
+        .as_object_mut()
+        .unwrap()
+        .remove("openbao_didcomm_image");
+    fs::write(&lock_path, unbound_plugin.to_string()).unwrap();
+    assert!(package_with_image_lock(&options, render, &lock_path).is_err());
     assert!(!options.output.exists());
 
     fs::write(&lock_path, image_lock.to_string()).unwrap();

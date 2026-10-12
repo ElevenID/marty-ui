@@ -74,6 +74,7 @@ struct ImageLock {
     schema: String,
     release: String,
     services: BTreeMap<String, String>,
+    openbao_didcomm_image: String,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -663,6 +664,17 @@ fn package_with_publication(
             serde_json::from_slice(&bytes).map_err(|_| "Image lock is invalid JSON")?;
         if lock.schema != IMAGE_LOCK_SCHEMA {
             return Err("Image lock schema is unsupported".into());
+        }
+        let plugin_digest = lock
+            .openbao_didcomm_image
+            .strip_prefix("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:")
+            .ok_or("Image lock has no exact OpenBao DIDComm image")?;
+        if plugin_digest.len() != 64
+            || !plugin_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("Image lock has no exact OpenBao DIDComm image".into());
         }
         let source_lock_path = repo.join("release/stack-lock.json");
         check_ancestors(&source_lock_path)?;

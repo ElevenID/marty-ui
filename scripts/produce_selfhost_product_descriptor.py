@@ -55,6 +55,9 @@ def produce(archive: Path, image_lock: Path, transaction: Path, receipt_path: Pa
         exact_image = recorded["uri"] + "@" + recorded["digest"]
         if exact_image not in locked_images.values():
             raise ValueError(f"image lock omits transaction {role} image")
+    plugin = claim["images"]["openbao_didcomm"]
+    if lock.get("openbao_didcomm_image") != plugin["uri"] + "@" + plugin["digest"]:
+        raise ValueError("image lock omits transaction OpenBao DIDComm image")
     archive_digest = "sha256:" + receipt["archive_sha256"]
     manifest = {
         "schema": "marty.product-artifact/v1",

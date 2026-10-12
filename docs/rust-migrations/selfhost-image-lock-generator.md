@@ -44,7 +44,12 @@ python scripts/build_selfhost_image_lock.py \
 
 The generated `marty.selfhost-image-lock/v1` JSON has exactly the fields the
 Rust `package-selfhost-bundle --image-lock` path expects. It binds every
-rendered Compose service to one digest. A release producer must still verify
+rendered Compose service to one digest and records `openbao_didcomm_image`
+from the same four-role stack transaction. The Rust packager requires that
+field; the preparation and consumer lanes verify and pull its exact digest.
+The separate OpenBao Compose project is not yet included in the customer ZIP,
+so this field is a release identity binding, not installed KMS qualification.
+A release producer must still verify
 provenance and anonymous pull for every image, qualify an extracted installed
 bundle, and sign/attest the eventual lock and archive before publication.
 

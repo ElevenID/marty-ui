@@ -1352,7 +1352,8 @@ jobs:
             "$SERVICES_IMAGE@$SERVICES_DIGEST" \
             "$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST" \
             "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
-            "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST"; do
+            "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST" \
+            "$(jq -er '.images.openbao_didcomm | .uri + "@" + .digest' validated-transaction.json)"; do
             gh attestation verify "oci://$image" \
               --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
               --source-ref refs/heads/main --deny-self-hosted-runners
@@ -1372,7 +1373,7 @@ jobs:
         run: |
           set -euo pipefail
           docker logout ghcr.io >/dev/null 2>&1 || true
-          jq -r '.services[]' prepared-selfhost-images.json | LC_ALL=C sort -u |
+          jq -r '.services[], .openbao_didcomm_image' prepared-selfhost-images.json | LC_ALL=C sort -u |
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done

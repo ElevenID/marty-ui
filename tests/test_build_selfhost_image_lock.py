@@ -105,6 +105,7 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result == build(tmp_path)
     assert result["schema"] == "marty.selfhost-image-lock/v1"
     assert result["release"] == "marty-ui@1.2.3"
+    assert result["openbao_didcomm_image"] == reference("openbao-didcomm", "7")
     assert result["services"]["gateway"] == reference("services", "2")
     assert result["services"]["issuance"] == result["services"]["issuance-migrations"] == reference("services", "2")
     assert result["services"]["db-migrate"] == reference("migrations", "3")

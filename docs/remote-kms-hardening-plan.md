@@ -17153,3 +17153,19 @@ tests. Merge commit `2979cd480` records both upstream commits as ancestry
 with an identical first-parent tree, preserving the hardened Rust-only graph
 and release hold. Focused release/CI contracts passed 231/231 after the merge;
 the grouped head still needs exact-head hosted checks.
+
+2026-10-12 self-host OpenBao binding candidate, held locally while UI #1192
+head `1019b33e7` runs CI: the offline image-lock generator now takes the
+`openbao_didcomm` URI/digest from the same validated four-role stack
+transaction and records it as `openbao_didcomm_image`. The Rust bundle packager
+rejects a lock without the exact plugin repository/digest, the product
+descriptor checks it against the stack transaction. The preparation lane
+checks its attestation and anonymous pull; the consumer anonymously pulls and
+inspects its Linux/amd64 digest alongside the main Compose images. This closes the release identity gap
+for the prepared lock; the ZIP still does not package the separate OpenBao
+Compose project or prove an installed KMS-only runtime. Local focused Python
+tests passed 92/92 and Rust package contracts passed 14/14; Rust formatting,
+Ruff, workflow YAML parsing and diff checks passed. The full Rust executable
+bundle suite had two Docker Compose renderer failures on Windows after its
+other tests passed; this is not an installed Linux proof. Do not push or claim
+acceptance until the prior hosted head resolves.

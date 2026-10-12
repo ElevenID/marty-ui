@@ -247,8 +247,12 @@ def build_lock(
              "external image map has missing or extra Compose service roles")
     _require(resolved["issuance"] == resolved["issuance-migrations"],
              "issuance API and migration images differ")
+    plugin = claim["images"]["openbao_didcomm"]
+    plugin_image = _exact_image(plugin["uri"] + "@" + plugin["digest"],
+                                "openbao_didcomm")
     return {"schema": SCHEMA, "release": source_lock["release"],
-            "services": dict(sorted(resolved.items()))}
+            "services": dict(sorted(resolved.items())),
+            "openbao_didcomm_image": plugin_image}
 
 
 def main() -> None:

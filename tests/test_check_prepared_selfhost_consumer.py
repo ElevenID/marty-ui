@@ -17,7 +17,9 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path, monke
     image = "example.org/app@sha256:" + "a" * 64
     lock = tmp_path / "lock.json"
     lock.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
-                                "release": "marty-ui@1.2.3", "services": {"app": image}}))
+                                "release": "marty-ui@1.2.3",
+                                "openbao_didcomm_image": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64,
+                                "services": {"app": image}}))
     transaction = tmp_path / "transaction.json"
     transaction.write_text("{}")
     files = {".marty-selfhost-images.json": lock.read_bytes(),

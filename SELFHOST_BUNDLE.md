@@ -48,7 +48,8 @@ Compose service to an exact `registry/path@sha256:<64 lowercase hex>` reference.
 The JSON must use schema `marty.selfhost-image-lock/v1`, a `release` matching
 `release/stack-lock.json`, and a `services` object keyed by every rendered
 Compose service name. Packaging rejects missing/extra services, mutable image
-references, and a release mismatch, then includes the lock in the bundle as
+references, a missing exact `openbao_didcomm_image`, and a release mismatch,
+then includes the lock in the bundle as
 `.marty-selfhost-images.json`. This is a binding mechanism, not a qualification
 claim: the release process must first verify the image digests, provenance,
 signatures, licensing, and clean installed stack. No current public release

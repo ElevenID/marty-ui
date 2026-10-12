@@ -24,6 +24,7 @@ class BundlePreparationTest(unittest.TestCase):
         self.image = "example.org/app@sha256:" + "a" * 64
         self.lock.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
                                          "release": "marty-ui@1.2.3",
+                                         "openbao_didcomm_image": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64,
                                          "services": {"app": self.image}}))
         self.transaction.write_text("{}")
         self.contents = {

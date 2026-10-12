@@ -72,9 +72,11 @@ def test_lock_staging_checks_exact_source_provenance_and_full_profile_closure() 
     assert "scripts/build_selfhost_image_lock.py" in source
     assert "--source-repo ." in source
     assert "gh attestation verify" in source
+    assert '.images.openbao_didcomm | .uri + "@" + .digest' in source
     assert "--source-digest \"$SOURCE_SHA\"" in source
     assert "docker logout ghcr.io" in source
     assert "docker pull \"$image\"" in source
+    assert '.services[], .openbao_didcomm_image' in source
     assert "selfhost-lock-preparation-unqualified-" in str(preparation)
     assert "retention-days: 30" in WORKFLOW.read_text(encoding="utf-8")
     assert "selfhost-lock-preparation-unqualified-" not in str(jobs["publish-manifest"])

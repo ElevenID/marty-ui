@@ -28,6 +28,7 @@ def inputs(tmp_path):
     image = images["services"]
     lock = tmp_path / "images.json"
     write_json(lock, {"schema": "marty.selfhost-image-lock/v1", "release": "marty-ui@1.2.3",
+                      "openbao_didcomm_image": images["openbao_didcomm"],
                       "services": {"app": image, "db-migrate": images["migrations"]}})
     stack = tmp_path / "stack.json"
     write_json(stack, {"schema": "marty.stack-lock/v1", "release_state": "eligible",
@@ -143,4 +144,14 @@ def test_rejects_consistent_receipt_with_unbound_transaction_image(inputs):
     write_json(claim_path, claim)
     write_json(receipt_path, record(archive, lock, claim_path, "b" * 40, "126"))
     with pytest.raises(ValueError, match="transaction services image"):
+        produce(*inputs)
+
+
+def test_rejects_consistent_receipt_with_unbound_openbao_image(inputs):
+    archive, lock, claim_path, receipt_path = inputs
+    claim = json.loads(claim_path.read_text())
+    claim["images"]["openbao_didcomm"]["digest"] = "sha256:" + "d" * 64
+    write_json(claim_path, claim)
+    write_json(receipt_path, record(archive, lock, claim_path, "b" * 40, "126"))
+    with pytest.raises(ValueError, match="transaction OpenBao DIDComm image"):
         produce(*inputs)
