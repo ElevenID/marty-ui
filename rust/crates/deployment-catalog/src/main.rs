@@ -54,9 +54,18 @@ fn positional<'a>(args: &'a [String], options_with_value: &[&str]) -> Vec<&'a st
 }
 
 fn option<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.windows(2)
-        .find(|parts| parts[0] == name)
-        .map(|parts| parts[1].as_str())
+    let mut result = None;
+    for (index, arg) in args.iter().enumerate() {
+        if arg == name {
+            result = args.get(index + 1).map(String::as_str);
+        } else if let Some(value) = arg
+            .strip_prefix(name)
+            .and_then(|tail| tail.strip_prefix('='))
+        {
+            result = Some(value);
+        }
+    }
+    result
 }
 
 fn required<'a>(args: &'a [&str], position: usize, label: &str) -> Result<&'a str, String> {
@@ -136,6 +145,12 @@ fn check_options(command: &str, params: &[String]) -> Result<(), String> {
             }
             index += 2;
             continue;
+        }
+        if let Some((name, _value)) = arg.split_once('=') {
+            if valued.contains(&name) {
+                index += 1;
+                continue;
+            }
         }
         if arg.starts_with('-') && !flags.contains(&arg.as_str()) {
             unknown.push(arg.clone());
@@ -251,7 +266,9 @@ fn run() -> Result<(), String> {
         args.remove(index);
         Some(path)
     } else {
-        None
+        args.iter()
+            .position(|arg| arg.starts_with("--repo-root="))
+            .map(|index| PathBuf::from(args.remove(index).trim_start_matches("--repo-root=")))
     };
     if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
         print!("{}", frozen_help("root"));

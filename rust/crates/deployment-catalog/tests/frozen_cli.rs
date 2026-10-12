@@ -77,3 +77,61 @@ fn secret_metadata_selector_never_exposes_new_value_fields() {
         .public_input_field("postgres_password", "value")
         .is_err());
 }
+
+#[test]
+fn malformed_catalog_lists_fail_validation_before_operator_use() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut catalog = Catalog::load(root).unwrap();
+    catalog
+        .groups
+        .insert("app".into(), Value::String("gateway".into()));
+    assert!(catalog
+        .validate()
+        .unwrap_err()
+        .contains("service group 'app' members must be an array of strings"));
+    catalog
+        .groups
+        .insert("app".into(), Value::Array(vec![Value::from(1)]));
+    assert!(catalog
+        .validate()
+        .unwrap_err()
+        .contains("service group 'app' members must be an array of strings"));
+}
+
+#[test]
+fn equals_style_options_match_frozen_spaced_options() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let root = root.to_string_lossy();
+    let binary = env!("CARGO_BIN_EXE_marty-deploy");
+    for (spaced, equals) in [
+        (
+            vec!["services", "--group", "app", "--field", "id"],
+            vec!["services", "--group=app", "--field=id"],
+        ),
+        (
+            vec!["secrets", "selfhost-production", "--field", "env"],
+            vec!["secrets", "selfhost-production", "--field=env"],
+        ),
+    ] {
+        let spaced_output = Command::new(binary)
+            .args(["--repo-root", root.as_ref()])
+            .args(spaced)
+            .output()
+            .unwrap();
+        let equals_output = Command::new(binary)
+            .arg(format!("--repo-root={root}"))
+            .args(equals)
+            .output()
+            .unwrap();
+        assert!(spaced_output.status.success());
+        assert_eq!(equals_output.status.code(), spaced_output.status.code());
+        assert_eq!(equals_output.stdout, spaced_output.stdout);
+        assert_eq!(equals_output.stderr, spaced_output.stderr);
+    }
+}

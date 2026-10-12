@@ -48,6 +48,15 @@ fn strings(value: Option<&Value>) -> Vec<String> {
         .collect()
 }
 
+fn validate_string_list(errors: &mut Vec<String>, label: &str, value: Option<&Value>) {
+    if let Some(value) = value {
+        match value.as_array() {
+            Some(items) if items.iter().all(Value::is_string) => {}
+            _ => errors.push(format!("{label} must be an array of strings")),
+        }
+    }
+}
+
 fn text(value: &Value) -> String {
     match value {
         Value::String(s) => s.clone(),
@@ -172,6 +181,11 @@ impl Catalog {
     pub fn validate(&self) -> Result<()> {
         let mut errors = Vec::new();
         for (group, ids) in &self.groups {
+            validate_string_list(
+                &mut errors,
+                &format!("service group {} members", pyrepr(group)),
+                Some(ids),
+            );
             for id in strings(Some(ids)) {
                 if !self.services.contains_key(&id) {
                     errors.push(format!(
@@ -194,6 +208,11 @@ impl Catalog {
             }
         }
         for (id, descriptor) in &self.input_specs {
+            validate_string_list(
+                &mut errors,
+                &format!("secret {} required_for", pyrepr(id)),
+                field(descriptor, "required_for"),
+            );
             for stack in strings(field(descriptor, "required_for")) {
                 if !self.stacks.contains_key(&stack) {
                     errors.push(format!(
@@ -205,6 +224,38 @@ impl Catalog {
             }
         }
         for (name, stack) in &self.stacks {
+            for key in [
+                "compose_files",
+                "compose_profiles",
+                "deployment_targets",
+                "domains",
+                "required_service_groups",
+                "required_services",
+                "optional_services",
+                "required_secrets",
+            ] {
+                validate_string_list(
+                    &mut errors,
+                    &format!("stack {} {key}", pyrepr(name)),
+                    field(stack, key),
+                );
+            }
+            if let Some(operations) = field(stack, "operations") {
+                if let Some(operations) = operations.as_object() {
+                    for (operation, args) in operations {
+                        validate_string_list(
+                            &mut errors,
+                            &format!("stack {} operation {}", pyrepr(name), pyrepr(operation)),
+                            Some(args),
+                        );
+                    }
+                } else {
+                    errors.push(format!(
+                        "stack {} operations must be an object",
+                        pyrepr(name)
+                    ));
+                }
+            }
             for compose in strings(field(stack, "compose_files")) {
                 if !self.root.join(&compose).exists() {
                     errors.push(format!(
@@ -252,6 +303,11 @@ impl Catalog {
             }
         }
         for (name, bundle) in &self.bundles {
+            validate_string_list(
+                &mut errors,
+                &format!("bundle {} assets", pyrepr(name)),
+                field(bundle, "assets"),
+            );
             let stack = field(bundle, "stack").and_then(string).unwrap_or_default();
             if !self.stacks.contains_key(stack) {
                 errors.push(format!(
