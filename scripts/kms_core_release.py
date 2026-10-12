@@ -4,8 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-
-CORE_REVISION = "08489a2aa5c6215878c38f64f4b257b79e164c14"
+CORE_REVISION = "f0819fa0a7783eaebc2efaa105908809244c75a4"
 CORE_VERSION = "0.2.2"
 CORE_WHEEL_PREFIXES = {
     "marty-core-python": "marty_rs",

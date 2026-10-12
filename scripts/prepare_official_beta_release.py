@@ -7,16 +7,13 @@ import argparse
 import hashlib
 import json
 import re
+import runpy
 from pathlib import Path
 from typing import Any
 
-try:
-    from .kms_core_release import has_hardened_core_wheels
-except ImportError:  # direct script or file-based loader
-    try:
-        from scripts.kms_core_release import has_hardened_core_wheels
-    except ModuleNotFoundError:
-        from kms_core_release import has_hardened_core_wheels
+has_hardened_core_wheels = runpy.run_path(
+    str(Path(__file__).with_name("kms_core_release.py"))
+)["has_hardened_core_wheels"]
 
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}$")

@@ -3705,7 +3705,7 @@ dependencies = [
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -3864,7 +3864,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -3963,7 +3963,7 @@ dependencies = [
 [[package]]
 name = "marty-didcomm"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -3986,7 +3986,7 @@ dependencies = [
 [[package]]
 name = "marty-emrtd-issuance"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "cms",
  "const-oid 0.9.6",
@@ -4182,7 +4182,7 @@ dependencies = [
 [[package]]
 name = "marty-iso18013"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "anyhow",
  "ciborium",
@@ -4329,7 +4329,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4672,7 +4672,7 @@ dependencies = [
 [[package]]
 name = "marty-status"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -4717,7 +4717,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4819,7 +4819,7 @@ dependencies = [
 [[package]]
 name = "marty-x509-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=08489a2#08489a2aa5c6215878c38f64f4b257b79e164c14"
+source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
 dependencies = [
  "chrono",
  "const-oid 0.9.6",

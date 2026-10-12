@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.kms_core_release import CORE_VERSION
 
 SCRIPT = Path(__file__).parents[1] / "scripts/ci/check_marty_core_kms_boundary.py"
 SPEC = importlib.util.spec_from_file_location("kms_boundary", SCRIPT)
@@ -18,7 +19,7 @@ def reviewed_graph() -> dict:
         {
             "id": name,
             "name": name,
-            "version": "0.2.0",
+            "version": CORE_VERSION,
             "source": guard.CORE_SOURCE,
         }
         for name in sorted(guard.CORE_CRATES)

@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
-from pathlib import Path
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from scripts import check_passport_beta_fence_authority as authority
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 from scripts.probe_passport_beta_host import HostProbeError
-
 
 HEAD = "a" * 40
 TAG_OBJECT = "b" * 40
@@ -349,6 +354,15 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     planned_dir.mkdir()
     manifest = planned_dir / "stack-manifest.json"
     def component(name: str, repository: str) -> dict:
+        if name in CORE_WHEEL_PREFIXES:
+            prefix = CORE_WHEEL_PREFIXES[name]
+            return {
+                "name": name, "repository": "ElevenID/marty-core",
+                "commit": CORE_REVISION, "version": CORE_VERSION,
+                "artifacts": [{"type": "python",
+                               "uri": f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl",
+                               "digest": DIGEST}],
+            }
         return {
             "name": name, "repository": repository, "commit": "3" * 40,
             "version": "1.0.0", "artifacts": [{

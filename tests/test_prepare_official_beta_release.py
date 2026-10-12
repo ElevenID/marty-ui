@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from scripts.check_passport_beta_fence_authority import HostProbeError, manifest_source
 from scripts.kms_core_release import (
     CORE_RELEASE_URI,
     CORE_REVISION,
@@ -20,8 +22,6 @@ from scripts.prepare_official_beta_release import (
     prepare_release,
     validate_release_inputs,
 )
-from scripts.check_passport_beta_fence_authority import HostProbeError, manifest_source
-
 
 UI_SHA = "1" * 40
 RECORDER_SHA = "2" * 40
@@ -29,6 +29,25 @@ UI_DIGEST = "sha256:" + "a" * 64
 SERVICES_DIGEST = "sha256:" + "b" * 64
 MIGRATIONS_DIGEST = "sha256:" + "c" * 64
 ISSUANCE_DIGEST = "sha256:" + "d" * 64
+
+
+def test_isolated_renderer_and_promotion_load_core_release_policy() -> None:
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import runpy, sys; runpy.run_path(sys.argv[1]); runpy.run_path(sys.argv[2])",
+            str(root / "scripts/render_base_native_runtime_fixture.py"),
+            str(root / "scripts/promote_release_evidence.py"),
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _artifact(kind: str, uri: str, digest: str = UI_DIGEST) -> dict[str, str]:
@@ -324,6 +343,7 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
     tmp_path: Path,
 ) -> None:
     from types import SimpleNamespace
+
     from scripts.conformance_native import verify_release
 
     manifest, checksums = _write_release(tmp_path, _manifest())

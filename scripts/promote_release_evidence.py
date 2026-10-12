@@ -8,18 +8,15 @@ import copy
 import hashlib
 import json
 import re
-from datetime import datetime, timezone
+import runpy
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-try:
-    from .kms_core_release import has_hardened_core_wheels
-except ImportError:  # direct script or file-based loader
-    try:
-        from scripts.kms_core_release import has_hardened_core_wheels
-    except ModuleNotFoundError:
-        from kms_core_release import has_hardened_core_wheels
+has_hardened_core_wheels = runpy.run_path(
+    str(Path(__file__).with_name("kms_core_release.py"))
+)["has_hardened_core_wheels"]
 
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -770,7 +767,7 @@ def promote(args: argparse.Namespace) -> None:
         "stack_generated_at": manifest.get("generated_at"),
         "components": copy.deepcopy(manifest["components"]),
         "release_ready": True,
-        "promoted_at": datetime.now(timezone.utc).isoformat(),
+        "promoted_at": datetime.now(UTC).isoformat(),
     }
     promoted["beta_evidence"] = {
         "origin": args.beta_origin,

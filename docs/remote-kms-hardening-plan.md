@@ -1224,12 +1224,12 @@ assembled Core matrix is still due.
 | K2 | Prove backend support for non-exportable DIDComm sender agreement/authcrypt with actual recipient decryption; select the smallest shared Rust boundary and record supported provider scope. | In progress; standard Transit lacks X25519, current Go OpenBao plugin image and native Rust sender passed an isolated live holder-decryption proof, and the plugin passed a three-voter active/standby Raft forwarding and failover probe; published image and production scope remain unqualified |
 | K3 | Implement DIDComm scoped/versioned references and remote operations; bind tenant, sender DID/key, recipient documents and frozen attempt inputs; preserve rotation, expiry, retries, replay, cancellation and unknown-outcome semantics. | In progress; native Rust scoped/versioned authcrypt, rotation and local Raft capability/idempotence proofs passed; self-host and Kubernetes native-Issuance models mount a dedicated read/pack-only OpenBao token; the packaged direct Canvas renewal process passed anoncrypt/authcrypt holder decryption with a disposable plugin backend; Linux isolated gateway/Kubernetes processes, full retry/recovery and release deployment qualification remain |
 | K4 | Implement opaque integration-secret custody with remote-only startup and new writes; reject old AES-GCM envelopes and raw master-key configuration; prove tenant/purpose isolation, tamper rejection, restart, rotation, recovery and atomic repository behavior. | In progress; live Transit rotation/binding/tamper, clean PostgreSQL mixed Rust/Python read/write/startup-scan, and disposable coordinated Rust/PostgreSQL/OpenBao Raft snapshot restore passed; packaged image, hosted CI and cutover qualification remain pending |
-| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core PR #355 head `6acba9d` passed exact-head CI and release-wheel preflight. Both production UI Cargo roots and Credentials pin that head. Credentials #313 head `f22414f` passed exact-head CI; UI #1192 head `5f235b835` is running its exact-head gate. Protected review, exact release artifacts and wallet cutover remain. |
+| K5 | Adopt hardened Core across Rust services and fork pins; replace removed APIs and broad features; isolate fixtures and qualification binaries; eliminate compatibility crypto from production graphs. | In progress; Core #355 merged through protected merge-group CI at `f0819fa0a7783eaebc2efaa105908809244c75a4`, reserving 0.2.2. UI #1192 and Credentials #313 now pin that exact main commit locally. UI's locked production and standalone probe graph checks, and Credentials' Python/native/WASM graph checks, passed. Final pushed-head CI and released-artifact proof remain. |
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed. Provider adapters pin AWS/Azure/GCP key versions and check provider response identities; real cloud key/certificate acceptance remains. Seven origin-specific non-exportable HMAC keys, scoped grant mint/verify policies, one-use Redis consumption and Gateway/Flow/Issuance producers are implemented. Signing Keys binds the consumed grant to the selected remote key and exact bytes before KMS use. Exact-head CI, installed-image qualification and real-provider acceptance remain. |
-| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required and Python gRPC runtime is disabled. Draft Credentials PR #313 head `f22414f` pins reviewed Core `6acba9d` and passed its exact-head CI. Its unused marty-common harness dependency is removed in a held local follow-up. Protected review, released-artifact qualification and native UI cutover remain. |
-| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 head `58ee4dbd3` adds final credential/DIDComm read guards and depth-safe Canvas private-material scanning. The clean-source 64-case Canvas depth route, warnings-denied Clippy and full disposable OpenBao/Redis/PostgreSQL probe passed locally. [Exact-head CI 38176281794](https://github.com/ElevenID/marty-ui/actions/runs/38176281794) is running; real cloud, physical device, assembled artifact and final full review remain. |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork PR #9 and Rust-only Issuance PR #1203 are merged. Core #355 is green and requires protected review; Credentials #313 is draft with green exact-head CI, and UI #1192 is draft with [exact-head CI 38180019573](https://github.com/ElevenID/marty-ui/actions/runs/38180019573) running on `5f235b835`. Exact release artifacts, real cloud providers, physical-device proof, KMS-only cutover and recovery remain. |
-| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. A fresh PostgreSQL 16 source audit applied 22 SQL migrations plus seven embedded Rust schema constants: 93 tables and 1,198 columns with zero private-key catalog matches. Revocation, Deployment, Compliance, Issuance, Device Registration and Notification native migration/startup paths passed separate fresh-database checks. A further disposable probe ran native Auth, Organization, Credential Template, Presentation Policy and Flow migration/repository contracts plus the actual Verification migration executable twice; all six database catalog/content scans passed. The Flow migration and seeded profile link passed twice on its fresh database, leaving eight tables and 95 columns for inspection. Receipts are in `artifacts/kms-native-*-schema-audit-20261011.json`, `artifacts/kms-revocation-runtime-schema-audit-20261011.json`, `artifacts/kms-profile-runtime-schema-audit-20261011.json` and `artifacts/kms-native-service-migration-audit-20261011.json`. The marty-common wheel and its private-key ORM metadata are retired from the local UI release batch at d3eba83cb; exact signed-image execution, self-host cutover and release proof remain. |
+| K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Python DIDComm/secret/gRPC and legacy issuer adapters and their old tests are removed, native HTTP owner is required, and Python gRPC runtime is disabled. Draft Credentials #313 head `ba0b3b6` removes the unused marty-common harness and old wheel installer, pins Core 0.2.2, and passed local Python/native graph checks plus exact-head CI. Actual merged-Core pin, published artifact inspection and native UI cutover remain. |
+| K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 head `f79bd3a8a` guards public inputs and stores, pins the reviewed Core 0.2.2 candidate, and holds release while old wheels remain in the lock. Its hosted OpenBao plugin, recovery and service-image jobs passed. Three failing release-contract/Canvas/native-contract lanes have locally tested fixes held for the post-Core-merge pin batch. Installed artifacts, real cloud, physical device and final cross-PR review remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203 and Core #355 are merged. UI #1192 has three locally fixed prior-head lanes plus the final Core pin; Credentials #313 had green prior-head CI and now pins merged Core locally. Stable-tag preparation for Core v0.2.2 was dispatched as run `38189025361`. Signed wheels, final consumer CI/merges, installed stack, real providers, physical device, KMS-only cutover and recovery remain. |
+| K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials removed private-key ORM tables and historical creation paths; Core guards direct Open Badge public-key writes. A fresh PostgreSQL 16 source audit applied 22 SQL migrations plus seven embedded Rust schema constants: 93 tables and 1,198 columns with zero private-key catalog matches. Revocation, Deployment, Compliance, Issuance, Device Registration and Notification native migration/startup paths passed separate fresh-database checks. A further disposable probe ran native Auth, Organization, Credential Template, Presentation Policy and Flow migration/repository contracts plus the actual Verification migration executable twice; all six database catalog/content scans passed. The Flow migration and seeded profile link passed twice on its fresh database, leaving eight tables and 95 columns for inspection. Receipts are in `artifacts/kms-native-*-schema-audit-20261011.json`, `artifacts/kms-revocation-runtime-schema-audit-20261011.json`, `artifacts/kms-profile-runtime-schema-audit-20261011.json` and `artifacts/kms-native-service-migration-audit-20261011.json`. The marty-common wheel and its private-key ORM metadata are removed from pushed UI head `f79bd3a8a`; exact signed-image execution, self-host cutover and release proof remain. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
@@ -16524,3 +16524,161 @@ does not qualify the new head's hosted WASM/Python wheel matrix; that run is
 pending. UI now pins the same candidate in both production and standalone
 probe locks, with graph policy and 55 official-release-policy tests passing
 locally. Its native service compilation and new-head hosted CI are pending.
+
+The pinned `08489a2` is the reviewed Core PR head. Core's protected merge
+may create a different main commit. Before publishing `v0.2.2` and lifting
+the stack hold, pin both consumers and the official-manifest provenance rule
+to the actual merged main commit, rebuild locks, and requalify exact heads.
+The current PR-head pins prove candidate integration only; they do not
+authorize use of a release tagged from a different commit.
+
+The source-built `python scripts/probe_signing_keys_openbao_policy.py
+--rust-adapter` rerun against UI's Core 0.2.2 candidate passed with fresh
+disposable OpenBao, PostgreSQL, and Redis. It exercised six managed prefixes,
+seven origin-bound grant keys, isolated provider HMAC verification, Rust
+managed-key adapter, ES256/ES384/ES512 CSR custody, holder service/DB/OpenBao
+lifecycle, credential durability, Redis pairing tickets, tenant routes, and
+managed-profile routes. The probe removed all three labeled containers.
+This qualifies the local source graph; installed release images and signed
+wheel bytes remain unqualified.
+
+Core 0.2.2 release-wheel preflight passed at PR head `08489a2`, including
+the AArch64 wheel matrix. Its affected Rust job found two stale workflow
+commands that still requested the deliberately retired DIDComm
+`local-key-operations` feature. A local Core correction removes that feature
+from the positive encrypted-envelope test lanes; the exact test command and
+compile-fail doctests passed, as did 135 release-contract script tests. The
+current hosted KMS role graph, including disposable OpenBao signing, passed;
+the correction was pushed as `cbd3b69`; its exact-head CI and release-wheel
+preflight are running.
+
+UI #1192 exact-head Release Contract Tests at `f79bd3a8a` ran 6,451 passing
+tests and found 23 failing tests. They share two stale fixture assumptions:
+the Core graph fixture still claimed 0.2.0, and two synthetic official stack
+manifests used generic pre-hardening Core artifact URLs. Those three fixture
+sites now derive the reviewed Core 0.2.2 revision, version and wheel URI from
+the canonical `scripts/kms_core_release.py` policy; all 74 focused tests pass
+locally. Hold this correction with the post-Core-merge provenance repin so the
+next UI push consumes one CI run. Other jobs in that exact-head UI run remain
+in flight; their results still need inspection.
+
+The same UI run's Rust contract group found one presentation-policy regression
+test expecting a signed OB2 assertion to remain verified after its transported
+badge and issuer reference documents changed their `id` fields. The reviewed
+Core 0.2.2 verifier correctly rejects those contradictory references. The UI
+test now expects rejection and empty claims, then restores the legitimate
+reference documents before exercising its separate governed-key rejection
+cases. Its exact locked native-kernel test binary passes all five cases
+locally. This correction is also held for the same post-merge UI batch.
+
+Credentials #313 exact-head [CI 38184204047](https://github.com/ElevenID/marty-credentials/actions/runs/38184204047)
+completed successfully at `ba0b3b6`. Its Core branch-head pin is still
+candidate provenance and must be replaced with the protected Core main merge
+commit before final consumer qualification.
+
+Core #355 exact-head CI at `cbd3b69` completed the workspace Rust suites and
+DIDComm compile-fail docs, then the Affected Rust Tests job failed in its
+standalone mdoc benchmark smoke: the benchmark now obtains its signing key
+from marked disposable OpenBao, while that workflow step had no OpenBao.
+The Core workflow is corrected in pushed head `52f05ac` to run benchmark smoke once through
+the existing disposable OpenBao issuer probe, including the opt-in payload
+matrix on merge-group/non-PR runs. The affected lane now compiles the default
+benchmark binaries without executing them; duplicate direct benchmark
+execution was removed from the other non-PR jobs. A fresh locally labeled
+OpenBao with scoped Transit signing exercised the exact mdoc benchmark in
+Criterion test mode across all standard claim and batch sizes successfully;
+the container and temporary certificate were removed. The default benchmark
+binaries also compile locally with `--benches --no-run`. The corrected Core
+workflow still needs exact-head CI before protected merge.
+
+The new Core head's Fast Rust Preflight found one static release-contract test
+that still required the three now-removed duplicate benchmark steps in the
+Rust lint job. That test is corrected locally to require the disposable
+OpenBao benchmark lane and the affected job's compile-only benchmark step;
+it also rejects reintroduction of direct unscoped benchmark execution.
+`check_release_contract.py`, the verification feature guard, and all 135
+Python script tests pass locally. The correction is committed locally as
+`56b7c6d` and pushed after the preceding head's substantive jobs finished;
+its exact-head protected checks and release-wheel preflight are now due.
+
+Core [CI 38185766630](https://github.com/ElevenID/marty-core/actions/runs/38185766630)
+at `52f05ac` has now passed Affected Rust Tests with the compile-only
+benchmark lane; KMS role graphs and Rust lint remain live. UI [CI
+38184323716](https://github.com/ElevenID/marty-ui/actions/runs/38184323716)
+at `f79bd3a8a` passed its OpenBao DIDComm plugin image and coordinated
+PostgreSQL/Raft integration-secret recovery job. Canvas remains live; its two
+previously identified release-contract and Rust contract failures have local
+corrections ready for the merged-Core repin batch.
+
+Core [Release Wheel Preflight 38185766634](https://github.com/ElevenID/marty-core/actions/runs/38185766634)
+completed successfully at the pushed `52f05ac` head, including all AArch64
+wheel jobs. The static-contract correction is a test-only change and still
+requires its own exact-head preflight and protected checks after push.
+
+Core `52f05ac` subsequently passed its Rust lint and the live disposable
+OpenBao KMS role job, including the new benchmark smoke. Its only substantive
+CI failure was the stale release-contract assertion in Fast Rust Preflight,
+fixed in pushed `56b7c6d`. The next exact-head CI and wheel run will determine
+protected merge readiness; the earlier success cannot be treated as success
+for the new head.
+
+Core #355 head `56b7c6d` has passed its Fast Rust Preflight on the new CI
+run, confirming the workflow's 135 release-contract script tests with the
+OpenBao benchmark ownership assertion. Its exact-head Affected Rust Tests and
+Rust Lint jobs passed, and [Release Wheel Preflight 38186561695](https://github.com/ElevenID/marty-core/actions/runs/38186561695)
+completed successfully, including AArch64. Its live OpenBao KMS role job and
+CodeQL Rust remain in progress before protected merge.
+
+UI #1192 [CI 38184323716](https://github.com/ElevenID/marty-ui/actions/runs/38184323716)
+finished its Canvas lane with two failed isolated base-profile child processes.
+The uploaded `owned-runtime-failure-diagnostics-38184323716-1` artifact shows
+both children exited before Compose qualification because
+`prepare_official_beta_release.py` could not import the new
+`kms_core_release.py` policy when loaded through `runpy` under an isolated
+Python process. The UI batch now loads that adjacent policy by exact file path
+in both official release preparation and evidence promotion. An isolated
+`python -I` reproduction of the renderer/promotion import graph passes; the
+new regression test and 119 adjacent release/provisioning tests pass locally.
+The complete Canvas runtime cases still require exact-head hosted rerun after
+the merged-Core repin, so this is a diagnosed/fixed import failure, not yet
+full runtime qualification.
+
+Core #355 head `56b7c6d` has now passed its complete exact-head protected CI,
+including the disposable OpenBao KMS role/benchmark job, Rust CodeQL, CI Gate,
+and all release-wheel preflight architectures. The PR is mergeable; a protected
+merge request was submitted and GitHub reported that `main` uses a merge queue.
+The PR remains open pending that queue. Its eventual main merge commit, rather
+than the PR head, must be used for the final UI and Credentials pins and the
+v0.2.2 release tag. UI's three prior-head CI failures have local fixes batched
+for that repin; Credentials' prior head remains fully green. Neither consumer
+has final merged-Core or signed-artifact qualification yet.
+
+While Core merge-group CI run `38187637906` was queued, the source-built UI
+base-native renderer passed two local tests using actual Docker Compose
+rendering: the owned provider-ingress overlay remained closed and the authcrypt
+configuration bound the disposable KMS address/token and remote integration-
+secret settings. This supplements the isolated import regression proof; it
+does not replace the failed prior-head Linux Canvas runtime or released-image
+acceptance. Core's merge-group organization, policy and wallet workflows passed;
+the merge-group CI run was still queued at this checkpoint.
+
+The held UI release-policy batch passed 93 combined local tests across official
+beta preparation, supported provisioning, passport fence authority and Core
+KMS graph boundaries. These include the isolated renderer/promotion import
+regression. Core merge-group CI `38187637906` then entered in-progress state
+with KMS role, feature-matrix and platform jobs running; final merged-head
+provenance and dependent consumer qualification still await its result.
+
+Core #355 merged through the protected queue at
+`f0819fa0a7783eaebc2efaa105908809244c75a4` after merge-group [CI
+38187637906](https://github.com/ElevenID/marty-core/actions/runs/38187637906)
+passed, including KMS role graphs, feature combinations and Windows/macOS
+platform lanes. The actual `main` head matches that merge commit. The held UI
+and Credentials candidate pins were changed to this exact merged revision;
+UI's 93 combined release-policy tests pass after the repin. Core's `v0.2.2`
+stable-tag preparation was dispatched as [run
+38189025361](https://github.com/ElevenID/marty-core/actions/runs/38189025361)
+against the exact merge commit; it is still queued at this checkpoint. Local
+Cargo full-graph checks hit a full C: cache drive, so isolated Cargo cache on
+D: is being populated for validation. Neither signed wheels nor final
+consumer CI are qualified by this checkpoint.
