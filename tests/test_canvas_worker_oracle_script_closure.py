@@ -25,6 +25,7 @@ PRODUCERS = ROOT / "contracts/canvas-worker-oracle-producers.json"
 IMPORTS = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
 HARNESS = ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
 OAUTH_INPUTS = ROOT / "contracts/canvas-worker-oauth-revocation-current-inputs.json"
+PROVIDER_INPUTS = ROOT / "contracts/canvas-worker-provider-recovery-current-inputs.json"
 REST_INPUTS = ROOT / "contracts/canvas-worker-rest-current-inputs.json"
 OAUTH_RUNNER = "run_canvas_worker_oauth_revocation_oracle.py"
 MOUNTED_INPUTS = frozenset(
@@ -1052,7 +1053,7 @@ def oauth_input_records() -> tuple[dict, dict, dict, dict]:
     )
 
 
-def copy_oauth_input_sources(root: Path, evidence: dict, rest: dict) -> None:
+def copy_inherited_rest_input_sources(root: Path, evidence: dict, rest: dict) -> None:
     for source in rest["sha256"] | evidence["sha256"]:
         target = root / source
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1070,7 +1071,7 @@ def test_oauth_specific_input_change_invalidates_evidence(
     tmp_path: Path, name: str
 ) -> None:
     evidence, rest, producers, graph = oauth_input_records()
-    copy_oauth_input_sources(tmp_path, evidence, rest)
+    copy_inherited_rest_input_sources(tmp_path, evidence, rest)
     target = tmp_path / name
     target.write_bytes(target.read_bytes() + b"\n# changed\n")
     with pytest.raises(AssertionError, match="OAuth input drift"):
@@ -1079,7 +1080,7 @@ def test_oauth_specific_input_change_invalidates_evidence(
 
 def test_oauth_inherited_rest_change_invalidates_evidence(tmp_path: Path) -> None:
     evidence, rest, producers, graph = oauth_input_records()
-    copy_oauth_input_sources(tmp_path, evidence, rest)
+    copy_inherited_rest_input_sources(tmp_path, evidence, rest)
     target = tmp_path / "scripts/run_canvas_worker_rest_oracle.py"
     target.write_bytes(target.read_bytes() + b"\n# changed\n")
     with pytest.raises(AssertionError, match="REST input drift"):
@@ -1109,7 +1110,7 @@ def test_oauth_new_local_helper_needs_input_review() -> None:
 
 def test_oauth_new_transitive_scenario_needs_input_review(tmp_path: Path) -> None:
     evidence, rest, producers, graph = oauth_input_records()
-    copy_oauth_input_sources(tmp_path, evidence, rest)
+    copy_inherited_rest_input_sources(tmp_path, evidence, rest)
     scenario = tmp_path / "contracts/canvas-worker-oauth-revocation-scenarios.json"
     content = json.loads(scenario.read_text(encoding="utf-8"))
     content["new_reference"] = "new-transitive-scenario.json"
@@ -1122,3 +1123,124 @@ def test_oauth_new_transitive_scenario_needs_input_review(tmp_path: Path) -> Non
     )
     with pytest.raises(AssertionError, match="need input review"):
         check_oauth_current_inputs(evidence, rest, producers, graph, tmp_path)
+
+
+def provider_input_records() -> tuple[dict, dict, dict, dict]:
+    return (
+        json.loads(PROVIDER_INPUTS.read_text(encoding="utf-8")),
+        json.loads(REST_INPUTS.read_text(encoding="utf-8")),
+        json.loads(PRODUCERS.read_text(encoding="utf-8")),
+        json.loads(IMPORTS.read_text(encoding="utf-8")),
+    )
+
+
+def check_provider_current_inputs(
+    evidence: dict, rest: dict, producers: dict, graph: dict, root: Path
+) -> None:
+    assert set(evidence) == {
+        "schema", "purpose", "normalization", "inherited_inputs", "runners", "sha256"
+    }
+    assert evidence["inherited_inputs"] == "contracts/canvas-worker-rest-current-inputs.json"
+    assert evidence["normalization"] == rest["normalization"]
+    corpora = sorted(
+        name for name in producers["direct_runner_corpora"]
+        if name.startswith("canvas-worker-provider-")
+        or name.startswith("canvas-worker-reclaimers")
+    )
+    runners = tuple(
+        name.replace("canvas-worker-", "run_canvas_worker_", 1)
+        .replace("-oracle.json", "_oracle.py")
+        .replace("-", "_")
+        for name in corpora
+    )
+    assert evidence["runners"] == list(runners), "Provider producer family needs input review"
+    for runner, corpus in zip(runners, corpora, strict=True):
+        scenario = corpus.replace("-oracle.json", "-scenarios.json")
+        assert graph["scenario_literals"][runner] == [scenario], (
+            "Provider scenario selection needs input review"
+        )
+        assert runner not in graph["scenario_templates"], (
+            "Provider scenario template needs input review"
+        )
+    assert not (set(evidence["sha256"]) & set(rest["sha256"]))
+    assert_current_inputs(
+        rest, graph, root,
+        entrypoint="run_canvas_worker_rest_oracle.py",
+        schema="marty.canvas-worker-rest-current-inputs/v1",
+        label="REST",
+        disclaimer="do not attest historical REST or downstream corpora",
+        additional_inputs=MOUNTED_INPUTS,
+    )
+    combined = {key: evidence[key] for key in ("schema", "purpose", "normalization")}
+    combined["sha256"] = rest["sha256"] | evidence["sha256"]
+    assert_current_inputs(
+        combined, graph, root,
+        entrypoint=runners,
+        schema="marty.canvas-worker-provider-recovery-current-inputs/v1",
+        label="Provider recovery",
+        disclaimer="do not attest historical provider recovery corpora",
+        additional_inputs=MOUNTED_INPUTS,
+    )
+
+
+def test_current_provider_recovery_inputs_cover_all_direct_runners() -> None:
+    check_provider_current_inputs(*provider_input_records(), ROOT)
+
+
+@pytest.mark.parametrize(
+    "name", json.loads(PROVIDER_INPUTS.read_text(encoding="utf-8"))["sha256"]
+)
+def test_provider_specific_input_change_invalidates_evidence(
+    tmp_path: Path, name: str
+) -> None:
+    evidence, rest, producers, graph = provider_input_records()
+    copy_inherited_rest_input_sources(tmp_path, evidence, rest)
+    target = tmp_path / name
+    target.write_bytes(target.read_bytes() + b"\n# changed\n")
+    with pytest.raises(AssertionError, match="Provider recovery input drift"):
+        check_provider_current_inputs(evidence, rest, producers, graph, tmp_path)
+
+
+def test_provider_inherited_rest_change_invalidates_evidence(tmp_path: Path) -> None:
+    evidence, rest, producers, graph = provider_input_records()
+    copy_inherited_rest_input_sources(tmp_path, evidence, rest)
+    target = tmp_path / "scripts/run_canvas_worker_rest_oracle.py"
+    target.write_bytes(target.read_bytes() + b"\n# changed\n")
+    with pytest.raises(AssertionError, match="REST input drift"):
+        check_provider_current_inputs(evidence, rest, producers, graph, tmp_path)
+
+
+def test_provider_new_corpus_or_scenario_needs_input_review() -> None:
+    evidence, rest, producers, graph = provider_input_records()
+    producers["direct_runner_corpora"].append("canvas-worker-provider-new-oracle.json")
+    with pytest.raises(AssertionError, match="Provider producer family needs input review"):
+        check_provider_current_inputs(evidence, rest, producers, graph, ROOT)
+    producers = provider_input_records()[2]
+    graph["scenario_literals"][evidence["runners"][0]].append("new.json")
+    with pytest.raises(AssertionError, match="Provider scenario selection needs input review"):
+        check_provider_current_inputs(evidence, rest, producers, graph, ROOT)
+
+
+def test_provider_new_local_helper_needs_input_review() -> None:
+    evidence, rest, producers, graph = provider_input_records()
+    graph["direct_imports"][evidence["runners"][0]].append("new_local_helper.py")
+    graph["direct_imports"]["new_local_helper.py"] = []
+    with pytest.raises(AssertionError, match="need input review"):
+        check_provider_current_inputs(evidence, rest, producers, graph, ROOT)
+
+
+def test_provider_new_transitive_scenario_needs_input_review(tmp_path: Path) -> None:
+    evidence, rest, producers, graph = provider_input_records()
+    copy_inherited_rest_input_sources(tmp_path, evidence, rest)
+    scenario = tmp_path / "contracts/canvas-worker-provider-recovery-scenarios.json"
+    content = json.loads(scenario.read_text(encoding="utf-8"))
+    content["new_reference"] = "new-transitive-scenario.json"
+    scenario.write_text(json.dumps(content), encoding="utf-8")
+    (tmp_path / "contracts/new-transitive-scenario.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    evidence["sha256"]["contracts/canvas-worker-provider-recovery-scenarios.json"] = (
+        normalized_sha256(scenario)
+    )
+    with pytest.raises(AssertionError, match="need input review"):
+        check_provider_current_inputs(evidence, rest, producers, graph, tmp_path)

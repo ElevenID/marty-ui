@@ -484,7 +484,7 @@ workflow-policy tests, independent review, full PR CI, and [protected
 combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38227383325)
 before merge.
 
-OAuth-revocation current-input follow-up (2026-10-12 local candidate): the
+OAuth-revocation current-input follow-up (2026-10-12 merged [UI #1289](https://github.com/ElevenID/marty-ui/pull/1289)): the
 shared runner produces ten reviewed kinds, including nine variant corpora.
 One overlay inherits the guarded REST inputs and pins eleven additional
 current inputs (the runner and ten scenario matrices). Its release-owned test
@@ -493,8 +493,18 @@ imports, nested JSON references, mounted helpers, and every normalized source
 hash. A new kind, helper, or scenario requires input review. This guards only
 current capture inputs; it does not attest historical OAuth observations,
 establish runtime compatibility, authorize qualification reuse, or alter any
-routine/full oracle execution. The reviewed candidate is now based on main
-after #1287 merged; its own PR and protected CI are still required.
+routine/full oracle execution. Exact-head and protected combined-head CI
+passed before merge.
+
+Provider-recovery current-input follow-up (2026-10-12 local candidate): eight
+direct provider/reclaimer runners are treated as one family because the
+recovery runner can select sibling scenarios. A single overlay inherits the
+REST current inputs and pins 17 additional scripts/scenario files. Tests
+reject a new producer, scenario selection, local helper, transitive JSON
+reference, or changed hash without review. The manifest is release-sensitive
+in the existing CI classifier. This is current capture-input evidence only,
+not historical corpus attestation, a qualification skip, or a runtime change.
+Local validation and independent review are required before a PR.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 

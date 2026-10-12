@@ -1753,6 +1753,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "contracts/canvas-worker-rest-wrappers-current-inputs.json",
             "contracts/canvas-worker-rest-dependent-current-inputs.json",
             "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+            "contracts/canvas-worker-provider-recovery-current-inputs.json",
             "tests/test_ci_workflow_performance.py",
             "tests/test_canvas_worker_rest_input_evidence.py",
             "tests/test_canvas_worker_rest_wrapper_input_evidence.py",
@@ -1776,6 +1777,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-oauth-revocation-current-inputs.json": {
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_ci_workflow_performance.py",
+        },
+        "canvas-worker-provider-recovery-current-inputs.json": {
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -1905,6 +1910,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-rest-dependent-current-inputs.json",
         "contracts/canvas-worker-timeout-current-inputs.json",
         "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+        "contracts/canvas-worker-provider-recovery-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
