@@ -427,7 +427,7 @@ and 602 successful Canvas timing rows in each run, then merged as
 `2300a8582d`. Its exact preflight-test source selector has no measured
 scoped-PR saving yet.
 
-Facts/retry current-input follow-up (2026-10-12 candidate): the two thin
+Facts/retry current-input follow-up (2026-10-12 merged): the two thin
 `run_canvas_worker_{facts,retry}_oracle.py` producers inherit the independently
 guarded REST capture inputs and add only their two scripts and two scenario
 files. One overlay pins those four normalized source hashes; its test first
@@ -436,8 +436,21 @@ the exact union of both computed wrapper import, child, and transitive
 scenario closures plus the mounted preparer/trust inputs. Focused local
 tests and independent review cleared the candidate. This is current-source
 drift detection, not historical capture-source attestation, complete image
-or runtime closure, or permission to skip reference qualification. Protected
-CI and main merge remain pending.
+or runtime closure, or permission to skip reference qualification.
+[UI #1282](https://github.com/ElevenID/marty-ui/pull/1282) passed full PR
+and [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38209022385),
+including the Canvas service and release-contract gates, then merged as
+`eb7cdd0bb`.
+
+REST-dependent current-input follow-up (2026-10-12 local candidate): the
+provider-signals, roster-failure, and validation producers share the REST and
+startup graph. A single overlay inherits the ten guarded REST inputs and pins
+seven additional current inputs, including the shared retry scenario. Its test
+requires the exact union of all three producers' static script and transitive
+scenario closures plus mounted preparer/trust inputs. It does not attest their
+historical observations, qualify an image or runtime, or reduce live oracle
+coverage. The rebased local candidate passed 216 focused tests and independent
+review; protected CI remains pending.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
@@ -458,6 +471,16 @@ A7 refresh (2026-10-07): Core PR [#352 run 37419154761](https://github.com/Eleve
 A7 refresh (2026-10-08): The latest normal CI for draft Core #355, [run 37844023348](https://github.com/ElevenID/marty-core/actions/runs/37844023348) at `d41d87c`, ran preflight for 14m07s (21:06:33–21:20:40 UTC), versus affected Rust tests 9m08s and Native ZKP security 8m23s; the CI gate started three seconds after preflight ended. Earlier successful #355 revisions [37841791644](https://github.com/ElevenID/marty-core/actions/runs/37841791644) and [37839304785](https://github.com/ElevenID/marty-core/actions/runs/37839304785) also ended on preflight: 12m37s versus 9m59s affected tests / 10m39s ZKP, and 18m16s versus 10m08s / 10m32s, respectively. These are three revisions of **one** security PR, not independent workload samples. In contrast, #354's [normal run 37826531572](https://github.com/ElevenID/marty-core/actions/runs/37826531572) ended on affected tests (18m06s versus 12m54s preflight); its [protected run 37828982922](https://github.com/ElevenID/marty-core/actions/runs/37828982922) ended on the protocols feature lane (17m04s versus 16m52s preflight). In #355's latest preflight, KMS graphs took 7m03s, its new OpenBao issuer proof 2m39s, workspace Clippy 1m47s, WASM fallback 1m03s, and EUDI client 1m02s. Cheap policy/format/setup checks already lead the job; the expensive steps share Cargo inputs and compiler cache on its runner. Splitting them into another job would add runner/toolchain/cache startup and potentially repeated compilation, while a same-runner split cannot shorten the gate. No independently cacheable or no-extra-cost split is demonstrated, and no speedup is claimed. Keep A7 deferred and all feature/security gates intact; remeasure across independent normal PR workloads before authorizing a split.
 
 A7 refresh (2026-10-10): Two independent normal dependency PRs now provide the requested workload check. [UUID run 38029628248](https://github.com/ElevenID/marty-core/actions/runs/38029628248) finished preflight at 06:19:56 UTC, after affected Rust tests at 06:19:23; its KMS graph step took 8m09s, workspace Clippy 2m18s, and EUDI client 3m39s. [cc run 38029635868](https://github.com/ElevenID/marty-core/actions/runs/38029635868) finished affected tests at 06:22:16, after preflight at 06:17:51; its KMS graphs took 6m33s, Clippy 2m16s, and EUDI client 3m22s. Thus preflight can be last, but is not consistently the gate tail even across two dependency inputs. These checks deliberately share a Cargo target/cache within their job and test different feature/security obligations. A separate runner has no demonstrated reusable compiled artifact or duration advantage; preserve all checks and defer splitting until a same-obligation, comparable pilot proves faster feedback or completion.
+
+A7 post-merge spot check (2026-10-12): after #359's bounded split,
+[Core cc PR run 38189253281](https://github.com/ElevenID/marty-core/actions/runs/38189253281)
+completed Fast Rust Preflight in 38s after runner start, while Affected Rust
+Tests took 13m35s. [Core UUID PR run 38189230770](https://github.com/ElevenID/marty-core/actions/runs/38189230770)
+completed the cheap lane in 35s after runner start, but that job did not start
+until 8m47s after Affected Rust Tests began. The split gives a short cheap
+execution path once assigned; runner scheduling can still delay wall-clock
+feedback. Both runs kept the broader required checks, and these observations
+do not establish an end-to-end speedup.
 
 ### A8: release-tier E2E and demo strategy
 

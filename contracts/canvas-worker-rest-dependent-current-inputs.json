@@ -1,0 +1,15 @@
+{
+  "schema": "marty.canvas-worker-rest-dependent-current-inputs/v1",
+  "purpose": "Guard current provider-signals, roster-failure, and validation REST-dependent capture inputs only; do not attest historical corpora or authorize qualification reuse.",
+  "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+  "inherited_inputs": "contracts/canvas-worker-rest-current-inputs.json",
+  "sha256": {
+    "contracts/canvas-worker-provider-signals-scenarios.json": "901d1337f4b9b34aa17e899110800bb540b15086963b300c044bd133d8a524d3",
+    "contracts/canvas-worker-retry-scenarios.json": "77d186577a5ec9972f8b61747d9fed807280dd1e2825df5e8c6b222f01ac09c9",
+    "contracts/canvas-worker-roster-failure-scenarios.json": "6087c9ba852d868b0923735a56ac2e2e1f0f12153a017e02f397b8bc3c19c4a7",
+    "contracts/canvas-worker-validation-scenarios.json": "4933e2fe4108d2ebb6329233c2a42889155ed2c8c6b948ca2a4b938e6b9290a7",
+    "scripts/run_canvas_worker_provider_signals_oracle.py": "068dd621c9955387e87866e80120fd574e974000d564ec6d934e1aa300c658aa",
+    "scripts/run_canvas_worker_roster_failure_oracle.py": "2ee7dddefb2a825a0e26fe7835573758b66174234b444e75df1c5e743467c680",
+    "scripts/run_canvas_worker_validation_oracle.py": "f6aaef963565169bfe49d704b86e9c439189a93ac9f7d06c6a40931dd767fafc"
+  }
+}
