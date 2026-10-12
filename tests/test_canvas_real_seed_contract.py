@@ -471,6 +471,44 @@ def test_frozen_canvas_transition_print(monkeypatch) -> None:
     assert capture_canvas_transition_print(monkeypatch) == contract["canvas_transition_print"]
 
 
+def capture_canvas_cli_journey_order(monkeypatch) -> dict:
+    steps = []
+    monkeypatch.setattr(seed.os, "environ", {
+        "MARTY_API_KEY": "test-gateway-key",
+        "CANVAS_DEMO_APPLICATION_SEED_ENABLED": "false",
+    })
+    monkeypatch.setattr(seed.sys, "argv", ["seed_canvas_real.py", "--skip-canvas-lms-seed"])
+    monkeypatch.setattr(seed, "_load_dotenv", lambda _path: None)
+    def templates(_cfg, *, canvas_scope=None):
+        steps.append({"step": "templates", "scope": canvas_scope})
+    def platform(_cfg):
+        steps.append({"step": "platform"})
+        return {"action": "created", "platform": {"id": "platform-1"}}
+    def refresh(_cfg, _id):
+        steps.append({"step": "jwks_refresh"})
+        return {"platform": {"id": "platform-1", "lti_jwks_json": {"keys": []}}}
+    def binding(_cfg, _platform, *, canvas_scope):
+        steps.append({"step": "binding", "scope": canvas_scope})
+        return {"action": "created", "binding": {"id": "binding-1"}}
+    def issuer(_cfg):
+        steps.append({"step": "issuer_context"})
+        return None
+    monkeypatch.setattr(seed, "_seed_canvas_open_badge_templates", templates)
+    monkeypatch.setattr(seed, "_upsert_canvas_platform", platform)
+    monkeypatch.setattr(seed, "_refresh_canvas_platform_jwks", refresh)
+    monkeypatch.setattr(seed, "_upsert_canvas_program_binding", binding)
+    monkeypatch.setattr(seed, "_resolve_issuer_context_summary", issuer)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        assert seed.main() == 0
+    return {"steps": steps}
+
+
+def test_frozen_canvas_cli_journey_order(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_cli_journey_order(monkeypatch) == contract["canvas_cli_journey_order"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []

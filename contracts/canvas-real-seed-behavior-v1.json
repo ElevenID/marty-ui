@@ -2081,5 +2081,30 @@
       "      console_provenance: https://marty.example/console/org/operate/verify?external_credential_id=badge-1&canvas_account_id=account-1&organization_id=org-1",
       "    offer_endpoint:      https://marty.example/v1/issuance/offers/tx-1"
     ]
+  },
+  "canvas_cli_journey_order": {
+    "steps": [
+      {
+        "step": "templates",
+        "scope": null
+      },
+      {
+        "step": "platform"
+      },
+      {
+        "step": "jwks_refresh"
+      },
+      {
+        "step": "templates",
+        "scope": {}
+      },
+      {
+        "step": "binding",
+        "scope": {}
+      },
+      {
+        "step": "issuer_context"
+      }
+    ]
   }
 }
