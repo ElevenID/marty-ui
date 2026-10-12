@@ -3521,18 +3521,44 @@ any routine or release promotion. [#1276](https://github.com/ElevenID/marty-ui/p
 merged the opt-in four-concurrent-by-two-batch published-base isolation
 diagnostic after 23 protected checks passed. Its exact ignored local case
 passed in 32.93s, but the protected run did not enable the manual diagnostic.
-Same-commit manual-dispatch pilot-on/off qualification remains pending: the
-first queued pilot run was canceled before execution because the preceding
+The first attempted same-commit manual-dispatch pilot was canceled before
+execution because the preceding
 full-main run failed its unchanged crawler artifact gate: the build log reports
 missing Chrome 154.0.8037.57 for Puppeteer. [#1277](https://github.com/ElevenID/marty-ui/pull/1277)
- provisions that browser through the locally installed Puppeteer CLI, with
- `--no-install` to forbid an unpinned CLI fallback. Its reviewed amended head
- passed 147 local workflow-policy tests and all 23 jobs in exact-head
- [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38175378391),
- including both crawler jobs and the retained Canvas lane. Protected
- [merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38178073919)
- is running; main merge is not yet established. Re-dispatch both sides on
- one corrected main revision; do not infer hosted speedup from the merge itself.
+provisions that browser through the locally installed Puppeteer CLI, with
+`--no-install` to forbid an unpinned CLI fallback. Its reviewed amended head
+passed 147 local workflow-policy tests and all 23 jobs in exact-head
+[PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38175378391),
+including both crawler jobs and the retained Canvas lane. Protected
+[merge-group CI](https://github.com/ElevenID/marty-ui/actions/runs/38178073919)
+passed and #1277 merged to main as `d140bda5e`. The off-side manual
+[baseline run](https://github.com/ElevenID/marty-ui/actions/runs/38180950901)
+was dispatched at that main revision; its opt-in diagnostic step was skipped,
+and all 23 jobs passed. Its Canvas job took 43m42s; the timing artifact
+retained 1,334 successful rows, including four `canvas_target` rows
+(`worker` 787.488s, `composition` 471.907s, `selfhost` 154.039s, `flow`
+10.086s), 132 `oracle_case` rows, and 105 `scenario` rows. A redundant
+off-side pending run was canceled before execution. The
+[on-side manual pilot](https://github.com/ElevenID/marty-ui/actions/runs/38183804123)
+ran at the same `d140bda5e` revision. Its database suites passed, and the
+249 successful `scenario`/`oracle_case`/`canvas_serial`/`canvas_target`
+identities matched the off-side artifact exactly. However, the affected
+database step took 28m15s on versus 21m48s off (+6m27s), and the Canvas job
+took 51m36s on versus 43m42s off (+7m54s). The on-side artifact had 286
+`migration_seed` and `database_readiness` rows versus 245 each off; the
+published Canvas worker target took 1,154.680s on versus 787.488s off.
+These rows overlap and are not additive wall-clock savings. The separate
+opt-in isolation diagnostic then failed immediately at its first Docker
+create (`Docker create failed`); the other 21 job families passed, but the
+Canvas and final CI gates correctly failed. The exact Docker cause is not
+established by the sanitized log. The process-local base cache may pay
+repeated cold initialization across test executables, consistent with the
+extra setup rows, but this remains a hypothesis. Keep reuse manual-only;
+do not promote it to routine or release validation from the local speedup.
+Before another hosted pilot, attribute the extra per-case setup work and add
+a bounded, credential-free Docker-create failure category to the manual
+diagnostic; rerunning the unchanged configuration would repeat a slower,
+unqualified full workflow.
 [#1269](https://github.com/ElevenID/marty-ui/pull/1269)
 merged the A6 assignment of three exact DIDComm/retention Python test sources
 to a focused Release Contract Tests PR path: 56 owned cases plus the
