@@ -263,23 +263,23 @@ jobs:
                 esac
               fi
             fi
-            service_acceptance_test_only=false
-            service_acceptance_candidate=true
+            contract_test_only=false
+            contract_test_candidate=true
             if [[ "${{ github.event_name }}" != pull_request || ${#changed_files[@]} -eq 0 ]]; then
-              service_acceptance_candidate=false
+              contract_test_candidate=false
             fi
             for path in "${changed_files[@]}"; do
               case "$path" in
-                rust/crates/service-acceptance/tests/*) ;;
-                *) service_acceptance_candidate=false; break ;;
+                rust/crates/service-acceptance/tests/*|rust/services/signing-keys/tests/*) ;;
+                *) contract_test_candidate=false; break ;;
               esac
             done
             # The prefix only rejects; exact ownership and six contexts grant.
-            if [[ "$service_acceptance_candidate" == true ]] &&
+            if [[ "$contract_test_candidate" == true ]] &&
                printf '%s\0' "${changed_files[@]}" |
                  python3 tests/test_rust_test_only_docker_context.py \
-                   --select-service-acceptance-tests; then
-              service_acceptance_test_only=true
+                   --select-contract-tests; then
+              contract_test_only=true
             fi
             for path in "${changed_files[@]}"; do
               case "$path" in
@@ -456,7 +456,7 @@ jobs:
                     "${{ github.event_name }}" == pull_request ]]; then
               rust_runtime=false
               rust_matrix='["selfhost"]'
-            elif [[ "${service_acceptance_test_only:-false}" == true && "$all" == false &&
+            elif [[ "${contract_test_only:-false}" == true && "$all" == false &&
                     "${{ github.event_name }}" == pull_request ]]; then
               rust_runtime=false
               rust_matrix='["contracts"]'

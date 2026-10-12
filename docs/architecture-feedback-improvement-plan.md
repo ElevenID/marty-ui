@@ -700,7 +700,7 @@ A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072),
 
 Merged A1 service boundaries (2026-10-06 checkpoint): [#1118](https://github.com/ElevenID/marty-ui/pull/1118) moved the signed Gateway-to-Issuance webhook test to cross-service acceptance with its real PostgreSQL, signature, tenant-isolation, durable-state, and named CI checks. [#1121](https://github.com/ElevenID/marty-ui/pull/1121) moved six opt-in Gateway-to-Signing cases into `gateway_signing_acceptance`, retaining their exact named CI invocations and disposable Redis/OpenBao guards. Both service-to-service development edges are removed, and all six signing cases passed the protected contracts lane before #1121 merged. These ownership moves preserve production code and required acceptance runs.
 
-CSCA test-owner follow-up (2026-10-12 local candidate): the Signing Keys
+CSCA test-owner follow-up (2026-10-12): the Signing Keys
 package still carried a Verification development dependency solely for two
 certificate-generating test helpers and one Core capability-vector assertion.
 Use a shared `marty-crypto` test fixture for the Signing Keys lifecycle and
@@ -722,6 +722,13 @@ duration. Local Rust 1.95 validation passed seven lifecycle cases, both new
 acceptance cases, and both real Redis/HTTP cases against an owned disposable
 Redis container; 147 workflow-policy tests passed, and independent review
 found no P1-P3 issue.
+[UI #1294](https://github.com/ElevenID/marty-ui/pull/1294) passed exact-head
+and protected combined-head CI, including the two disposable-Redis CSCA cases,
+and merged as `c7d225b9` on October 12. The first protected attempt failed
+before two UI shards could start because the pinned release asset endpoint
+returned HTTP 500; its failed jobs passed on retry, and the fresh queue
+candidate passed in full. This is an ownership/compile-surface improvement,
+not a measured pipeline speedup.
 
 A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull/1117), merged 2026-10-06): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup or narrower gate is claimed.
 
@@ -3830,6 +3837,29 @@ no test or gate is skipped. A Linux loopback test passed both a 500-then-200
 recovery and a wrong-digest rejection, 147 workflow-policy tests passed, and
 independent review found no P1-P3 issue. Hosted benefit and protected merge
 validation remain unproven until its own PR completes.
+[UI #1295](https://github.com/ElevenID/marty-ui/pull/1295) subsequently
+passed all exact-head checks and full protected
+[combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38261915179),
+then merged as `5297e214` on October 12. The bounded-retry branch was not
+exercised by a live GitHub asset outage, so no turnaround saving is claimed.
+
+Next A0/A6 bounded candidate: the two Signing Keys CSCA test targets and
+their shared fixture are tracked test-only sources. The ordinary contracts
+lane runs the behavior target through the workspace test step and both
+ignored real-Redis storage cases through an exact-count step. The root
+Docker context still included the two test targets even though release
+builds do not compile tests; seven Rust-copying contexts are now checked
+before proposing exact exclusions. A PR-only selector may assign a nonempty
+diff consisting solely of these three files and the four existing
+service-acceptance test targets to the contracts lane, provided the checked-out
+source, Cargo ownership, all seven Docker contexts, and CI execution owners
+still match. The production-focused CodeQL proof uses the same exact source
+set and retains analysis when proof or scope changes. Mixed, unknown,
+production, manifest, and proof-failed diffs,
+plus protected merge groups and main, retain full Rust validation. The
+complete 178-test local workflow/context suite passes; independent review
+found no P1-P3 issue. Hosted qualification remains. This is not yet a measured
+speedup.
 
 ## Design references
 
