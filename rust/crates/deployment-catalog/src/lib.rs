@@ -378,6 +378,18 @@ impl Catalog {
         if name == "id" {
             return Ok(id.to_owned());
         }
+        // This catalog contains names and policy metadata, never secret contents.
+        // Keep the public CLI's metadata fields explicit so a future JSON field
+        // containing a value cannot be selected for stdout.
+        let name = match name {
+            "env" => "env",
+            "file_env" => "file_env",
+            "compose_secret" => "compose_secret",
+            "no_log" => "no_log",
+            "allow_empty" => "allow_empty",
+            "required_for" => "required_for",
+            _ => return Err(format!("Unsupported secret metadata field: {name}")),
+        };
         let secret = self
             .secrets
             .get(id)

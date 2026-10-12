@@ -1,3 +1,4 @@
+use marty_deployment_catalog::Catalog;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::process::Command;
@@ -47,4 +48,28 @@ fn matches_frozen_python_cli_cases() {
         }
         assert_eq!(stderr, case["stderr"].as_str().unwrap(), "args: {args:?}");
     }
+}
+
+#[test]
+fn secret_metadata_selector_never_exposes_new_value_fields() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut catalog = Catalog::load(root).unwrap();
+    let metadata = catalog
+        .secrets
+        .get_mut("postgres_password")
+        .unwrap()
+        .as_object_mut()
+        .unwrap();
+    metadata.insert(
+        "value".to_owned(),
+        Value::String("private-sentinel".to_owned()),
+    );
+    assert_eq!(
+        catalog.secret_field("postgres_password", "env").unwrap(),
+        "POSTGRES_PASSWORD"
+    );
+    assert!(catalog.secret_field("postgres_password", "value").is_err());
 }
