@@ -192,6 +192,21 @@ pub async fn run_seed(
 ) -> Result<Value, String> {
     validate_disposable_secret(env, config.connector.demo_evidence_event_enabled)?;
     let mut connector = config.connector.clone();
+    let wallet_proof = if connector.open_badge_scenario_enabled
+        && connector.demo_application_seed_enabled
+        && connector.demo_evidence_event_enabled
+        && connector.demo_wallet_claim_enabled
+    {
+        let base = env_first(env, &["SIGNING_KEYS_HOLDER_PROOF_BASE_URL"])
+            .ok_or("SIGNING_KEYS_HOLDER_PROOF_BASE_URL is required for Canvas wallet claims")?;
+        Some(CanonicalWalletProof::new(
+            &base,
+            &connector.signing_keys_internal_api_key,
+            &connector.organization_id,
+        )?)
+    } else {
+        None
+    };
     let mut gateway_cfg = GatewaySeedConfig::from(&connector);
     let gateway = GatewayHttp::new(connector.issuance_api_key.clone())?;
     let mut warnings = Vec::<String>::new();
@@ -353,30 +368,15 @@ pub async fn run_seed(
                                     if connector.demo_wallet_claim_enabled {
                                         let public_api =
                                             env_first(env, &["PUBLIC_API_URL"]).unwrap_or_default();
-                                        let proof_base =
-                                            env_first(env, &["SIGNING_KEYS_HOLDER_PROOF_BASE_URL"])
-                                                .unwrap_or_else(|| {
-                                                    "http://signing-keys:8017/internal/signing-keys"
-                                                        .into()
-                                                });
-                                        let claim = match CanonicalWalletProof::new(
-                                            &proof_base,
-                                            &connector.signing_keys_internal_api_key,
-                                            &gateway_cfg.organization_id,
-                                        ) {
-                                            Ok(proof) => {
-                                                claim_wallet_credential(
-                                                    &WalletHttp::new(),
-                                                    &proof,
-                                                    &gateway_cfg,
-                                                    &public_api,
-                                                    &transaction_id,
-                                                )
-                                                .await
-                                            }
-                                            Err(error) => Err(error),
-                                        };
-                                        match claim {
+                                        match claim_wallet_credential(
+                                            &WalletHttp::new(),
+                                            wallet_proof.as_ref().expect("validated wallet proof"),
+                                            &gateway_cfg,
+                                            &public_api,
+                                            &transaction_id,
+                                        )
+                                        .await
+                                        {
                                             Ok(result) => {
                                                 wallet = Some(result);
                                                 if connector.demo_mirror_publish_enabled {
@@ -432,7 +432,8 @@ pub async fn run_seed(
 
 #[cfg(test)]
 mod tests {
-    use super::{has_ags_evidence_response, validate_disposable_secret};
+    use super::{has_ags_evidence_response, run_seed, validate_disposable_secret};
+    use crate::build_run_config;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -459,5 +460,23 @@ mod tests {
             "local-only-secret".into(),
         );
         assert!(validate_disposable_secret(&env, true).is_ok());
+    }
+
+    #[tokio::test]
+    async fn wallet_proof_service_must_be_configured_before_any_journey_side_effect() {
+        let env = HashMap::from([
+            ("MARTY_API_KEY".into(), "gateway-key".into()),
+            ("ISSUANCE_API_KEY".into(), "issuance-key".into()),
+            (
+                "ISSUANCE_INTERNAL_API_BASE_URL".into(),
+                "http://issuance:8005".into(),
+            ),
+            ("CANVAS_DEMO_EVIDENCE_EVENT_ENABLED".into(), "true".into()),
+        ]);
+        let config = build_run_config(&env, true, false).unwrap();
+        let error = run_seed(&config, &env, "unreachable-database")
+            .await
+            .unwrap_err();
+        assert!(error.contains("SIGNING_KEYS_HOLDER_PROOF_BASE_URL"));
     }
 }

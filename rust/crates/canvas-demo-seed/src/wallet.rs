@@ -89,15 +89,25 @@ impl CanonicalWalletProof {
         api_key: &str,
         organization_id: &str,
     ) -> Result<Self, String> {
-        let service = signing_keys_internal_base_url
-            .trim_end_matches('/')
-            .strip_suffix("/internal/signing-keys")
-            .ok_or("Signing keys URL must end in /internal/signing-keys")?;
-        if service.is_empty() || api_key.trim().is_empty() || organization_id.trim().is_empty() {
+        let service = reqwest::Url::parse(signing_keys_internal_base_url)
+            .map_err(|_| "Signing keys holder proof URL is invalid")?;
+        if !matches!(service.scheme(), "http" | "https")
+            || service.host_str().is_none()
+            || !service.username().is_empty()
+            || service.password().is_some()
+            || service.path().trim_end_matches('/') != "/internal/signing-keys"
+            || service.query().is_some()
+            || service.fragment().is_some()
+            || api_key.trim().is_empty()
+            || organization_id.trim().is_empty()
+        {
             return Err("Signing keys holder proof configuration is incomplete".into());
         }
         Ok(Self {
-            url: format!("{service}/internal/vc-api/holder-proof"),
+            url: format!(
+                "{}/internal/vc-api/holder-proof",
+                service.origin().ascii_serialization()
+            ),
             api_key: api_key.into(),
             organization_id: organization_id.into(),
             client: reqwest::Client::new(),
