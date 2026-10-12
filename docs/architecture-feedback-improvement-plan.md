@@ -454,15 +454,33 @@ passed 216 focused local tests, independent review, full PR CI and protected
 combined-head CI, then merged as `94e5640bb`. No CI speedup is attributed to
 the evidence guard.
 
-Timeout current-input follow-up (2026-10-12 local candidate): the delayed-header
+Timeout current-input follow-up (2026-10-12 merged [UI #1286](https://github.com/ElevenID/marty-ui/pull/1286),
+`97778e0f8`): the delayed-header
 and body-inactivity historical producers now have one exact current-input
 record covering their static script/import and transitive scenario union, plus
 the mounted preparer and trust fixture. The release-owned test fails on source
 drift, a newly reached helper/scenario or a removed mounted input. It does not
 attest the historical corpora, prove runtime compatibility, or authorize any
 test skip. All routine and full timeout obligations remain unchanged. The 33
-focused input tests and 180 combined workflow-policy/input tests pass locally;
-hosted and protected CI remain pending, with no claimed runtime saving.
+focused input tests and 180 combined workflow-policy/input tests passed locally;
+full PR and protected combined-head CI passed before merge, with no claimed
+runtime saving.
+
+A6 current-input metadata follow-up (2026-10-12 local candidate): the root and
+both service-specific Docker ignore files repeat one exclusion per Canvas
+`*-current-inputs.json` evidence record, while the CI path classifier repeats
+their names. Bounded immediate-child patterns cover the same seven current
+records: the Docker rule excludes these CI-only manifests from product images,
+and the classifier selects Rust plus release ownership. A nested lookalike
+falls back to the full matrix. The inventory/consumer policy test requires the
+discovered set to match reviewed release-owned records, rejects later Docker
+re-inclusion, and exercises both new and nested path classifications. A future
+CI-evidence manifest therefore need not edit all three ignore files or the CI
+workflow, but still requires its owning test and inventory review. This does
+not change existing image inputs, protected merge-group selection, source or
+corpus selection, or claim a hosted speedup. The rebased candidate passed 147
+local workflow-policy tests and independent review; hosted/protected CI remains
+required before promotion.
 
 The remote-KMS Rust-only branch retires the Python facts, retry,
 roster-failure, and validation producers. Their main-branch current-input
@@ -3686,6 +3704,17 @@ and [protected merge-group artifact](https://github.com/ElevenID/marty-ui/action
 recorded all 64 JSON-depth route cases at 27.127s and 14.219s, respectively,
 so keep that full route matrix rather than cutting coverage for a small
 fraction of the 8-11-minute routine database step.
+
+October 12 pilot-input check: [manual run 38214937221](https://github.com/ElevenID/marty-ui/actions/runs/38214937221)
+passed, but its dispatch payload set `canvas_migrated_base_pilot=false` and
+the migrated-base parity/isolation step was skipped. It is an off-side run,
+not evidence that the repaired opt-in diagnostic passed. Its Canvas database
+step took 27m26s (07:22:01–07:49:27 UTC), and its timing artifact has 105
+distinct successful `scenario` names; this is a baseline, not a speed claim. A new
+[manual run 38220186150](https://github.com/ElevenID/marty-ui/actions/runs/38220186150)
+was requested on main with the input set to `true`; its job-level input,
+result, and comparable timings remain pending verification. Keep reuse
+manual-only.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both

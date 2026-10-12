@@ -17297,3 +17297,19 @@ not evidence that images or the KMS-only cutover have already qualified.
 The stack lock remains `hold` at this checkpoint. UI #1192's exact-head run
 `38227682264` is still live with 17 successful jobs and no failures at the
 latest poll; plugin, Rust contracts, Canvas and service images remain active.
+
+2026-10-12 exact-head result and main reconciliation: UI CI run
+`38227682264` completed successfully on `5cf9bc071` with 22/22 jobs passing,
+including the plugin/Raft recovery, Rust contracts, service images, Canvas,
+and the final CI Gate. CodeQL Rust and Actions passed on the same head.
+Before merge, protected `main` advanced to `81865d048` with a bounded Canvas
+current-input classifier. The local integration merge adopted its single
+immediate-child `contracts/canvas-*-current-inputs.json` classifier and
+Docker ignore pattern across all four Rust/service image contexts, including
+the migrations context carried by this branch. The merged workflow-policy
+test needed the branch's `openbao` selector in its expected result for a new
+manifest. The affected case and 30 Canvas closure/inventory cases passed;
+the earlier full workflow file run had 184 passing cases and revealed only
+these two merge-fixture mismatches, which are now corrected. The passing CI
+run proves the previous head; a fresh exact-head run is required after this
+grouped reconciliation push. The release lock remains `hold`.
