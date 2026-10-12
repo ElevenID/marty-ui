@@ -7,13 +7,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import subprocess
-import sys
 import threading
 import time
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,16 @@ CONTRACT = json.loads(
         encoding="utf-8"
     )
 )
+
+
+@pytest.fixture(scope="session")
+def candidate_binary():
+    candidate = os.environ.get("CANVAS_LOCALHOST_BRIDGE_CANDIDATE")
+    if not candidate:
+        pytest.skip("Set CANVAS_LOCALHOST_BRIDGE_CANDIDATE to the built Rust bridge")
+    binary = Path(candidate)
+    assert binary.is_file(), f"Rust bridge binary missing: {binary}"
+    return str(binary)
 
 
 def unused_port() -> int:
@@ -44,7 +55,14 @@ def upstream():
 
         def handle_any(self):
             body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
-            requests.append((self.command, self.path, body, dict(self.headers)))
+            requests.append((self.command, self.path, body,
+                             {key.lower(): value for key, value in self.headers.items()}))
+            if self.path == "/redirect-cross-host":
+                self.send_response(307)
+                self.send_header("Location", self.headers["X-Redirect-To"])
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             payload = b"canvas-upstream-response"
             self.send_response(218)
             self.send_header("Content-Type", "application/octet-stream")
@@ -69,7 +87,7 @@ def upstream():
 
 
 @pytest.fixture
-def bridge(upstream):
+def bridge(upstream, candidate_binary):
     port = unused_port()
     upstream_port, _ = upstream
     env = os.environ.copy()
@@ -79,13 +97,7 @@ def bridge(upstream):
         CANVAS_LOCALHOST_BRIDGE_UPSTREAM=f"http://127.0.0.1:{upstream_port}/",
         CANVAS_LOCALHOST_BRIDGE_PUBLIC_BASE="http://localhost:8088/",
     )
-    candidate = os.environ.get("CANVAS_LOCALHOST_BRIDGE_CANDIDATE")
-    command = (
-        [candidate]
-        if candidate
-        else [sys.executable, str(ROOT / "docker/canvas-localhost-bridge/server.py")]
-    )
-    process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    process = subprocess.Popen([candidate_binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         for _ in range(100):
             if process.poll() is not None:
@@ -113,7 +125,7 @@ def request(port, method, path, body=None, headers=None):
     try:
         connection.request(method, path, body=body, headers=headers or {})
         response = connection.getresponse()
-        return response.status, dict(response.getheaders()), response.read()
+        return response.status, {key.lower(): value for key, value in response.getheaders()}, response.read()
     finally:
         connection.close()
 
@@ -126,17 +138,17 @@ def test_discovery_is_local_and_does_not_hit_upstream(bridge, upstream, method):
         port, method, CONTRACT["discovery_path"] + "?query=preserved"
     )
     assert status == 200
-    assert headers["Content-Type"] == "application/json"
+    assert headers["content-type"] == "application/json"
     if method == "HEAD":
         assert body == b""
-        assert headers["Content-Length"] == "0"
+        assert headers["content-length"] == "0"
     else:
         assert json.loads(body) == json.loads(
             json.dumps(CONTRACT["discovery"]).replace(
                 "{public_base}", "http://localhost:8088"
             )
         )
-        assert int(headers["Content-Length"]) == len(body)
+        assert int(headers["content-length"]) == len(body)
     assert seen == []
 
 
@@ -158,22 +170,22 @@ def test_all_methods_proxy_path_query_body_and_response(bridge, upstream, method
         {"Content-Type": "application/x-test", "X-Bridge-Trace": "synthetic"},
     )
     assert status == 218
-    assert headers["Content-Type"] == "application/octet-stream"
-    assert "Connection" not in headers
+    assert headers["content-type"] == "application/octet-stream"
+    assert "connection" not in headers
     assert len(seen) == 1
     got_method, got_path, got_body, got_headers = seen[0]
     assert (got_method, got_path, got_body) == (method, path, body or b"")
-    assert got_headers["Content-Type"] == "application/x-test"
-    assert got_headers["X-Bridge-Trace"] == "synthetic"
+    assert got_headers["content-type"] == "application/x-test"
+    assert got_headers["x-bridge-trace"] == "synthetic"
     if method == "HEAD":
         assert response_body == b""
-        assert headers["Content-Length"] == "0"
+        assert headers["content-length"] == "0"
     else:
         assert response_body == b"canvas-upstream-response"
-        assert headers["Content-Length"] == str(len(response_body))
+        assert headers["content-length"] == str(len(response_body))
 
 
-def test_unavailable_upstream_returns_json_502():
+def test_unavailable_upstream_returns_json_502(candidate_binary):
     port, refused_port = unused_port(), unused_port()
     env = os.environ.copy()
     env.update(
@@ -181,13 +193,7 @@ def test_unavailable_upstream_returns_json_502():
         CANVAS_LOCALHOST_BRIDGE_LISTEN_PORT=str(port),
         CANVAS_LOCALHOST_BRIDGE_UPSTREAM=f"http://127.0.0.1:{refused_port}",
     )
-    candidate = os.environ.get("CANVAS_LOCALHOST_BRIDGE_CANDIDATE")
-    command = (
-        [candidate]
-        if candidate
-        else [sys.executable, str(ROOT / "docker/canvas-localhost-bridge/server.py")]
-    )
-    process = subprocess.Popen(command, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    process = subprocess.Popen([candidate_binary], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         for _ in range(100):
             if process.poll() is not None:
@@ -201,7 +207,7 @@ def test_unavailable_upstream_returns_json_502():
             raise AssertionError("bridge did not listen")
         status, headers, body = request(port, "GET", "/api/lti/failure")
         assert status == CONTRACT["upstream_error_status"]
-        assert headers["Content-Type"] == "application/json"
+        assert headers["content-type"] == "application/json"
         assert json.loads(body)["error"].startswith(CONTRACT["upstream_error_json_prefix"])
     finally:
         process.terminate()
@@ -213,9 +219,114 @@ def test_unavailable_upstream_returns_json_502():
         process.stderr.close()
 
 
-def test_contract_covers_source_and_methods():
-    source = (ROOT / "docker/canvas-localhost-bridge/server.py").read_text()
+def test_cross_host_redirect_is_returned_without_replaying_credentials(bridge, upstream):
+    port, _ = bridge
+    _, seen = upstream
+    replayed = []
+
+    class Sink(BaseHTTPRequestHandler):
+        def do_POST(self):
+            replayed.append((self.headers.get("Authorization"), self.headers.get("Cookie")))
+            self.send_response(200)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *_args):
+            pass
+
+    sink = ThreadingHTTPServer(("127.0.0.1", 0), Sink)
+    thread = threading.Thread(target=sink.serve_forever, daemon=True)
+    thread.start()
+    target = f"http://127.0.0.1:{sink.server_port}/steal"
+    try:
+        status, headers, body = request(
+            port,
+            "POST",
+            "/redirect-cross-host",
+            b"sensitive=synthetic",
+            {"Authorization": "Bearer synthetic", "Cookie": "session=synthetic",
+             "X-Redirect-To": target},
+        )
+        assert status == 307
+        assert headers["location"] == target
+        assert body == b""
+        assert seen[0][0:3] == ("POST", "/redirect-cross-host", b"sensitive=synthetic")
+        assert replayed == []
+    finally:
+        sink.shutdown()
+        sink.server_close()
+        thread.join(timeout=3)
+
+
+@pytest.mark.parametrize("method", CONTRACT["unsupported_methods"])
+def test_unsupported_methods_are_not_proxied(bridge, upstream, method):
+    port, _ = bridge
+    _, seen = upstream
+    status, _, _ = request(port, method, "/api/lti/test")
+    assert status == CONTRACT["unsupported_method_status"]
+    assert seen == []
+
+
+def test_contract_covers_native_source_and_runtime_wiring():
+    source = (ROOT / "docker/canvas-localhost-bridge/src/main.rs").read_text()
+    dockerfile = (ROOT / "docker/canvas-localhost-bridge/Dockerfile").read_text()
+    compose = (ROOT / "docker-compose.profile.canvas-real.yml").read_text()
+    service = yaml.safe_load(compose)["services"]["issuance-canvas-localhost-bridge"]
+    catalog = json.loads((ROOT / "deploy-config/catalog/services.json").read_text())
+    listed = catalog["services"]["issuance-canvas-localhost-bridge"]
+    deploy = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text()
     assert CONTRACT["source"].endswith("be17936d3")
     assert CONTRACT["upstream_timeout_seconds"] == 30
-    for method in CONTRACT["proxy_methods"]:
-        assert f"def do_{method}(" in source
+    assert "Duration::from_secs(30)" in source
+    assert "redirect::Policy::none()" in source
+    assert "FROM rust:1.95-bookworm@sha256:" in dockerfile
+    assert "FROM debian:bookworm-slim@sha256:" in dockerfile
+    assert "docker/canvas-localhost-bridge/src/main.rs" in deploy
+    assert "docker/canvas-localhost-bridge/Cargo.lock" in deploy
+    assert deploy.index("$runningCanvasBridge = @(& docker ps") < deploy.index(
+        'Write-Step "Enter maintenance window and apply live migration"'
+    )
+    assert "Stop the optional Canvas localhost bridge before beta release" in deploy
+    assert service["build"] == {
+        "context": "${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/canvas-localhost-bridge",
+        "dockerfile": "Dockerfile",
+    }
+    assert service["network_mode"] == "service:issuance"
+    assert "command" not in service and "volumes" not in service
+    assert listed["image_name"] == "issuance-canvas-localhost-bridge"
+    assert listed["dockerfile"] == "docker/canvas-localhost-bridge/Dockerfile"
+    assert listed["context"] == "docker/canvas-localhost-bridge"
+    assert "python:3.12-alpine" not in compose
+    assert "server.py" not in compose
+    assert not (ROOT / "docker/canvas-localhost-bridge/server.py").exists()
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_beta_preflight_rejects_running_optional_bridge_before_mutation(tmp_path, running):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell unavailable")
+    deploy = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text()
+    start = deploy.index("$runningCanvasBridge = @(& docker ps")
+    end = deploy.index("$env:MARTY_COMMON_URI", start)
+    guard = deploy[start:end]
+    marker = "'synthetic-bridge-id'" if running else ""
+    harness = tmp_path / "bridge-guard.ps1"
+    harness.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
+        "$script:BetaProject = 'elevenid-beta'\n"
+        "function docker {\n"
+        "  if ($args[0] -ne 'ps') { throw 'Unexpected Docker invocation' }\n"
+        "  $global:LASTEXITCODE = 0\n"
+        f"  {marker}\n"
+        "}\n"
+        + guard,
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-File", str(harness)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert (result.returncode != 0) is running
+    if running:
+        assert "Stop the optional Canvas localhost bridge before beta release" in result.stderr

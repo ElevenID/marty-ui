@@ -523,7 +523,10 @@ function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
         "docker/openbao-init.sh",
         "config/envoy/envoy.yaml",
         "config/envoy/proto_descriptor.pb",
-        "docker/canvas-localhost-bridge/server.py",
+        "docker/canvas-localhost-bridge/Cargo.toml",
+        "docker/canvas-localhost-bridge/Cargo.lock",
+        "docker/canvas-localhost-bridge/Dockerfile",
+        "docker/canvas-localhost-bridge/src/main.rs",
         "config/canvas/production-local.rb",
         "config/canvas/dynamic_settings.local.yml",
         "config/canvas/session_store.local.yml",
@@ -1074,6 +1077,14 @@ Write-Host "Runtime configuration: $script:RuntimeConfigRoot"
 
 Write-Step "Preflight running beta topology"
 Invoke-Checked -FilePath docker -Arguments @("info", "--format", "{{.ServerVersion}}")
+$runningCanvasBridge = @(& docker ps `
+    --filter "label=com.docker.compose.project=$script:BetaProject" `
+    --filter "label=com.docker.compose.service=issuance-canvas-localhost-bridge" `
+    --format '{{.ID}}')
+if ($LASTEXITCODE -ne 0) { throw "Could not inspect optional Canvas localhost bridge before beta release" }
+if ($runningCanvasBridge.Count -ne 0) {
+    throw "Stop the optional Canvas localhost bridge before beta release; this public-Canvas deployment does not recreate it with issuance"
+}
 $env:MARTY_COMMON_URI = $martyCommon.Uri
 $env:MARTY_COMMON_DIGEST = $martyCommon.Digest
 $env:MARTY_RS_URI = $martyRs.Uri

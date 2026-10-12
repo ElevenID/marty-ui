@@ -169,7 +169,10 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
         "config/keycloak",
         "config/envoy/envoy.yaml",
         "docker/openbao-init.sh",
-        "docker/canvas-localhost-bridge/server.py",
+        "docker/canvas-localhost-bridge/Cargo.toml",
+        "docker/canvas-localhost-bridge/Cargo.lock",
+        "docker/canvas-localhost-bridge/Dockerfile",
+        "docker/canvas-localhost-bridge/src/main.rs",
         "docker/waltid/wallet-api/config",
         "nginx-tunnel.conf.template",
     ):

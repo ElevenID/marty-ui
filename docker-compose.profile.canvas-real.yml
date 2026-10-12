@@ -26,7 +26,9 @@ services:
       CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS: ${CANVAS_ALLOW_HTTP_LOCALHOST_BASE_URLS:-true}
 
   issuance-canvas-localhost-bridge:
-    image: python:3.12-alpine
+    build:
+      context: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/canvas-localhost-bridge
+      dockerfile: Dockerfile
     container_name: marty-issuance-canvas-localhost-bridge
     network_mode: "service:issuance"
     environment:
@@ -35,11 +37,6 @@ services:
     depends_on:
       issuance:
         condition: service_started
-    volumes:
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/canvas-localhost-bridge/server.py:/bridge/server.py:ro
-    command:
-      - python
-      - /bridge/server.py
     restart: unless-stopped
 
   canvas-real:

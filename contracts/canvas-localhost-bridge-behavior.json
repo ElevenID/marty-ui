@@ -16,11 +16,14 @@
     "claims_supported": ["iss", "sub", "aud", "exp", "iat", "nonce", "https://purl.imsglobal.org/spec/lti/claim/deployment_id", "https://purl.imsglobal.org/spec/lti/claim/context", "https://purl.imsglobal.org/spec/lti/claim/roles", "https://purl.imsglobal.org/spec/lti/claim/message_type", "https://purl.imsglobal.org/spec/lti/claim/version", "https://purl.imsglobal.org/spec/lti/claim/target_link_uri"]
   },
   "proxy_methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"],
+  "unsupported_methods": ["OPTIONS", "TRACE"],
+  "unsupported_method_status": 501,
   "proxy_preserves": ["path_and_query", "method", "request_body", "request_content_type", "response_status", "response_body", "response_content_type"],
   "hop_by_hop_headers_removed": ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers", "transfer-encoding", "upgrade"],
   "request_host_removed": true,
   "head_response_content_length": 0,
   "upstream_timeout_seconds": 30,
+  "redirect_policy": "return_upstream_3xx_without_following_to_protect_credentials; intentional_hardening_from_python_urllib",
   "upstream_error_status": 502,
   "upstream_error_json_prefix": "Canvas localhost bridge upstream failure: "
 }

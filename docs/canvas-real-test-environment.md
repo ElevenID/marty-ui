@@ -235,7 +235,7 @@ When active:
 - Internal URL: `http://canvas-real:3000`
 - Host URL: `http://localhost:${CANVAS_REAL_HOST_PORT:-8088}`
 - Tunnel URL: `https://${CANVAS_REAL_PUBLIC_HOST}` (for beta experiments: `https://canvas-test.elevenidllc.com`)
-- Sidecar bridge: `marty-issuance-canvas-localhost-bridge`
+- Sidecar bridge: `marty-issuance-canvas-localhost-bridge` (Rust image built from `docker/canvas-localhost-bridge`)
 - Canvas local overrides mounted for this profile:
 	- `config/canvas/production-local.rb` → enables static file serving and seeds `Canvas::Security.config['lti_iss']` for local LTI launches when blank
 	- `config/canvas/dynamic_settings.local.yml` → production LTI key store / JWKS
@@ -265,7 +265,8 @@ Recommended minimum local resources:
 
 - Use this profile when you need realistic Canvas behavior.
 - For quick iteration/unit tests, keep using the lightweight sandbox profile (`canvas-sandbox-*` targets).
-- In local real-Canvas mode, use `http://localhost:8088` as the Canvas platform `canvas_base_url`; the issuance-side localhost bridge synthesizes `/.well-known/openid-configuration` and proxies other requests to the host Canvas instance.
+- In local real-Canvas mode, use `http://localhost:8088` as the Canvas platform `canvas_base_url`; the issuance-side Rust localhost bridge synthesizes `/.well-known/openid-configuration` and proxies other requests to the host Canvas instance. Build the optional `issuance-canvas-localhost-bridge` service with the same Compose profile set before starting it.
+- The beta aggregate release uses public Canvas URLs and does not recreate this optional localhost bridge. Stop a running bridge before beta release; the release preflight refuses to replace issuance while the sidecar shares its network namespace.
 - Real Canvas exposes `/api/lti/security/jwks`, but its `/api/lti/security/openid-configuration` path is gated by `registration_token`; the bridge exists specifically to provide a standards-style discovery document for localhost testing.
 - Use `CANVAS_LTI_EXPERIENCE_BASE_URL` for the public ElevenID launch/redirect URLs that Canvas stores on the developer key and external tool.
 - If `CANVAS_LTI_EXPERIENCE_BASE_URL` is unset, the issuance service now falls back to `UI_BASE_URL` instead of hard-coding `http://localhost:3000`; this keeps tunnel/profile launches on the public ElevenID hostname.
