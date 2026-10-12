@@ -1548,5 +1548,91 @@
         "name": "Canvas Demo"
       }
     }
+  },
+  "canvas_admin_bootstrap": {
+    "initial_data": {
+      "operations": [
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-e",
+            "CANVAS_ADMIN_EMAIL=admin@example.com",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'"
+          ],
+          "input": null,
+          "timeout": 90
+        },
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-i",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bundle exec rake db:load_initial_data RAILS_ENV=production"
+          ],
+          "input": "admin@example.com\nadmin@example.com\ntest-admin-password\ntest-admin-password\nMarty Canvas Test\n3\n",
+          "timeout": 240
+        },
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-e",
+            "CANVAS_ADMIN_EMAIL=admin@example.com",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'"
+          ],
+          "input": null,
+          "timeout": 90
+        }
+      ],
+      "result": true
+    },
+    "mint_token": {
+      "operations": [
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-e",
+            "CANVAS_ADMIN_EMAIL=admin@example.com",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'"
+          ],
+          "input": null,
+          "timeout": 90
+        },
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            "CANVAS_ADMIN_TOKEN_SETUP_B64=<payload>",
+            "stack_marty-canvas-real",
+            "bash",
+            "-lc",
+            "cat >/tmp/mint_canvas_admin_token.rb; cd /usr/src/app; bin/rails runner -e production /tmp/mint_canvas_admin_token.rb"
+          ],
+          "input": "<token-script>",
+          "timeout": 120,
+          "script_sha256": "2427376a2b5c58594a4cbd8c423f1b5b44c0096d853da54ae2a20df679c06dfd",
+          "payload": {
+            "admin_email": "admin@example.com"
+          }
+        }
+      ],
+      "result": "test-admin-token"
+    }
   }
 }

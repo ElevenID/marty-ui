@@ -262,6 +262,50 @@ def test_frozen_canvas_rails_lti(monkeypatch) -> None:
     assert capture_canvas_rails_lti(monkeypatch) == contract["canvas_rails_lti"]
 
 
+def capture_canvas_admin_bootstrap(monkeypatch) -> dict:
+    cfg = canvas_config()
+
+    def scenario(initially_exists: bool, mint: bool) -> dict:
+        operations = []
+        checks = 0
+
+        def run(command, *, input=None, text=True, capture_output=True, check=False, timeout=None):
+            nonlocal checks
+            assert text and capture_output and not check
+            if command[:2] == ["docker", "ps"]:
+                return types.SimpleNamespace(returncode=0, stdout="stack_marty-canvas-real\n", stderr="")
+            assert command[:2] == ["docker", "exec"]
+            sanitized = [
+                part if not part.startswith("CANVAS_ADMIN_TOKEN_SETUP_B64=") else "CANVAS_ADMIN_TOKEN_SETUP_B64=<payload>"
+                for part in command
+            ]
+            operation = {"command": sanitized, "input": input, "timeout": timeout}
+            if input and "require \"base64\"" in input:
+                operation["script_sha256"] = hashlib.sha256(input.encode()).hexdigest()
+                operation["input"] = "<token-script>"
+                encoded = next(part.split("=", 1)[1] for part in command if part.startswith("CANVAS_ADMIN_TOKEN_SETUP_B64="))
+                operation["payload"] = json.loads(base64.b64decode(encoded))
+            operations.append(operation)
+            if "CANVAS_ADMIN_EMAIL=" in " ".join(command):
+                checks += 1
+                answer = "yes" if initially_exists or checks > 1 else "no"
+                return types.SimpleNamespace(returncode=0, stdout=answer + "\n", stderr="")
+            if "db:load_initial_data" in command[-1]:
+                return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+            return types.SimpleNamespace(returncode=0, stdout=seed.CANVAS_RAILS_TOKEN_PREFIX + "test-admin-token\n", stderr="")
+
+        monkeypatch.setattr(seed.subprocess, "run", run)
+        value = seed._mint_canvas_admin_token(cfg) if mint else seed._ensure_canvas_initial_data(cfg)
+        return {"operations": operations, "result": value}
+
+    return {"initial_data": scenario(False, False), "mint_token": scenario(True, True)}
+
+
+def test_frozen_canvas_admin_bootstrap(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_admin_bootstrap(monkeypatch) == contract["canvas_admin_bootstrap"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []

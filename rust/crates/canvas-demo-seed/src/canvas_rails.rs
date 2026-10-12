@@ -7,7 +7,9 @@ use std::{process::Stdio, time::Duration};
 use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 
 pub const CANVAS_LTI_SETUP_SCRIPT: &str = include_str!("../assets/canvas_lti_setup.rb");
+pub const CANVAS_ADMIN_TOKEN_SCRIPT: &str = include_str!("../assets/mint_canvas_admin_token.rb");
 const RESULT_PREFIX: &str = "__CANVAS_LTI_RESULT__";
+const TOKEN_PREFIX: &str = "__CANVAS_ADMIN_TOKEN__";
 const SETUP_COMMAND: &str = "cat >/tmp/ensure_canvas_lti_setup.rb; cd /usr/src/app; bin/rails runner -e production /tmp/ensure_canvas_lti_setup.rb";
 const REQUIRED_SCOPES: [&str; 4] = [
     "https://purl.imsglobal.org/spec/lti-ags/scope/lineitem",
@@ -21,6 +23,7 @@ pub struct CanvasRailsConfig {
     pub container_name: String,
     pub account_id: String,
     pub admin_email: String,
+    pub admin_password: String,
     pub browser_base_url: String,
     pub lti_client_id: String,
     pub lti_tool_base_url: String,
@@ -261,4 +264,115 @@ pub async fn ensure_canvas_external_tool<T: CanvasDockerTransport + Sync>(
         .filter(|value| value.is_object() && value.get("id").is_some_and(|id| !id.is_null()))
         .ok_or("External tool setup did not return a valid tool payload")?;
     Ok(json!({"action": tool.get("action").unwrap_or(&json!("updated")), "tool": tool}))
+}
+
+pub async fn canvas_admin_exists<T: CanvasDockerTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRailsConfig,
+) -> Result<bool, String> {
+    let container = resolve_container_name(transport, &cfg.container_name).await;
+    let command = "cd /usr/src/app && bin/rails runner -e production 'email=ENV.fetch(\"CANVAS_ADMIN_EMAIL\"); puts(Pseudonym.where(unique_id: email).exists? ? \"yes\" : \"no\")'";
+    let output = transport
+        .run(CanvasDockerOperation {
+            args: vec![
+                "exec".into(),
+                "-e".into(),
+                format!("CANVAS_ADMIN_EMAIL={}", cfg.admin_email),
+                container,
+                "bash".into(),
+                "-lc".into(),
+                command.into(),
+            ],
+            input: None,
+            timeout_seconds: 90,
+        })
+        .await
+        .map_err(|error| format!("Canvas admin state check failed: {error}"))?;
+    if output.exit_code != 0 {
+        return Err(format!(
+            "Canvas admin state check failed (exit {}): {}",
+            output.exit_code,
+            output.stderr.trim()
+        ));
+    }
+    Ok(output.stdout.lines().any(|line| line.trim() == "yes"))
+}
+
+pub async fn ensure_canvas_initial_data<T: CanvasDockerTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRailsConfig,
+) -> Result<bool, String> {
+    if canvas_admin_exists(transport, cfg).await? {
+        return Ok(false);
+    }
+    let container = resolve_container_name(transport, &cfg.container_name).await;
+    let input = format!(
+        "{0}\n{0}\n{1}\n{1}\nMarty Canvas Test\n3\n",
+        cfg.admin_email, cfg.admin_password
+    );
+    let output = transport
+        .run(CanvasDockerOperation {
+            args: vec![
+                "exec".into(),
+                "-i".into(),
+                container,
+                "bash".into(),
+                "-lc".into(),
+                "cd /usr/src/app && bundle exec rake db:load_initial_data RAILS_ENV=production"
+                    .into(),
+            ],
+            input: Some(input),
+            timeout_seconds: 240,
+        })
+        .await
+        .map_err(|error| format!("Canvas initial data setup failed: {error}"))?;
+    if output.exit_code != 0 {
+        return Err(format!(
+            "Canvas initial data setup failed (exit {}): {}",
+            output.exit_code,
+            output.stderr.trim()
+        ));
+    }
+    if !canvas_admin_exists(transport, cfg).await? {
+        return Err("Canvas initial data setup completed but admin login was not created".into());
+    }
+    Ok(true)
+}
+
+pub async fn mint_canvas_admin_token<T: CanvasDockerTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRailsConfig,
+) -> Result<String, String> {
+    ensure_canvas_initial_data(transport, cfg).await?;
+    let payload = json!({"admin_email": cfg.admin_email});
+    let encoded = STANDARD.encode(serde_json::to_vec(&payload).map_err(|error| error.to_string())?);
+    let container = resolve_container_name(transport, &cfg.container_name).await;
+    let output = transport.run(CanvasDockerOperation {
+        args: vec![
+            "exec".into(), "-i".into(), "-e".into(),
+            format!("CANVAS_ADMIN_TOKEN_SETUP_B64={encoded}"),
+            container, "bash".into(), "-lc".into(),
+            "cat >/tmp/mint_canvas_admin_token.rb; cd /usr/src/app; bin/rails runner -e production /tmp/mint_canvas_admin_token.rb".into(),
+        ],
+        input: Some(CANVAS_ADMIN_TOKEN_SCRIPT.into()),
+        timeout_seconds: 120,
+    }).await.map_err(|error| format!("Canvas admin token minting failed: {error}"))?;
+    if output.exit_code != 0 {
+        return Err(format!(
+            "Canvas admin token minting failed (exit {}): {}",
+            output.exit_code,
+            output.stderr.trim()
+        ));
+    }
+    output
+        .stdout
+        .lines()
+        .rev()
+        .find_map(|line| {
+            line.strip_prefix(TOKEN_PREFIX)
+                .map(str::trim)
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| "Canvas admin token minting completed but did not emit a token".into())
 }
