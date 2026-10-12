@@ -1777,10 +1777,12 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-oauth-revocation-current-inputs.json": {
+            ".github/workflows/ci.yml",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
         "canvas-worker-provider-recovery-current-inputs.json": {
+            ".github/workflows/ci.yml",
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
@@ -1831,6 +1833,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         for name in inventory_consumers
         if name.startswith("canvas-") and name.endswith("-current-inputs.json")
     }
+    release_only_records = {
+        "canvas-worker-oauth-revocation-current-inputs.json",
+        "canvas-worker-provider-recovery-current-inputs.json",
+    }
     assert CI_PATH.read_text(encoding="utf-8").count(
         "contracts/canvas-*-current-inputs.json"
     ) == 1, "Review the bounded classifier alongside the manifest inventory"
@@ -1848,7 +1854,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             if not path.endswith((".md", ".dockerignore"))
         } == (
             expected - {".github/workflows/ci.yml"}
-            if manifest in current_input_manifests
+            if manifest in current_input_manifests and manifest not in release_only_records
             else expected
         ), f"Review new consumer of {manifest} before narrowing its gate"
     tracked = subprocess.run(
@@ -1903,6 +1909,10 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
                 line.startswith("!contracts")
                 for line in lines[lines.index(exclusion) + 1 :]
             ), f"Later rule re-includes {exclusion} in {ignore_path}"
+    python_only_input_records = {
+        "contracts/canvas-worker-oauth-revocation-current-inputs.json",
+        "contracts/canvas-worker-provider-recovery-current-inputs.json",
+    }
     for path in (
         "contracts/canvas-worker-oracle-producers.json",
         "contracts/canvas-worker-oracle-script-imports.json",
@@ -1933,7 +1943,9 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "all": "false",
             "ui": "false",
             "python": "false",
-            "rust": str(path.startswith("contracts/")).lower(),
+            "rust": str(
+                path.startswith("contracts/") and path not in python_only_input_records
+            ).lower(),
             "release": "true",
             "verification": "false",
             "security": "false",
@@ -1972,6 +1984,25 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "verification": "false",
         "security": "false",
     }
+    for record in python_only_input_records:
+        assert _classify_changed_paths(
+            [record, "tests/test_canvas_worker_oracle_script_closure.py"],
+            tmp_path,
+            combined=True,
+        )[0] == {
+            "all": "false",
+            "ui": "false",
+            "python": "false",
+            "rust": "false",
+            "release": "true",
+            "verification": "false",
+            "security": "false",
+        }
+        assert _classify_changed_paths(
+            [record, "scripts/run_canvas_worker_provider_recovery_oracle.py"],
+            tmp_path,
+            combined=True,
+        )[0]["all"] == "true", "A changed capture implementation must stay broad"
     assert _classify_changed_path(
         "contracts/canvas-new-current-inputs.json", tmp_path
     ) == {

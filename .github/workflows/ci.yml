@@ -306,6 +306,12 @@ jobs:
                   python=true
                   security=true
                   ;;
+                contracts/canvas-worker-oauth-revocation-current-inputs.json|contracts/canvas-worker-provider-recovery-current-inputs.json)
+                  # These two overlays have only release-pytest consumers.
+                  # Their inherited REST record and every script/scenario
+                  # input retain their existing Rust/release or broad owner.
+                  release=true
+                  ;;
                 contracts/canvas-*-current-inputs.json)
                   # Only immediate-child CI input records use the reviewed
                   # Docker exclusion. A nested lookalike is unknown input.
