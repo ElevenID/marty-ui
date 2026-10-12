@@ -118,6 +118,33 @@ fn malformed_service_descriptor_fails_validation_before_operator_use() {
 }
 
 #[test]
+fn malformed_metadata_descriptors_fail_validation_before_operator_use() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut catalog = Catalog::load(root).unwrap();
+    catalog.input_specs.insert(
+        "notification_webhook_secret".into(),
+        Value::String("bad".into()),
+    );
+    catalog
+        .artifacts
+        .insert("production".into(), Value::Array(vec![]));
+    catalog
+        .stacks
+        .insert("kubernetes-production".into(), Value::String("bad".into()));
+    catalog
+        .bundles
+        .insert("selfhost".into(), Value::String("bad".into()));
+    let error = catalog.validate().unwrap_err();
+    assert!(error.contains("secret 'notification_webhook_secret' descriptor must be an object"));
+    assert!(error.contains("artifact profile 'production' descriptor must be an object"));
+    assert!(error.contains("stack 'kubernetes-production' descriptor must be an object"));
+    assert!(error.contains("bundle 'selfhost' descriptor must be an object"));
+}
+
+#[test]
 fn equals_style_options_match_frozen_spaced_options() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")

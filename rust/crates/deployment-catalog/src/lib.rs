@@ -215,6 +215,13 @@ impl Catalog {
             }
         }
         for (id, descriptor) in &self.input_specs {
+            if !descriptor.is_object() {
+                errors.push(format!(
+                    "secret {} descriptor must be an object",
+                    pyrepr(id)
+                ));
+                continue;
+            }
             validate_string_list(
                 &mut errors,
                 &format!("secret {} required_for", pyrepr(id)),
@@ -230,7 +237,22 @@ impl Catalog {
                 }
             }
         }
+        for (name, artifact) in &self.artifacts {
+            if !artifact.is_object() {
+                errors.push(format!(
+                    "artifact profile {} descriptor must be an object",
+                    pyrepr(name)
+                ));
+            }
+        }
         for (name, stack) in &self.stacks {
+            if !stack.is_object() {
+                errors.push(format!(
+                    "stack {} descriptor must be an object",
+                    pyrepr(name)
+                ));
+                continue;
+            }
             for key in [
                 "compose_files",
                 "compose_profiles",
@@ -310,6 +332,13 @@ impl Catalog {
             }
         }
         for (name, bundle) in &self.bundles {
+            if !bundle.is_object() {
+                errors.push(format!(
+                    "bundle {} descriptor must be an object",
+                    pyrepr(name)
+                ));
+                continue;
+            }
             validate_string_list(
                 &mut errors,
                 &format!("bundle {} assets", pyrepr(name)),
